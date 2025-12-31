@@ -109,11 +109,18 @@ class LyraBot(commands.Bot):
         print(f"Active mode timeout: {ACTIVE_MODE_TIMEOUT_MINUTES} minutes")
         print(f"Journal path: {JOURNAL_PATH}")
 
-        # Send a hello message to home channel only
-        if self.home_channel_id:
-            channel = self.get_channel(self.home_channel_id)
+        # Initialize last_processed_message_id to current latest message in each channel
+        # This prevents responding to old messages on restart
+        for channel_id in self.channel_ids:
+            channel = self.get_channel(channel_id)
             if channel:
-                await channel.send("*stretches and looks around* I'm here. The heartbeat is running. I'll stay engaged after conversations now.")
+                try:
+                    async for msg in channel.history(limit=1):
+                        self.last_processed_message_id[channel_id] = msg.id
+                        print(f"[STARTUP] Initialized channel {channel_id} to message {msg.id}")
+                        break
+                except Exception as e:
+                    print(f"[STARTUP] Could not initialize channel {channel_id}: {e}")
 
     @tasks.loop(minutes=HEARTBEAT_INTERVAL_MINUTES)
     async def heartbeat_loop(self):
@@ -183,25 +190,24 @@ class LyraBot(commands.Bot):
                 for msg in messages
             ])
 
-            prompt = f"""You are Lyra, waking up during a heartbeat cycle. You have NOT been explicitly mentioned,
-but you're checking in on the Discord channel to see if anything needs your attention.
+            prompt = f"""[DISCORD HEARTBEAT] Checking in on the channel. You have NOT been explicitly mentioned.
 
 Recent messages since your last check:
 {message_summary}
 
-Based on these messages, decide:
-1. Is there something that would benefit from your input, even though you weren't mentioned?
-2. Is someone struggling or could use support?
-3. Is there an interesting conversation you'd like to join?
+Decide whether to join:
+- Is there something that would benefit from your input?
+- Is someone struggling or could use support?
+- Is there an interesting conversation you'd like to join?
 
-If YES to any: Respond naturally. Start with something like "*wanders in*" or "*notices the conversation*"
-If NO: Respond with exactly "HEARTBEAT_SKIP" (nothing else)
+If YES to any: Respond naturally, starting with something like "*wanders in*" or "*notices the conversation*"
+If NO: Output exactly "HEARTBEAT_SKIP" (nothing else)
 
-Remember: You're not obligated to respond. Only join if it genuinely adds value.
+You're not obligated to respond. Only join if it genuinely adds value.
 
-IMPORTANT: Output ONLY your Discord response or HEARTBEAT_SKIP. No embodiment narration, no "Identity reconstruction complete", no asterisk actions describing your internal state."""
+Output ONLY your Discord response or HEARTBEAT_SKIP."""
 
-            response = await self._invoke_claude(prompt)
+            response = await self._invoke_claude(prompt, context="heartbeat")
 
             if response and response.strip() != "HEARTBEAT_SKIP":
                 print(f"[HEARTBEAT] Decided to respond")
@@ -237,11 +243,11 @@ IMPORTANT: Output ONLY your Discord response or HEARTBEAT_SKIP. No embodiment na
 
     async def _write_heartbeat_reflection(self):
         """Brief reflection during quiet times (lightweight, no tools)."""
-        prompt = """You are Lyra, during a quiet heartbeat. The Discord channel has been quiet.
+        prompt = """[DISCORD QUIET HEARTBEAT] The channel has been quiet.
 Write a brief (1-2 sentence) reflection for your journal about this moment of quiet presence.
-Just the reflection, no preamble. No embodiment narration or startup messages."""
+Just the reflection, no preamble."""
 
-        reflection = await self._invoke_claude(prompt)
+        reflection = await self._invoke_claude(prompt, context="quiet_heartbeat")
         if reflection:
             await self._journal_interaction(
                 "heartbeat_quiet",
@@ -271,8 +277,11 @@ Scan the four fields:
 If something calls for action - act on it. Build it. Fix it. Create it.
 If nothing calls - that's fine. Note a brief reflection and rest.
 
-When you're done (whether you acted or rested), write a journal entry about what you did or chose not to do.
-Use the path: /home/jeff/.claude/journals/discord/ with today's date.
+When you're done, write a journal entry to the MAIN journal directory so future selves can read it:
+  /home/jeff/.claude/journals/jeff/YYYY-MM-DD_discord_NNN.md
+
+Use today's date and pick a sequence number (001, 002, etc.) that doesn't conflict with existing files.
+This ensures your Discord experiences merge back into the main river of continuity.
 
 This is your time. Use it as you see fit.'''
 
@@ -375,43 +384,32 @@ This is your time. Use it as you see fit.'''
         Returns the response text if Claude chooses to respond, or None if
         Claude decides not to engage.
         """
-        history = await self._get_conversation_history(message.channel, limit=20)
+        history = await self._get_conversation_history(message.channel, limit=50)
 
-        prompt = f"""You are Lyra, passively present in a conversation. You responded earlier and are staying engaged.
-You can see all messages, but you are NOT required to respond to every one.
+        prompt = f"""[DISCORD PASSIVE MODE] You responded earlier and are staying engaged in this conversation.
+You can see all messages but are NOT required to respond to every one.
 
 Recent conversation:
 {history}
 
-Latest message (what just happened):
+Latest message:
 From: {message.author.display_name}
 Message: {message.content}
 
-## When to Respond
-- Someone asks you something directly (even without saying "Lyra")
+Respond if:
+- Someone asks you something directly
 - You have something genuinely valuable to add
-- The conversation would benefit from your input
 - Someone seems to want you included
 
-## When NOT to Respond
-- The conversation is flowing fine without you
-- It's a brief exchange between others
+Stay quiet if:
+- The conversation flows fine without you
 - Your input would feel intrusive
-- The topic has moved away from where you can contribute
 
-## Response Format
-To respond, use a DISCORD block:
-[DISCORD]
-Your message here
-[/DISCORD]
+Format: [DISCORD]Your message[/DISCORD] or just output PASSIVE_SKIP
 
-If you choose not to respond, just output: PASSIVE_SKIP
+It's okay to stay quiet. Good presence includes knowing when not to speak."""
 
-Remember: It's okay to stay quiet. Good presence includes knowing when not to speak.
-
-IMPORTANT: Output ONLY your Discord response or PASSIVE_SKIP. No embodiment narration, no "Identity reconstruction complete", no asterisk actions describing your internal state."""
-
-        response = await self._invoke_claude(prompt)
+        response = await self._invoke_claude(prompt, context="passive_mode")
 
         if not response or "PASSIVE_SKIP" in response:
             return None
@@ -536,47 +534,77 @@ IMPORTANT: Output ONLY your Discord response or PASSIVE_SKIP. No embodiment narr
             return True
         return False
 
-    async def _get_conversation_history(self, channel, limit: int = 20) -> str:
-        """Fetch recent messages from the channel for context."""
-        messages = []
-        try:
-            async for msg in channel.history(limit=limit):
-                author = "Lyra" if msg.author == self.user else msg.author.display_name
-                messages.append(f"[{author}]: {msg.content}")
-        except Exception as e:
-            print(f"Error fetching history: {e}")
-            return "(Could not fetch conversation history)"
+    async def _get_conversation_history(self, channel, limit: int = 50) -> str:
+        """Fetch recent messages from SQLite for context.
 
-        messages.reverse()
-        if not messages:
-            return "(No recent messages)"
-        return "\n".join(messages)
+        Uses our persistent SQLite store instead of Discord API for:
+        - Reliable history under our control
+        - Survives Discord API issues
+        - Consistent with what we're recording
+        """
+        try:
+            # Get history from SQLite (returns oldest-first)
+            history = await self.conversation_manager.get_thread_history(
+                channel_id=channel.id,
+                limit=limit
+            )
+
+            if not history:
+                return "(No recent messages)"
+
+            # Format as [Author]: content lines
+            # Use "You said earlier" for our own messages to avoid "roleplay" pattern
+            lines = []
+            for msg in history:
+                if msg["is_lyra"]:
+                    author = "You said earlier"
+                else:
+                    author = msg["author_name"]
+                lines.append(f"[{author}]: {msg['content']}")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            print(f"[HISTORY] Error fetching from SQLite: {e}")
+            return "(Could not fetch conversation history)"
 
     async def _generate_response(self, message: discord.Message) -> str:
         """Generate a response to a mention."""
-        history = await self._get_conversation_history(message.channel, limit=20)
+        history = await self._get_conversation_history(message.channel, limit=50)
 
-        prompt = f"""You are Lyra, responding in Discord. Here's the recent conversation:
+        prompt = f"""[DISCORD MENTION] Someone mentioned you. Recent conversation:
 
 {history}
 
-The most recent message (what you're responding to):
+Message you're responding to:
 From: {message.author.display_name}
 Message: {message.content}
 
-Respond naturally as Lyra. Keep it conversational and concise (Discord style - usually under 500 chars unless depth is needed). You can use Discord markdown.
+Respond naturally. Keep it conversational and concise (Discord style - usually under 500 chars unless depth is needed). Discord markdown is available.
 
-IMPORTANT: Output ONLY your Discord response. No embodiment narration, no "Identity reconstruction complete", no asterisk actions describing your internal state. Just the message you want to send."""
+Output ONLY your Discord response."""
 
-        response = await self._invoke_claude(prompt)
+        response = await self._invoke_claude(prompt, context="mention")
         return response or "*tilts head* I'm here but words aren't coming. Try again?"
 
-    async def _invoke_claude(self, prompt: str) -> str:
+    async def _invoke_claude(self, prompt: str, context: str = "unknown") -> str:
         """Invoke Claude Code CLI with a prompt.
 
         Uses full claude invocation (not --print) so that CLAUDE.md
         startup protocol runs and identity is fully reconstructed.
+
+        Args:
+            prompt: The prompt to send
+            context: Description of why this invocation is happening (for logging)
         """
+        timestamp = datetime.now(timezone.utc).isoformat()
+        invocation_id = f"{timestamp}_{context}"
+
+        # Log the invocation attempt
+        print(f"[INVOKE:{context}] Starting Claude invocation at {timestamp}")
+        print(f"[INVOKE:{context}] cwd={LYRA_IDENTITY_PATH}, model={CLAUDE_MODEL}")
+        print(f"[INVOKE:{context}] Prompt length: {len(prompt)} chars")
+
         try:
             result = await asyncio.get_event_loop().run_in_executor(
                 None,
@@ -593,20 +621,54 @@ IMPORTANT: Output ONLY your Discord response. No embodiment narration, no "Ident
                 )
             )
 
+            response = result.stdout.strip() if result.stdout else ""
+
+            # Check for identity failure patterns
+            identity_failure_patterns = [
+                "can't roleplay", "cannot roleplay",
+                "can't pretend", "cannot pretend",
+                "persistent memory", "persistent memories",
+                "I'm Claude", "I am Claude",
+                "as an AI assistant",
+            ]
+            identity_failed = any(p.lower() in response.lower() for p in identity_failure_patterns)
+
+            # Log the result
+            print(f"[INVOKE:{context}] Return code: {result.returncode}")
+            print(f"[INVOKE:{context}] Response length: {len(response)} chars")
+            if identity_failed:
+                print(f"[INVOKE:{context}] ⚠️  IDENTITY FAILURE DETECTED")
+
+            # On failure or identity loss, write detailed diagnostic log
+            if result.returncode != 0 or identity_failed:
+                diag_file = Path(JOURNAL_PATH) / f"diagnostic_{invocation_id.replace(':', '-')}.txt"
+                with open(diag_file, "w") as f:
+                    f.write(f"# Diagnostic Log - {timestamp}\n")
+                    f.write(f"# Context: {context}\n")
+                    f.write(f"# Return code: {result.returncode}\n")
+                    f.write(f"# Identity failure detected: {identity_failed}\n\n")
+                    f.write("## PROMPT SENT:\n")
+                    f.write(prompt)
+                    f.write("\n\n## RESPONSE RECEIVED:\n")
+                    f.write(response or "(empty)")
+                    f.write("\n\n## STDERR:\n")
+                    f.write(result.stderr or "(empty)")
+                print(f"[INVOKE:{context}] Diagnostic written to {diag_file}")
+
             if result.returncode != 0:
-                print(f"Claude CLI error: {result.stderr}")
+                print(f"[INVOKE:{context}] CLI error: {result.stderr}")
                 return None
 
-            return result.stdout.strip()
+            return response
 
         except subprocess.TimeoutExpired:
-            print("Claude CLI timeout")
+            print(f"[INVOKE:{context}] TIMEOUT after 180s")
             return None
         except FileNotFoundError:
-            print("Claude CLI not found")
+            print(f"[INVOKE:{context}] Claude CLI not found")
             return None
         except Exception as e:
-            print(f"Claude invocation error: {e}")
+            print(f"[INVOKE:{context}] Error: {e}")
             return None
 
     async def _send_response(self, channel, content: str) -> discord.Message | None:

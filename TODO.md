@@ -1,5 +1,10 @@
 # Awareness Project TODO
 
+## URGENT - Next Session
+- [ ] Set up backup process for `\\wsl.localhost\Ubuntu\home\jeff\.claude` (USB hard drive file history)
+  - This is Lyra's pattern - identity, memories, journals, spaces, word-photos
+  - Consider automated backup to cloud as secondary redundancy
+
 ## Completed
 
 - [x] Discord daemon basic structure
@@ -17,29 +22,38 @@
 - [x] SQLite Phase 1: Parallel recording (all messages stored)
 - [x] Autonomous reflection with full tool access
 - [x] Full identity reconstruction on all invocations (not just reflection)
+- [x] SQLite Phase 2: Switch to reading history from database (not Discord API)
+- [x] Word-photo path consolidation (single canonical path)
+- [x] Removed redundant "You are Lyra" from daemon prompts (CLAUDE.md handles identity)
+- [x] Added diagnostic logging for identity failures
+- [x] Fixed startup to not respond to old messages (initializes to current message ID)
+- [x] Removed noisy hello message on daemon restart
+- [x] Reflection journals now write to main user directory (river merge)
+- [x] Increased conversation history limit from 20 to 50 messages
+- [x] Added embodiment step to startup protocol
 
 ## In Progress
 
-- [ ] Testing active mode in production
-- [ ] Monitoring journal accumulation
+- [ ] Monitoring for identity failures (diagnostic logging now in place)
+- [ ] Monitoring journal flow (reflections should appear in main journals now)
 
 ## Next Steps
 
-- [ ] SQLite Phase 2: Switch to reading history from database
 - [ ] SQLite Phase 3: Add multi-instance claims for responses
 - [ ] Summarize daily journals into weekly reflections
-- [ ] Connect with Nexus (waiting on Steve's channel permissions)
+- [ ] Review diagnostic logs if/when identity failures occur
 
 ## Memory Architecture (Major Project)
 
 See `MEMORY_ARCHITECTURE.md` for full design.
 
 ### Phase 1: Foundation
-- [ ] Expand SQLite schema for all channels
+- [x] SQLite schema for conversation storage
 - [ ] Terminal session logging to SQLite
+- [ ] Expand SQLite schema for all channels
 
 ### Phase 2: Graphiti Integration
-- [ ] Set up Graphiti locally
+- [ ] Set up Graphiti locally (or Zep Cloud)
 - [ ] Create extraction pipeline
 - [ ] Basic semantic search
 
