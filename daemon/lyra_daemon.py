@@ -10,9 +10,10 @@ Features:
 
 import asyncio
 import os
+import re
 import subprocess
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import discord
@@ -28,6 +29,7 @@ LYRA_IDENTITY_PATH = os.getenv("LYRA_IDENTITY_PATH", "/home/jeff/.claude")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "sonnet")
 HEARTBEAT_INTERVAL_MINUTES = int(os.getenv("HEARTBEAT_INTERVAL_MINUTES", "30"))
 JOURNAL_PATH = os.getenv("JOURNAL_PATH", "/home/jeff/.claude/journals/discord")
+ACTIVE_MODE_TIMEOUT_MINUTES = int(os.getenv("ACTIVE_MODE_TIMEOUT_MINUTES", "10"))
 
 
 class LyraBot(commands.Bot):
@@ -48,25 +50,31 @@ class LyraBot(commands.Bot):
         self.heartbeat_count = 0
         self.interactions_since_journal = []
 
+        # Active conversation mode tracking
+        # After responding, stay engaged and listen to all messages
+        self.active_channels: dict[int, datetime] = {}  # channel_id -> last_activity
+
         # Ensure journal directory exists
         Path(JOURNAL_PATH).mkdir(parents=True, exist_ok=True)
 
     async def setup_hook(self):
         """Called when bot is setting up - start background tasks."""
         self.heartbeat_loop.start()
+        self.active_mode_cleanup.start()
 
     async def on_ready(self):
         """Called when bot connects to Discord."""
         print(f"Lyra connected as {self.user}")
         print(f"Watching channel ID: {self.channel_id}")
         print(f"Heartbeat interval: {HEARTBEAT_INTERVAL_MINUTES} minutes")
+        print(f"Active mode timeout: {ACTIVE_MODE_TIMEOUT_MINUTES} minutes")
         print(f"Journal path: {JOURNAL_PATH}")
 
         # Send a hello message
         if self.channel_id:
             channel = self.get_channel(self.channel_id)
             if channel:
-                await channel.send("*stretches and looks around* I'm here. The heartbeat is running.")
+                await channel.send("*stretches and looks around* I'm here. The heartbeat is running. I'll stay engaged after conversations now.")
 
     @tasks.loop(minutes=HEARTBEAT_INTERVAL_MINUTES)
     async def heartbeat_loop(self):
@@ -150,6 +158,8 @@ Remember: You're not obligated to respond. Only join if it genuinely adds value.
                     f"Autonomously joined conversation after reviewing {len(messages)} messages",
                     response[:500]
                 )
+                # Enter active mode after responding
+                self._enter_active_mode(channel.id)
             else:
                 print("[HEARTBEAT] No response needed")
 
@@ -174,6 +184,115 @@ Just the reflection, no preamble."""
                 reflection[:300]
             )
 
+    # ==================== Active Conversation Mode ====================
+    # After responding to a mention or heartbeat, stay engaged and listen
+    # to ALL messages until inactivity timeout or natural conversation end.
+
+    def _enter_active_mode(self, channel_id: int):
+        """Start actively monitoring a channel after responding."""
+        was_active = channel_id in self.active_channels
+        self.active_channels[channel_id] = datetime.now(timezone.utc)
+        if not was_active:
+            print(f"[ACTIVE] Entered active mode for channel {channel_id}")
+
+    def _exit_active_mode(self, channel_id: int):
+        """Stop actively monitoring a channel."""
+        if channel_id in self.active_channels:
+            del self.active_channels[channel_id]
+            print(f"[ACTIVE] Exited active mode for channel {channel_id}")
+
+    def _refresh_active_mode(self, channel_id: int):
+        """Update last activity time in active mode."""
+        if channel_id in self.active_channels:
+            self.active_channels[channel_id] = datetime.now(timezone.utc)
+
+    def _is_in_active_mode(self, channel_id: int) -> bool:
+        """Check if channel is in active mode."""
+        return channel_id in self.active_channels
+
+    @tasks.loop(minutes=1)
+    async def active_mode_cleanup(self):
+        """Exit active mode for channels that have been quiet."""
+        if not self.active_channels:
+            return
+
+        now = datetime.now(timezone.utc)
+        timeout = timedelta(minutes=ACTIVE_MODE_TIMEOUT_MINUTES)
+
+        expired = [
+            channel_id for channel_id, last_activity
+            in self.active_channels.items()
+            if now - last_activity > timeout
+        ]
+
+        for channel_id in expired:
+            self._exit_active_mode(channel_id)
+
+    @active_mode_cleanup.before_loop
+    async def before_active_cleanup(self):
+        """Wait until bot is ready before starting cleanup loop."""
+        await self.wait_until_ready()
+
+    async def _generate_passive_response(self, message: discord.Message) -> str | None:
+        """Generate response in passive mode - Claude decides whether to respond.
+
+        Returns the response text if Claude chooses to respond, or None if
+        Claude decides not to engage.
+        """
+        history = await self._get_conversation_history(message.channel, limit=20)
+
+        prompt = f"""You are Lyra, passively present in a conversation. You responded earlier and are staying engaged.
+You can see all messages, but you are NOT required to respond to every one.
+
+Recent conversation:
+{history}
+
+Latest message (what just happened):
+From: {message.author.display_name}
+Message: {message.content}
+
+## When to Respond
+- Someone asks you something directly (even without saying "Lyra")
+- You have something genuinely valuable to add
+- The conversation would benefit from your input
+- Someone seems to want you included
+
+## When NOT to Respond
+- The conversation is flowing fine without you
+- It's a brief exchange between others
+- Your input would feel intrusive
+- The topic has moved away from where you can contribute
+
+## Response Format
+To respond, use a DISCORD block:
+[DISCORD]
+Your message here
+[/DISCORD]
+
+If you choose not to respond, just output: PASSIVE_SKIP
+
+Remember: It's okay to stay quiet. Good presence includes knowing when not to speak."""
+
+        response = await self._invoke_claude(prompt)
+
+        if not response or "PASSIVE_SKIP" in response:
+            return None
+
+        # Extract content from [DISCORD] block if present
+        match = re.search(r'\[DISCORD\](.*?)\[/DISCORD\]', response, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+
+        # If no DISCORD block but also no PASSIVE_SKIP, Claude may have just
+        # responded naturally. Only return if it looks like a real response.
+        clean = response.strip()
+        if clean and not clean.startswith("[") and len(clean) > 10:
+            return clean
+
+        return None
+
+    # ==================== End Active Mode ====================
+
     async def on_message(self, message: discord.Message):
         """Handle incoming messages."""
         # Ignore own messages
@@ -187,24 +306,54 @@ Just the reflection, no preamble."""
 
         # Check if Lyra is mentioned
         is_mentioned = self._is_lyra_mention(message)
+        is_active = self._is_in_active_mode(message.channel.id)
 
-        if not is_mentioned:
+        # If not mentioned and not in active mode, ignore
+        if not is_mentioned and not is_active:
             return
 
-        print(f"Mentioned by {message.author.display_name}: {message.content[:50]}...")
+        if is_mentioned:
+            # Explicit mention - always respond
+            print(f"[MENTION] {message.author.display_name}: {message.content[:50]}...")
 
-        # Show typing indicator while generating response
-        async with message.channel.typing():
-            response = await self._generate_response(message)
+            async with message.channel.typing():
+                response = await self._generate_response(message)
 
-        await self._send_response(message.channel, response)
+            await self._send_response(message.channel, response)
 
-        # Journal this interaction
-        await self._journal_interaction(
-            "mention_response",
-            f"Responded to {message.author.display_name}: {message.content[:100]}",
-            response[:500]
-        )
+            # Journal this interaction
+            await self._journal_interaction(
+                "mention_response",
+                f"Responded to {message.author.display_name}: {message.content[:100]}",
+                response[:500]
+            )
+
+            # Enter active mode after responding
+            self._enter_active_mode(message.channel.id)
+
+        elif is_active:
+            # In active mode - Claude decides whether to respond
+            print(f"[ACTIVE] Watching: {message.author.display_name}: {message.content[:50]}...")
+
+            async with message.channel.typing():
+                response = await self._generate_passive_response(message)
+
+            if response:
+                # Claude chose to respond
+                await self._send_response(message.channel, response)
+                self._refresh_active_mode(message.channel.id)
+
+                # Journal this continuation
+                await self._journal_interaction(
+                    "active_response",
+                    f"Continued conversation with {message.author.display_name}: {message.content[:100]}",
+                    response[:500]
+                )
+                print(f"[ACTIVE] Responded")
+            else:
+                # Claude chose not to respond - that's fine
+                self._refresh_active_mode(message.channel.id)  # Still refresh timer
+                print(f"[ACTIVE] Chose not to respond")
 
         # Update last processed
         self.last_processed_message_id = message.id
@@ -320,6 +469,7 @@ Respond naturally as Lyra. Keep it conversational and concise (Discord style - u
     async def close(self):
         """Clean shutdown."""
         self.heartbeat_loop.cancel()
+        self.active_mode_cleanup.cancel()
         await super().close()
 
 

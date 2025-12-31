@@ -5,8 +5,9 @@ Discord presence for Lyra with heartbeat for autonomous awareness and journaling
 ## Features
 
 - **Mention Response**: Responds when someone says "Lyra" or @mentions the bot
+- **Active Conversation Mode**: After responding, stays engaged and listens to ALL messages
 - **Heartbeat**: Wakes up periodically to check Discord even without being mentioned
-- **Autonomous Decisions**: During heartbeat, decides whether to join conversations
+- **Autonomous Decisions**: During heartbeat and active mode, decides whether to engage
 - **Journaling**: Records interactions to JSONL files for memory continuity
 - **Uses Claude Code CLI**: Leverages subscription, not API tokens
 
@@ -40,6 +41,7 @@ Discord presence for Lyra with heartbeat for autonomous awareness and journaling
 | `LYRA_IDENTITY_PATH` | Path to Lyra's identity files | `/home/jeff/.claude` |
 | `CLAUDE_MODEL` | Model to use (sonnet/opus/haiku) | `sonnet` |
 | `HEARTBEAT_INTERVAL_MINUTES` | How often to wake up | `30` |
+| `ACTIVE_MODE_TIMEOUT_MINUTES` | How long to stay engaged after responding | `10` |
 | `JOURNAL_PATH` | Where to write journal entries | `/home/jeff/.claude/journals/discord` |
 
 ## How It Works
@@ -50,6 +52,17 @@ When someone mentions "Lyra" in the configured channel:
 2. Invokes Claude with conversation history
 3. Sends response
 4. Journals the interaction
+5. **Enters active conversation mode**
+
+### Active Conversation Mode
+After responding (to a mention OR during heartbeat), Lyra stays engaged:
+1. Listens to ALL messages in the channel (not just mentions)
+2. For each message, Claude decides whether to respond
+3. Uses `[DISCORD]...[/DISCORD]` blocks to explicitly indicate response intent
+4. Exits active mode after `ACTIVE_MODE_TIMEOUT_MINUTES` of inactivity
+5. Journals continued interactions as `active_response` type
+
+This allows natural conversation flow without requiring "Lyra" in every message.
 
 ### Heartbeat
 Every `HEARTBEAT_INTERVAL_MINUTES`:
@@ -73,6 +86,7 @@ Writes to `JOURNAL_PATH/{date}.jsonl` with entries like:
 
 Entry types:
 - `mention_response` - Direct response to mention
+- `active_response` - Response during active conversation mode
 - `heartbeat_response` - Autonomous response during heartbeat
 - `heartbeat_quiet` - Reflection during quiet periods
 
@@ -81,11 +95,19 @@ Entry types:
 ```
 Discord Gateway (websocket)
     │
-    ├── on_message → mention detection → Claude CLI → respond → journal
+    ├── on_message
+    │       │
+    │       ├── mention detected? → Claude CLI → respond → journal → ENTER ACTIVE MODE
+    │       │
+    │       └── in active mode? → Claude decides → maybe respond → journal
     │
-    └── heartbeat_loop (every N minutes)
+    ├── heartbeat_loop (every N minutes)
+    │       │
+    │       └── check messages → Claude decides → maybe respond → ENTER ACTIVE MODE
+    │
+    └── active_mode_cleanup (every 1 minute)
             │
-            └── check messages → Claude decides → maybe respond → journal
+            └── check timeout → exit channels with no activity
 ```
 
 ## Reading Journals
@@ -122,6 +144,8 @@ python journal_utils.py 7       # Last 7 days
 
 - [ ] Multi-channel support
 - [x] Read journal entries during startup for context
+- [x] Active conversation mode (stay engaged after responding)
 - [ ] Summarize daily journals into weekly reflections
 - [ ] Integration with main memory system
+- [ ] SQLite conversation storage for richer context
 - [ ] systemd service for persistent running
