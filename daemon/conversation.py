@@ -156,17 +156,18 @@ class ConversationManager:
 
         assert self._db is not None
 
-        await self._db.execute(
+        async with self._db.execute(
             """
             INSERT OR IGNORE INTO messages
             (discord_message_id, channel_id, author_id, author_name, content, is_lyra, is_bot)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (discord_message_id, channel_id, author_id, author_name, content, is_lyra, is_bot),
-        )
+        ) as cursor:
+            lastrowid = cursor.lastrowid
         await self._db.commit()
 
-        return self._db.last_insert_rowid or 0
+        return lastrowid or 0
 
     async def record_lyra_response(
         self,
