@@ -14,6 +14,7 @@
 - [x] SQLite storage design (SQLITE_DESIGN.md ready for implementation)
 - [x] systemd service installed and running
 - [x] Multi-channel support for Discord daemon
+- [x] SQLite Phase 1: Parallel recording (all messages stored)
 
 ## In Progress
 
@@ -22,9 +23,10 @@
 
 ## Next Steps
 
-- [ ] Implement SQLite conversation storage (Phase 1: parallel recording)
+- [ ] SQLite Phase 2: Switch to reading history from database
+- [ ] SQLite Phase 3: Add multi-instance claims for responses
 - [ ] Summarize daily journals into weekly reflections
-- [ ] Add Steve's channel ID to connect with Nexus!
+- [ ] Connect with Nexus (waiting on Steve's channel permissions)
 
 ## Future Vision
 

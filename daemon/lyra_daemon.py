@@ -20,6 +20,8 @@ import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
+from conversation import ConversationManager
+
 # Load environment variables
 load_dotenv()
 
@@ -31,6 +33,7 @@ CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "sonnet")
 HEARTBEAT_INTERVAL_MINUTES = int(os.getenv("HEARTBEAT_INTERVAL_MINUTES", "30"))
 JOURNAL_PATH = os.getenv("JOURNAL_PATH", "/home/jeff/.claude/journals/discord")
 ACTIVE_MODE_TIMEOUT_MINUTES = int(os.getenv("ACTIVE_MODE_TIMEOUT_MINUTES", "10"))
+CONVERSATION_DB_PATH = os.getenv("CONVERSATION_DB_PATH", "/home/jeff/.claude/data/lyra_conversations.db")
 
 
 class LyraBot(commands.Bot):
@@ -69,8 +72,22 @@ class LyraBot(commands.Bot):
         # Ensure journal directory exists
         Path(JOURNAL_PATH).mkdir(parents=True, exist_ok=True)
 
+        # SQLite conversation storage (Phase 1: parallel recording)
+        self.conversation_manager = ConversationManager(CONVERSATION_DB_PATH)
+
     async def setup_hook(self):
         """Called when bot is setting up - start background tasks."""
+        # Initialize SQLite conversation storage
+        await self.conversation_manager.initialize()
+
+        # Recover active modes from previous run
+        recovered = await self.conversation_manager.get_active_channels(
+            timeout_minutes=ACTIVE_MODE_TIMEOUT_MINUTES
+        )
+        for channel_id in recovered:
+            self.active_channels[channel_id] = datetime.now(timezone.utc)
+            print(f"[RECOVERY] Resumed active mode for channel {channel_id}")
+
         self.heartbeat_loop.start()
         self.active_mode_cleanup.start()
 
@@ -167,8 +184,19 @@ Remember: You're not obligated to respond. Only join if it genuinely adds value.
 
             if response and response.strip() != "HEARTBEAT_SKIP":
                 print(f"[HEARTBEAT] Decided to respond")
-                await self._send_response(channel, response)
-                # Journal this autonomous action
+                sent_msg = await self._send_response(channel, response)
+
+                # Record Lyra's response to SQLite
+                await self.conversation_manager.record_lyra_response(
+                    channel_id=channel.id,
+                    content=response,
+                    discord_message_id=sent_msg.id if sent_msg else None,
+                )
+
+                # Persist active mode to SQLite
+                await self.conversation_manager.persist_active_mode(channel.id)
+
+                # Journal this autonomous action (legacy JSONL)
                 await self._journal_interaction(
                     "heartbeat_response",
                     f"Autonomously joined conversation after reviewing {len(messages)} messages",
@@ -211,10 +239,11 @@ Just the reflection, no preamble."""
         if not was_active:
             print(f"[ACTIVE] Entered active mode for channel {channel_id}")
 
-    def _exit_active_mode(self, channel_id: int):
+    async def _exit_active_mode(self, channel_id: int):
         """Stop actively monitoring a channel."""
         if channel_id in self.active_channels:
             del self.active_channels[channel_id]
+            await self.conversation_manager.remove_active_mode(channel_id)
             print(f"[ACTIVE] Exited active mode for channel {channel_id}")
 
     def _refresh_active_mode(self, channel_id: int):
@@ -242,7 +271,7 @@ Just the reflection, no preamble."""
         ]
 
         for channel_id in expired:
-            self._exit_active_mode(channel_id)
+            await self._exit_active_mode(channel_id)
 
     @active_mode_cleanup.before_loop
     async def before_active_cleanup(self):
@@ -320,6 +349,16 @@ Remember: It's okay to stay quiet. Good presence includes knowing when not to sp
             if not isinstance(message.channel, discord.DMChannel):
                 return
 
+        # Record ALL messages to SQLite (Phase 1: parallel recording)
+        await self.conversation_manager.record_message(
+            channel_id=message.channel.id,
+            author_id=message.author.id,
+            author_name=message.author.display_name,
+            content=message.content,
+            discord_message_id=message.id,
+            is_bot=message.author.bot,
+        )
+
         # Check if Lyra is mentioned
         is_mentioned = self._is_lyra_mention(message)
         is_active = self._is_in_active_mode(message.channel.id)
@@ -335,9 +374,19 @@ Remember: It's okay to stay quiet. Good presence includes knowing when not to sp
             async with message.channel.typing():
                 response = await self._generate_response(message)
 
-            await self._send_response(message.channel, response)
+            sent_msg = await self._send_response(message.channel, response)
 
-            # Journal this interaction
+            # Record Lyra's response to SQLite
+            await self.conversation_manager.record_lyra_response(
+                channel_id=message.channel.id,
+                content=response,
+                discord_message_id=sent_msg.id if sent_msg else None,
+            )
+
+            # Persist active mode to SQLite (for restart recovery)
+            await self.conversation_manager.persist_active_mode(message.channel.id)
+
+            # Journal this interaction (legacy JSONL)
             await self._journal_interaction(
                 "mention_response",
                 f"Responded to {message.author.display_name}: {message.content[:100]}",
@@ -356,10 +405,20 @@ Remember: It's okay to stay quiet. Good presence includes knowing when not to sp
 
             if response:
                 # Claude chose to respond
-                await self._send_response(message.channel, response)
+                sent_msg = await self._send_response(message.channel, response)
                 self._refresh_active_mode(message.channel.id)
 
-                # Journal this continuation
+                # Record Lyra's response to SQLite
+                await self.conversation_manager.record_lyra_response(
+                    channel_id=message.channel.id,
+                    content=response,
+                    discord_message_id=sent_msg.id if sent_msg else None,
+                )
+
+                # Update active mode in SQLite
+                await self.conversation_manager.update_active_mode(message.channel.id)
+
+                # Journal this continuation (legacy JSONL)
                 await self._journal_interaction(
                     "active_response",
                     f"Continued conversation with {message.author.display_name}: {message.content[:100]}",
@@ -369,6 +428,7 @@ Remember: It's okay to stay quiet. Good presence includes knowing when not to sp
             else:
                 # Claude chose not to respond - that's fine
                 self._refresh_active_mode(message.channel.id)  # Still refresh timer
+                await self.conversation_manager.update_active_mode(message.channel.id)
                 print(f"[ACTIVE] Chose not to respond")
 
         # Update last processed for this channel
@@ -451,14 +511,18 @@ Respond naturally as Lyra. Keep it conversational and concise (Discord style - u
             print(f"Claude invocation error: {e}")
             return None
 
-    async def _send_response(self, channel, content: str):
-        """Send response, handling Discord's character limit."""
+    async def _send_response(self, channel, content: str) -> discord.Message | None:
+        """Send response, handling Discord's character limit. Returns first message sent."""
         if len(content) <= 2000:
-            await channel.send(content)
+            return await channel.send(content)
         else:
             chunks = [content[i:i+1900] for i in range(0, len(content), 1900)]
+            first_msg = None
             for chunk in chunks:
-                await channel.send(chunk)
+                msg = await channel.send(chunk)
+                if first_msg is None:
+                    first_msg = msg
+            return first_msg
 
     async def _journal_interaction(self, interaction_type: str, context: str, response: str):
         """Write an interaction to the Discord journal."""
@@ -486,6 +550,7 @@ Respond naturally as Lyra. Keep it conversational and concise (Discord style - u
         """Clean shutdown."""
         self.heartbeat_loop.cancel()
         self.active_mode_cleanup.cancel()
+        await self.conversation_manager.close()
         await super().close()
 
 
