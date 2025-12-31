@@ -1,0 +1,56 @@
+[Unit]
+Description=Lyra Discord Daemon - Autonomous presence with heartbeat
+Documentation=file:///mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Service type
+Type=simple
+
+# User and group (running as unprivileged user)
+User=%u
+Group=%u
+
+# Working directory
+WorkingDirectory=%h/Documents/1)) Caia/Awareness/daemon
+
+# Environment loading from .env file
+EnvironmentFile=%h/Documents/1)) Caia/Awareness/daemon/.env
+
+# Set additional required environment variables
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+
+# Execution
+ExecStart=%h/Documents/1)) Caia/Awareness/daemon/venv/bin/python3 -u lyra_daemon.py
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=5
+
+# Process management
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Resource limits (prevent runaway)
+MemoryLimit=512M
+CPUQuota=50%
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=no
+ReadWritePaths=%h/Documents/1)) Caia/Awareness/daemon/logs %h/.claude
+
+# Logging to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lyra-daemon
+
+[Install]
+WantedBy=default.target

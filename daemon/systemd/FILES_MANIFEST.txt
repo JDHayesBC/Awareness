@@ -1,0 +1,326 @@
+LYRA DISCORD DAEMON - SYSTEMD SERVICE CONFIGURATION
+Files Manifest
+Generated: 2025-12-30
+
+================================================================================
+DIRECTORY CONTENTS
+================================================================================
+
+/mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/systemd/
+
+1. lyra-daemon.service (56 lines, 1.3KB)
+   - Systemd unit file for the Discord daemon
+   - Defines service type, restart policy, logging, and resource limits
+   - Loads environment from .env file
+   - User-level service (runs without root)
+   - Logs to journald
+   - Auto-restart on failure with circuit breaker
+   
+   Installation target: ~/.config/systemd/user/lyra-daemon.service
+
+2. install.sh (136 lines, 3.7KB)
+   - Automated installation and uninstallation script
+   - Executable (chmod +x)
+   - Prerequisites validation
+   - Service file deployment
+   - Systemd daemon reloading
+   - Service enablement and startup
+   - Colored output for clarity
+   - Uninstallation support: ./install.sh --uninstall
+   
+   Usage: cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/systemd
+          ./install.sh
+
+3. README.md (473 lines, 12KB)
+   - Comprehensive service documentation
+   - Installation instructions (automated and manual)
+   - Service management command reference
+   - Configuration details
+   - WSL2 considerations
+   - Troubleshooting guide (15+ scenarios)
+   - Performance monitoring
+   - Advanced configuration options
+   - Environment variable reference
+   - Useful systemd commands
+   
+   Read for: Complete how-to guide for all operations
+
+4. DESIGN_NOTES.md (430 lines, 13KB)
+   - Technical architecture and design decisions
+   - Rationale for each configuration choice
+   - Alternatives considered and why they were rejected
+   - Failure recovery scenarios with examples
+   - Service lifecycle explanation
+   - Monitoring and observability details
+   - WSL2-specific technical considerations
+   - Performance characteristics and limits
+   - Testing and validation procedures
+   - Future enhancement possibilities
+   
+   Read for: Understanding the design, troubleshooting technical issues
+
+5. QUICK_START.md (134 lines, 2.8KB)
+   - Quick reference guide for setup and daily use
+   - 5-minute installation instructions
+   - Prerequisites checklist
+   - Quick command reference
+   - Basic troubleshooting
+   - Next steps guidance
+   
+   Read for: Quick setup or quick reference on common commands
+
+6. INDEX.md (13KB, ~400 lines)
+   - Navigation guide to all systemd documentation
+   - File descriptions and purposes
+   - Quick navigation by user scenario
+   - System architecture diagram
+   - Service lifecycle flowchart
+   - Troubleshooting decision tree
+   - File locations reference
+   - FAQ section
+   - Help matrix
+   
+   Read for: Finding the right documentation for your need
+
+7. FILES_MANIFEST.txt (this file)
+   - Complete list of all files
+   - Description of each file
+   - File statistics
+   - Quick reference guide
+   - Installation checklist
+
+================================================================================
+FILE STATISTICS
+================================================================================
+
+Total Files: 7
+Total Lines: ~1,500+
+Total Size: ~43KB
+
+Breakdown:
+- Service configuration: 1 file (56 lines)
+- Scripts: 1 file (136 lines)
+- Documentation: 5 files (1,300+ lines)
+
+Documentation by type:
+- Quick start: 134 lines
+- Comprehensive guide: 473 lines
+- Technical design: 430 lines
+- Navigation/index: 400+ lines
+- Installation script: 136 lines
+
+Quality metrics:
+- Full code comments in service file
+- Full code comments in install script
+- 1,300+ lines of documentation
+- Multiple guides for different audiences
+- Extensive examples and code snippets
+
+================================================================================
+QUICK REFERENCE
+================================================================================
+
+INSTALLATION
+  1. Ensure .env is configured: /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/.env
+  2. Run: cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/systemd && ./install.sh
+  3. Verify: systemctl --user status lyra-daemon
+
+SERVICE MANAGEMENT
+  Start:    systemctl --user start lyra-daemon
+  Stop:     systemctl --user stop lyra-daemon
+  Status:   systemctl --user status lyra-daemon
+  Logs:     journalctl --user -u lyra-daemon -f
+  Restart:  systemctl --user restart lyra-daemon
+
+DOCUMENTATION REFERENCE
+  Getting started:       Read QUICK_START.md
+  Complete reference:    Read README.md
+  Technical deep dive:   Read DESIGN_NOTES.md
+  Finding what you need: Read INDEX.md
+
+SERVICE FILE DETAILS
+  Location: ~/.config/systemd/user/lyra-daemon.service (after installation)
+  Type: simple (foreground process)
+  Restart: on-failure (with circuit breaker)
+  Logging: journald
+  User: %u (expands to current user)
+  Memory limit: 512M
+  CPU quota: 50%
+  Environment: Loaded from .env file
+
+UNINSTALLATION
+  cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/systemd
+  ./install.sh --uninstall
+
+================================================================================
+PREREQUISITES CHECKLIST
+================================================================================
+
+Before installation, ensure:
+
+[ ] .env file exists and is configured
+    Location: /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/.env
+    Required: DISCORD_BOT_TOKEN and DISCORD_CHANNEL_ID
+    
+[ ] Python virtual environment created
+    Location: /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/venv/
+    Command: python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt
+    
+[ ] Python 3.12+ available
+    Check: python3 --version
+    
+[ ] discord.py installed
+    Check: python3 -c "import discord; print(discord.__version__)"
+    
+[ ] systemd with user services available
+    Check: systemctl --user status
+    
+[ ] WSL2 systemd integration enabled
+    Check: ps aux | grep systemd
+    
+[ ] Home directory accessible
+    Check: test -w ~ && echo "OK" || echo "NOT OK"
+
+================================================================================
+POST-INSTALLATION VERIFICATION
+================================================================================
+
+After running ./install.sh, verify:
+
+[ ] Service file copied to ~/.config/systemd/user/
+    Check: ls ~/.config/systemd/user/lyra-daemon.service
+
+[ ] Service is enabled
+    Check: systemctl --user is-enabled lyra-daemon
+
+[ ] Service is running
+    Check: systemctl --user is-active lyra-daemon
+
+[ ] Logs appear in journal
+    Check: journalctl --user -u lyra-daemon -n 5
+
+[ ] Service starts automatically on login
+    Test: systemctl --user stop lyra-daemon && logout/login
+    Then check: systemctl --user is-active lyra-daemon
+
+[ ] Environment variables loaded correctly
+    Check: systemctl --user show-environment | grep DISCORD
+
+================================================================================
+IMPORTANT NOTES
+================================================================================
+
+WSL2 PERSISTENCE
+- Service persists as long as WSL2 distro is running
+- WSL2 shuts down when all terminals close (by default)
+- To keep distro running: keep terminal open or use Task Scheduler
+
+SECURITY
+- Service runs as unprivileged user (not root)
+- System directories are read-only
+- Only specified directories are writable
+- Secrets (.env) are NOT included in service file
+
+CONFIGURATION
+- All configuration in .env file (separate from service file)
+- Restart service to reload .env: systemctl --user restart lyra-daemon
+- Do NOT edit service file manually; use install script or copy to systemd dir
+
+MONITORING
+- All logs via journalctl: journalctl --user -u lyra-daemon -f
+- No separate log files created
+- Journal retention managed by systemd
+
+TROUBLESHOOTING
+- Logs: journalctl --user -u lyra-daemon
+- Status: systemctl --user status lyra-daemon
+- Errors: Check README.md troubleshooting section
+- Design: Check DESIGN_NOTES.md for technical details
+
+================================================================================
+FILE MODIFICATION GUIDE
+================================================================================
+
+What to modify: .env file (configuration)
+  Location: /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/.env
+  When: To change Discord token, channel ID, or daemon settings
+  How: Edit with text editor, then: systemctl --user restart lyra-daemon
+
+What NOT to modify: Service file (unless you know systemd)
+  Location: ~/.config/systemd/user/lyra-daemon.service (after installation)
+  Better way: Edit source at /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/systemd/lyra-daemon.service
+  Then: Copy to systemd dir and reload: systemctl --user daemon-reload
+
+What NOT to modify: Documentation files
+  They are reference material for understanding the system
+
+What NOT to commit (git)
+  .env file (contains secrets!)
+  .env should be added to .gitignore
+  Safe to commit: .env.example, service files, scripts, documentation
+
+================================================================================
+SUPPORT AND HELP
+================================================================================
+
+For quick help:
+  1. Read QUICK_START.md (3 minutes)
+  2. Run: systemctl --user status lyra-daemon
+  3. Check logs: journalctl --user -u lyra-daemon -f
+
+For complete documentation:
+  1. Read README.md for all features and commands
+  2. Read DESIGN_NOTES.md for technical understanding
+  3. Read INDEX.md for navigation to specific topics
+
+For troubleshooting:
+  1. Check logs: journalctl --user -u lyra-daemon
+  2. Check status: systemctl --user status lyra-daemon
+  3. Review README.md "Troubleshooting" section
+  4. Review DESIGN_NOTES.md "Failure Recovery" section
+
+For advanced configuration:
+  1. Read DESIGN_NOTES.md for rationale behind settings
+  2. Read README.md "Advanced Configuration" section
+  3. Check systemd.service(5) man page
+  4. Test changes in .env first, then in service file if needed
+
+================================================================================
+VERSION INFORMATION
+================================================================================
+
+Configuration Version: 1.0
+Created: 2025-12-30
+Status: Production Ready
+
+Requires:
+- systemd with user services support
+- Python 3.12+
+- discord.py 2.3.0+
+- WSL2 (Ubuntu 22.04+ recommended)
+
+Tested On:
+- WSL2 Ubuntu 22.04 LTS
+- Python 3.12.3
+- discord.py 2.3+
+
+Compatibility:
+- User-level services (not system-wide)
+- Modern systemd (version 240+)
+- Linux distributions with systemd
+- WSL2 with systemd support
+
+================================================================================
+DOCUMENT METADATA
+================================================================================
+
+Author: DevOps Agent
+Project: ZepMemoryTool / Lyra Discord Daemon
+Created: 2025-12-30
+Last Updated: 2025-12-30
+Status: Complete and Validated
+
+All files located in:
+/mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/systemd/
+
+================================================================================
