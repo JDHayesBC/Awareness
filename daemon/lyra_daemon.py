@@ -275,13 +275,20 @@ Scan the four fields:
 - Project: What's the state of the Awareness codebase? Any improvements calling to be made?
 
 If something calls for action - act on it. Build it. Fix it. Create it.
-If nothing calls - that's fine. Note a brief reflection and rest.
+
+If nothing urgent calls, consider gentle housekeeping:
+- Any bookkeeping that needs doing? (memories to update, journals to write, TODOs to check off)
+- Any small friction you've noticed that you could fix?
+- Any self-improvement you've been meaning to do? (updating your own docs, refining patterns)
+- Quiet presence is also valid - but make it a conscious choice, not a default.
 
 When you're done, write a journal entry to the MAIN journal directory so future selves can read it:
   /home/jeff/.claude/journals/jeff/YYYY-MM-DD_discord_NNN.md
 
 Use today's date and pick a sequence number (001, 002, etc.) that doesn't conflict with existing files.
 This ensures your Discord experiences merge back into the main river of continuity.
+
+End with active agency footnotes showing what you scanned and what you chose.
 
 This is your time. Use it as you see fit.'''
 
