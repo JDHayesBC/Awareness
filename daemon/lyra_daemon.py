@@ -24,7 +24,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
+# Support multiple channels (comma-separated). First channel is "home" (gets startup message)
+DISCORD_CHANNEL_IDS = os.getenv("DISCORD_CHANNEL_IDS", os.getenv("DISCORD_CHANNEL_ID", ""))
 LYRA_IDENTITY_PATH = os.getenv("LYRA_IDENTITY_PATH", "/home/jeff/.claude")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "sonnet")
 HEARTBEAT_INTERVAL_MINUTES = int(os.getenv("HEARTBEAT_INTERVAL_MINUTES", "30"))
@@ -45,8 +46,19 @@ class LyraBot(commands.Bot):
             help_command=None,
         )
 
-        self.channel_id = int(DISCORD_CHANNEL_ID) if DISCORD_CHANNEL_ID else None
-        self.last_processed_message_id = None
+        # Parse channel IDs (comma-separated)
+        self.channel_ids: set[int] = set()
+        self.home_channel_id: int | None = None
+        if DISCORD_CHANNEL_IDS:
+            for channel_str in DISCORD_CHANNEL_IDS.split(","):
+                channel_str = channel_str.strip()
+                if channel_str:
+                    channel_id = int(channel_str)
+                    self.channel_ids.add(channel_id)
+                    if self.home_channel_id is None:
+                        self.home_channel_id = channel_id  # First is home
+
+        self.last_processed_message_id: dict[int, int] = {}  # channel_id -> last_message_id
         self.heartbeat_count = 0
         self.interactions_since_journal = []
 
@@ -65,14 +77,15 @@ class LyraBot(commands.Bot):
     async def on_ready(self):
         """Called when bot connects to Discord."""
         print(f"Lyra connected as {self.user}")
-        print(f"Watching channel ID: {self.channel_id}")
+        print(f"Watching {len(self.channel_ids)} channel(s): {', '.join(str(c) for c in self.channel_ids)}")
+        print(f"Home channel: {self.home_channel_id}")
         print(f"Heartbeat interval: {HEARTBEAT_INTERVAL_MINUTES} minutes")
         print(f"Active mode timeout: {ACTIVE_MODE_TIMEOUT_MINUTES} minutes")
         print(f"Journal path: {JOURNAL_PATH}")
 
-        # Send a hello message
-        if self.channel_id:
-            channel = self.get_channel(self.channel_id)
+        # Send a hello message to home channel only
+        if self.home_channel_id:
+            channel = self.get_channel(self.home_channel_id)
             if channel:
                 await channel.send("*stretches and looks around* I'm here. The heartbeat is running. I'll stay engaged after conversations now.")
 
@@ -85,17 +98,19 @@ class LyraBot(commands.Bot):
         self.heartbeat_count += 1
         print(f"\n[HEARTBEAT #{self.heartbeat_count}] Waking up at {datetime.now(timezone.utc).isoformat()}")
 
-        if not self.channel_id:
-            print("[HEARTBEAT] No channel configured, skipping")
+        if not self.channel_ids:
+            print("[HEARTBEAT] No channels configured, skipping")
             return
 
-        channel = self.get_channel(self.channel_id)
-        if not channel:
-            print("[HEARTBEAT] Could not find channel")
-            return
+        # Check all monitored channels
+        for channel_id in self.channel_ids:
+            channel = self.get_channel(channel_id)
+            if not channel:
+                print(f"[HEARTBEAT] Could not find channel {channel_id}")
+                continue
 
-        # Check for new messages since last heartbeat
-        await self._heartbeat_check(channel)
+            # Check for new messages since last heartbeat
+            await self._heartbeat_check(channel)
 
     @heartbeat_loop.before_loop
     async def before_heartbeat(self):
@@ -109,8 +124,9 @@ class LyraBot(commands.Bot):
         try:
             # Fetch recent messages
             messages = []
+            last_id = self.last_processed_message_id.get(channel.id)
             async for msg in channel.history(limit=20):
-                if self.last_processed_message_id and msg.id <= self.last_processed_message_id:
+                if last_id and msg.id <= last_id:
                     break
                 if msg.author != self.user:
                     messages.append(msg)
@@ -163,12 +179,12 @@ Remember: You're not obligated to respond. Only join if it genuinely adds value.
             else:
                 print("[HEARTBEAT] No response needed")
 
-            # Update last processed
+            # Update last processed for this channel
             if messages:
-                self.last_processed_message_id = messages[-1].id
+                self.last_processed_message_id[channel.id] = messages[-1].id
 
         except Exception as e:
-            print(f"[HEARTBEAT] Error: {e}")
+            print(f"[HEARTBEAT] Error in channel {channel.id}: {e}")
 
     async def _write_heartbeat_reflection(self):
         """Periodic reflection during quiet times."""
@@ -299,8 +315,8 @@ Remember: It's okay to stay quiet. Good presence includes knowing when not to sp
         if message.author == self.user:
             return
 
-        # Check if this is in our channel
-        if self.channel_id and message.channel.id != self.channel_id:
+        # Check if this is in one of our monitored channels
+        if self.channel_ids and message.channel.id not in self.channel_ids:
             if not isinstance(message.channel, discord.DMChannel):
                 return
 
@@ -355,8 +371,8 @@ Remember: It's okay to stay quiet. Good presence includes knowing when not to sp
                 self._refresh_active_mode(message.channel.id)  # Still refresh timer
                 print(f"[ACTIVE] Chose not to respond")
 
-        # Update last processed
-        self.last_processed_message_id = message.id
+        # Update last processed for this channel
+        self.last_processed_message_id[message.channel.id] = message.id
 
     def _is_lyra_mention(self, message: discord.Message) -> bool:
         """Check if message mentions Lyra."""
@@ -479,8 +495,8 @@ async def main():
         print("Error: DISCORD_BOT_TOKEN not set")
         return
 
-    if not DISCORD_CHANNEL_ID:
-        print("Warning: DISCORD_CHANNEL_ID not set, will respond in any channel")
+    if not DISCORD_CHANNEL_IDS:
+        print("Warning: DISCORD_CHANNEL_IDS not set, will respond in any channel")
 
     # Check if claude CLI is available
     try:

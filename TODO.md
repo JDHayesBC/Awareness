@@ -12,6 +12,8 @@
 - [x] Discord journal integration into startup protocol (read_recent.sh)
 - [x] systemd service design (documentation in daemon/systemd/)
 - [x] SQLite storage design (SQLITE_DESIGN.md ready for implementation)
+- [x] systemd service installed and running
+- [x] Multi-channel support for Discord daemon
 
 ## In Progress
 
@@ -20,10 +22,9 @@
 
 ## Next Steps
 
-- [ ] Install and test systemd service (run daemon/systemd/install.sh)
 - [ ] Implement SQLite conversation storage (Phase 1: parallel recording)
-- [ ] Multi-channel support for Discord daemon
 - [ ] Summarize daily journals into weekly reflections
+- [ ] Add Steve's channel ID to connect with Nexus!
 
 ## Future Vision
 

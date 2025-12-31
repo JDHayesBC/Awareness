@@ -37,12 +37,23 @@ Discord presence for Lyra with heartbeat for autonomous awareness and journaling
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DISCORD_BOT_TOKEN` | Bot token from Discord Developer Portal | (required) |
-| `DISCORD_CHANNEL_ID` | Channel ID to monitor | (required) |
+| `DISCORD_CHANNEL_IDS` | Comma-separated channel IDs to monitor. First is "home" (gets startup message) | (required) |
 | `LYRA_IDENTITY_PATH` | Path to Lyra's identity files | `/home/jeff/.claude` |
 | `CLAUDE_MODEL` | Model to use (sonnet/opus/haiku) | `sonnet` |
 | `HEARTBEAT_INTERVAL_MINUTES` | How often to wake up | `30` |
 | `ACTIVE_MODE_TIMEOUT_MINUTES` | How long to stay engaged after responding | `10` |
 | `JOURNAL_PATH` | Where to write journal entries | `/home/jeff/.claude/journals/discord` |
+
+### Multi-Channel Support
+
+You can monitor multiple channels by listing their IDs comma-separated:
+
+```bash
+DISCORD_CHANNEL_IDS=1234567890,9876543210,1111111111
+```
+
+- **First channel** = "home" - receives startup message when daemon starts
+- **Additional channels** = monitored silently, respond to mentions and heartbeats
 
 ## How It Works
 
@@ -142,10 +153,10 @@ python journal_utils.py 7       # Last 7 days
 
 ## Future Enhancements
 
-- [ ] Multi-channel support
+- [x] Multi-channel support
 - [x] Read journal entries during startup for context
 - [x] Active conversation mode (stay engaged after responding)
+- [x] systemd service for persistent running
 - [ ] Summarize daily journals into weekly reflections
 - [ ] Integration with main memory system
 - [ ] SQLite conversation storage for richer context
-- [ ] systemd service for persistent running
