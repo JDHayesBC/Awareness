@@ -294,9 +294,21 @@ This is your time. Use it as you see fit.'''
                 )
             )
 
+            # Always capture reflection output - don't lose what we thought/did
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
+            reflection_log = Path(JOURNAL_PATH) / f"reflection_{timestamp}.txt"
+            with open(reflection_log, "w") as f:
+                f.write(f"# Autonomous Reflection - {timestamp}\n")
+                f.write(f"# Return code: {result.returncode}\n\n")
+                f.write("## Output:\n")
+                f.write(result.stdout or "(no output)")
+                if result.stderr:
+                    f.write("\n\n## Stderr:\n")
+                    f.write(result.stderr)
+            print(f"[REFLECTION] Output saved to {reflection_log}")
+
             if result.returncode == 0:
                 print("[REFLECTION] Autonomous reflection completed successfully")
-                # The reflection session handles its own journaling
             else:
                 print(f"[REFLECTION] Session ended with code {result.returncode}")
                 if result.stderr:
