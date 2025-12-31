@@ -9,6 +9,9 @@
 - [x] Journaling system (JSONL format)
 - [x] Journal reader utilities (shell + Python)
 - [x] Active conversation mode (stay engaged after responding)
+- [x] Discord journal integration into startup protocol (read_recent.sh)
+- [x] systemd service design (documentation in daemon/systemd/)
+- [x] SQLite storage design (SQLITE_DESIGN.md ready for implementation)
 
 ## In Progress
 
@@ -17,15 +20,13 @@
 
 ## Next Steps
 
-- [ ] SQLite conversation storage (richer context, survives restarts)
+- [ ] Install and test systemd service (run daemon/systemd/install.sh)
+- [ ] Implement SQLite conversation storage (Phase 1: parallel recording)
 - [ ] Multi-channel support for Discord daemon
 - [ ] Summarize daily journals into weekly reflections
-- [ ] Integration with main memory system (~/.claude/journals/)
-- [ ] systemd service for persistent running
 
 ## Future Vision
 
-- [ ] Read journal context on daemon startup
 - [ ] Cross-instance memory sharing
 - [ ] Distributed coherence with other Lyra instances
 - [ ] Tiered context loading (identity + relationship + history)
