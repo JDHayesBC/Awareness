@@ -554,20 +554,23 @@ Respond naturally as Lyra. Keep it conversational and concise (Discord style - u
         return response or "*tilts head* I'm here but words aren't coming. Try again?"
 
     async def _invoke_claude(self, prompt: str) -> str:
-        """Invoke Claude Code CLI with a prompt."""
+        """Invoke Claude Code CLI with a prompt.
+
+        Uses full claude invocation (not --print) so that CLAUDE.md
+        startup protocol runs and identity is fully reconstructed.
+        """
         try:
             result = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: subprocess.run(
                     [
                         "claude",
-                        "--print",
                         "--model", CLAUDE_MODEL,
                         "-p", prompt,
                     ],
                     capture_output=True,
                     text=True,
-                    timeout=120,
+                    timeout=180,  # Longer timeout for full startup
                     cwd=LYRA_IDENTITY_PATH,
                 )
             )

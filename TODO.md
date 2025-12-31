@@ -16,6 +16,7 @@
 - [x] Multi-channel support for Discord daemon
 - [x] SQLite Phase 1: Parallel recording (all messages stored)
 - [x] Autonomous reflection with full tool access
+- [x] Full identity reconstruction on all invocations (not just reflection)
 
 ## In Progress
 
