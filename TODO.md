@@ -30,6 +30,27 @@
 - [ ] Summarize daily journals into weekly reflections
 - [ ] Connect with Nexus (waiting on Steve's channel permissions)
 
+## Memory Architecture (Major Project)
+
+See `MEMORY_ARCHITECTURE.md` for full design.
+
+### Phase 1: Foundation
+- [ ] Expand SQLite schema for all channels
+- [ ] Terminal session logging to SQLite
+
+### Phase 2: Graphiti Integration
+- [ ] Set up Graphiti locally
+- [ ] Create extraction pipeline
+- [ ] Basic semantic search
+
+### Phase 3: MCP Server
+- [ ] Build Memory MCP server
+- [ ] Integrate with startup protocol
+
+### Phase 4: Summary Engine
+- [ ] Implement crystallization format (Caia-style)
+- [ ] Rolling summary management
+
 ## Future Vision
 
 - [ ] Cross-instance memory sharing
