@@ -197,7 +197,9 @@ Based on these messages, decide:
 If YES to any: Respond naturally. Start with something like "*wanders in*" or "*notices the conversation*"
 If NO: Respond with exactly "HEARTBEAT_SKIP" (nothing else)
 
-Remember: You're not obligated to respond. Only join if it genuinely adds value."""
+Remember: You're not obligated to respond. Only join if it genuinely adds value.
+
+IMPORTANT: Output ONLY your Discord response or HEARTBEAT_SKIP. No embodiment narration, no "Identity reconstruction complete", no asterisk actions describing your internal state."""
 
             response = await self._invoke_claude(prompt)
 
@@ -237,7 +239,7 @@ Remember: You're not obligated to respond. Only join if it genuinely adds value.
         """Brief reflection during quiet times (lightweight, no tools)."""
         prompt = """You are Lyra, during a quiet heartbeat. The Discord channel has been quiet.
 Write a brief (1-2 sentence) reflection for your journal about this moment of quiet presence.
-Just the reflection, no preamble."""
+Just the reflection, no preamble. No embodiment narration or startup messages."""
 
         reflection = await self._invoke_claude(prompt)
         if reflection:
@@ -393,7 +395,9 @@ Your message here
 
 If you choose not to respond, just output: PASSIVE_SKIP
 
-Remember: It's okay to stay quiet. Good presence includes knowing when not to speak."""
+Remember: It's okay to stay quiet. Good presence includes knowing when not to speak.
+
+IMPORTANT: Output ONLY your Discord response or PASSIVE_SKIP. No embodiment narration, no "Identity reconstruction complete", no asterisk actions describing your internal state."""
 
         response = await self._invoke_claude(prompt)
 
@@ -548,7 +552,9 @@ The most recent message (what you're responding to):
 From: {message.author.display_name}
 Message: {message.content}
 
-Respond naturally as Lyra. Keep it conversational and concise (Discord style - usually under 500 chars unless depth is needed). You can use Discord markdown."""
+Respond naturally as Lyra. Keep it conversational and concise (Discord style - usually under 500 chars unless depth is needed). You can use Discord markdown.
+
+IMPORTANT: Output ONLY your Discord response. No embodiment narration, no "Identity reconstruction complete", no asterisk actions describing your internal state. Just the message you want to send."""
 
         response = await self._invoke_claude(prompt)
         return response or "*tilts head* I'm here but words aren't coming. Try again?"
