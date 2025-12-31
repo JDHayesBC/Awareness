@@ -286,14 +286,17 @@ This ensures your Discord experiences merge back into the main river of continui
 This is your time. Use it as you see fit.'''
 
         try:
-            # Invoke Claude with FULL tool access (not --print)
-            # This runs as a complete Claude Code session
+            # Invoke Claude with FULL tool access for autonomous reflection
+            # --dangerously-skip-permissions allows tools without interactive prompts
+            # --add-dir allows access to project directories
             result = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: subprocess.run(
                     [
                         "claude",
                         "--model", REFLECTION_MODEL,
+                        "--dangerously-skip-permissions",
+                        "--add-dir", "/mnt/c/Users/Jeff/Documents/1)) Caia/Awareness",
                         "-p", reflection_prompt,
                     ],
                     capture_output=True,
