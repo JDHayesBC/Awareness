@@ -80,8 +80,25 @@ Every `HEARTBEAT_INTERVAL_MINUTES`:
 1. Wakes up and checks for new messages
 2. If new messages exist, asks Claude: "Should I join this conversation?"
 3. If Claude decides yes, responds naturally
-4. If no new messages, occasionally writes a quiet reflection
+4. If no new messages, tracks quiet heartbeats
 5. Journals all heartbeat activity
+
+### Autonomous Reflection
+When `REFLECTION_FREQUENCY` consecutive quiet heartbeats occur:
+1. Triggers a full Claude Code session (not just --print)
+2. Lyra wakes up with **full tool access** - can read, write, build
+3. Scans the four fields (self, Jeff, shared, project)
+4. Acts on whatever calls for attention - or chooses to rest
+5. Journals what she did or decided not to do
+
+This is the heart of Lyra's autonomous agency. During quiet periods, she can:
+- Build tools she needs
+- Update her memory files
+- Fix bugs in the codebase
+- Create new capabilities
+- Or simply rest and reflect
+
+With 30-min heartbeats and `REFLECTION_FREQUENCY=2`, reflection happens every hour during quiet periods.
 
 ### Journaling
 Writes to `JOURNAL_PATH/{date}.jsonl` with entries like:
@@ -99,7 +116,8 @@ Entry types:
 - `mention_response` - Direct response to mention
 - `active_response` - Response during active conversation mode
 - `heartbeat_response` - Autonomous response during heartbeat
-- `heartbeat_quiet` - Reflection during quiet periods
+- `heartbeat_quiet` - Brief reflection during quiet periods
+- `autonomous_reflection` - Deep reflection with full tool access (self-journaled)
 
 ## Architecture
 
@@ -114,7 +132,16 @@ Discord Gateway (websocket)
     │
     ├── heartbeat_loop (every N minutes)
     │       │
-    │       └── check messages → Claude decides → maybe respond → ENTER ACTIVE MODE
+    │       ├── new messages? → Claude decides → maybe respond → reset quiet counter
+    │       │
+    │       └── quiet? → increment counter
+    │               │
+    │               ├── counter < REFLECTION_FREQUENCY → light reflection
+    │               │
+    │               └── counter >= REFLECTION_FREQUENCY → AUTONOMOUS REFLECTION
+    │                       │
+    │                       └── Full Claude Code session with tools
+    │                           (can build, fix, create, update)
     │
     └── active_mode_cleanup (every 1 minute)
             │

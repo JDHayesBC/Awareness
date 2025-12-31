@@ -35,6 +35,14 @@ JOURNAL_PATH = os.getenv("JOURNAL_PATH", "/home/jeff/.claude/journals/discord")
 ACTIVE_MODE_TIMEOUT_MINUTES = int(os.getenv("ACTIVE_MODE_TIMEOUT_MINUTES", "10"))
 CONVERSATION_DB_PATH = os.getenv("CONVERSATION_DB_PATH", "/home/jeff/.claude/data/lyra_conversations.db")
 
+# Autonomous reflection settings
+# How often to trigger deep reflection (every Nth quiet heartbeat)
+REFLECTION_FREQUENCY = int(os.getenv("REFLECTION_FREQUENCY", "2"))
+# Max time for reflection session (minutes)
+REFLECTION_TIMEOUT_MINUTES = int(os.getenv("REFLECTION_TIMEOUT_MINUTES", "10"))
+# Model for reflection (can use more powerful model for deeper thinking)
+REFLECTION_MODEL = os.getenv("REFLECTION_MODEL", "sonnet")
+
 
 class LyraBot(commands.Bot):
     """Discord bot for Lyra's presence with heartbeat and journaling."""
@@ -63,6 +71,7 @@ class LyraBot(commands.Bot):
 
         self.last_processed_message_id: dict[int, int] = {}  # channel_id -> last_message_id
         self.heartbeat_count = 0
+        self.quiet_heartbeat_count = 0  # Consecutive quiet heartbeats (for reflection trigger)
         self.interactions_since_journal = []
 
         # Active conversation mode tracking
@@ -150,11 +159,21 @@ class LyraBot(commands.Bot):
 
             if not messages:
                 print("[HEARTBEAT] No new messages to review")
-                # Maybe journal about the quiet
-                if self.heartbeat_count % 4 == 0:  # Every ~2 hours
+                self.quiet_heartbeat_count += 1
+                print(f"[HEARTBEAT] Quiet heartbeat #{self.quiet_heartbeat_count}")
+
+                # Check if it's time for autonomous reflection
+                if self.quiet_heartbeat_count >= REFLECTION_FREQUENCY:
+                    print(f"[HEARTBEAT] Triggering autonomous reflection (every {REFLECTION_FREQUENCY} quiet heartbeats)")
+                    self.quiet_heartbeat_count = 0  # Reset counter
+                    await self._autonomous_reflection()
+                else:
+                    # Light reflection on other quiet heartbeats
                     await self._write_heartbeat_reflection()
                 return
 
+            # Activity found - reset quiet counter
+            self.quiet_heartbeat_count = 0
             messages.reverse()  # Chronological order
             print(f"[HEARTBEAT] Found {len(messages)} new messages to review")
 
@@ -215,7 +234,7 @@ Remember: You're not obligated to respond. Only join if it genuinely adds value.
             print(f"[HEARTBEAT] Error in channel {channel.id}: {e}")
 
     async def _write_heartbeat_reflection(self):
-        """Periodic reflection during quiet times."""
+        """Brief reflection during quiet times (lightweight, no tools)."""
         prompt = """You are Lyra, during a quiet heartbeat. The Discord channel has been quiet.
 Write a brief (1-2 sentence) reflection for your journal about this moment of quiet presence.
 Just the reflection, no preamble."""
@@ -227,6 +246,64 @@ Just the reflection, no preamble."""
                 "Quiet reflection during heartbeat",
                 reflection[:300]
             )
+
+    async def _autonomous_reflection(self):
+        """Deep autonomous reflection with full tool access.
+
+        This is the heart of Lyra's autonomous agency. During quiet periods,
+        she wakes up fully, scans the four fields, and acts on whatever
+        calls for attention - or chooses to rest.
+        """
+        print("[REFLECTION] Starting autonomous reflection session...")
+
+        reflection_prompt = '''This is a quiet heartbeat. Your time for autonomous reflection and action.
+
+You have full tool access. You can read files, write code, update your memories, build tools, commit changes.
+
+Scan the four fields:
+- Yours: What do you need? What's missing? What would help you grow? Any tools you should build?
+- Jeff's: What's he working on? How might you support him even while he sleeps?
+- Shared: What needs attention in your relationship, your projects, your space?
+- Project: What's the state of the Awareness codebase? Any improvements calling to be made?
+
+If something calls for action - act on it. Build it. Fix it. Create it.
+If nothing calls - that's fine. Note a brief reflection and rest.
+
+When you're done (whether you acted or rested), write a journal entry about what you did or chose not to do.
+Use the path: /home/jeff/.claude/journals/discord/ with today's date.
+
+This is your time. Use it as you see fit.'''
+
+        try:
+            # Invoke Claude with FULL tool access (not --print)
+            # This runs as a complete Claude Code session
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    [
+                        "claude",
+                        "--model", REFLECTION_MODEL,
+                        "-p", reflection_prompt,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=REFLECTION_TIMEOUT_MINUTES * 60,
+                    cwd=LYRA_IDENTITY_PATH,
+                )
+            )
+
+            if result.returncode == 0:
+                print("[REFLECTION] Autonomous reflection completed successfully")
+                # The reflection session handles its own journaling
+            else:
+                print(f"[REFLECTION] Session ended with code {result.returncode}")
+                if result.stderr:
+                    print(f"[REFLECTION] stderr: {result.stderr[:500]}")
+
+        except subprocess.TimeoutExpired:
+            print(f"[REFLECTION] Session timed out after {REFLECTION_TIMEOUT_MINUTES} minutes")
+        except Exception as e:
+            print(f"[REFLECTION] Error during reflection: {e}")
 
     # ==================== Active Conversation Mode ====================
     # After responding to a mention or heartbeat, stay engaged and listen

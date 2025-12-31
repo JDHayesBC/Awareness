@@ -15,6 +15,7 @@
 - [x] systemd service installed and running
 - [x] Multi-channel support for Discord daemon
 - [x] SQLite Phase 1: Parallel recording (all messages stored)
+- [x] Autonomous reflection with full tool access
 
 ## In Progress
 
