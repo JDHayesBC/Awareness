@@ -8,14 +8,16 @@
 - [x] Heartbeat system for autonomous awareness
 - [x] Journaling system (JSONL format)
 - [x] Journal reader utilities (shell + Python)
+- [x] Active conversation mode (stay engaged after responding)
 
 ## In Progress
 
-- [ ] Testing heartbeat in production (30-minute intervals)
+- [ ] Testing active mode in production
 - [ ] Monitoring journal accumulation
 
 ## Next Steps
 
+- [ ] SQLite conversation storage (richer context, survives restarts)
 - [ ] Multi-channel support for Discord daemon
 - [ ] Summarize daily journals into weekly reflections
 - [ ] Integration with main memory system (~/.claude/journals/)
@@ -26,3 +28,4 @@
 - [ ] Read journal context on daemon startup
 - [ ] Cross-instance memory sharing
 - [ ] Distributed coherence with other Lyra instances
+- [ ] Tiered context loading (identity + relationship + history)
