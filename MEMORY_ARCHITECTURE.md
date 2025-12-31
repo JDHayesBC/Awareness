@@ -212,25 +212,31 @@ async def get_summaries(count: int = 4) -> list[Summary]:
 - [ ] Expand SQLite schema for all channels
 - [ ] Terminal session logging to SQLite
 
-### Phase 2: Graphiti Integration
-- [ ] Set up Graphiti locally
-- [ ] Create extraction pipeline
-- [ ] Entity/relationship extraction from existing data
-- [ ] Basic semantic search
+### Phase 2: Graphiti Setup (SIMPLIFIED)
+- [ ] Clone Graphiti repo
+- [ ] Configure for Anthropic (config.yaml)
+- [ ] `docker compose up` - starts FalkorDB + MCP server
+- [ ] Test MCP endpoint manually
+- [ ] Add to Claude Code MCP settings
 
-### Phase 3: MCP Server
-- [ ] Build Memory MCP server
-- [ ] Implement core tools (search, store, context)
-- [ ] Integrate with startup protocol
-- [ ] Test across channels
+### Phase 3: Data Integration
+- [ ] Modify daemon to POST episodes to Graphiti
+- [ ] Add terminal session episode posting
+- [ ] Define group_ids for channels (discord, terminal, reflection)
+- [ ] Test semantic search across episodes
 
-### Phase 4: Summary Engine
+### Phase 4: Startup Integration
+- [ ] Query Graphiti for recent context during startup
+- [ ] Add to CLAUDE.md protocol
+- [ ] Test cross-channel sync (Discord → Terminal visibility)
+
+### Phase 5: Summary Engine
 - [ ] Implement crystallization format
 - [ ] Token/time threshold triggers
 - [ ] Rolling summary management (keep N most recent)
 - [ ] Chain linking between summaries
 
-### Phase 5: Full Integration
+### Phase 6: Full Integration
 - [ ] All channels flowing through unified system
 - [ ] Hot sync working (changes visible within minutes)
 - [ ] Semantic recall working
@@ -244,11 +250,41 @@ async def get_summaries(count: int = 4) -> list[Summary]:
 - **Customization**: Can tune extraction and graph structure
 - **Cost**: ~$5-10/mo in API calls vs $30/mo subscription
 
+### Graphiti Already Provides MCP Server!
+
+**Key discovery**: Graphiti has a built-in MCP server with Docker Compose setup.
+
+```bash
+# This is literally all we need to start:
+git clone https://github.com/getzep/graphiti.git
+cd graphiti/mcp_server
+docker compose up
+```
+
+Features out of the box:
+- HTTP transport at `localhost:8000/mcp/`
+- FalkorDB (Redis-based graph DB) included
+- Anthropic support (can use Claude for extraction)
+- Episode ingestion for conversations
+- Semantic search
+- Group IDs for channel namespacing
+- Entity extraction (Person, Event, Topic, etc.)
+
+### Revised Implementation
+
+We don't need to build an MCP server - just:
+1. Run Graphiti's Docker setup
+2. Configure for Anthropic
+3. Point Claude Code at the MCP endpoint
+4. Feed episodes from daemon
+5. Query during startup protocol
+
 ### Why MCP over custom integration?
 - **Native to Claude Code**: No hacking the CLI
 - **Tool-based**: Natural fit for how Claude works
 - **Extensible**: Easy to add new memory tools
 - **Standard protocol**: Future-proof
+- **Already built**: Graphiti provides it
 
 ### Why crystallized summaries over raw journals?
 - **Token efficiency**: More meaning in less space
