@@ -1,0 +1,21 @@
+# PPS Observatory - Web Dashboard
+# Lightweight container for the observability UI
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY docker/requirements-web.txt requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy web application
+COPY web/ /app/web/
+
+# Copy layers (needed for some imports)
+COPY layers/ /app/layers/
+
+WORKDIR /app/web
+
+# Run with uvicorn
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

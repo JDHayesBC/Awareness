@@ -7,6 +7,7 @@
 # Services:
 #   - chromadb: Vector database for embeddings
 #   - pps-server: MCP server for Claude Code integration
+#   - pps-web: Web dashboard for observability
 #
 # Volumes:
 #   - chromadb_data: Persistent vector storage
@@ -60,6 +61,36 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+
+  # Web Dashboard for observability
+  pps-web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    container_name: pps-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8202}:8000"
+    depends_on:
+      chromadb:
+        condition: service_started
+    environment:
+      - TZ=${TZ:-America/Los_Angeles}
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - CLAUDE_HOME=/app/claude_home
+    volumes:
+      # Mount identity files (read-only)
+      - ${CLAUDE_HOME:-/home/jeff/.claude}/memories:/app/claude_home/memories:ro
+      - ${CLAUDE_HOME:-/home/jeff/.claude}/data:/app/claude_home/data:ro
+      - ${CLAUDE_HOME:-/home/jeff/.claude}/journals:/app/claude_home/journals:ro
+      - ${CLAUDE_HOME:-/home/jeff/.claude}/summaries:/app/claude_home/summaries:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
 volumes:
   chromadb_data:

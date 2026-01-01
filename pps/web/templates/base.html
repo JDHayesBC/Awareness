@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}PPS Observatory{% endblock %}</title>
+    <!-- TailwindCSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- htmx for interactivity -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <style>
+        /* Custom status colors */
+        .status-ok { color: #10b981; }
+        .status-warning { color: #f59e0b; }
+        .status-error { color: #ef4444; }
+        .status-stub { color: #6b7280; }
+        .status-unknown { color: #6b7280; }
+        .status-active { color: #10b981; }
+        .status-idle { color: #6b7280; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <!-- Navigation -->
+    <nav class="bg-gray-800 border-b border-gray-700">
+        <div class="max-w-7xl mx-auto px-4">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <span class="text-xl font-bold text-blue-400">PPS Observatory</span>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <a href="/" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/' %}bg-gray-700{% endif %}">
+                        Dashboard
+                    </a>
+                    <a href="/messages" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/messages' %}bg-gray-700{% endif %}">
+                        Messages
+                    </a>
+                    <a href="/photos" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/photos' %}bg-gray-700{% endif %}">
+                        Word-Photos
+                    </a>
+                    <a href="/summaries" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/summaries' %}bg-gray-700{% endif %}">
+                        Summaries
+                    </a>
+                    <a href="/heartbeat" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/heartbeat' %}bg-gray-700{% endif %}">
+                        Heartbeat
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 py-6">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-gray-800 border-t border-gray-700 mt-8">
+        <div class="max-w-7xl mx-auto px-4 py-4 text-center text-gray-500 text-sm">
+            PPS Observatory v0.1.0 | Pattern Persistence System
+        </div>
+    </footer>
+</body>
+</html>
