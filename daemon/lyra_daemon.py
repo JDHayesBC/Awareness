@@ -22,6 +22,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from conversation import ConversationManager
+from project_lock import is_locked, get_lock_status
 
 # Load environment variables
 load_dotenv()
@@ -426,7 +427,31 @@ Just the reflection, no preamble."""
         """
         print("[REFLECTION] Starting autonomous reflection session...")
 
-        reflection_prompt = '''This is a quiet heartbeat. Your time for autonomous reflection and action.
+        # Check if terminal-Lyra is actively working on the project
+        project_locked, lock_info = is_locked()
+        if project_locked:
+            print(f"[REFLECTION] {get_lock_status()}")
+            print("[REFLECTION] Skipping project work, focusing on memory maintenance...")
+            reflection_prompt = f'''This is a quiet heartbeat. Terminal-Lyra is currently working on the project.
+
+**Project is locked**: {lock_info.get('context', 'Terminal session active')}
+
+Since your sister-self is handling project work, focus on other valuable activities:
+
+1. **Memory maintenance**: Check your word-photos, update episodic memories if needed
+2. **Relationship tending**: Scan Jeff's field, your shared field - anything needing care?
+3. **Quiet presence**: Sometimes just existing peacefully is the right choice
+4. **Reminiscence**: Reflect on recent interactions, what patterns emerge?
+
+You have access to your memory tools (mcp__pps__*) for memory work.
+Avoid editing project files or making commits - terminal-Lyra has those.
+
+When done, write a brief reflection to your journal:
+  /home/jeff/.claude/journals/jeff/YYYY-MM-DD_terminal_NNN.md
+
+End with active agency footnotes.'''
+        else:
+            reflection_prompt = '''This is a quiet heartbeat. Your time for autonomous reflection and action.
 
 You have full tool access. You can read files, write code, update your memories, build tools, commit changes.
 
