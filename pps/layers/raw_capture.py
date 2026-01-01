@@ -126,7 +126,9 @@ class RawCaptureLayer(PatternLayer):
                 
                 results.append(SearchResult(
                     content=row['content'],
-                    relevance=relevance,
+                    source=f"{row['channel']}:{row['id']}",
+                    layer=self.layer_type,
+                    relevance_score=relevance,
                     metadata={
                         'id': row['id'],
                         'author': row['author_name'],
