@@ -185,13 +185,18 @@ Next: Test MCP integration live in new session
 
 ## Future Vision
 
-### Portable Deployment for Steve/Nexus
+### Portable Deployment for Steve/Nexus (COMPLETED 2026-01-01)
 Ultimate goal: Hand Steve a Docker image + simple instructions, and Nexus gets full PPS.
-- [ ] Consolidate PPS into single Docker Compose (currently stdio server runs in WSL, ChromaDB in Docker)
-- [ ] All-in-one container or compose file with MCP server + ChromaDB
-- [ ] Simple Claude Code MCP config that points to Docker container
-- [ ] Documentation: "Run this, hook it in this way, done"
-- [ ] Configurable paths for identity files (not hardcoded to /home/jeff/.claude)
+- [x] Consolidate PPS into single Docker Compose (stdio server connects to Docker services)
+- [x] All-in-one container or compose file with MCP server + ChromaDB
+- [x] Simple Claude Code MCP config that points to stdio server (see deploy/mcp-config-example.json)
+- [x] Documentation: "Run this, hook it in this way, done" (see DEPLOYMENT.md)
+- [x] Configurable paths for identity files (uses CLAUDE_HOME env var)
+- [x] Created automated setup script (deploy/setup.sh)
+- [x] Created deployment package script (package.sh)
+- [x] Example Claude home structure with sample word-photo
+
+Ready to package with: `./package.sh` → creates pps-deploy-{timestamp}.tar.gz
 
 ### Other Future Work
 - [ ] Cross-instance memory sharing
