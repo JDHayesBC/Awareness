@@ -203,21 +203,99 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="texture_query",
+            name="texture_search",
             description=(
-                "Query the knowledge graph (Layer 3: Rich Texture). "
-                "Use for exploring entities, relationships, and facts. "
-                "Note: Currently stubbed, returns empty until Graphiti is configured."
+                "Search the knowledge graph (Layer 3: Rich Texture) for entities and facts. "
+                "Use for semantic search over extracted knowledge - people, places, concepts, relationships. "
+                "Returns entities and facts ranked by relevance."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "What to query in the knowledge graph"
+                        "description": "What to search for in the knowledge graph"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results (default: 10)",
+                        "default": 10
                     }
                 },
                 "required": ["query"]
+            }
+        ),
+        Tool(
+            name="texture_explore",
+            description=(
+                "Explore the knowledge graph from a specific entity. "
+                "Use to find what's connected to a person, place, or concept. "
+                "Returns relationships and connected entities."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "entity_name": {
+                        "type": "string",
+                        "description": "Name of entity to explore from (e.g., 'Jeff', 'care-gravity')"
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "description": "How many relationship hops to traverse (default: 2)",
+                        "default": 2
+                    }
+                },
+                "required": ["entity_name"]
+            }
+        ),
+        Tool(
+            name="texture_timeline",
+            description=(
+                "Query the knowledge graph by time range. "
+                "Use to find what happened during a specific period. "
+                "Returns episodes and facts from the time range."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "since": {
+                        "type": "string",
+                        "description": "Start time (ISO format like '2026-01-01' or relative like '24h', '7d')"
+                    },
+                    "until": {
+                        "type": "string",
+                        "description": "End time (optional, defaults to now)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results (default: 20)",
+                        "default": 20
+                    }
+                },
+                "required": ["since"]
+            }
+        ),
+        Tool(
+            name="texture_add",
+            description=(
+                "Manually add content to the knowledge graph. "
+                "Use to store a fact, observation, or conversation for entity extraction. "
+                "Graphiti will automatically extract entities and relationships."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The content to store (conversation, note, observation)"
+                    },
+                    "channel": {
+                        "type": "string",
+                        "description": "Source channel for metadata (default: 'manual')",
+                        "default": "manual"
+                    }
+                },
+                "required": ["content"]
             }
         ),
         Tool(
@@ -403,7 +481,77 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         # Sort by relevance score
         all_results.sort(key=lambda r: r.relevance_score, reverse=True)
 
-        if not all_results:
+        # For startup context, also include recent turns since last summary
+        # This fills the gap between crystallized summaries and now
+        recent_turns_section = ""
+        if context.lower() == "startup":
+            try:
+                # Get the timestamp of the last summary
+                crystal_layer = layers[LayerType.CRYSTALLIZATION]
+                last_summary_time = await crystal_layer.get_latest_timestamp()
+
+                # Query SQLite for recent turns
+                raw_layer = layers[LayerType.RAW_CAPTURE]
+                conn = raw_layer._connect_with_wal()
+                cursor = conn.cursor()
+
+                min_turns = 10
+                max_turns = 30
+
+                rows_after = []
+                rows_before = []
+
+                if last_summary_time:
+                    # Get turns AFTER the last summary
+                    cursor.execute("""
+                        SELECT author_name, content, created_at, channel
+                        FROM messages
+                        WHERE created_at > ?
+                        ORDER BY created_at ASC LIMIT ?
+                    """, [last_summary_time.isoformat(), max_turns])
+                    rows_after = cursor.fetchall()
+
+                    # If not enough, get some from before
+                    if len(rows_after) < min_turns:
+                        needed = min_turns - len(rows_after)
+                        cursor.execute("""
+                            SELECT author_name, content, created_at, channel
+                            FROM messages
+                            WHERE created_at <= ?
+                            ORDER BY created_at DESC LIMIT ?
+                        """, [last_summary_time.isoformat(), needed])
+                        rows_before = list(reversed(cursor.fetchall()))
+                else:
+                    # No summary yet - get most recent turns
+                    cursor.execute("""
+                        SELECT author_name, content, created_at, channel
+                        FROM messages
+                        ORDER BY created_at DESC LIMIT ?
+                    """, [max_turns])
+                    rows_after = list(reversed(cursor.fetchall()))
+
+                conn.close()
+
+                all_rows = list(rows_before) + list(rows_after)
+
+                if all_rows:
+                    turns = []
+                    for row in all_rows:
+                        timestamp = row['created_at'][:16] if row['created_at'] else "?"
+                        author = row['author_name'] or "Unknown"
+                        content = row['content'] or ""
+                        channel = row['channel'] or ""
+                        # Truncate long content
+                        if len(content) > 300:
+                            content = content[:300] + "..."
+                        turns.append(f"[{timestamp}] [{channel}] {author}: {content}")
+
+                    header = f"\n---\n[recent_turns] ({len(all_rows)} turns since last summary)\n"
+                    recent_turns_section = header + "\n".join(turns)
+            except Exception as e:
+                recent_turns_section = f"\n---\n[recent_turns] Error fetching: {e}"
+
+        if not all_results and not recent_turns_section:
             return [TextContent(
                 type="text",
                 text=(
@@ -412,12 +560,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     "Layer status:\n"
                     "- Raw Capture: FTS5 full-text search\n"
                     "- Core Anchors: " + ("ChromaDB" if USE_CHROMA else "file-based") + "\n"
-                    "- Rich Texture: stub (Graphiti not configured)\n"
+                    "- Rich Texture: Graphiti (check if running with pps_health)\n"
                     "- Crystallization: active"
                 )
             )]
 
-        return [TextContent(type="text", text=clock_info + format_results(all_results))]
+        return [TextContent(type="text", text=clock_info + format_results(all_results) + recent_turns_section)]
 
     elif name == "anchor_search":
         query = arguments.get("query", "")
@@ -442,10 +590,43 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         results = await layers[LayerType.RAW_CAPTURE].search(query, limit)
         return [TextContent(type="text", text=format_results(results))]
 
-    elif name == "texture_query":
+    elif name == "texture_search":
         query = arguments.get("query", "")
-        results = await layers[LayerType.RICH_TEXTURE].search(query)
+        limit = arguments.get("limit", 10)
+        results = await layers[LayerType.RICH_TEXTURE].search(query, limit)
+        if not results:
+            return [TextContent(type="text", text="No results found. Graphiti may not be running or has no data yet.")]
         return [TextContent(type="text", text=format_results(results))]
+
+    elif name == "texture_explore":
+        entity_name = arguments.get("entity_name", "")
+        depth = arguments.get("depth", 2)
+        layer = layers[LayerType.RICH_TEXTURE]
+        results = await layer.explore(entity_name, depth)
+        if not results:
+            return [TextContent(type="text", text=f"No connections found for '{entity_name}'. Entity may not exist in the graph.")]
+        return [TextContent(type="text", text=format_results(results))]
+
+    elif name == "texture_timeline":
+        since = arguments.get("since", "")
+        until = arguments.get("until")
+        limit = arguments.get("limit", 20)
+        layer = layers[LayerType.RICH_TEXTURE]
+        results = await layer.timeline(since, until, limit)
+        if not results:
+            return [TextContent(type="text", text=f"No episodes found since '{since}'.")]
+        return [TextContent(type="text", text=format_results(results))]
+
+    elif name == "texture_add":
+        content = arguments.get("content", "")
+        channel = arguments.get("channel", "manual")
+        if not content:
+            return [TextContent(type="text", text="Error: content required")]
+        metadata = {"channel": channel}
+        success = await layers[LayerType.RICH_TEXTURE].store(content, metadata)
+        if success:
+            return [TextContent(type="text", text=f"Content stored in knowledge graph (channel: {channel}). Entities will be extracted automatically.")]
+        return [TextContent(type="text", text="Failed to store content. Graphiti may not be running.")]
 
     elif name == "get_summaries":
         count = arguments.get("count", 4)

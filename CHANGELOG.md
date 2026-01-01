@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Layer 3: Graphiti Integration** (Issue #9)
+  - Full RichTextureLayer implementation with Graphiti connectivity
+  - Knowledge graph for entity/relationship extraction
+  - New MCP tools: `texture_search`, `texture_explore`, `texture_timeline`, `texture_add`
+  - Docker services: FalkorDB (graph database) + Graphiti server
+  - SessionEnd hook for terminal session sync to Graphiti
+  - "One river, many channels" - single `lyra` group with channel metadata
 - **PPS Observatory Web Dashboard** (Issue #10, Phase 1)
   - FastAPI backend with Jinja2 templates
   - Dashboard showing layer health, channel stats, recent activity
@@ -33,7 +40,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Planned
 - PPS Observatory Phase 2+ (Messages, Word-Photos, Summaries pages)
-- Graphiti integration for Layer 3 (Issue #9)
+- Discord daemon batched ingestion to Graphiti
 
 ---
 

@@ -5,12 +5,15 @@
 #   docker compose up -d
 #
 # Services:
-#   - chromadb: Vector database for embeddings
+#   - chromadb: Vector database for word-photo embeddings (Layer 2)
+#   - falkordb: Graph database for Graphiti (Layer 3)
+#   - graphiti: Knowledge graph extraction and search (Layer 3)
 #   - pps-server: MCP server for Claude Code integration
 #   - pps-web: Web dashboard for observability
 #
 # Volumes:
 #   - chromadb_data: Persistent vector storage
+#   - falkordb_data: Persistent graph storage
 #   - Bind mounts for identity files and SQLite (configure in .env)
 
 services:
@@ -27,6 +30,45 @@ services:
     environment:
       - IS_PERSISTENT=TRUE
       - ANONYMIZED_TELEMETRY=FALSE
+
+  # Graph Database for Graphiti (Layer 3: Rich Texture)
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: pps-falkordb
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${FALKORDB_PORT:-6379}:6379"
+    volumes:
+      - falkordb_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Knowledge Graph Service (Layer 3: Rich Texture)
+  graphiti:
+    image: zepai/graphiti:latest
+    container_name: pps-graphiti
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${GRAPHITI_PORT:-8203}:8000"
+    depends_on:
+      falkordb:
+        condition: service_healthy
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - FALKORDB_HOST=falkordb
+      - FALKORDB_PORT=6379
+      - DEFAULT_GROUP_ID=lyra
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
   # Pattern Persistence MCP Server
   pps-server:
     build:
@@ -39,10 +81,14 @@ services:
     depends_on:
       chromadb:
         condition: service_started
+      graphiti:
+        condition: service_healthy
     environment:
       - TZ=${TZ:-America/Los_Angeles}
       - CHROMA_HOST=chromadb
       - CHROMA_PORT=8000
+      - GRAPHITI_HOST=graphiti
+      - GRAPHITI_PORT=8000
       - CLAUDE_HOME=${CLAUDE_HOME:-/home/jeff/.claude}
       - JINA_API_KEY=${JINA_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -94,6 +140,8 @@ services:
 
 volumes:
   chromadb_data:
+    driver: local
+  falkordb_data:
     driver: local
 
 networks:
