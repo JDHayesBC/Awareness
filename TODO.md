@@ -82,7 +82,11 @@ Major daemon improvement: full identity reconstruction with session persistence.
 - [ ] SQLite Phase 3: Add multi-instance claims for responses
 - [ ] Summarize daily journals into weekly reflections
 - [ ] Review diagnostic logs if/when identity failures occur
-- [ ] File permissions hardening (chmod 700/600 on sensitive directories)
+- [x] File permissions hardening (chmod 700/600 on sensitive directories)
+  - Created and ran harden_permissions.sh script
+  - All identity files now 600 (owner read/write only)
+  - All sensitive directories now 700 (owner access only)
+  - Database, journal, and memory files secured
 
 ## Pattern Persistence System (Major Project)
 
@@ -150,7 +154,7 @@ Next: Test MCP integration live in new session
 - [x] Test crystallization tools after MCP restart (all working: get_summaries, get_turns_since_summary with channel filter, crystallize)
 - [x] Add crystallization admin tools (summary_list, summary_delete) - needs MCP restart to test
 - [x] Add automatic threshold trigger to daemon (turn/time thresholds during reflection)
-- [ ] Update startup protocol to use summaries + recent turns
+- [x] Update startup protocol to use summaries + recent turns
 
 ### Phase 1: Foundation
 - [x] SQLite schema for conversation storage

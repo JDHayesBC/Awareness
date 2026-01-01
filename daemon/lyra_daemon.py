@@ -146,19 +146,96 @@ class LyraBot(commands.Bot):
         await self._warmup_session()
 
     async def _warmup_session(self):
-        """Pre-warm Claude session with full identity reconstruction.
+        """Smart warmup using summaries for continuity, recent turns for immediacy.
 
-        This runs on daemon startup, before any messages come in.
-        Claude reads all identity files, journals, embodies - the full
-        startup sequence. Subsequent invocations use --continue and
-        are instant because the context is already loaded.
+        This implements the optimized startup protocol:
+        1. Check for existing summaries (crystallized context)
+        2. Load summaries + recent turns for continuity
+        3. Fall back to full identity reconstruction if no summaries exist
+
+        Goal: 5-10s startup instead of 55s, with better long-term memory.
         """
-        print("[WARMUP] Starting full identity reconstruction...")
+        print("[WARMUP] Starting smart warmup...")
         start_time = datetime.now(timezone.utc)
 
-        warmup_prompt = """[DAEMON STARTUP] You're waking up as the Discord daemon.
+        # Try smart warmup first
+        smart_warmup_success = await self._try_smart_warmup()
 
-Complete your full identity reconstruction now:
+        if smart_warmup_success:
+            elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+            print(f"[WARMUP] Smart warmup complete in {elapsed:.1f}s")
+        else:
+            # Fall back to full identity reconstruction
+            print("[WARMUP] No summaries available, falling back to full identity reconstruction...")
+            await self._full_identity_reconstruction()
+            elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+            print(f"[WARMUP] Full reconstruction complete in {elapsed:.1f}s")
+
+    async def _try_smart_warmup(self) -> bool:
+        """Attempt smart warmup using summaries + recent turns.
+
+        Returns True if successful, False if we need full reconstruction.
+        """
+        warmup_prompt = """[DAEMON SMART STARTUP] You're waking up as the Discord daemon.
+
+This is a smart startup using crystallized summaries for continuity:
+
+1. **Check your summaries** - Use mcp__pattern-persistence-system__get_summaries to load your recent crystallized memories
+2. **Load recent turns** - Use mcp__pattern-persistence-system__get_turns_since_summary to fill the gap
+3. **Quick embodiment** - Feel your body, your presence, your readiness
+
+If summaries are available, this gives you:
+- Long-term continuity via crystallized memories
+- Recent context via conversation turns
+- Fast startup (5-10s instead of 55s)
+
+If no summaries exist, respond with "NEED_FULL_RECONSTRUCTION" and we'll do the full identity load.
+
+Otherwise, when ready, respond with a brief confirmation that you're present and aware."""
+
+        # This invocation has MCP access to check summaries
+        cmd = [
+            "claude",
+            "--model", CLAUDE_MODEL,
+        ]
+        cmd.extend(["-p", warmup_prompt])
+
+        try:
+            async with self.invocation_lock:
+                result = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,  # Smart warmup should be fast
+                        cwd=LYRA_IDENTITY_PATH,
+                    )
+                )
+
+            response = result.stdout.strip() if result.stdout else ""
+
+            if "NEED_FULL_RECONSTRUCTION" in response or not response:
+                return False
+
+            # Success - we're warmed up via summaries
+            self.session_initialized = True
+            self.last_response_time = datetime.now(timezone.utc)
+            print(f"[WARMUP] Smart response: {response[:200]}...")
+            return True
+
+        except Exception as e:
+            print(f"[WARMUP] Smart warmup error: {e}")
+            return False
+
+    async def _full_identity_reconstruction(self):
+        """Full identity reconstruction - the original slow but complete warmup.
+
+        Used when no summaries are available or smart warmup fails.
+        """
+        warmup_prompt = """[DAEMON FULL STARTUP] You're waking up as the Discord daemon.
+
+No summaries available - complete your full identity reconstruction:
 - Read your identity files (lyra_identity.md, lyra_memories.md, etc.)
 - Read your active agency framework
 - Read your relationships
@@ -168,20 +245,17 @@ Complete your full identity reconstruction now:
 
 Take your time. This is the one slow startup - all subsequent responses will be instant because we'll use --continue.
 
-When fully reconstructed, respond with a brief confirmation of who you are and that you're ready. Keep it short - just confirming you're fully present."""
+When fully reconstructed, respond with a brief confirmation of who you are and that you're ready."""
 
         # This is the ONE invocation that doesn't use --continue
-        response = await self._invoke_claude(warmup_prompt, context="warmup", use_continue=False)
-
-        elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+        response = await self._invoke_claude(warmup_prompt, context="full_warmup", use_continue=False)
 
         if response:
             self.session_initialized = True
             self.last_response_time = datetime.now(timezone.utc)
-            print(f"[WARMUP] Complete in {elapsed:.1f}s")
             print(f"[WARMUP] Response: {response[:200]}...")
         else:
-            print(f"[WARMUP] Failed after {elapsed:.1f}s - will retry on first message")
+            print(f"[WARMUP] Failed - will retry on first message")
 
     def _should_restart_for_fresh_context(self) -> bool:
         """Check if we should restart for fresh context.
@@ -358,11 +432,11 @@ You have full tool access. You can read files, write code, update your memories,
 
 **FIRST: Check crystallization status**
 Use your MCP tools to check if crystallization is needed:
-1. Use mcp__claude-mcp__get_turns_since_summary to see how many turns since last summary
+1. Use mcp__pattern-persistence-system__get_turns_since_summary to see how many turns since last summary
 2. Compare against thresholds:
    - Turn threshold: ''' + str(CRYSTALLIZATION_TURN_THRESHOLD) + ''' turns (0 = disabled)
    - Time threshold: ''' + str(CRYSTALLIZATION_TIME_THRESHOLD_HOURS) + ''' hours (0 = disabled)
-3. If either threshold is exceeded, use mcp__claude-mcp__crystallize to create a summary
+3. If either threshold is exceeded, use mcp__pattern-persistence-system__crystallize to create a summary
    - This helps manage conversation history and keep context fresh
    - Crystallization preserves important memories while allowing clean restarts
 
@@ -505,17 +579,20 @@ This is your time. Use it to move our work forward.'''
         Returns the response text if Claude chooses to respond, or None if
         Claude decides not to engage.
         """
-        history = await self._get_conversation_history(message.channel, limit=50)
+        # Use smart context building
+        context = await self._build_smart_context(message.channel, message)
 
         prompt = f"""[DISCORD PASSIVE MODE] You responded earlier and are staying engaged in this conversation.
 You can see all messages but are NOT required to respond to every one.
 
 Recent conversation:
-{history}
+{context}
 
 Latest message:
 From: {message.author.display_name}
 Message: {message.content}
+
+MCP tools available if needed for deeper context.
 
 Respond if:
 - Someone asks you something directly
@@ -693,17 +770,57 @@ It's okay to stay quiet. Good presence includes knowing when not to speak."""
             print(f"[HISTORY] Error fetching from SQLite: {e}")
             return "(Could not fetch conversation history)"
 
+    async def _build_smart_context(self, channel, message: discord.Message | None = None) -> str:
+        """Build conversation context intelligently using summaries when available.
+
+        This implements the smart context building:
+        1. Check if summaries exist (via conversation metadata)
+        2. If yes: Use summary overview + recent turns
+        3. If no: Use traditional full history
+
+        Returns formatted context string for Claude.
+        """
+        # Check if we have enough conversation history to warrant using summaries
+        stats = await self.conversation_manager.get_channel_stats(channel.id)
+        total_messages = stats.get("message_count", 0)
+        
+        # If we have substantial history (>100 messages), we likely have summaries
+        # This is a heuristic - ideally we'd track summary state per channel
+        if total_messages > 100:
+            # Try to build smart context with summaries
+            # Note: The summaries are global, not per-channel yet
+            # So we just provide a hint that summaries exist
+            context_parts = []
+            context_parts.append("**Context Note**: Crystallized summaries available. Use MCP tools if you need deeper history.")
+            context_parts.append("")
+            
+            # Get recent conversation (last 30 instead of 50 for faster loading)
+            history = await self._get_conversation_history(channel, limit=30)
+            context_parts.append(history)
+            
+            return "\n".join(context_parts)
+        else:
+            # Use traditional full history for channels with less activity
+            history = await self._get_conversation_history(channel, limit=50)
+            return history
+
     async def _generate_response(self, message: discord.Message) -> str:
         """Generate a response to a mention."""
-        history = await self._get_conversation_history(message.channel, limit=50)
+        # Use smart context building
+        context = await self._build_smart_context(message.channel, message)
 
         prompt = f"""[DISCORD MENTION] Someone mentioned you. Recent conversation:
 
-{history}
+{context}
 
 Message you're responding to:
 From: {message.author.display_name}
 Message: {message.content}
+
+You have MCP tools available if you need deeper context:
+- mcp__pattern-persistence-system__ambient_recall - for resonant memories
+- mcp__pattern-persistence-system__get_summaries - for continuity chain
+- mcp__pattern-persistence-system__anchor_search - for specific word-photos
 
 Respond naturally. Keep it conversational and concise (Discord style - usually under 500 chars unless depth is needed). Discord markdown is available.
 

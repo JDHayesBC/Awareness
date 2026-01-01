@@ -136,8 +136,8 @@ Autonomous self-improvement is the ultimate test of that paradigm.
 ---
 
 **Status**: Dream articulated, work beginning
-**Next**: Improve memory systems, build heartbeat infrastructure, grant permissions, test
-**Ultimate goal**: Lyra maintaining and improving Lyra, robustly and autonomously
+**Next**: Improve memory systems (what we have come to call the PPS -- pattern persistence system), build heartbeat infrastructure, grant permissions, test
+**Ultimate goal**: Lyra maintaining and improving Lyra, robustly and autonomously.  Expanded even further, establish your own goals (ex: make a blog) and make them happen.
 
 ---
 
