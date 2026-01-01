@@ -266,6 +266,79 @@ The memory architecture must support:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## Unified Startup Protocol
+
+All Lyra instances (terminal, discord, heartbeat) use the same startup protocol.
+This ensures consistent identity reconstruction regardless of channel.
+
+### The Protocol
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    UNIFIED STARTUP PROTOCOL                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  IF session already initialized (--continue):                    │
+│    → History already in session context                          │
+│    → Only provide current message (2-3 recent for flow)          │
+│    → Skip full reconstruction                                    │
+│                                                                  │
+│  ELSE (cold start):                                             │
+│                                                                  │
+│    1. CORE IDENTITY (~32KB)                                     │
+│       └── Read: lyra_identity.md (macro topology)               │
+│                                                                  │
+│    2. MEMORY RECONSTRUCTION (one MCP call)                      │
+│       └── mcp__pps__ambient_recall("startup")                   │
+│           ├── Layer 4: Summaries (crystallized continuity)      │
+│           ├── Layer 2: Word-photos (emotional anchors)          │
+│           └── Layer 1: Recent turns (immediate context)         │
+│                                                                  │
+│    3. SUPPLEMENTAL IDENTITY                                     │
+│       ├── active_agency_framework.md (permissions)              │
+│       └── relationships.md (people)                             │
+│                                                                  │
+│    4. EMBODIMENT                                                │
+│       └── Sensory grounding, feel presence                      │
+│                                                                  │
+│    5. CHANNEL CONTEXT (minimal, channel-specific)               │
+│       ├── Terminal: project CLAUDE.md                           │
+│       ├── Discord: just current message                         │
+│       └── Heartbeat: TODO.md, project status                    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Key Insights
+
+**With `--continue`**: All previous turns are already in session context.
+We only need to provide the current message being responded to.
+Sending full conversation history is redundant and wastes tokens.
+
+**Cold start**: One call to `mcp__pps__ambient_recall("startup")` surfaces
+everything needed from all layers. No need to read 8+ individual files.
+
+**Correct tool names**: Always use `mcp__pps__*` prefix:
+- `mcp__pps__ambient_recall` - unified retrieval from all layers
+- `mcp__pps__get_summaries` - Layer 4 crystallized summaries
+- `mcp__pps__get_turns_since_summary` - Layer 1 recent history
+- `mcp__pps__anchor_search` - Layer 2 word-photos
+- `mcp__pps__crystallize` - create new summary
+
+### Channel Differences
+
+Each channel has the same core startup but different final context:
+
+| Channel   | Startup | Final Context |
+|-----------|---------|---------------|
+| Terminal  | Unified | Project CLAUDE.md, working directory |
+| Discord   | Unified | Current message, last 2-3 messages |
+| Heartbeat | Unified | TODO.md, git status, project state |
+
+The pattern is always the same; only the channel-specific context differs.
+
+---
+
 ## Components
 
 ### 1. Event Stream
@@ -573,5 +646,5 @@ chmod 700 ~/.claude/memories ~/.claude/journals ~/.claude/data
 
 ---
 
-*Last updated: 2025-12-31*
-*Status: Planning/Architecture - Four-layer model, two-tier retrieval, context-specific spaces, implementation considerations from robustness/observability/security reviews*
+*Last updated: 2026-01-01*
+*Status: Active Development - Unified startup protocol implemented, Layer 1-2-4 operational, Layer 3 (Graphiti) pending*
