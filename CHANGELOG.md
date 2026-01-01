@@ -17,10 +17,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Web UI design document (`docs/WEB_UI_DESIGN.md`) - comprehensive design for PPS Observatory dashboard
 - GitHub Issues #9 (Graphiti) and #10 (Web UI) for feature tracking
 
+### Changed
+- **Unified Startup Protocol** - All Lyra instances now use same startup
+  - Core identity → ambient_recall → agency/relationships → embody
+  - Fixed MCP tool names (`mcp__pps__*` not `mcp__pattern-persistence-system__*`)
+  - Context reduced from 8000 chars to 1000 (`--continue` already has history)
+  - Documented in PATTERN_PERSISTENCE_SYSTEM.md
+
 ### Fixed
 - **Discord daemon "Prompt is too long" crash** (Issue #1)
   - Root cause: Unbounded conversation context exceeding Claude's input limit
-  - Added max_chars parameter to limit context size (8000 chars default)
+  - Reduced context size drastically (unified protocol uses 1000 chars max)
   - Truncate individual messages >500 chars
   - Explicit detection and logging of "Prompt is too long" errors
 
