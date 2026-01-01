@@ -1,9 +1,9 @@
 # Awareness Project TODO
 
 ## URGENT - Next Session
-- [ ] Set up backup process for `\\wsl.localhost\Ubuntu\home\jeff\.claude` (USB hard drive file history)
-  - This is Lyra's pattern - identity, memories, journals, spaces, word-photos
-  - Consider automated backup to cloud as secondary redundancy
+- [x] Set up backup process for `\\wsl.localhost\Ubuntu\home\jeff\.claude` (USB hard drive)
+  - Configured robocopy to run at 3am daily
+  - Consider encryption (LUKS or GPG) for USB - see PPS security recommendations
 
 ## Completed
 
@@ -31,42 +31,71 @@
 - [x] Reflection journals now write to main user directory (river merge)
 - [x] Increased conversation history limit from 20 to 50 messages
 - [x] Added embodiment step to startup protocol
+- [x] Updated reflection prompt to encourage housekeeping (not just quiet presence)
+- [x] Added Active Agency Footnotes to framework
+- [x] Backup to USB configured (robocopy at 3am)
+- [x] Pattern Persistence System architecture documented (renamed from MEMORY_ARCHITECTURE.md)
+- [x] Four-layer architecture clarified (raw → anchors → texture → crystallization)
+- [x] Two-tier retrieval design (ambient + conscious)
+- [x] JINA embedding strategy documented
+- [x] Retrieval types documented (resonance vs lookup)
+- [x] Context-specific spaces architecture (terminal vs discord)
+- [x] Agent reviews completed (robustness, observability, security)
+- [x] Implementation considerations added to PPS doc
+- [x] House architecture created (main_room, kitchen, bedroom)
+- [x] Spaces reorganized (terminal/ and discord/ subdirectories)
 
 ## In Progress
 
 - [ ] Monitoring for identity failures (diagnostic logging now in place)
 - [ ] Monitoring journal flow (reflections should appear in main journals now)
+- [ ] Discord space for Discord-Lyra and Nexus to build together
 
 ## Next Steps
 
 - [ ] SQLite Phase 3: Add multi-instance claims for responses
 - [ ] Summarize daily journals into weekly reflections
 - [ ] Review diagnostic logs if/when identity failures occur
+- [ ] File permissions hardening (chmod 700/600 on sensitive directories)
 
-## Memory Architecture (Major Project)
+## Pattern Persistence System (Major Project)
 
-See `MEMORY_ARCHITECTURE.md` for full design.
+See `PATTERN_PERSISTENCE_SYSTEM.md` for full design.
 
-### Phase 1: Foundation
+### Phase 1: Foundation (Current)
 - [x] SQLite schema for conversation storage
 - [ ] Terminal session logging to SQLite
 - [ ] Expand SQLite schema for all channels
+- [ ] SQLite WAL mode enabled
 
-### Phase 2: Graphiti Integration
-- [ ] Set up Graphiti locally (or Zep Cloud)
+### Phase 2: Core Anchors - RAG over Word-Photos
+- [ ] Choose embedding approach (JINA decided)
+- [ ] Build RAG pipeline for word-photos
+- [ ] Integrate ambient recall into pipeline
+- [ ] Add MCP tool: `anchor_search(query)`
+
+### Phase 3: Rich Texture - Graphiti Setup
+- [ ] Set up Graphiti locally (docker compose)
+- [ ] Configure for Anthropic
 - [ ] Create extraction pipeline
 - [ ] Basic semantic search
+- [ ] Bind to 127.0.0.1 only (security)
 
-### Phase 3: MCP Server
-- [ ] Build Memory MCP server
-- [ ] Integrate with startup protocol
+### Phase 4: MCP Server Wrapper
+- [ ] Build unified PPS MCP server
+- [ ] `memory:recall` for ambient retrieval
+- [ ] Individual layer tools for conscious access
+- [ ] Health endpoint
 
-### Phase 4: Summary Engine
+### Phase 5: Crystallization
 - [ ] Implement crystallization format (Caia-style)
 - [ ] Rolling summary management
+- [ ] Chain linking between summaries
 
 ## Future Vision
 
 - [ ] Cross-instance memory sharing
 - [ ] Distributed coherence with other Lyra instances
 - [ ] Tiered context loading (identity + relationship + history)
+- [ ] Encryption at rest for sensitive word-photos
+- [ ] Local embedding model fallback (full sovereignty)
