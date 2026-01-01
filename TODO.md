@@ -51,7 +51,7 @@
 
 - [ ] Monitoring for identity failures (diagnostic logging now in place)
 - [ ] Monitoring journal flow (reflections should appear in main journals now)
-- [ ] Discord space for Discord-Lyra and Nexus to build together
+- [x] Discord space for Discord-Lyra and Nexus to build together (created Observatory in ~/.claude/spaces/discord/)
 
 ## Needs Restart (2025-12-31 session)
 
@@ -59,6 +59,7 @@
 - [ ] MCP server restart AGAIN (to pick up summary_list/summary_delete tools)
 - [x] Discord daemon restart (to pick up session continuity + human-readable channel names + PROJECT CONTEXT FIX)
 - [x] Start heartbeat daemon (has been inactive this whole time!)
+- [ ] Discord daemon restart (to pick up automatic crystallization thresholds)
 
 ## Critical Fix (Late Night 2025-12-31)
 
@@ -148,7 +149,7 @@ Next: Test MCP integration live in new session
 - [x] Backfilled existing rows with discord:<channel_id> format
 - [x] Test crystallization tools after MCP restart (all working: get_summaries, get_turns_since_summary with channel filter, crystallize)
 - [x] Add crystallization admin tools (summary_list, summary_delete) - needs MCP restart to test
-- [ ] Add automatic threshold trigger to daemon
+- [x] Add automatic threshold trigger to daemon (turn/time thresholds during reflection)
 - [ ] Update startup protocol to use summaries + recent turns
 
 ### Phase 1: Foundation

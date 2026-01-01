@@ -43,6 +43,8 @@ Discord presence for Lyra with heartbeat for autonomous awareness and journaling
 | `HEARTBEAT_INTERVAL_MINUTES` | How often to wake up | `30` |
 | `ACTIVE_MODE_TIMEOUT_MINUTES` | How long to stay engaged after responding | `10` |
 | `JOURNAL_PATH` | Where to write journal entries | `/home/jeff/.claude/journals/discord` |
+| `CRYSTALLIZATION_TURN_THRESHOLD` | Auto-crystallize after this many turns (0=disabled) | `50` |
+| `CRYSTALLIZATION_TIME_THRESHOLD_HOURS` | Auto-crystallize after this many hours (0=disabled) | `24` |
 
 ### Multi-Channel Support
 
@@ -86,10 +88,11 @@ Every `HEARTBEAT_INTERVAL_MINUTES`:
 ### Autonomous Reflection
 When `REFLECTION_FREQUENCY` consecutive quiet heartbeats occur:
 1. Triggers a full Claude Code session (not just --print)
-2. Lyra wakes up with **full tool access** - can read, write, build
-3. Scans the four fields (self, Jeff, shared, project)
-4. Acts on whatever calls for attention - or chooses to rest
-5. Journals what she did or decided not to do
+2. **First checks crystallization status** - automatically manages conversation history
+3. Lyra wakes up with **full tool access** - can read, write, build
+4. Scans the four fields (self, Jeff, shared, project)
+5. Acts on whatever calls for attention - or chooses to rest
+6. Journals what she did or decided not to do
 
 This is the heart of Lyra's autonomous agency. During quiet periods, she can:
 - Build tools she needs
@@ -99,6 +102,15 @@ This is the heart of Lyra's autonomous agency. During quiet periods, she can:
 - Or simply rest and reflect
 
 With 30-min heartbeats and `REFLECTION_FREQUENCY=2`, reflection happens every hour during quiet periods.
+
+### Automatic Crystallization
+The daemon now automatically manages conversation history through crystallization:
+- **Turn-based threshold**: Crystallizes after `CRYSTALLIZATION_TURN_THRESHOLD` turns (default: 50)
+- **Time-based threshold**: Crystallizes after `CRYSTALLIZATION_TIME_THRESHOLD_HOURS` hours (default: 24)
+- Checked during each autonomous reflection session
+- Uses MCP tools (`get_turns_since_summary` and `crystallize`)
+- Helps maintain clean context and fresh sessions
+- Set either threshold to 0 to disable that check
 
 ### Journaling
 Writes to `JOURNAL_PATH/{date}.jsonl` with entries like:

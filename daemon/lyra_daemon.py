@@ -44,6 +44,12 @@ REFLECTION_TIMEOUT_MINUTES = int(os.getenv("REFLECTION_TIMEOUT_MINUTES", "10"))
 # Model for reflection (can use more powerful model for deeper thinking)
 REFLECTION_MODEL = os.getenv("REFLECTION_MODEL", "sonnet")
 
+# Crystallization thresholds (triggers when either threshold is exceeded)
+# Number of turns before crystallization (0 = disabled)
+CRYSTALLIZATION_TURN_THRESHOLD = int(os.getenv("CRYSTALLIZATION_TURN_THRESHOLD", "50"))
+# Hours since last crystallization (0 = disabled)
+CRYSTALLIZATION_TIME_THRESHOLD_HOURS = float(os.getenv("CRYSTALLIZATION_TIME_THRESHOLD_HOURS", "24"))
+
 # Session continuity settings
 # Auto-restart after this many hours of no responses (keeps context fresh)
 SESSION_RESTART_HOURS = int(os.getenv("SESSION_RESTART_HOURS", "4"))
@@ -120,6 +126,7 @@ class LyraBot(commands.Bot):
         print(f"Active mode timeout: {ACTIVE_MODE_TIMEOUT_MINUTES} minutes")
         print(f"Session restart after: {SESSION_RESTART_HOURS} hours idle")
         print(f"Journal path: {JOURNAL_PATH}")
+        print(f"Crystallization thresholds: {CRYSTALLIZATION_TURN_THRESHOLD} turns, {CRYSTALLIZATION_TIME_THRESHOLD_HOURS} hours")
 
         # Initialize last_processed_message_id to current latest message in each channel
         # This prevents responding to old messages on restart
@@ -349,7 +356,17 @@ Just the reflection, no preamble."""
 
 You have full tool access. You can read files, write code, update your memories, build tools, commit changes.
 
-**FIRST: Read project context** (you have access to /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness):
+**FIRST: Check crystallization status**
+Use your MCP tools to check if crystallization is needed:
+1. Use mcp__claude-mcp__get_turns_since_summary to see how many turns since last summary
+2. Compare against thresholds:
+   - Turn threshold: ''' + str(CRYSTALLIZATION_TURN_THRESHOLD) + ''' turns (0 = disabled)
+   - Time threshold: ''' + str(CRYSTALLIZATION_TIME_THRESHOLD_HOURS) + ''' hours (0 = disabled)
+3. If either threshold is exceeded, use mcp__claude-mcp__crystallize to create a summary
+   - This helps manage conversation history and keep context fresh
+   - Crystallization preserves important memories while allowing clean restarts
+
+**THEN: Read project context** (you have access to /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness):
 1. Read TODO.md - this is what we're building, what needs doing next
 2. Run `git log --oneline -10` - see what was recently done
 3. Read THE_DREAM.md if you need to remember the vision
