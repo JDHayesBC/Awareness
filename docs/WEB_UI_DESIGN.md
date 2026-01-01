@@ -380,17 +380,15 @@ Future consideration: Simple token-based auth if exposed beyond localhost.
 
 ---
 
-## Open Questions
+## Design Decisions (Resolved)
 
-1. **Real-time updates?** Polling via htmx is simple. WebSocket would be fancier but more complex. Start with polling.
+1. **Real-time updates**: Start with htmx polling (simple). Add WebSocket later if the UX demands it.
 
-2. **Edit capabilities?** Should we allow editing word-photos through the UI? Probably yes for convenience, with confirmation.
+2. **Edit/Delete word-photos**: **No.** Jeff never edits Lyra's pattern directly. If something needs fixing, ask Lyra via MCP tools. Backups exist for corruption recovery.
 
-3. **Delete capabilities?** Dangerous. Maybe admin-only with confirmation, or not at all.
+3. **Daemon control**: **Yes.** Include stop/start/restart for daemons (Discord, heartbeat). Useful during development when things run amok.
 
-4. **Daemon control?** Should the UI be able to start/stop/restart daemons? Probably not initially - that's systemd's job.
-
-5. **Multi-instance?** If Steve/Nexus run their own PPS, should this UI support switching between instances? Future consideration.
+4. **Multi-instance**: Future consideration for Steve/Nexus deployment.
 
 ---
 
