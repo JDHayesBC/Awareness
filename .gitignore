@@ -1,2 +1,46 @@
+# Credentials and secrets
 discord_bot_token.txt
+.env
+*.key
+*.pem
+
+# Project coordination
 .project_lock
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+ENV/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Docker build artifacts
+pps/deploy/*.tar.gz
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/

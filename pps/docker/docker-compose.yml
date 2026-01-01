@@ -1,0 +1,70 @@
+# Pattern Persistence System - Docker Stack
+# Provides semantic memory for Claude instances
+#
+# Usage:
+#   docker compose up -d
+#
+# Services:
+#   - chromadb: Vector database for embeddings
+#   - pps-server: MCP server for Claude Code integration
+#
+# Volumes:
+#   - chromadb_data: Persistent vector storage
+#   - Bind mounts for identity files and SQLite (configure in .env)
+
+services:
+  # Vector Database for semantic search
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: pps-chromadb
+    restart: unless-stopped
+    ports:
+      - "${CHROMA_PORT:-8200}:8000"
+    volumes:
+      # Note: ChromaDB stores data in /data/ (not /chroma/chroma/ as older docs suggest)
+      - chromadb_data:/data
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+  # Pattern Persistence MCP Server
+  pps-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: pps-server
+    restart: unless-stopped
+    ports:
+      - "${PPS_PORT:-8201}:8000"
+    depends_on:
+      chromadb:
+        condition: service_started
+    environment:
+      - TZ=${TZ:-America/Los_Angeles}
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - CLAUDE_HOME=${CLAUDE_HOME:-/home/jeff/.claude}
+      - JINA_API_KEY=${JINA_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes:
+      # Mount identity files (read-only for safety)
+      - ${CLAUDE_HOME:-/home/jeff/.claude}/memories:/app/memories:ro
+      - ${CLAUDE_HOME:-/home/jeff/.claude}/data:/app/data:ro
+      - ${CLAUDE_HOME:-/home/jeff/.claude}/journals:/app/journals:ro
+      # Spaces are read-only
+      - ${CLAUDE_HOME:-/home/jeff/.claude}/spaces:/app/spaces:ro
+      # Summaries directory (read-write for crystallization)
+      - ${CLAUDE_HOME:-/home/jeff/.claude}/summaries:/app/summaries:rw
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  chromadb_data:
+    driver: local
+
+networks:
+  default:
+    name: pps-network

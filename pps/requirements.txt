@@ -1,0 +1,10 @@
+# Pattern Persistence System - Dependencies
+
+# MCP SDK for Claude Code integration
+mcp>=1.0.0
+
+# Future dependencies (uncomment as layers are implemented):
+# jina-embeddings        # Layer 2: Semantic search for word-photos
+# chromadb               # Alternative vector store for embeddings
+# httpx                  # Layer 3: Graphiti API client
+# aiosqlite              # Layer 1: Async SQLite access

@@ -1,0 +1,13 @@
+# Additional dependencies for Docker deployment
+
+# ChromaDB client for vector storage
+chromadb>=0.4.0
+
+# HTTP server for Docker (MCP over HTTP instead of stdio)
+fastapi>=0.100.0
+uvicorn>=0.23.0
+
+# Embedding models
+sentence-transformers>=2.2.0  # Local embeddings fallback
+openai>=1.0.0                 # OpenAI embeddings option
+httpx>=0.25.0                 # For JINA API calls

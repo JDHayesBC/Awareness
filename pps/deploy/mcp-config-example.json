@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "pps": {
+      "command": "python",
+      "args": ["/path/to/pps/server.py"],
+      "env": {
+        "CLAUDE_HOME": "/path/to/.claude",
+        "CHROMA_HOST": "localhost",
+        "CHROMA_PORT": "8200"
+      }
+    }
+  }
+}
