@@ -17,6 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Web UI design document (`docs/WEB_UI_DESIGN.md`) - comprehensive design for PPS Observatory dashboard
 - GitHub Issues #9 (Graphiti) and #10 (Web UI) for feature tracking
 
+### Fixed
+- **Discord daemon "Prompt is too long" crash** (Issue #1)
+  - Root cause: Unbounded conversation context exceeding Claude's input limit
+  - Added max_chars parameter to limit context size (8000 chars default)
+  - Truncate individual messages >500 chars
+  - Explicit detection and logging of "Prompt is too long" errors
+
 ### Planned
 - PPS Observatory Phase 2+ (Messages, Word-Photos, Summaries pages)
 - Graphiti integration for Layer 3 (Issue #9)
