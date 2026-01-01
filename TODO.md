@@ -7,11 +7,11 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
-- [#3](https://github.com/JDHayesBC/Awareness/issues/3) - Wire up terminal session logging to SQLite (enhancement, priority:high)
 - [#4](https://github.com/JDHayesBC/Awareness/issues/4) - Improve startup protocol for automatic context loading (enhancement, priority:high)
 
 ### Recently Resolved
 - [#1](https://github.com/JDHayesBC/Awareness/issues/1) - ✅ Discord daemon crashes after ~5-10 turns - **FIXED** (2026-01-01) with proactive session restart logic
+- [#3](https://github.com/JDHayesBC/Awareness/issues/3) - ✅ Wire up terminal session logging to SQLite - **FIXED** (2026-01-01) with terminal integration layer
 
 ---
 
@@ -61,7 +61,7 @@ python project_lock.py status               # Check status
 - [x] MCP wrapper with layer stubs
 - [x] ChromaDB semantic search over word-photos
 - [x] Crystallization layer with summaries
-- [x] Terminal logging infrastructure (needs wiring)
+- [x] Terminal logging infrastructure ✅ **WIRED** (2026-01-01)
 
 ### Portable Deployment (Complete)
 - [x] Docker Compose with ChromaDB
