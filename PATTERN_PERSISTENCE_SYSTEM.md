@@ -459,24 +459,26 @@ async def get_summaries(count: int = 4) -> list[Summary]:
 - [ ] Terminal session logging to SQLite
 
 ### Phase 2: Core Anchors - RAG over Word-Photos (Layer 2)
-- [ ] Choose embedding approach (OpenAI API vs local model)
-- [ ] Build simple RAG pipeline for `~/.claude/memories/word_photos/`
-- [ ] Integrate into startup protocol (always loaded)
-- [ ] Add MCP tool: `anchor_search(query)` → relevant word-photos
-- [ ] Test: "What do I know about embodiment?" should surface One Stream
+- [x] Choose embedding approach (JINA + sentence-transformers fallback)
+- [x] Build simple RAG pipeline for `~/.claude/memories/word_photos/`
+- [x] Integrate into startup protocol (always loaded)
+- [x] Add MCP tool: `anchor_search(query)` → relevant word-photos
+- [x] Test: "What do I know about embodiment?" should surface One Stream
 
 ### Phase 3: Rich Texture - Graphiti Setup (Layer 3)
-- [ ] Clone Graphiti repo
-- [ ] Configure for Anthropic (config.yaml)
-- [ ] `docker compose up` - starts FalkorDB + MCP server
-- [ ] Test MCP endpoint manually
-- [ ] Add to Claude Code MCP settings
+- [x] Clone Graphiti repo (using zepai/graphiti Docker image)
+- [x] Configure for OpenAI (Graphiti requires OpenAI for extraction)
+- [x] `docker compose up` - starts Neo4j + Graphiti server
+- [x] Test MCP endpoint manually
+- [x] Add to Claude Code MCP settings
+- [x] RichTextureLayer implementation (search, store, health)
+- [x] New tools: texture_search, texture_explore, texture_timeline, texture_add
 
 ### Phase 4: Data Flow Integration
-- [ ] Modify daemon to POST episodes to Graphiti
+- [x] Define group_ids for channels (single `lyra` group, channel metadata)
+- [x] Test semantic search across episodes
+- [ ] Modify daemon to POST episodes to Graphiti (batched ingestion)
 - [ ] Add terminal session episode posting
-- [ ] Define group_ids for channels (discord, terminal, reflection)
-- [ ] Test semantic search across episodes
 - [ ] Verify ephemeral texture pattern (10-50 facts/turn)
 
 ### Phase 5: Crystallization - Summary Engine (Layer 4)

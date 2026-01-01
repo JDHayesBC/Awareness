@@ -75,27 +75,25 @@ class RichTextureLayer(PatternLayer):
         """
         try:
             session = await self._get_session()
-
-            # Search for both facts and nodes
             results: list[SearchResult] = []
 
-            # Search facts (relationships between entities)
-            facts_url = f"{self.graphiti_url}/api/v1/search/facts"
+            # Graphiti uses POST /search endpoint
+            search_url = f"{self.graphiti_url}/search"
             async with session.post(
-                facts_url,
+                search_url,
                 json={
                     "query": query,
-                    "group_id": self.group_id,
-                    "num_results": limit,
+                    "group_ids": [self.group_id],
+                    "max_facts": limit,
                 }
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    for i, fact in enumerate(data.get("facts", [])):
-                        # Calculate relevance score (1.0 to 0.0 based on position)
-                        score = 1.0 - (i / max(len(data.get("facts", [])), 1)) * 0.5
 
-                        # Format fact as readable content
+                    # Process facts (edges)
+                    facts = data.get("facts", [])
+                    for i, fact in enumerate(facts):
+                        score = 1.0 - (i / max(len(facts), 1)) * 0.5
                         content = self._format_fact(fact)
 
                         results.append(SearchResult(
@@ -109,26 +107,13 @@ class RichTextureLayer(PatternLayer):
                                 "predicate": fact.get("name"),
                                 "object": fact.get("target_node_name"),
                                 "valid_at": fact.get("valid_at"),
-                                "episode_id": fact.get("episode_uuid"),
                             }
                         ))
 
-            # Search nodes (entities)
-            nodes_url = f"{self.graphiti_url}/api/v1/search/nodes"
-            async with session.post(
-                nodes_url,
-                json={
-                    "query": query,
-                    "group_id": self.group_id,
-                    "num_results": limit,
-                }
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    for i, node in enumerate(data.get("nodes", [])):
-                        # Score slightly lower than facts (facts are more specific)
-                        score = 0.9 - (i / max(len(data.get("nodes", [])), 1)) * 0.4
-
+                    # Process entities (nodes)
+                    nodes = data.get("nodes", [])
+                    for i, node in enumerate(nodes):
+                        score = 0.9 - (i / max(len(nodes), 1)) * 0.4
                         content = self._format_node(node)
 
                         results.append(SearchResult(
@@ -140,7 +125,6 @@ class RichTextureLayer(PatternLayer):
                                 "type": "entity",
                                 "name": node.get("name"),
                                 "labels": node.get("labels", []),
-                                "created_at": node.get("created_at"),
                             }
                         ))
 
@@ -148,11 +132,9 @@ class RichTextureLayer(PatternLayer):
             results.sort(key=lambda r: r.relevance_score, reverse=True)
             return results[:limit]
 
-        except aiohttp.ClientError as e:
-            # Connection error - Graphiti unavailable, return empty
+        except aiohttp.ClientError:
             return []
-        except Exception as e:
-            # Other errors - log and return empty
+        except Exception:
             return []
 
     def _format_fact(self, fact: dict) -> str:
@@ -180,7 +162,7 @@ class RichTextureLayer(PatternLayer):
 
     async def store(self, content: str, metadata: Optional[dict] = None) -> bool:
         """
-        Store content in knowledge graph as an episode.
+        Store content in knowledge graph as messages.
 
         Graphiti will automatically extract entities and relationships.
 
@@ -189,35 +171,31 @@ class RichTextureLayer(PatternLayer):
             metadata: Optional metadata including:
                 - channel: Source channel (discord, terminal, etc.)
                 - timestamp: When this occurred
-                - participants: Who was involved
+                - role: Who said this (user/assistant)
         """
         try:
             session = await self._get_session()
             metadata = metadata or {}
 
-            # Build episode name from metadata
             channel = metadata.get("channel", "unknown")
-            timestamp = metadata.get("timestamp", datetime.now().isoformat())
-            name = f"{channel}:{timestamp}"
+            role = metadata.get("role", "user")
 
-            # Determine episode type based on content structure
-            episode_type = "text"
-            if ":" in content and "\n" in content:
-                # Looks like conversation format (role: message)
-                episode_type = "message"
-
-            episode_url = f"{self.graphiti_url}/api/v1/episodes"
+            # Graphiti uses POST /messages for ingestion
+            messages_url = f"{self.graphiti_url}/messages"
             async with session.post(
-                episode_url,
+                messages_url,
                 json={
-                    "name": name,
-                    "episode_body": content,
                     "group_id": self.group_id,
-                    "source_description": channel,
-                    "episode_type": episode_type,
+                    "messages": [
+                        {
+                            "role": role,
+                            "content": content,
+                            "metadata": {"channel": channel}
+                        }
+                    ]
                 }
             ) as resp:
-                if resp.status in (200, 201):
+                if resp.status in (200, 201, 202):
                     return True
                 else:
                     return False
@@ -232,24 +210,20 @@ class RichTextureLayer(PatternLayer):
         try:
             session = await self._get_session()
 
-            status_url = f"{self.graphiti_url}/api/v1/status"
+            # Graphiti uses /healthcheck endpoint
+            status_url = f"{self.graphiti_url}/healthcheck"
             async with session.get(status_url) as resp:
                 if resp.status == 200:
                     data = await resp.json()
 
-                    # Try to get entity/relationship counts
-                    entity_count = data.get("entity_count", "unknown")
-                    relationship_count = data.get("relationship_count", "unknown")
-
                     return LayerHealth(
                         available=True,
-                        message=f"Graphiti active ({entity_count} entities, {relationship_count} relationships)",
+                        message=f"Graphiti active (group: {self.group_id})",
                         details={
                             "graphiti_url": self.graphiti_url,
                             "group_id": self.group_id,
-                            "entity_count": entity_count,
-                            "relationship_count": relationship_count,
                             "status": "operational",
+                            "health_response": data,
                         }
                     )
                 else:
@@ -285,66 +259,17 @@ class RichTextureLayer(PatternLayer):
         """
         Explore the graph from a specific entity.
 
-        Finds connected entities and relationships up to `depth` hops away.
+        Uses search focused on the entity name to find related facts.
 
         Args:
             entity_name: Name of entity to explore from
-            depth: How many relationship hops to traverse
+            depth: How many relationship hops to traverse (currently uses search)
 
         Returns:
             List of connected entities and relationships
         """
-        try:
-            session = await self._get_session()
-
-            # First, find the entity
-            nodes_url = f"{self.graphiti_url}/api/v1/search/nodes"
-            async with session.post(
-                nodes_url,
-                json={
-                    "query": entity_name,
-                    "group_id": self.group_id,
-                    "num_results": 1,
-                }
-            ) as resp:
-                if resp.status != 200:
-                    return []
-                data = await resp.json()
-                nodes = data.get("nodes", [])
-                if not nodes:
-                    return []
-
-                center_node = nodes[0]
-                center_uuid = center_node.get("uuid")
-
-            # Get edges connected to this entity
-            # Note: This is a simplified approach; full graph traversal
-            # would require multiple queries or a dedicated endpoint
-            edges_url = f"{self.graphiti_url}/api/v1/nodes/{center_uuid}/edges"
-            results: list[SearchResult] = []
-
-            async with session.get(edges_url) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    for edge in data.get("edges", []):
-                        content = self._format_fact(edge)
-                        results.append(SearchResult(
-                            content=content,
-                            source=edge.get("uuid", "unknown"),
-                            layer=LayerType.RICH_TEXTURE,
-                            relevance_score=0.8,
-                            metadata={
-                                "type": "relationship",
-                                "from_entity": entity_name,
-                                "relationship": edge.get("name"),
-                                "to_entity": edge.get("target_node_name"),
-                            }
-                        ))
-
-            return results
-
-        except Exception:
-            return []
+        # Use search with entity name as query to find related facts
+        return await self.search(entity_name, limit=depth * 10)
 
     async def timeline(
         self,
@@ -366,36 +291,28 @@ class RichTextureLayer(PatternLayer):
         try:
             session = await self._get_session()
 
-            # Get recent episodes
-            episodes_url = f"{self.graphiti_url}/api/v1/episodes"
-            async with session.get(
-                episodes_url,
-                params={
-                    "group_id": self.group_id,
-                    "limit": limit,
-                }
-            ) as resp:
+            # Get recent episodes using /episodes/{group_id} endpoint
+            episodes_url = f"{self.graphiti_url}/episodes/{self.group_id}"
+            async with session.get(episodes_url) as resp:
                 if resp.status != 200:
                     return []
 
                 data = await resp.json()
                 results: list[SearchResult] = []
 
-                for episode in data.get("episodes", []):
-                    # Parse and filter by time if needed
-                    # For now, return all recent episodes
+                episodes = data if isinstance(data, list) else data.get("episodes", [])
+                for episode in episodes[:limit]:
                     content = episode.get("content", episode.get("name", ""))
                     created_at = episode.get("created_at", "")
 
                     results.append(SearchResult(
-                        content=f"[{created_at}] {content[:200]}...",
+                        content=f"[{created_at}] {content[:200]}..." if len(str(content)) > 200 else f"[{created_at}] {content}",
                         source=episode.get("uuid", "unknown"),
                         layer=LayerType.RICH_TEXTURE,
                         relevance_score=0.7,
                         metadata={
                             "type": "episode",
                             "created_at": created_at,
-                            "channel": episode.get("source_description"),
                         }
                     ))
 

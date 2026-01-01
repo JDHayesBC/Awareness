@@ -3,8 +3,10 @@
 # MCP SDK for Claude Code integration
 mcp>=1.0.0
 
+# Layer 3 (Graphiti) integration
+aiohttp>=3.8.0         # Async HTTP client for Graphiti API
+
 # Future dependencies (uncomment as layers are implemented):
 # jina-embeddings        # Layer 2: Semantic search for word-photos
 # chromadb               # Alternative vector store for embeddings
-# httpx                  # Layer 3: Graphiti API client
 # aiosqlite              # Layer 1: Async SQLite access

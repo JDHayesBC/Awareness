@@ -11,3 +11,6 @@ uvicorn>=0.23.0
 sentence-transformers>=2.2.0  # Local embeddings fallback
 openai>=1.0.0                 # OpenAI embeddings option
 httpx>=0.25.0                 # For JINA API calls
+
+# Layer 3 (Graphiti) integration
+aiohttp>=3.8.0                # Async HTTP client for Graphiti API
