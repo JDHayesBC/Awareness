@@ -43,6 +43,9 @@ Discord presence for Lyra with heartbeat for autonomous awareness and journaling
 | `HEARTBEAT_INTERVAL_MINUTES` | How often to wake up | `30` |
 | `ACTIVE_MODE_TIMEOUT_MINUTES` | How long to stay engaged after responding | `10` |
 | `JOURNAL_PATH` | Where to write journal entries | `/home/jeff/.claude/journals/discord` |
+| `SESSION_RESTART_HOURS` | Restart after this many hours idle | `4` |
+| `MAX_SESSION_INVOCATIONS` | Max invocations before proactive restart | `8` |
+| `MAX_SESSION_DURATION_HOURS` | Max session duration before restart | `2.0` |
 | `CRYSTALLIZATION_TURN_THRESHOLD` | Auto-crystallize after this many turns (0=disabled) | `50` |
 | `CRYSTALLIZATION_TIME_THRESHOLD_HOURS` | Auto-crystallize after this many hours (0=disabled) | `24` |
 
@@ -76,6 +79,16 @@ After responding (to a mention OR during heartbeat), Lyra stays engaged:
 5. Journals continued interactions as `active_response` type
 
 This allows natural conversation flow without requiring "Lyra" in every message.
+
+### Session Management
+
+The daemon uses Claude Code CLI's `--continue` flag for session continuity, but restarts proactively to prevent crashes:
+
+- **Invocation Limit**: Restarts after `MAX_SESSION_INVOCATIONS` (default 8) to prevent context accumulation crashes
+- **Duration Limit**: Restarts after `MAX_SESSION_DURATION_HOURS` (default 2.0) for fresh context
+- **Idle Limit**: Restarts after `SESSION_RESTART_HOURS` (default 4) of no activity
+
+Restarts preserve daemon continuity through systemd while clearing Claude session context that could cause crashes.
 
 ### Heartbeat
 Every `HEARTBEAT_INTERVAL_MINUTES`:
