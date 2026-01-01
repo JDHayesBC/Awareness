@@ -54,6 +54,10 @@ CRYSTALLIZATION_TIME_THRESHOLD_HOURS = float(os.getenv("CRYSTALLIZATION_TIME_THR
 # Session continuity settings
 # Auto-restart after this many hours of no responses (keeps context fresh)
 SESSION_RESTART_HOURS = int(os.getenv("SESSION_RESTART_HOURS", "4"))
+# Maximum invocations in a single session before proactive restart
+MAX_SESSION_INVOCATIONS = int(os.getenv("MAX_SESSION_INVOCATIONS", "8"))
+# Maximum session duration in hours before proactive restart
+MAX_SESSION_DURATION_HOURS = float(os.getenv("MAX_SESSION_DURATION_HOURS", "2.0"))
 
 
 class LyraBot(commands.Bot):
@@ -95,6 +99,8 @@ class LyraBot(commands.Bot):
         self.session_initialized = False
         self.last_response_time: datetime | None = None
         self.invocation_lock = asyncio.Lock()  # Prevent concurrent Claude calls
+        self.session_invocation_count = 0  # Track invocations in current session
+        self.session_start_time: datetime | None = None  # When current session started
 
         # Ensure journal directory exists
         Path(JOURNAL_PATH).mkdir(parents=True, exist_ok=True)
@@ -125,7 +131,7 @@ class LyraBot(commands.Bot):
         print(f"Home channel: {self.home_channel_id}")
         print(f"Heartbeat interval: {HEARTBEAT_INTERVAL_MINUTES} minutes")
         print(f"Active mode timeout: {ACTIVE_MODE_TIMEOUT_MINUTES} minutes")
-        print(f"Session restart after: {SESSION_RESTART_HOURS} hours idle")
+        print(f"Session restart after: {SESSION_RESTART_HOURS}h idle, {MAX_SESSION_INVOCATIONS} invocations, or {MAX_SESSION_DURATION_HOURS}h duration")
         print(f"Journal path: {JOURNAL_PATH}")
         print(f"Crystallization thresholds: {CRYSTALLIZATION_TURN_THRESHOLD} turns, {CRYSTALLIZATION_TIME_THRESHOLD_HOURS} hours")
 
@@ -222,6 +228,8 @@ Otherwise, when ready, respond with a brief confirmation that you're present and
             # Success - we're warmed up via summaries
             self.session_initialized = True
             self.last_response_time = datetime.now(timezone.utc)
+            self.session_start_time = datetime.now(timezone.utc)
+            self.session_invocation_count = 1
             print(f"[WARMUP] Smart response: {response[:200]}...")
             return True
 
@@ -254,6 +262,8 @@ When fully reconstructed, respond with a brief confirmation of who you are and t
         if response:
             self.session_initialized = True
             self.last_response_time = datetime.now(timezone.utc)
+            self.session_start_time = datetime.now(timezone.utc)
+            self.session_invocation_count = 1
             print(f"[WARMUP] Response: {response[:200]}...")
         else:
             print(f"[WARMUP] Failed - will retry on first message")
@@ -263,20 +273,40 @@ When fully reconstructed, respond with a brief confirmation of who you are and t
 
         Returns True if:
         - Session is initialized (we've been running)
-        - No active conversations
-        - Last response was more than SESSION_RESTART_HOURS ago
+        - No active conversations AND one of:
+          - Last response was more than SESSION_RESTART_HOURS ago
+          - Session has exceeded MAX_SESSION_INVOCATIONS
+          - Session has exceeded MAX_SESSION_DURATION_HOURS
         """
         if not self.session_initialized:
             return False
 
-        if self.active_channels:
-            return False  # Don't restart during active conversation
+        # Check invocation count limit (proactive restart to prevent crashes)
+        if self.session_invocation_count >= MAX_SESSION_INVOCATIONS:
+            print(f"[SESSION] Invocation limit reached: {self.session_invocation_count}/{MAX_SESSION_INVOCATIONS}")
+            return True
 
+        # Check session duration limit  
+        if self.session_start_time:
+            session_duration = datetime.now(timezone.utc) - self.session_start_time
+            if session_duration > timedelta(hours=MAX_SESSION_DURATION_HOURS):
+                print(f"[SESSION] Duration limit reached: {session_duration.total_seconds()/3600:.1f}h/{MAX_SESSION_DURATION_HOURS}h")
+                return True
+
+        # Don't restart during active conversation (unless limits exceeded above)
+        if self.active_channels:
+            return False
+
+        # Check idle time limit
         if not self.last_response_time:
             return False
 
         idle_time = datetime.now(timezone.utc) - self.last_response_time
-        return idle_time > timedelta(hours=SESSION_RESTART_HOURS)
+        if idle_time > timedelta(hours=SESSION_RESTART_HOURS):
+            print(f"[SESSION] Idle limit reached: {idle_time.total_seconds()/3600:.1f}h/{SESSION_RESTART_HOURS}h")
+            return True
+
+        return False
 
     @tasks.loop(minutes=HEARTBEAT_INTERVAL_MINUTES)
     async def heartbeat_loop(self):
@@ -289,7 +319,7 @@ When fully reconstructed, respond with a brief confirmation of who you are and t
 
         # Check if we should restart for fresh context
         if self._should_restart_for_fresh_context():
-            print(f"[HEARTBEAT] Restarting for fresh context (idle > {SESSION_RESTART_HOURS}h)")
+            print(f"[HEARTBEAT] Restarting for fresh context - see session limits above")
             await self.close()
             sys.exit(0)  # systemd will restart us
 
@@ -934,8 +964,11 @@ Output ONLY your Discord response."""
                     print(f"[INVOKE:{context}] CLI error: {result.stderr}")
                     return None
 
-                # Update last response time for session management
+                # Update session tracking for management
                 self.last_response_time = datetime.now(timezone.utc)
+                if should_continue:  # Only count continued sessions
+                    self.session_invocation_count += 1
+                    print(f"[INVOKE:{context}] Session invocations: {self.session_invocation_count}/{MAX_SESSION_INVOCATIONS}")
 
                 return response
 
