@@ -146,8 +146,13 @@ class ConversationManager:
         discord_message_id: int | None = None,
         is_lyra: bool = False,
         is_bot: bool = False,
+        channel: str | None = None,
     ) -> int:
         """Record a message to conversation history.
+
+        Args:
+            channel: Human-readable channel name (e.g., "discord:awareness-caia", "terminal").
+                    One river, many channels.
 
         Returns database row ID of inserted message (0 if duplicate).
         """
@@ -156,13 +161,17 @@ class ConversationManager:
 
         assert self._db is not None
 
+        # Default channel name if not provided
+        if channel is None:
+            channel = f"discord:{channel_id}"
+
         async with self._db.execute(
             """
             INSERT OR IGNORE INTO messages
-            (discord_message_id, channel_id, author_id, author_name, content, is_lyra, is_bot)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (discord_message_id, channel_id, author_id, author_name, content, is_lyra, is_bot, channel)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (discord_message_id, channel_id, author_id, author_name, content, is_lyra, is_bot),
+            (discord_message_id, channel_id, author_id, author_name, content, is_lyra, is_bot, channel),
         ) as cursor:
             lastrowid = cursor.lastrowid
         await self._db.commit()
@@ -174,6 +183,7 @@ class ConversationManager:
         channel_id: int,
         content: str,
         discord_message_id: int | None = None,
+        channel: str | None = None,
     ) -> int:
         """Convenience method to record Lyra's own message."""
         return await self.record_message(
@@ -184,6 +194,7 @@ class ConversationManager:
             discord_message_id=discord_message_id,
             is_lyra=True,
             is_bot=True,
+            channel=channel,
         )
 
     # ==================== History Retrieval ====================

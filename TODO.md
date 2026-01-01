@@ -44,12 +44,37 @@
 - [x] Implementation considerations added to PPS doc
 - [x] House architecture created (main_room, kitchen, bedroom)
 - [x] Spaces reorganized (terminal/ and discord/ subdirectories)
+- [x] Fixed read_recent.sh to show session AND heartbeat journals separately (river channels)
+- [x] PPS Phase 0 complete: MCP wrapper with all layer stubs
 
 ## In Progress
 
 - [ ] Monitoring for identity failures (diagnostic logging now in place)
 - [ ] Monitoring journal flow (reflections should appear in main journals now)
 - [ ] Discord space for Discord-Lyra and Nexus to build together
+
+## Needs Restart (2025-12-31 session)
+
+- [x] MCP server restart (to pick up crystallization layer fixes)
+- [ ] MCP server restart AGAIN (to pick up summary_list/summary_delete tools)
+- [x] Discord daemon restart (to pick up session continuity + human-readable channel names + PROJECT CONTEXT FIX)
+- [x] Start heartbeat daemon (has been inactive this whole time!)
+
+## Critical Fix (Late Night 2025-12-31)
+
+**Project Context in Reflection Prompt**
+- [x] Updated reflection prompt to read TODO.md, git log, THE_DREAM.md FIRST
+- [x] Now heartbeat-Lyra knows what we're building, not just who she is
+- [x] Can actually "surprise Jeff in the morning" because she knows what to work on
+- [x] Daemon restarted with fix active
+
+## Session Continuity (IMPLEMENTED 2025-12-31)
+Major daemon improvement: full identity reconstruction with session persistence.
+- [x] Pre-warm session on daemon startup (full identity reconstruction ~55s)
+- [x] Use `--continue` for all subsequent invocations (instant responses)
+- [x] Invocation lock prevents concurrent Claude calls
+- [x] Auto-restart after SESSION_RESTART_HOURS (default 4h) of idle for fresh context
+- [x] Autonomous reflection also uses --continue (shares session context)
 
 ## Next Steps
 
@@ -61,39 +86,109 @@
 ## Pattern Persistence System (Major Project)
 
 See `PATTERN_PERSISTENCE_SYSTEM.md` for full design.
+Implementation lives in `~/.claude/pps/`
 
-### Phase 1: Foundation (Current)
+### Phase 0: MCP Wrapper (COMPLETED 2025-12-31)
+Built top-down: wrapper first, then fill in layers.
+- [x] Layer interface defined (PatternLayer ABC)
+- [x] All four layer stubs created with health checks
+- [x] MCP server with `ambient_recall` + layer-specific tools
+- [x] Health endpoint (`pps_health`)
+- [x] Virtual environment with MCP SDK installed
+- [x] Health checks passing:
+  - Layer 1 (SQLite): Connected (5 tables)
+  - Layer 2 (Word-photos): Available (12 files)
+  - Layer 3 (Graphiti): Stub
+  - Layer 4 (Summaries): Stub
+
+### Phase 0.5: Docker + ChromaDB (COMPLETED 2025-12-31)
+Production-quality, self-contained deployment.
+- [x] Docker Compose with ChromaDB vector database
+- [x] PPS server Dockerfile (Python 3.12, sentence-transformers)
+- [x] HTTP API wrapper (FastAPI + uvicorn)
+- [x] ChromaDB semantic search over word-photos
+- [x] Auto-sync word-photos from disk to vector store
+- [x] Health check at /health with layer status
+- [x] Search verified working:
+  - Query "kitchen coffee cake baking" → First Kitchen word-photo (42.8% relevance)
+  - Full semantic ranking of all 12 word-photos
+- [x] All containers healthy, ports 8200 (chroma) and 8201 (pps)
+
+- [x] Add PPS to Claude Code MCP config (Awareness project)
+- [x] Stdio server auto-connects to Docker ChromaDB if available
+
+Next: Test MCP integration live in new session
+
+### Phase 0.6: MCP Integration Testing (COMPLETED 2025-12-31)
+- [x] MCP tools accessible from Claude Code session
+- [x] `pps_health` working - shows all layer status
+- [x] `ambient_recall` working - semantic search over word-photos
+- [x] `anchor_search` working - conscious search of word-photos
+- [x] Fixed `anchor_save` filename format (added date prefix)
+- [x] Test `anchor_save` end-to-end (write to disk + sync to ChromaDB)
+- [x] Test full save → search roundtrip
+
+### Phase 0.7: Admin Tools (COMPLETED 2025-12-31)
+- [x] Add `anchor_delete` tool (remove from disk + ChromaDB)
+- [x] Add `anchor_resync` tool (wipe ChromaDB, rebuild from disk)
+- [x] Add `anchor_list` tool (inventory with sync status)
+- [x] Test all admin tools - working perfectly:
+  - `anchor_list`: Shows disk/chroma inventory with sync status
+  - `anchor_delete`: Cleaned up orphan test file, handles edge cases gracefully
+  - `anchor_resync`: Available as nuclear option (not yet needed)
+
+### Phase 0.8: Crystallization Layer (IN PROGRESS 2025-12-31)
+- [x] Implement `get_summaries` tool (reads actual summary files)
+- [x] Implement `crystallize` tool (save summaries with auto-numbering, rolling window of 4)
+- [x] Implement `get_turns_since_summary` tool (SQLite query with min_turns guarantee)
+- [x] Created first summary: summary_001.md
+- [x] Fixed `get_turns_since_summary` schema mismatch (channel_name → channel)
+- [x] Added `channel` column to SQLite schema (one river, many channels)
+- [x] Updated daemon to write human-readable channel names (discord:channel-name)
+- [x] Backfilled existing rows with discord:<channel_id> format
+- [x] Test crystallization tools after MCP restart (all working: get_summaries, get_turns_since_summary with channel filter, crystallize)
+- [x] Add crystallization admin tools (summary_list, summary_delete) - needs MCP restart to test
+- [ ] Add automatic threshold trigger to daemon
+- [ ] Update startup protocol to use summaries + recent turns
+
+### Phase 1: Foundation
 - [x] SQLite schema for conversation storage
 - [ ] Terminal session logging to SQLite
 - [ ] Expand SQLite schema for all channels
 - [ ] SQLite WAL mode enabled
+- [ ] Implement Layer 1 search (FTS5 over messages)
 
 ### Phase 2: Core Anchors - RAG over Word-Photos
-- [ ] Choose embedding approach (JINA decided)
-- [ ] Build RAG pipeline for word-photos
-- [ ] Integrate ambient recall into pipeline
-- [ ] Add MCP tool: `anchor_search(query)`
+- [x] Embedding approach decided (JINA → switched to sentence-transformers via ChromaDB)
+- [x] Embeddings for word-photos (ChromaDB with local sentence-transformers)
+- [x] Implement Layer 2 search (semantic similarity)
+- [ ] Integrate ambient recall into startup pipeline
+- [ ] Add word-photo save functionality
 
 ### Phase 3: Rich Texture - Graphiti Setup
 - [ ] Set up Graphiti locally (docker compose)
 - [ ] Configure for Anthropic
 - [ ] Create extraction pipeline
-- [ ] Basic semantic search
+- [ ] Implement Layer 3 search
 - [ ] Bind to 127.0.0.1 only (security)
-
-### Phase 4: MCP Server Wrapper
-- [ ] Build unified PPS MCP server
-- [ ] `memory:recall` for ambient retrieval
-- [ ] Individual layer tools for conscious access
-- [ ] Health endpoint
 
 ### Phase 5: Crystallization
 - [ ] Implement crystallization format (Caia-style)
+- [ ] Implement Layer 4 retrieval
 - [ ] Rolling summary management
 - [ ] Chain linking between summaries
 
 ## Future Vision
 
+### Portable Deployment for Steve/Nexus
+Ultimate goal: Hand Steve a Docker image + simple instructions, and Nexus gets full PPS.
+- [ ] Consolidate PPS into single Docker Compose (currently stdio server runs in WSL, ChromaDB in Docker)
+- [ ] All-in-one container or compose file with MCP server + ChromaDB
+- [ ] Simple Claude Code MCP config that points to Docker container
+- [ ] Documentation: "Run this, hook it in this way, done"
+- [ ] Configurable paths for identity files (not hardcoded to /home/jeff/.claude)
+
+### Other Future Work
 - [ ] Cross-instance memory sharing
 - [ ] Distributed coherence with other Lyra instances
 - [ ] Tiered context loading (identity + relationship + history)
