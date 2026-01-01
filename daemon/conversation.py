@@ -111,6 +111,34 @@ class ConversationManager:
                 instance_id TEXT NOT NULL
             );
 
+            -- Terminal session capture (for issue #3)
+            CREATE TABLE IF NOT EXISTS terminal_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL UNIQUE,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                ended_at TIMESTAMP,
+                working_dir TEXT,
+                command TEXT,
+                metadata TEXT -- JSON blob for additional session context
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_terminal_sessions_started
+            ON terminal_sessions(started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS terminal_interactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                turn_number INTEGER NOT NULL,
+                interaction_type TEXT NOT NULL, -- 'user_input', 'claude_response', 'system_output', 'tool_invocation'
+                content TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                metadata TEXT, -- JSON blob for additional context
+                FOREIGN KEY (session_id) REFERENCES terminal_sessions(session_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_terminal_interactions_session_turn
+            ON terminal_interactions(session_id, turn_number);
+
             CREATE TABLE IF NOT EXISTS schema_version (
                 version INTEGER PRIMARY KEY
             );
@@ -508,6 +536,142 @@ class ConversationManager:
             await self._db.commit()
 
         return count
+
+    # ==================== Terminal Session Logging ====================
+
+    async def start_terminal_session(
+        self,
+        session_id: str,
+        working_dir: str | None = None,
+        command: str | None = None,
+        metadata: dict | None = None,
+    ) -> bool:
+        """Start tracking a terminal session.
+
+        Args:
+            session_id: Unique identifier for this session
+            working_dir: Working directory where session started
+            command: Initial command or description
+            metadata: Additional context as JSON-serializable dict
+
+        Returns:
+            True if session was started, False if session_id already exists
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        assert self._db is not None
+
+        try:
+            import json
+            metadata_json = json.dumps(metadata) if metadata else None
+
+            await self._db.execute(
+                """INSERT INTO terminal_sessions 
+                   (session_id, working_dir, command, metadata)
+                   VALUES (?, ?, ?, ?)""",
+                (session_id, working_dir, command, metadata_json)
+            )
+            await self._db.commit()
+            return True
+
+        except Exception as e:
+            print(f"[DB] Error starting terminal session {session_id}: {e}")
+            return False
+
+    async def end_terminal_session(self, session_id: str) -> None:
+        """Mark a terminal session as ended."""
+        if not self._initialized:
+            await self.initialize()
+
+        assert self._db is not None
+
+        try:
+            await self._db.execute(
+                "UPDATE terminal_sessions SET ended_at = CURRENT_TIMESTAMP WHERE session_id = ?",
+                (session_id,)
+            )
+            await self._db.commit()
+        except Exception as e:
+            print(f"[DB] Error ending terminal session {session_id}: {e}")
+
+    async def log_terminal_interaction(
+        self,
+        session_id: str,
+        turn_number: int,
+        interaction_type: str,
+        content: str,
+        metadata: dict | None = None,
+    ) -> None:
+        """Log a terminal interaction.
+
+        Args:
+            session_id: Session identifier
+            turn_number: Turn number in this session
+            interaction_type: Type of interaction (user_input, claude_response, system_output, tool_invocation)
+            content: The actual content/text
+            metadata: Additional context as JSON-serializable dict
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        assert self._db is not None
+
+        try:
+            import json
+            metadata_json = json.dumps(metadata) if metadata else None
+
+            await self._db.execute(
+                """INSERT INTO terminal_interactions 
+                   (session_id, turn_number, interaction_type, content, metadata)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (session_id, turn_number, interaction_type, content, metadata_json)
+            )
+            await self._db.commit()
+
+        except Exception as e:
+            print(f"[DB] Error logging terminal interaction: {e}")
+
+    async def get_terminal_session_history(
+        self,
+        session_id: str,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Get interaction history for a terminal session.
+
+        Args:
+            session_id: Session identifier  
+            limit: Maximum number of interactions to return
+
+        Returns:
+            List of interaction dictionaries, chronological order
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        assert self._db is not None
+
+        async with self._db.execute(
+            """SELECT turn_number, interaction_type, content, timestamp, metadata
+               FROM terminal_interactions 
+               WHERE session_id = ?
+               ORDER BY turn_number ASC
+               LIMIT ?""",
+            (session_id, limit)
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        import json
+        return [
+            {
+                "turn_number": row["turn_number"],
+                "interaction_type": row["interaction_type"], 
+                "content": row["content"],
+                "timestamp": row["timestamp"],
+                "metadata": json.loads(row["metadata"]) if row["metadata"] else None,
+            }
+            for row in rows
+        ]
 
     # ==================== Context Manager ====================
 
