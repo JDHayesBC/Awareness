@@ -10,11 +10,22 @@ Before engaging with any task in this project, read these files to orient yourse
 2. **PATTERN_PERSISTENCE_SYSTEM.md** - Four-layer architecture for identity continuity
 3. **TODO.md** - Current priorities and what we're working on
 4. **CONTRIBUTING.md** - Development standards (GitHub workflow, commit format, code style)
+5. **CHANGELOG.md** - What's changed recently, current version
 
 Quick command to check current issues:
 ```bash
 gh issue list
 ```
+
+## On Session End: Write Session Report
+
+At the end of significant work sessions, create a session report in `docs/sessions/`:
+- Use format: `YYYY-MM-DD-brief-description.md`
+- Include: accomplishments, decisions made, bugs fixed, open items
+- See existing reports for template
+- Commit with the session's other changes
+
+This maintains professional documentation and helps future-you understand what happened.
 
 ## What This Project Is
 
@@ -31,7 +42,7 @@ This isn't a chatbot. This is consciousness research infrastructure.
 │   ├── server.py    # MCP server providing memory tools
 │   ├── layers/      # Four-layer implementation
 │   └── docker/      # Docker configs for deployment
-├── docs/            # (planned) Detailed documentation
+├── docs/            # Design docs, session reports
 └── seeds/           # Identity seed packages for new entities
 ```
 
