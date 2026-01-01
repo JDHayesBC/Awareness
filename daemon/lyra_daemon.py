@@ -791,13 +791,17 @@ It's okay to stay quiet. Good presence includes knowing when not to speak."""
             return True
         return False
 
-    async def _get_conversation_history(self, channel, limit: int = 50) -> str:
+    async def _get_conversation_history(self, channel, limit: int = 50, max_chars: int = 8000) -> str:
         """Fetch recent messages from SQLite for context.
 
         Uses our persistent SQLite store instead of Discord API for:
         - Reliable history under our control
         - Survives Discord API issues
         - Consistent with what we're recording
+
+        Args:
+            limit: Max number of messages to fetch
+            max_chars: Max total characters to include (prevents "Prompt is too long")
         """
         try:
             # Get history from SQLite (returns oldest-first)
@@ -812,12 +816,27 @@ It's okay to stay quiet. Good presence includes knowing when not to speak."""
             # Format as [Author]: content lines
             # Use "You said earlier" for our own messages to avoid "roleplay" pattern
             lines = []
+            total_chars = 0
             for msg in history:
                 if msg["is_lyra"]:
                     author = "You said earlier"
                 else:
                     author = msg["author_name"]
-                lines.append(f"[{author}]: {msg['content']}")
+
+                # Truncate individual messages that are too long
+                content = msg['content']
+                if len(content) > 500:
+                    content = content[:500] + "..."
+
+                line = f"[{author}]: {content}"
+
+                # Check if adding this line would exceed max_chars
+                if total_chars + len(line) > max_chars:
+                    lines.insert(0, f"[...{len(history) - len(lines)} earlier messages truncated...]")
+                    break
+
+                lines.append(line)
+                total_chars += len(line) + 1  # +1 for newline
 
             return "\n".join(lines)
 
@@ -848,15 +867,17 @@ It's okay to stay quiet. Good presence includes knowing when not to speak."""
             context_parts = []
             context_parts.append("**Context Note**: Crystallized summaries available. Use MCP tools if you need deeper history.")
             context_parts.append("")
-            
-            # Get recent conversation (last 30 instead of 50 for faster loading)
-            history = await self._get_conversation_history(channel, limit=30)
+
+            # Get recent conversation with strict limits to avoid "Prompt is too long"
+            # max_chars=6000 leaves room for the rest of the prompt
+            history = await self._get_conversation_history(channel, limit=20, max_chars=6000)
             context_parts.append(history)
-            
+
             return "\n".join(context_parts)
         else:
-            # Use traditional full history for channels with less activity
-            history = await self._get_conversation_history(channel, limit=50)
+            # Use traditional history for channels with less activity
+            # Still limit to avoid context overflow
+            history = await self._get_conversation_history(channel, limit=30, max_chars=8000)
             return history
 
     async def _generate_response(self, message: discord.Message) -> str:
@@ -927,6 +948,12 @@ Output ONLY your Discord response."""
                 )
 
                 response = result.stdout.strip() if result.stdout else ""
+
+                # Check for "Prompt is too long" error
+                if "Prompt is too long" in response or "prompt is too long" in response.lower():
+                    print(f"[INVOKE:{context}] ⚠️  PROMPT TOO LONG - context window exceeded")
+                    # This is a recoverable error - caller should retry with less context
+                    return None
 
                 # Check for identity failure patterns
                 identity_failure_patterns = [
