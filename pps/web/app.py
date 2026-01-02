@@ -93,9 +93,52 @@ def get_layer_health() -> dict:
         health["layer2"]["status"] = "error"
         health["layer2"]["detail"] = str(e)[:50]
 
-    # Layer 3: Graphiti (stub for now)
-    health["layer3"]["status"] = "stub"
-    health["layer3"]["detail"] = "Not implemented"
+    # Layer 3: Graphiti  
+    try:
+        import requests
+        import json
+        
+        # Try direct HTTP check to Graphiti health endpoint
+        graphiti_host = os.getenv("GRAPHITI_HOST", "localhost") 
+        graphiti_port = int(os.getenv("GRAPHITI_PORT", "8203"))
+        graphiti_url = f"http://{graphiti_host}:{graphiti_port}"
+        
+        # Check Graphiti health
+        resp = requests.get(f"{graphiti_url}/healthcheck", timeout=5)
+        if resp.status_code == 200:
+            health["layer3"]["status"] = "ok"
+            health["layer3"]["detail"] = "Operational"
+            
+            # Try to get entity count for more detail
+            try:
+                pps_server_url = "http://localhost:8201"
+                search_resp = requests.post(
+                    f"{pps_server_url}/tools/texture_search",
+                    json={"query": "test", "limit": 1},
+                    timeout=3
+                )
+                if search_resp.status_code == 200:
+                    search_data = search_resp.json()
+                    # Successfully connected to Graphiti via PPS
+                    health["layer3"]["detail"] = "Active (via PPS)"
+                else:
+                    health["layer3"]["detail"] = "Graphiti online"
+            except:
+                # Graphiti health OK but can't query through PPS
+                health["layer3"]["detail"] = "Graphiti online"
+        else:
+            health["layer3"]["status"] = "error"
+            health["layer3"]["detail"] = f"HTTP {resp.status_code}"
+            
+    except requests.exceptions.ConnectionError:
+        health["layer3"]["status"] = "error"
+        health["layer3"]["detail"] = "Graphiti unreachable"
+    except requests.exceptions.Timeout:
+        health["layer3"]["status"] = "error"
+        health["layer3"]["detail"] = "Graphiti timeout"
+    except Exception as e:
+        health["layer3"]["status"] = "error"
+        health["layer3"]["detail"] = str(e)[:50]
 
     # Layer 4: Summaries
     try:
