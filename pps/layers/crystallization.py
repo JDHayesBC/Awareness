@@ -20,10 +20,10 @@ class CrystallizationLayer(PatternLayer):
     Layer 4: Crystallization
 
     Rolling crystals in Caia's format - compressed continuity.
-    Keeps 4 crystals in current/, archives older ones.
+    Keeps 8 crystals in current/, archives older ones.
     """
 
-    MAX_CURRENT_CRYSTALS = 4
+    MAX_CURRENT_CRYSTALS = 8  # Increased for multiple streams (terminal, reflection, Discord)
 
     def __init__(self, crystals_path: Optional[Path] = None, archive_path: Optional[Path] = None):
         """
