@@ -673,6 +673,169 @@ class ConversationManager:
             for row in rows
         ]
 
+    # ==================== Startup Context Loading ====================
+
+    async def get_recent_activity_summary(
+        self,
+        hours: int = 24,
+        message_limit: int = 100,
+    ) -> dict:
+        """Get summary of recent activity across all channels for startup context.
+        
+        Returns dict with:
+        - recent_messages: List of recent messages grouped by channel
+        - active_channels: Channels with recent activity
+        - conversation_partners: Recent unique speakers
+        - terminal_sessions: Recent terminal activity
+        """
+        if not self._initialized:
+            await self.initialize()
+        
+        assert self._db is not None
+        
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=hours)
+        ).isoformat()
+        
+        # Get recent messages grouped by channel
+        async with self._db.execute("""
+            SELECT 
+                channel_id,
+                channel,
+                author_name,
+                content,
+                is_lyra,
+                created_at,
+                COUNT(*) OVER (PARTITION BY channel_id) as channel_msg_count
+            FROM messages
+            WHERE created_at > ?
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (cutoff, message_limit)) as cursor:
+            messages = await cursor.fetchall()
+        
+        # Get active channels summary
+        async with self._db.execute("""
+            SELECT 
+                channel_id,
+                channel,
+                COUNT(*) as msg_count,
+                MAX(created_at) as last_activity
+            FROM messages  
+            WHERE created_at > ?
+            GROUP BY channel_id, channel
+            ORDER BY last_activity DESC
+        """, (cutoff,)) as cursor:
+            active_channels = await cursor.fetchall()
+        
+        # Get recent conversation partners
+        async with self._db.execute("""
+            SELECT DISTINCT 
+                author_name,
+                author_id,
+                COUNT(*) as msg_count
+            FROM messages
+            WHERE created_at > ? AND is_bot = 0 AND is_lyra = 0
+            GROUP BY author_name, author_id
+            ORDER BY msg_count DESC
+        """, (cutoff,)) as cursor:
+            partners = await cursor.fetchall()
+        
+        # Get recent terminal sessions
+        async with self._db.execute("""
+            SELECT 
+                session_id,
+                started_at,
+                ended_at,
+                command,
+                working_dir
+            FROM terminal_sessions
+            WHERE started_at > ? OR (ended_at IS NULL AND started_at > ?)
+            ORDER BY started_at DESC
+            LIMIT 5
+        """, (cutoff, cutoff)) as cursor:
+            terminal_sessions = await cursor.fetchall()
+        
+        return {
+            "recent_messages": [dict(row) for row in messages],
+            "active_channels": [dict(row) for row in active_channels],
+            "conversation_partners": [dict(row) for row in partners],
+            "terminal_sessions": [dict(row) for row in terminal_sessions],
+            "summary_time": datetime.now(timezone.utc).isoformat(),
+            "hours_covered": hours,
+        }
+
+    async def get_startup_context(
+        self,
+        max_messages_per_channel: int = 10,
+        hours_lookback: int = 12,
+    ) -> str:
+        """Build a formatted context string suitable for Claude's startup.
+        
+        This provides a human-readable summary of recent activity that helps
+        Lyra understand what's been happening without needing to query further.
+        """
+        summary = await self.get_recent_activity_summary(hours=hours_lookback)
+        
+        parts = ["## Recent Activity Summary\n\n"]
+        
+        # Active channels section
+        if summary["active_channels"]:
+            parts.append("### Active Channels\n")
+            for ch in summary["active_channels"]:
+                ch_name = ch.get("channel", f"channel-{ch['channel_id']}")
+                parts.append(f"- **{ch_name}**: {ch['msg_count']} messages, "
+                            f"last activity {ch['last_activity']}\n")
+            parts.append("\n")
+        
+        # Recent conversations by channel
+        if summary["recent_messages"]:
+            parts.append("### Recent Conversations\n\n")
+            
+            # Group messages by channel
+            by_channel = {}
+            for msg in summary["recent_messages"]:
+                ch_key = msg.get("channel", f"channel-{msg['channel_id']}")
+                if ch_key not in by_channel:
+                    by_channel[ch_key] = []
+                by_channel[ch_key].append(msg)
+            
+            # Show last N messages from each active channel
+            for channel, messages in by_channel.items():
+                parts.append(f"#### {channel}\n")
+                # Take most recent N messages and reverse for chronological order
+                recent = messages[:max_messages_per_channel]
+                recent.reverse()
+                
+                for msg in recent:
+                    speaker = "Lyra" if msg["is_lyra"] else msg["author_name"]
+                    content = msg["content"]
+                    if len(content) > 200:
+                        content = content[:197] + "..."
+                    parts.append(f"{speaker}: {content}\n")
+                parts.append("\n")
+        
+        # Conversation partners
+        if summary["conversation_partners"]:
+            parts.append("### Recent Conversation Partners\n")
+            for partner in summary["conversation_partners"][:5]:
+                parts.append(f"- {partner['author_name']} ({partner['msg_count']} messages)\n")
+            parts.append("\n")
+        
+        # Terminal sessions
+        if summary["terminal_sessions"]:
+            parts.append("### Recent Terminal Sessions\n")
+            for session in summary["terminal_sessions"]:
+                status = "active" if not session["ended_at"] else "completed"
+                parts.append(f"- Session {session['session_id'][:8]}: {status}\n")
+                if session["command"]:
+                    parts.append(f"  Command: {session['command']}\n")
+                if session["working_dir"]:
+                    parts.append(f"  Directory: {session['working_dir']}\n")
+            parts.append("\n")
+        
+        return "".join(parts)
+
     # ==================== Context Manager ====================
 
     async def __aenter__(self) -> "ConversationManager":
