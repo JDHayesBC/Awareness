@@ -360,28 +360,41 @@ async function loadEntities() {
 function updateGraph(nodes, edges) {
     // Clear existing elements
     cy.elements().remove();
-    
-    // Add nodes
+
+    // Track added nodes to avoid duplicates
+    const addedNodes = new Set();
+
+    // Add nodes (skip duplicates)
     nodes.forEach(node => {
-        cy.add({
-            group: 'nodes',
-            data: node
-        });
+        if (!addedNodes.has(node.id)) {
+            addedNodes.add(node.id);
+            cy.add({
+                group: 'nodes',
+                data: node
+            });
+        }
     });
-    
-    // Add edges
+
+    // Track added edges to avoid duplicates
+    const addedEdges = new Set();
+
+    // Add edges (skip duplicates)
     edges.forEach(edge => {
-        cy.add({
-            group: 'edges',
-            data: {
-                id: `${edge.source}-${edge.label}-${edge.target}`,
-                source: edge.source,
-                target: edge.target,
-                label: edge.label,
-                relevance: edge.relevance,
-                content: edge.content
-            }
-        });
+        const edgeId = `${edge.source}-${edge.label}-${edge.target}`;
+        if (!addedEdges.has(edgeId) && addedNodes.has(edge.source) && addedNodes.has(edge.target)) {
+            addedEdges.add(edgeId);
+            cy.add({
+                group: 'edges',
+                data: {
+                    id: edgeId,
+                    source: edge.source,
+                    target: edge.target,
+                    label: edge.label,
+                    relevance: edge.relevance,
+                    content: edge.content
+                }
+            });
+        }
     });
     
     // Run layout
