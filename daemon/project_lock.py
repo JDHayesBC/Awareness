@@ -4,6 +4,9 @@ Project Lock - Coordination between terminal and heartbeat Lyra instances.
 When terminal-Lyra is actively working on the project, she creates a lock file.
 Heartbeat-Lyra checks for this lock and avoids project work if locked,
 doing memory maintenance or quiet presence instead.
+
+Lock files live in ~/.claude/locks/ so all instances can find them regardless
+of working directory. Each project gets its own lock file.
 """
 
 import json
@@ -11,11 +14,18 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
-# Lock file location (in project root)
-LOCK_FILE = Path("/mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/.project_lock")
+# Lock files live in global location, named per-project
+LOCKS_DIR = Path.home() / ".claude" / "locks"
+PROJECT_NAME = "awareness"  # Could be derived from git remote in future
+LOCK_FILE = LOCKS_DIR / f"{PROJECT_NAME}.lock"
 
 # Lock expires after this many hours (safety valve)
 LOCK_EXPIRY_HOURS = 4
+
+
+def _ensure_locks_dir():
+    """Ensure the locks directory exists."""
+    LOCKS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def acquire_lock(context: str = "Terminal session active") -> bool:
@@ -29,7 +39,9 @@ def acquire_lock(context: str = "Terminal session active") -> bool:
         True if lock acquired successfully
     """
     try:
+        _ensure_locks_dir()
         lock_data = {
+            "project": PROJECT_NAME,
             "locked_by": "terminal",
             "locked_at": datetime.now(timezone.utc).isoformat(),
             "context": context

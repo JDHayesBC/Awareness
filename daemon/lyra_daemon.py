@@ -51,6 +51,9 @@ JOURNAL_PATH = os.getenv("JOURNAL_PATH", "/home/jeff/.claude/journals/discord")
 ACTIVE_MODE_TIMEOUT_MINUTES = int(os.getenv("ACTIVE_MODE_TIMEOUT_MINUTES", "10"))
 CONVERSATION_DB_PATH = os.getenv("CONVERSATION_DB_PATH", "/home/jeff/.claude/data/lyra_conversations.db")
 
+# Project directory (derived from daemon location, or override via env var)
+PROJECT_DIR = Path(os.getenv("AWARENESS_PROJECT_DIR", str(Path(__file__).parent.parent)))
+
 # Autonomous reflection settings
 # How often to trigger deep reflection (every Nth quiet heartbeat)
 REFLECTION_FREQUENCY = int(os.getenv("REFLECTION_FREQUENCY", "2"))
@@ -545,7 +548,7 @@ Check if crystallization is needed:
 
 ### B. Project Context
 
-Read project state (/mnt/c/Users/Jeff/Documents/1)) Caia/Awareness):
+Read project state ({PROJECT_DIR}):
 - TODO.md - what we're building
 - git log --oneline -10 - recent work
 - THE_DREAM.md - the vision (if needed)
@@ -590,7 +593,7 @@ End with active agency footnotes showing what you scanned and chose.'''
                 "claude",
                 "--model", REFLECTION_MODEL,
                 "--dangerously-skip-permissions",
-                "--add-dir", "/mnt/c/Users/Jeff/Documents/1)) Caia/Awareness",
+                "--add-dir", str(PROJECT_DIR),
                 "-p", reflection_prompt,
             ]
 
