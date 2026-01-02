@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+*Nothing yet - just released 0.4.0!*
+
+---
+
+## [0.4.0] - 2026-01-02
+
 ### Added
 - **Layer 3: Graphiti Integration** (Issue #9)
   - Full RichTextureLayer implementation with Graphiti connectivity
@@ -59,9 +65,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Also: Reflection now includes full identity reconstruction in prompt
   - Also: Memory limit bumped from 512M to 1G for headroom
 
-### Planned
-- PPS Observatory Phase 2+ (Messages, Word-Photos, Summaries pages)
-- Discord daemon batched ingestion to Graphiti
+### Notes
+- All four PPS layers now operational and validated
+- Docker ecosystem stable (pps-neo4j, pps-graphiti, pps-server, pps-chromadb all healthy)
+- MCP tools fully functional across all layers
 
 ---
 
