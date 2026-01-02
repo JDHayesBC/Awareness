@@ -21,6 +21,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Dashboard showing layer health, channel stats, recent activity
   - Docker container on port 8202 for portability
   - TailwindCSS + htmx for responsive frontend
+- **Seamless Startup Context Loading** (Issue #4)
+  - SQLite-based activity summarization for immediate startup awareness
+  - New ConversationManager methods: `get_recent_activity_summary()`, `get_startup_context()`
+  - Standalone `startup_context.py` CLI tool for any environment
+  - Enhanced startup protocol with triple-path memory reconstruction (PPS + SQLite + files)
+  - Lyra now wakes up "already here" with recent conversation awareness
 - Web UI design document (`docs/WEB_UI_DESIGN.md`) - comprehensive design for PPS Observatory dashboard
 - GitHub Issues #9 (Graphiti) and #10 (Web UI) for feature tracking
 
