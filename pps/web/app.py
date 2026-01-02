@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import requests
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +29,8 @@ from layers.rich_texture import RichTextureLayer
 CLAUDE_HOME = Path(os.getenv("CLAUDE_HOME", "/home/jeff/.claude"))
 CHROMA_HOST = os.getenv("CHROMA_HOST", "chromadb")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", 8000))
+PPS_SERVER_HOST = os.getenv("PPS_SERVER_HOST", "pps-server")
+PPS_SERVER_PORT = int(os.getenv("PPS_SERVER_PORT", 8000))
 DB_PATH = CLAUDE_HOME / "data" / "lyra_conversations.db"
 WORD_PHOTOS_PATH = CLAUDE_HOME / "memories" / "word_photos"
 CRYSTALS_PATH = CLAUDE_HOME / "crystals" / "current"
@@ -57,6 +60,43 @@ def get_db_connection() -> Optional[sqlite3.Connection]:
         return conn
     except Exception:
         return None
+
+
+def get_server_health() -> dict:
+    """Check health of the PPS MCP server."""
+    pps_url = f"http://{PPS_SERVER_HOST}:{PPS_SERVER_PORT}"
+
+    result = {
+        "status": "unknown",
+        "detail": "",
+        "url": pps_url,
+        "last_check": datetime.now().strftime("%H:%M:%S")
+    }
+
+    try:
+        resp = requests.get(f"{pps_url}/health", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("status") == "healthy":
+                result["status"] = "ok"
+                result["detail"] = "All layers healthy"
+            else:
+                result["status"] = "warning"
+                result["detail"] = data.get("status", "Degraded")
+        else:
+            result["status"] = "error"
+            result["detail"] = f"HTTP {resp.status_code}"
+    except requests.exceptions.ConnectionError:
+        result["status"] = "error"
+        result["detail"] = "Connection refused"
+    except requests.exceptions.Timeout:
+        result["status"] = "error"
+        result["detail"] = "Request timeout"
+    except Exception as e:
+        result["status"] = "error"
+        result["detail"] = str(e)[:50]
+
+    return result
 
 
 def get_layer_health() -> dict:
@@ -282,6 +322,7 @@ async def dashboard(request: Request):
     """Main dashboard view."""
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
+        "server": get_server_health(),
         "layers": get_layer_health(),
         "activity": get_recent_activity(10),
         "channels": get_channel_stats(),

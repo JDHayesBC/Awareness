@@ -20,6 +20,27 @@
         </div>
     </div>
 
+    <!-- Server Status -->
+    <section>
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 flex items-center justify-between">
+            <div class="flex items-center space-x-4">
+                <span class="status-{{ server.status }} text-2xl">
+                    {% if server.status == 'ok' %}&#10003;{% elif server.status == 'error' %}&#10007;{% elif server.status == 'warning' %}&#9888;{% else %}?{% endif %}
+                </span>
+                <div>
+                    <div class="text-lg font-semibold text-white">
+                        PPS Server:
+                        {% if server.status == 'ok' %}Healthy{% elif server.status == 'error' %}Offline{% elif server.status == 'warning' %}Degraded{% else %}Unknown{% endif %}
+                    </div>
+                    <div class="text-gray-500 text-sm">{{ server.detail }}</div>
+                </div>
+            </div>
+            <div class="text-gray-500 text-sm">
+                Last check: {{ server.last_check }}
+            </div>
+        </div>
+    </section>
+
     <!-- Layer Health -->
     <section>
         <h2 class="text-lg font-semibold mb-3 text-gray-300">Layer Health</h2>
