@@ -91,6 +91,15 @@ python project_lock.py status               # Check status
 - [x] ambient_recall now surfaces rich_texture results
 - [x] Discord → Graphiti integration ✅ **IMPLEMENTED** (2026-01-02)
 
+### Phase 3: Observability Infrastructure (2026-01-02)
+- [x] daemon_traces SQLite table for structured event logging
+- [x] TraceLogger class with standard event types
+- [x] Discord daemon instrumentation (messages, API calls, Graphiti)
+- [x] Reflection daemon instrumentation (decisions, artifacts)
+- [x] Web API endpoints (/api/traces, /api/traces/sessions, /api/traces/session/{id})
+- [x] Traces page UI with expandable sessions and inline trace details
+- [x] Navigation link added to PPS Observatory
+
 ---
 
 ## Future Vision
