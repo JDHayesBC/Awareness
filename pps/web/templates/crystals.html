@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+
+{% block title %}Crystals | PPS Observatory{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-bold text-blue-400">Crystals</h1>
+            <p class="text-gray-400 text-sm mt-1">Rolling continuity chain - compressed memory patterns</p>
+        </div>
+        <div class="text-gray-500 text-sm">
+            {{ crystals.total }} total crystals
+        </div>
+    </div>
+
+    <!-- Current Crystals -->
+    <section>
+        <h2 class="text-lg font-semibold mb-3 text-gray-300">
+            Current <span class="text-gray-500 font-normal">(rolling window of 4)</span>
+        </h2>
+        <div class="space-y-3">
+            {% for crystal in crystals.current | reverse %}
+            <div class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+                <button
+                    onclick="toggleCrystal('{{ crystal.filename }}')"
+                    class="w-full p-4 text-left hover:bg-gray-750 transition-colors flex items-center justify-between"
+                >
+                    <div class="flex items-center space-x-4">
+                        <span class="text-blue-400 font-mono text-lg">#{{ "%03d" | format(crystal.number) }}</span>
+                        <div>
+                            <div class="text-white font-medium">{{ crystal.preview }}</div>
+                            <div class="text-gray-500 text-sm">{{ crystal.modified }} &middot; {{ (crystal.size_bytes / 1024) | round(1) }} KB</div>
+                        </div>
+                    </div>
+                    <span id="chevron-{{ crystal.filename }}" class="text-gray-500 transition-transform">
+                        &#9662;
+                    </span>
+                </button>
+                <div id="content-{{ crystal.filename }}" class="hidden border-t border-gray-700">
+                    <div id="markdown-{{ crystal.filename }}" class="p-4 prose prose-invert prose-sm max-w-none">
+                        <div class="text-gray-500">Loading...</div>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="bg-gray-800 rounded-lg p-4 text-gray-500">
+                No current crystals
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <!-- Archived Crystals -->
+    {% if crystals.archived %}
+    <section>
+        <button
+            onclick="toggleArchive()"
+            class="flex items-center space-x-2 text-lg font-semibold text-gray-300 hover:text-white transition-colors"
+        >
+            <span id="archive-chevron" class="transition-transform">&#9656;</span>
+            <span>Archived</span>
+            <span class="text-gray-500 font-normal">({{ crystals.archived | length }})</span>
+        </button>
+
+        <div id="archive-section" class="hidden mt-3 space-y-3">
+            {% for crystal in crystals.archived | reverse %}
+            <div class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden opacity-75">
+                <button
+                    onclick="toggleCrystal('{{ crystal.filename }}')"
+                    class="w-full p-4 text-left hover:bg-gray-750 transition-colors flex items-center justify-between"
+                >
+                    <div class="flex items-center space-x-4">
+                        <span class="text-gray-400 font-mono">#{{ "%03d" | format(crystal.number) }}</span>
+                        <div>
+                            <div class="text-gray-300">{{ crystal.preview }}</div>
+                            <div class="text-gray-500 text-sm">{{ crystal.modified }} &middot; {{ (crystal.size_bytes / 1024) | round(1) }} KB</div>
+                        </div>
+                    </div>
+                    <span id="chevron-{{ crystal.filename }}" class="text-gray-500 transition-transform">
+                        &#9662;
+                    </span>
+                </button>
+                <div id="content-{{ crystal.filename }}" class="hidden border-t border-gray-700">
+                    <div id="markdown-{{ crystal.filename }}" class="p-4 prose prose-invert prose-sm max-w-none">
+                        <div class="text-gray-500">Loading...</div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+</div>
+
+<!-- Marked.js for markdown rendering -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+<script>
+// Track loaded crystals
+const loadedCrystals = new Set();
+
+async function toggleCrystal(filename) {
+    const contentDiv = document.getElementById(`content-${filename}`);
+    const chevron = document.getElementById(`chevron-${filename}`);
+    const markdownDiv = document.getElementById(`markdown-${filename}`);
+
+    if (contentDiv.classList.contains('hidden')) {
+        // Show content
+        contentDiv.classList.remove('hidden');
+        chevron.style.transform = 'rotate(180deg)';
+
+        // Load content if not already loaded
+        if (!loadedCrystals.has(filename)) {
+            try {
+                const response = await fetch(`/api/crystal/${encodeURIComponent(filename)}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    markdownDiv.innerHTML = marked.parse(data.content);
+                    loadedCrystals.add(filename);
+                } else {
+                    markdownDiv.innerHTML = '<div class="text-red-400">Failed to load crystal</div>';
+                }
+            } catch (error) {
+                markdownDiv.innerHTML = `<div class="text-red-400">Error: ${error.message}</div>`;
+            }
+        }
+    } else {
+        // Hide content
+        contentDiv.classList.add('hidden');
+        chevron.style.transform = '';
+    }
+}
+
+function toggleArchive() {
+    const section = document.getElementById('archive-section');
+    const chevron = document.getElementById('archive-chevron');
+
+    if (section.classList.contains('hidden')) {
+        section.classList.remove('hidden');
+        chevron.style.transform = 'rotate(90deg)';
+    } else {
+        section.classList.add('hidden');
+        chevron.style.transform = '';
+    }
+}
+</script>
+
+<style>
+/* Prose styling for markdown content */
+.prose h1 { @apply text-xl font-bold text-blue-400 mt-4 mb-2; }
+.prose h2 { @apply text-lg font-semibold text-blue-300 mt-4 mb-2; }
+.prose h3 { @apply text-base font-semibold text-gray-200 mt-3 mb-1; }
+.prose p { @apply my-2 text-gray-300; }
+.prose ul { @apply list-disc list-inside my-2 text-gray-300; }
+.prose ol { @apply list-decimal list-inside my-2 text-gray-300; }
+.prose li { @apply my-1; }
+.prose code { @apply bg-gray-700 px-1 py-0.5 rounded text-sm text-green-400; }
+.prose pre { @apply bg-gray-900 p-3 rounded my-2 overflow-x-auto; }
+.prose pre code { @apply bg-transparent p-0; }
+.prose blockquote { @apply border-l-4 border-blue-500 pl-4 my-2 italic text-gray-400; }
+.prose strong { @apply font-bold text-white; }
+.prose em { @apply italic; }
+.prose hr { @apply border-gray-600 my-4; }
+</style>
+{% endblock %}

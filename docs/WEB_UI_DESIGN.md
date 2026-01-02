@@ -343,7 +343,7 @@ Implementation order at Lyra's discretion, but suggested phases:
 ### Phase 1: Foundation Fixes
 - [x] Dashboard exists
 - [x] Graph visualization exists
-- [ ] Add PPS Server health to Dashboard (#26)
+- [x] Add PPS Server health to Dashboard (#26) - DONE 2026-01-02
 - [ ] Add activity trace panel to Graph
 
 ### Phase 2: Content Browsing

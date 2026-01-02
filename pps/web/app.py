@@ -34,6 +34,7 @@ PPS_SERVER_PORT = int(os.getenv("PPS_SERVER_PORT", 8000))
 DB_PATH = CLAUDE_HOME / "data" / "lyra_conversations.db"
 WORD_PHOTOS_PATH = CLAUDE_HOME / "memories" / "word_photos"
 CRYSTALS_PATH = CLAUDE_HOME / "crystals" / "current"
+CRYSTALS_ARCHIVE_PATH = CLAUDE_HOME / "crystals" / "archive"
 JOURNALS_PATH = CLAUDE_HOME / "journals"
 
 # Initialize FastAPI
@@ -201,6 +202,65 @@ def get_layer_health() -> dict:
         health["layer4"]["detail"] = str(e)
 
     return health
+
+
+def get_crystal_list() -> dict:
+    """Get list of all crystals (current + archived) with metadata."""
+    import re
+
+    def extract_number(filename: str) -> int:
+        """Extract crystal number from filename."""
+        match = re.search(r'crystal_(\d+)', filename)
+        return int(match.group(1)) if match else 0
+
+    def get_crystal_info(path: Path) -> dict:
+        """Get info about a single crystal file."""
+        try:
+            stat = path.stat()
+            content = path.read_text()
+            lines = [l.strip() for l in content.split('\n') if l.strip()]
+            preview = lines[0][:80] if lines else ""
+            return {
+                "filename": path.name,
+                "number": extract_number(path.name),
+                "size_bytes": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                "preview": preview
+            }
+        except Exception as e:
+            return {"filename": path.name, "error": str(e)}
+
+    current = []
+    archived = []
+
+    if CRYSTALS_PATH.exists():
+        for path in sorted(CRYSTALS_PATH.glob("crystal_*.md"),
+                          key=lambda p: extract_number(p.name)):
+            current.append(get_crystal_info(path))
+
+    if CRYSTALS_ARCHIVE_PATH.exists():
+        for path in sorted(CRYSTALS_ARCHIVE_PATH.glob("crystal_*.md"),
+                          key=lambda p: extract_number(p.name)):
+            archived.append(get_crystal_info(path))
+
+    return {
+        "current": current,
+        "archived": archived,
+        "total": len(current) + len(archived)
+    }
+
+
+def get_crystal_content(filename: str) -> Optional[str]:
+    """Get the full content of a specific crystal."""
+    # Check current first, then archive
+    for base_path in [CRYSTALS_PATH, CRYSTALS_ARCHIVE_PATH]:
+        path = base_path / filename
+        if path.exists() and path.is_file():
+            try:
+                return path.read_text()
+            except Exception:
+                return None
+    return None
 
 
 def get_recent_activity(limit: int = 10) -> list:
@@ -617,11 +677,21 @@ async def photos(request: Request):
 
 @app.get("/crystals", response_class=HTMLResponse)
 async def crystals(request: Request):
-    """Crystal chain view - coming soon."""
-    return templates.TemplateResponse("coming_soon.html", {
+    """Crystal chain view - view current and archived crystals."""
+    crystal_data = get_crystal_list()
+    return templates.TemplateResponse("crystals.html", {
         "request": request,
-        "page": "Crystals"
+        "crystals": crystal_data
     })
+
+
+@app.get("/api/crystal/{filename}")
+async def api_crystal_content(filename: str):
+    """API endpoint for fetching a crystal's full content."""
+    content = get_crystal_content(filename)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Crystal not found")
+    return {"filename": filename, "content": content}
 
 
 @app.get("/heartbeat", response_class=HTMLResponse)
