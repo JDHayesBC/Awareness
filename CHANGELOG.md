@@ -32,11 +32,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Documented in PATTERN_PERSISTENCE_SYSTEM.md
 
 ### Fixed
-- **Discord daemon "Prompt is too long" crash** (Issue #1)
+- **Discord daemon "Prompt is too long" crash** (Issue #1) - INITIAL FIX
   - Root cause: Unbounded conversation context exceeding Claude's input limit
   - Reduced context size drastically (unified protocol uses 1000 chars max)
   - Truncate individual messages >500 chars
   - Explicit detection and logging of "Prompt is too long" errors
+- **Discord daemon crashes with progressive context reduction** (Issue #14) - COMPREHENSIVE FIX
+  - Enhanced error detection in both stdout and stderr
+  - 4-tier progressive context reduction (moderate → aggressive → minimal → emergency)
+  - Automatic retry logic with smart prompt type detection
+  - Conservative default limits (2 messages/600 chars for initialized sessions)
+  - Token size estimation and boundary-aware truncation
+  - Maintains conversation quality while eliminating crashes entirely
 
 ### Planned
 - PPS Observatory Phase 2+ (Messages, Word-Photos, Summaries pages)
