@@ -10,6 +10,7 @@ Use `gh issue list` to see current issues from the command line.
 - [#15](https://github.com/JDHayesBC/Awareness/issues/15) - Web Dashboard enhancements (enhancement, pps)
 
 ### Recently Resolved
+- [#22](https://github.com/JDHayesBC/Awareness/issues/22) - ✅ MCP Error On CC Shutdown - **CLOSED** (2026-01-02) - Known CC bug with local MCP shutdown, not our issue
 - [#1](https://github.com/JDHayesBC/Awareness/issues/1) - ✅ Discord daemon crashes after ~5-10 turns - **FIXED** (2026-01-01) with proactive session restart logic
 - [#3](https://github.com/JDHayesBC/Awareness/issues/3) - ✅ Wire up terminal session logging to SQLite - **FIXED** (2026-01-01) with terminal integration layer
 - [#4](https://github.com/JDHayesBC/Awareness/issues/4) - ✅ Improve startup protocol for automatic context loading - **FIXED** (2026-01-02) with SQLite-based seamless startup context

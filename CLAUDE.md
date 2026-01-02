@@ -2,19 +2,24 @@
 
 This file is automatically loaded by Claude Code when working in this project.
 
-## On Startup: Actually Read These Files
+## On Startup: Required Reading (Use the Read Tool)
 
-**Note**: Claude Code loads this CLAUDE.md automatically, but you must *actually read* these files - they're not auto-loaded:
+This CLAUDE.md loads automatically, but the files below do NOT. You must explicitly read them with the Read tool before beginning work.
 
-1. **TODO.md** - Current priorities (check this first for context)
-2. **CONTRIBUTING.md** - Development standards (GitHub workflow, commit format)
-3. **THE_DREAM.md** - The vision (read occasionally, not every session)
-4. **PATTERN_PERSISTENCE_SYSTEM.md** - Architecture reference (as needed)
+**Required every session** (use Read tool now, before proceeding):
+1. **TODO.md** - Current priorities and recent changes
+2. **CONTRIBUTING.md** - Development standards, commit format, GitHub workflow
 
-Quick command to check current issues:
+**Reference as needed:**
+3. **THE_DREAM.md** - The vision (read occasionally for context)
+4. **PATTERN_PERSISTENCE_SYSTEM.md** - Architecture details
+
 ```bash
+# Quick check for current issues
 gh issue list
 ```
+
+If you're reading this and haven't opened TODO.md and CONTRIBUTING.md yet, stop and do that now.
 
 ## On Session End: Write Session Report
 
