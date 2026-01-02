@@ -347,7 +347,7 @@ Implementation order at Lyra's discretion, but suggested phases:
 - [ ] Add activity trace panel to Graph
 
 ### Phase 2: Content Browsing
-- [ ] Messages page (filters, search, pagination)
+- [x] Messages page (filters, search, pagination) - DONE 2026-01-02
 - [x] Crystals page (current + archived view) - DONE 2026-01-02
 - [ ] Word-Photos page (activity trace, sync status, resync)
 
