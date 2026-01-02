@@ -83,7 +83,7 @@ class LyraReflectionDaemon:
             daemon_type="reflection"
         )
 
-        await self.trace_logger.session_start(channels=[])
+        await self.trace_logger.session_start()
 
         # Initial delay before first reflection
         print(f"[START] Waiting 2 minutes before first reflection...")

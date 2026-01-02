@@ -134,7 +134,7 @@ class LyraDiscordBot(commands.Bot):
         self.active_mode_cleanup.start()
 
         # Trace session start
-        await self.trace_logger.session_start(channels=list(self.channel_ids))
+        await self.trace_logger.session_start(metadata={"channels": list(self.channel_ids)})
 
     async def on_ready(self):
         """Called when bot successfully connects."""
