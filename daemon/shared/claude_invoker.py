@@ -2,22 +2,35 @@
 Claude CLI Invoker - Shared invocation logic for Lyra daemons.
 
 This module provides:
-- Claude CLI invocation with --resume session management
+- Claude CLI invocation with --continue session management
+- Session limits to prevent unbounded context growth
 - Progressive context reduction for prompt too long errors
 - Trace logging integration
 - Error handling and diagnostics
 
-Key Design Decision:
-Uses --resume <sessionId> instead of --continue to allow
-multiple daemons to maintain independent conversation sessions.
+Session Management:
+Uses --continue to resume the most recent conversation in the working directory.
+Sessions are automatically reset when limits are exceeded:
+- MAX_SESSION_INVOCATIONS: Hard limit on turns per session
+- MAX_SESSION_DURATION_HOURS: Maximum session age
+- SESSION_IDLE_HOURS: Reset after idle period
+
+Directory Isolation:
+Each daemon should use a different cwd to maintain separate sessions.
+Discord uses /home/jeff/.claude, Reflection uses /home/jeff/.claude/reflection.
 """
 
 import asyncio
 import subprocess
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Optional, Callable, Awaitable
+from typing import Optional, Callable
+
+# Session limits (can be overridden via environment)
+MAX_SESSION_INVOCATIONS = int(os.getenv("MAX_SESSION_INVOCATIONS", "12"))
+MAX_SESSION_DURATION_HOURS = float(os.getenv("MAX_SESSION_DURATION_HOURS", "2.0"))
+SESSION_IDLE_HOURS = float(os.getenv("SESSION_IDLE_HOURS", "4.0"))
 
 
 class PromptTooLongError(Exception):
@@ -29,12 +42,11 @@ class ClaudeInvoker:
     """
     Handles Claude CLI invocations with session management.
 
-    Each daemon creates its own ClaudeInvoker with a unique session_prefix,
-    allowing Discord and Reflection to maintain separate conversation contexts.
+    Uses --continue for session continuity within the working directory.
+    Automatically resets sessions when limits are exceeded.
 
     Example:
         invoker = ClaudeInvoker(
-            session_prefix="discord-lyra",
             model="sonnet",
             cwd="/home/jeff/.claude"
         )
@@ -43,66 +55,90 @@ class ClaudeInvoker:
 
     def __init__(
         self,
-        session_prefix: str,
         model: str = "sonnet",
         cwd: str = "/home/jeff/.claude",
         journal_path: Optional[str] = None,
         trace_logger: Optional[object] = None,
+        max_invocations: int = MAX_SESSION_INVOCATIONS,
+        max_duration_hours: float = MAX_SESSION_DURATION_HOURS,
+        idle_hours: float = SESSION_IDLE_HOURS,
     ):
         """
         Initialize the Claude invoker.
 
         Args:
-            session_prefix: Unique prefix for session IDs (e.g., "discord-lyra", "reflection-lyra")
             model: Claude model to use (sonnet, opus, haiku)
-            cwd: Working directory for Claude CLI
+            cwd: Working directory for Claude CLI (determines session isolation)
             journal_path: Path for diagnostic logs
             trace_logger: Optional TraceLogger for observability
+            max_invocations: Max invocations before session reset
+            max_duration_hours: Max session age before reset
+            idle_hours: Reset session after this much idle time
         """
-        self.session_prefix = session_prefix
         self.model = model
         self.cwd = cwd
         self.journal_path = journal_path or "/home/jeff/.claude/journals/discord"
         self.trace_logger = trace_logger
 
+        # Session limits
+        self.max_invocations = max_invocations
+        self.max_duration_hours = max_duration_hours
+        self.idle_hours = idle_hours
+
         # Session tracking
-        self.current_session_id: Optional[str] = None
         self.session_initialized = False
         self.session_invocation_count = 0
         self.session_start_time: Optional[datetime] = None
         self.last_response_time: Optional[datetime] = None
 
-        # Ensure journal directory exists
+        # Ensure directories exist
         Path(self.journal_path).mkdir(parents=True, exist_ok=True)
+        Path(self.cwd).mkdir(parents=True, exist_ok=True)
 
-    def get_session_id(self, channel_id: Optional[str] = None) -> str:
+    def should_reset_session(self) -> tuple[bool, str]:
         """
-        Get or create a session ID.
-
-        Args:
-            channel_id: Optional channel identifier for per-channel sessions
+        Check if session should be reset based on limits.
 
         Returns:
-            Session ID string for use with --resume
+            Tuple of (should_reset, reason)
         """
-        if channel_id:
-            return f"{self.session_prefix}-{channel_id}"
-        return self.session_prefix
+        if not self.session_initialized:
+            return False, ""
 
-    def start_new_session(self, channel_id: Optional[str] = None):
-        """Start a new session, resetting tracking state."""
-        self.current_session_id = self.get_session_id(channel_id)
+        now = datetime.now(timezone.utc)
+
+        # Check invocation count
+        if self.session_invocation_count >= self.max_invocations:
+            return True, f"invocation limit ({self.session_invocation_count}/{self.max_invocations})"
+
+        # Check session duration
+        if self.session_start_time:
+            duration = now - self.session_start_time
+            if duration > timedelta(hours=self.max_duration_hours):
+                hours = duration.total_seconds() / 3600
+                return True, f"duration limit ({hours:.1f}h/{self.max_duration_hours}h)"
+
+        # Check idle time
+        if self.last_response_time:
+            idle = now - self.last_response_time
+            if idle > timedelta(hours=self.idle_hours):
+                hours = idle.total_seconds() / 3600
+                return True, f"idle limit ({hours:.1f}h/{self.idle_hours}h)"
+
+        return False, ""
+
+    def reset_session(self, reason: str = "manual"):
+        """Reset session state, forcing fresh context on next invocation."""
+        print(f"[SESSION] Resetting session: {reason}")
         self.session_initialized = False
         self.session_invocation_count = 0
-        self.session_start_time = datetime.now(timezone.utc)
-        print(f"[SESSION] Started new session: {self.current_session_id}")
+        self.session_start_time = None
 
     async def invoke(
         self,
         prompt: str,
         context: str = "unknown",
         use_session: bool = True,
-        channel_id: Optional[str] = None,
         timeout: int = 180,
         model_override: Optional[str] = None,
     ) -> Optional[str]:
@@ -112,8 +148,7 @@ class ClaudeInvoker:
         Args:
             prompt: The prompt to send
             context: Context label for logging
-            use_session: Whether to use --resume for session continuity
-            channel_id: Optional channel ID for per-channel sessions
+            use_session: Whether to use --continue for session continuity
             timeout: Subprocess timeout in seconds
             model_override: Override the default model for this call
 
@@ -124,13 +159,17 @@ class ClaudeInvoker:
         invocation_id = f"{timestamp}_{context}"
         model = model_override or self.model
 
-        # Determine session ID
-        session_id = self.get_session_id(channel_id) if use_session else None
-        should_resume = use_session and self.session_initialized
+        # Check if we should reset before this invocation
+        should_reset, reset_reason = self.should_reset_session()
+        if should_reset:
+            self.reset_session(reset_reason)
+
+        # Determine if we should use --continue
+        should_continue = use_session and self.session_initialized
 
         # Log the invocation
         print(f"[INVOKE:{context}] Starting Claude invocation at {timestamp}")
-        print(f"[INVOKE:{context}] cwd={self.cwd}, model={model}, session={session_id}, resume={should_resume}")
+        print(f"[INVOKE:{context}] cwd={self.cwd}, model={model}, continue={should_continue}")
         print(f"[INVOKE:{context}] Prompt length: {len(prompt)} chars")
 
         # Trace: API call start
@@ -138,14 +177,14 @@ class ClaudeInvoker:
         if self.trace_logger:
             api_start_time = await self.trace_logger.api_call_start(
                 model=model,
-                prompt_tokens=len(prompt) // 4,  # Rough estimate
+                prompt_tokens=len(prompt) // 4,
             )
 
         try:
             # Build command
             cmd = ["claude", "--model", model]
-            if should_resume and session_id:
-                cmd.extend(["--resume", session_id])
+            if should_continue:
+                cmd.append("--continue")
             cmd.extend(["-p", prompt])
 
             result = await asyncio.get_event_loop().run_in_executor(
@@ -171,7 +210,8 @@ class ClaudeInvoker:
             )
 
             if prompt_too_long:
-                print(f"[INVOKE:{context}] PROMPT TOO LONG - context window exceeded")
+                print(f"[INVOKE:{context}] PROMPT TOO LONG - resetting session")
+                self.reset_session("prompt too long")
                 raise PromptTooLongError("Context window exceeded")
 
             # Check for identity failure patterns
@@ -199,14 +239,15 @@ class ClaudeInvoker:
                 return None
 
             # Update session tracking
-            self.last_response_time = datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc)
+            self.last_response_time = now
             if not self.session_initialized:
                 self.session_initialized = True
-                self.session_start_time = datetime.now(timezone.utc)
-                print(f"[INVOKE:{context}] Session initialized: {session_id}")
+                self.session_start_time = now
+                print(f"[INVOKE:{context}] Session initialized")
 
             self.session_invocation_count += 1
-            print(f"[INVOKE:{context}] Session invocations: {self.session_invocation_count}")
+            print(f"[INVOKE:{context}] Session invocations: {self.session_invocation_count}/{self.max_invocations}")
 
             # Trace: API call complete
             if self.trace_logger and api_start_time:
@@ -244,7 +285,6 @@ class ClaudeInvoker:
         prompt: str,
         context: str = "unknown",
         use_session: bool = True,
-        channel_id: Optional[str] = None,
         context_reducer: Optional[Callable[[str, int], str]] = None,
         max_retries: int = 3,
     ) -> Optional[str]:
@@ -255,7 +295,6 @@ class ClaudeInvoker:
             prompt: Initial prompt
             context: Context label
             use_session: Whether to use session continuity
-            channel_id: Optional channel ID
             context_reducer: Function(prompt, retry_count) -> reduced_prompt
             max_retries: Maximum retry attempts
 
@@ -270,7 +309,6 @@ class ClaudeInvoker:
                     current_prompt,
                     context=f"{context}_retry{retry}" if retry > 0 else context,
                     use_session=use_session,
-                    channel_id=channel_id,
                 )
             except PromptTooLongError:
                 if retry >= max_retries:
@@ -281,7 +319,6 @@ class ClaudeInvoker:
                     current_prompt = context_reducer(current_prompt, retry + 1)
                     print(f"[INVOKE:{context}] Reduced prompt to {len(current_prompt)} chars")
                 else:
-                    # Default: just fail if no reducer provided
                     print(f"[INVOKE:{context}] No context reducer, failing")
                     return None
 
@@ -304,7 +341,8 @@ class ClaudeInvoker:
                 f.write(f"# Diagnostic Log - {timestamp}\n")
                 f.write(f"# Context: {context}\n")
                 f.write(f"# Return code: {result.returncode}\n")
-                f.write(f"# Identity failure: {identity_failed}\n\n")
+                f.write(f"# Identity failure: {identity_failed}\n")
+                f.write(f"# Session invocations: {self.session_invocation_count}\n\n")
                 f.write("## PROMPT SENT:\n")
                 f.write(prompt)
                 f.write("\n\n## RESPONSE RECEIVED:\n")

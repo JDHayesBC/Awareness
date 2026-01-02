@@ -93,9 +93,9 @@ class LyraDiscordBot(commands.Bot):
         # Active conversation mode
         self.active_channels: dict[int, datetime] = {}
 
-        # Claude invoker with per-channel sessions
+        # Claude invoker - uses --continue with session limits
+        # Sessions isolated by cwd (LYRA_IDENTITY_PATH for Discord)
         self.invoker = ClaudeInvoker(
-            session_prefix="discord-lyra",
             model=CLAUDE_MODEL,
             cwd=LYRA_IDENTITY_PATH,
             journal_path=JOURNAL_PATH,
@@ -163,7 +163,6 @@ class LyraDiscordBot(commands.Bot):
             prompt,
             context="warmup",
             use_session=True,
-            channel_id=channel_id,
             timeout=120,
         )
 
@@ -391,7 +390,6 @@ Keep responses conversational - this is Discord, not a formal setting."""
             prompt,
             context="mention",
             use_session=True,
-            channel_id=str(message.channel.id),
         )
 
         return response or "*connection issues - couldn't process that*"
@@ -425,7 +423,6 @@ Format: [DISCORD]Your message[/DISCORD] or output PASSIVE_SKIP"""
             prompt,
             context="passive_mode",
             use_session=True,
-            channel_id=str(message.channel.id),
         )
 
         if not response or "PASSIVE_SKIP" in response:

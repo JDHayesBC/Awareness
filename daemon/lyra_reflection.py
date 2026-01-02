@@ -53,6 +53,10 @@ CRYSTALLIZATION_TIME_THRESHOLD_HOURS = float(os.getenv("CRYSTALLIZATION_TIME_THR
 # Stale lock detection
 STALE_LOCK_HOURS = float(os.getenv("STALE_LOCK_HOURS", "2.0"))
 
+# Reflection runs from its own directory to isolate sessions from Discord
+# This ensures --continue in Discord won't pick up reflection sessions
+REFLECTION_CWD = os.getenv("REFLECTION_CWD", "/home/jeff/.claude/reflection")
+
 
 class LyraReflectionDaemon:
     """Daemon for autonomous reflection - runs independently of Discord."""
@@ -65,8 +69,9 @@ class LyraReflectionDaemon:
         self.conversation_manager = ConversationManager(CONVERSATION_DB_PATH)
         self.trace_logger: TraceLogger | None = None
 
-        # Ensure journal directory
+        # Ensure directories exist
         Path(JOURNAL_PATH).mkdir(parents=True, exist_ok=True)
+        Path(REFLECTION_CWD).mkdir(parents=True, exist_ok=True)
 
         print(f"[INIT] Reflection daemon initialized")
         print(f"[INIT] Interval: {REFLECTION_INTERVAL_MINUTES} minutes")
@@ -261,7 +266,7 @@ End with active agency footnotes showing what you scanned and chose.'''
                     capture_output=True,
                     text=True,
                     timeout=REFLECTION_TIMEOUT_MINUTES * 60,
-                    cwd=LYRA_IDENTITY_PATH,
+                    cwd=REFLECTION_CWD,
                 )
             )
 
