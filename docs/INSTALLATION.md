@@ -99,7 +99,21 @@ PPS_SERVER_PATH=/path/to/Awareness/pps/server.py
 
 The PPS tools are available via MCP (Model Context Protocol). Register them in Claude Code:
 
-#### Option A: Global Registration (Recommended)
+#### Option A: Claude CLI Registration (Recommended)
+
+Use the Claude Code CLI to add the PPS server globally:
+
+```bash
+# Add PPS MCP server to Claude's configuration
+claude mcp add pps "python3 /path/to/Awareness/pps/server.py"
+
+# Verify it was added
+claude mcp list
+```
+
+This method automatically handles the proper configuration and is the preferred approach as of Claude Code v0.7.0+.
+
+#### Option B: Manual JSON Configuration
 
 Add to `~/.claude.json`:
 ```json
@@ -116,7 +130,7 @@ Add to `~/.claude.json`:
 }
 ```
 
-#### Option B: Project-Specific Registration
+#### Option C: Project-Specific Registration
 
 Create `.mcp.json` in your Claude Code project:
 ```json
@@ -129,6 +143,8 @@ Create `.mcp.json` in your Claude Code project:
   }
 }
 ```
+
+**Note**: After adding the MCP server, you may need to restart Claude Code or start a new session for the tools to become available.
 
 ### 6. Verification
 
@@ -238,14 +254,21 @@ Services defined in `docker/docker-compose.yml`:
 
 ### Common Issues
 
-**"MCP tools not found"**:
+**"MCP tools not found" / "mcp__pps__ambient_recall undefined"**:
 ```bash
-# Check Claude Code can see MCP config
+# Check if PPS is in Claude's MCP configuration
 claude mcp list
+
+# If not listed, add it:
+claude mcp add pps "python3 /path/to/Awareness/pps/server.py"
 
 # Verify server path and permissions
 ls -la /path/to/Awareness/pps/server.py
+
+# Note: After adding, restart Claude Code or start a new session
 ```
+
+**Related**: This issue was documented and fixed in GitHub Issue #29. The startup protocol in CLAUDE.md requires PPS tools to be globally available.
 
 **"Database connection failed"**:
 ```bash
