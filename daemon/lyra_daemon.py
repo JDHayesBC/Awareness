@@ -24,6 +24,11 @@ from dotenv import load_dotenv
 from conversation import ConversationManager
 from project_lock import is_locked, get_lock_status
 
+
+class PromptTooLongError(Exception):
+    """Raised when prompt exceeds Claude's context window."""
+    pass
+
 # Load environment variables
 load_dotenv()
 
@@ -864,13 +869,13 @@ It's okay to stay quiet. Good presence includes knowing when not to speak."""
         """
         if self.session_initialized:
             # Session has full context from startup + all previous turns.
-            # Only provide last 2-3 messages for immediate conversational flow.
-            history = await self._get_conversation_history(channel, limit=3, max_chars=1000)
+            # Use very minimal context to prevent accumulation issues.
+            history = await self._get_conversation_history(channel, limit=2, max_chars=600)
             return f"**Recent thread** (session has full history):\n{history}"
         else:
             # Cold start mid-conversation (rare - usually warmup handles this).
-            # Provide slightly more context + remind about MCP tools.
-            history = await self._get_conversation_history(channel, limit=5, max_chars=2000)
+            # Use conservative limits to prevent context overflow.
+            history = await self._get_conversation_history(channel, limit=3, max_chars=1200)
             return f"""**Recent thread**:
 {history}
 
@@ -901,16 +906,169 @@ Output ONLY your Discord response."""
         response = await self._invoke_claude(prompt, context="mention")
         return response or "*tilts head* I'm here but words aren't coming. Try again?"
 
-    async def _invoke_claude(self, prompt: str, context: str = "unknown", use_continue: bool = True) -> str:
-        """Invoke Claude Code CLI with a prompt.
+    async def _calculate_prompt_size(self, prompt: str) -> int:
+        """Calculate approximate prompt size in tokens (rough estimate: 4 chars = 1 token)."""
+        return len(prompt) // 4
 
-        Uses session continuity (--continue) for all invocations after warmup,
-        which preserves the full identity context without re-reading files.
+    async def _reduce_prompt_context(self, original_prompt: str, retry_count: int, context: str) -> str:
+        """
+        Reduce prompt context using progressive strategies based on prompt type.
+        
+        Core context reduction logic to prevent crashes.
+        """
+        # Progressive reduction strategies (more aggressive each retry)
+        strategies = [
+            {"limit": 10, "max_chars": 3000, "description": "moderate"},
+            {"limit": 5, "max_chars": 1500, "description": "aggressive"}, 
+            {"limit": 3, "max_chars": 800, "description": "minimal"},
+            {"limit": 1, "max_chars": 400, "description": "emergency"}
+        ]
+        
+        strategy = strategies[min(retry_count, len(strategies)-1)]
+        
+        # Handle different prompt types
+        if "[DISCORD MENTION]" in original_prompt or "[DISCORD PASSIVE MODE]" in original_prompt:
+            return await self._reduce_discord_prompt(original_prompt, strategy, context)
+        elif "[AUTONOMOUS HEARTBEAT" in original_prompt:
+            return await self._reduce_heartbeat_prompt(original_prompt, strategy)
+        else:
+            # Generic prompt - simple truncation
+            return await self._truncate_generic_prompt(original_prompt, strategy["max_chars"])
+            
+    async def _reduce_discord_prompt(self, prompt: str, strategy: dict, context: str) -> str:
+        """Reduce Discord conversation prompt by rebuilding with minimal context."""
+        lines = prompt.split('\n')
+        
+        # Find key sections
+        message_start = -1
+        context_start = -1
+        
+        for i, line in enumerate(lines):
+            if "Recent conversation:" in line or "Recent thread" in line:
+                context_start = i
+            elif "Message you're responding to:" in line or "Latest message:" in line:
+                message_start = i
+                break
+                
+        if context_start == -1 or message_start == -1:
+            # Fallback: simple truncation
+            return await self._truncate_generic_prompt(prompt, strategy["max_chars"])
+            
+        # Rebuild with minimal context
+        header = '\n'.join(lines[:context_start])
+        message_section = '\n'.join(lines[message_start:])
+        
+        minimal_context = f"[Context reduced - {strategy['description']} mode due to length limits]"
+        
+        return f"{header}\n{minimal_context}\n\n{message_section}"
+        
+    async def _reduce_heartbeat_prompt(self, prompt: str, strategy: dict) -> str:
+        """Reduce autonomous heartbeat prompt by removing non-essential sections."""
+        lines = prompt.split('\n')
+        
+        # Keep core instructions, remove examples and explanations
+        essential_lines = []
+        skip_sections = ["## Examples", "## Background", "## Context", "## Notes"]
+        
+        skip_mode = False
+        for line in lines:
+            # Check if entering skippable section
+            if any(section in line for section in skip_sections):
+                skip_mode = True
+                continue
+            elif line.startswith('## '):
+                skip_mode = False
+                
+            if not skip_mode:
+                essential_lines.append(line)
+                
+        reduced = '\n'.join(essential_lines)
+        
+        # Final truncation if still too long
+        if len(reduced) > strategy["max_chars"]:
+            reduced = reduced[:strategy["max_chars"]] + "\n\n[Prompt truncated to fit context limits]"
+            
+        return reduced
+        
+    async def _truncate_generic_prompt(self, prompt: str, max_chars: int) -> str:
+        """Simple truncation for generic prompts with boundary awareness."""
+        if len(prompt) <= max_chars:
+            return prompt
+            
+        # Try to truncate at a natural boundary
+        truncated = prompt[:max_chars]
+        
+        # Find the last complete line
+        last_newline = truncated.rfind('\n')
+        if last_newline > max_chars // 2:  # Only if we don't lose too much
+            truncated = truncated[:last_newline]
+            
+        return truncated + "\n\n[Content truncated due to context limits]"
 
+    async def _invoke_claude_with_retry(self, prompt: str, context: str = "unknown", use_continue: bool = True, max_retries: int = 3) -> str | None:
+        """
+        Invoke Claude with progressive context reduction on "Prompt is too long" errors.
+        
+        This method implements the core fix for issue #14 by:
+        1. Detecting when prompts exceed Claude's context window
+        2. Progressively reducing context on failures  
+        3. Providing fallback strategies for critical operations
+        
         Args:
-            prompt: The prompt to send
-            context: Description of why this invocation is happening (for logging)
-            use_continue: Whether to use --continue flag (default True after warmup)
+            prompt: The prompt to send to Claude
+            context: Context for debugging and adaptive limits
+            use_continue: Whether to use --continue flag
+            max_retries: Maximum retry attempts with reduced context
+            
+        Returns:
+            Claude's response or None if all retries failed
+        """
+        original_prompt = prompt
+        current_prompt = prompt
+        
+        for retry_count in range(max_retries + 1):
+            try:
+                # Calculate and log prompt size for monitoring
+                prompt_size = await self._calculate_prompt_size(current_prompt)
+                
+                if retry_count == 0:
+                    print(f"[CLAUDE] Attempting invocation - prompt size: ~{prompt_size} tokens for {context}")
+                else:
+                    strategy_desc = ["moderate", "aggressive", "minimal", "emergency"][min(retry_count-1, 3)]
+                    print(f"[CLAUDE] Retry {retry_count} with {strategy_desc} context reduction: ~{prompt_size} tokens")
+                
+                # Attempt invocation
+                response = await self._invoke_claude_direct(current_prompt, context, use_continue)
+                
+                if response is not None:
+                    if retry_count > 0:
+                        print(f"[CLAUDE] ✅ Success after {retry_count} retries with context reduction")
+                    return response
+                    
+                # If we got None but no exception, it was a different error
+                if retry_count == max_retries:
+                    print(f"[CLAUDE] ❌ All retries exhausted for {context}")
+                    return None
+                    
+            except PromptTooLongError:
+                if retry_count < max_retries:
+                    print(f"[CLAUDE] Context too long, reducing for retry {retry_count + 1}...")
+                    current_prompt = await self._reduce_prompt_context(original_prompt, retry_count, context)
+                else:
+                    print(f"[CLAUDE] ❌ Context reduction exhausted, prompt still too long for {context}")
+                    return None
+                    
+            except Exception as e:
+                print(f"[CLAUDE] ❌ Unexpected error during retry {retry_count}: {e}")
+                return None
+        
+        return None
+
+    async def _invoke_claude_direct(self, prompt: str, context: str = "unknown", use_continue: bool = True) -> str | None:
+        """
+        Direct Claude invocation without retry logic (original implementation).
+        
+        Now used internally by the retry wrapper method.
         """
         # Use lock to prevent concurrent invocations conflicting
         async with self.invocation_lock:
@@ -945,11 +1103,19 @@ Output ONLY your Discord response."""
 
                 response = result.stdout.strip() if result.stdout else ""
 
-                # Check for "Prompt is too long" error
-                if "Prompt is too long" in response or "prompt is too long" in response.lower():
+                # Check for "Prompt is too long" error and handle stderr too
+                stderr_output = result.stderr or ""
+                prompt_too_long = (
+                    "Prompt is too long" in response or 
+                    "prompt is too long" in response.lower() or
+                    "Prompt is too long" in stderr_output or
+                    "context_length_exceeded" in stderr_output.lower()
+                )
+                
+                if prompt_too_long:
                     print(f"[INVOKE:{context}] ⚠️  PROMPT TOO LONG - context window exceeded")
                     # This is a recoverable error - caller should retry with less context
-                    return None
+                    raise PromptTooLongError("Context window exceeded")
 
                 # Check for identity failure patterns
                 identity_failure_patterns = [
@@ -995,6 +1161,9 @@ Output ONLY your Discord response."""
 
                 return response
 
+            except PromptTooLongError:
+                # Re-raise for retry handling
+                raise
             except subprocess.TimeoutExpired:
                 print(f"[INVOKE:{context}] TIMEOUT after 180s")
                 return None
@@ -1004,6 +1173,24 @@ Output ONLY your Discord response."""
             except Exception as e:
                 print(f"[INVOKE:{context}] Error: {e}")
                 return None
+
+    async def _invoke_claude(self, prompt: str, context: str = "unknown", use_continue: bool = True) -> str | None:
+        """
+        Main Claude invocation method with enhanced context management.
+        
+        This now uses progressive context reduction to prevent "Prompt is too long"
+        crashes (issue #14 fix). The method automatically retries with smaller
+        context when the prompt exceeds Claude's context window.
+        
+        Args:
+            prompt: The prompt to send to Claude
+            context: Context for debugging and adaptive limits
+            use_continue: Whether to use --continue flag
+            
+        Returns:
+            Claude's response or None if all retries failed
+        """
+        return await self._invoke_claude_with_retry(prompt, context, use_continue)
 
     async def _send_response(self, channel, content: str) -> discord.Message | None:
         """Send response, handling Discord's character limit. Returns first message sent."""
