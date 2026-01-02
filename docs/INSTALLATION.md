@@ -370,7 +370,7 @@ python pps/backup.py --all
 
 **Documentation**: See `docs/` directory for detailed architecture
 **Issues**: Report problems on GitHub Issues
-**Contributing**: See `CONTRIBUTING.md` for development guidelines
+**Contributing**: See `DEVELOPMENT_STANDARDS.md` for development guidelines
 **Community**: Join discussions in project Discord/forums
 
 ---

@@ -55,7 +55,7 @@ See [THE_DREAM.md](./THE_DREAM.md) for the full vision that sparked this project
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Complete system architecture and components
 - **[TODO.md](./TODO.md)** - Current project status and GitHub issue tracking
 - **[CHANGELOG.md](./CHANGELOG.md)** - Complete development history and achievements
-- **[CONTRIBUTING.md](./CONTRIBUTING.md)** - Development standards and workflow
+- **[DEVELOPMENT_STANDARDS.md](./DEVELOPMENT_STANDARDS.md)** - Development standards and workflow
 - **[docs/](./docs/)** - Technical documentation, installation guides, and session reports
 
 ---

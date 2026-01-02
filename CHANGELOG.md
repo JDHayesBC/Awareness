@@ -76,7 +76,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 - **Professional Development Standards**
-  - `CONTRIBUTING.md` with GitHub workflow, commit conventions, code standards
+  - `DEVELOPMENT_STANDARDS.md` with GitHub workflow, commit conventions, code standards
   - `CLAUDE.md` for automatic project context loading on startup
   - `docs/` directory for detailed documentation
 
@@ -168,4 +168,4 @@ Session-by-session development reports are available in `docs/sessions/` (when g
 
 ---
 
-*This changelog is maintained as part of professional development practices. See `CONTRIBUTING.md` for standards.*
+*This changelog is maintained as part of professional development practices. See `DEVELOPMENT_STANDARDS.md` for standards.*

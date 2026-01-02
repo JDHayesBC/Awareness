@@ -84,7 +84,7 @@ For quick fixes (typos, obvious bugs), direct commits to main are fine with good
 ```
 /
 ├── README.md              # Project overview, quick start
-├── CONTRIBUTING.md        # This file - development standards
+├── DEVELOPMENT_STANDARDS.md  # This file - development standards
 ├── TODO.md                # Quick reference, links to issues
 ├── docs/                  # Detailed documentation
 │   ├── ARCHITECTURE.md
