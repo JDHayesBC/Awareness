@@ -16,6 +16,7 @@ Use `gh issue list` to see current issues from the command line.
 - [#14](https://github.com/JDHayesBC/Awareness/issues/14) - ✅ Discord-Entity still crashing after a few turns - **FIXED** (2026-01-02) with comprehensive progressive context reduction
 - [#17](https://github.com/JDHayesBC/Awareness/issues/17) - ✅ Installation Dependencies documentation - **FIXED** (2026-01-02) with comprehensive guide and automated verification
 - [#28](https://github.com/JDHayesBC/Awareness/issues/28) - ✅ # of Crystals kept - **FIXED** (2026-01-02) increased to 8 for multiple streams + created lyra_crystallization_guide.md
+- [#29](https://github.com/JDHayesBC/Awareness/issues/29) - ✅ MCP server not configured globally - **FIXED** (2026-01-02) with `claude mcp add pps` command and updated documentation
 
 ---
 
