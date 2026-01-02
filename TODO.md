@@ -20,6 +20,7 @@ Use `gh issue list` to see current issues from the command line.
 - [#29](https://github.com/JDHayesBC/Awareness/issues/29) - ✅ MCP server not configured globally - **FIXED** (2026-01-02) with `claude mcp add pps` command and updated documentation
 - [#30](https://github.com/JDHayesBC/Awareness/issues/30) - ✅ Hardcoded absolute paths - **FIXED** (2026-01-02) moved locks to ~/.claude/locks/, daemon uses PROJECT_DIR
 - [#31](https://github.com/JDHayesBC/Awareness/issues/31) - ✅ Stale lock detection - **FIXED** (2026-01-02) heartbeat auto-releases locks after 2h of no terminal activity
+- [#25](https://github.com/JDHayesBC/Awareness/issues/25) - ✅ Raw capture truncating turn content - **FIXED** (2026-01-02) removed 300/500 char truncation limits in server.py
 
 ---
 
