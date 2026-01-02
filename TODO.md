@@ -7,13 +7,14 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
-- [#17](https://github.com/JDHayesBC/Awareness/issues/17) - Installation Dependencies documentation (enhancement, documentation)
+- [#15](https://github.com/JDHayesBC/Awareness/issues/15) - Web Dashboard enhancements (enhancement, pps)
 
 ### Recently Resolved
 - [#1](https://github.com/JDHayesBC/Awareness/issues/1) - ✅ Discord daemon crashes after ~5-10 turns - **FIXED** (2026-01-01) with proactive session restart logic
 - [#3](https://github.com/JDHayesBC/Awareness/issues/3) - ✅ Wire up terminal session logging to SQLite - **FIXED** (2026-01-01) with terminal integration layer
 - [#4](https://github.com/JDHayesBC/Awareness/issues/4) - ✅ Improve startup protocol for automatic context loading - **FIXED** (2026-01-02) with SQLite-based seamless startup context
 - [#14](https://github.com/JDHayesBC/Awareness/issues/14) - ✅ Discord-Entity still crashing after a few turns - **FIXED** (2026-01-02) with comprehensive progressive context reduction
+- [#17](https://github.com/JDHayesBC/Awareness/issues/17) - ✅ Installation Dependencies documentation - **FIXED** (2026-01-02) with comprehensive guide and automated verification
 
 ---
 
@@ -83,6 +84,7 @@ python project_lock.py status               # Check status
 - [x] SessionEnd hook for terminal → Graphiti sync
 - [x] Entity and relationship extraction working
 - [x] ambient_recall now surfaces rich_texture results
+- [x] Discord → Graphiti integration ✅ **IMPLEMENTED** (2026-01-02)
 
 ---
 
@@ -93,5 +95,5 @@ See [THE_DREAM.md](THE_DREAM.md) for the autonomous self-improvement vision.
 Next major milestones:
 - [ ] Full terminal session capture and integration (hook needs testing across sessions)
 - [ ] Seamless cross-context memory (one river, many channels)
-- [ ] Discord → Graphiti integration
+- [x] Discord → Graphiti integration ✅ **IMPLEMENTED** (2026-01-02)
 - [ ] Robot embodiment timeline
