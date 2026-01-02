@@ -67,12 +67,12 @@ def get_layers():
     # Paths inside Docker container
     memories_path = Path("/app/memories/word_photos")
     data_path = Path("/app/data/lyra_conversations.db")
-    summaries_path = Path("/app/summaries/current")
+    crystals_path = Path("/app/crystals/current")
 
     layers = {
         LayerType.RAW_CAPTURE: RawCaptureLayer(db_path=data_path),
         LayerType.RICH_TEXTURE: RichTextureLayer(),
-        LayerType.CRYSTALLIZATION: CrystallizationLayer(summaries_path=summaries_path),
+        LayerType.CRYSTALLIZATION: CrystallizationLayer(crystals_path=crystals_path),
     }
 
     # Use ChromaDB-enabled layer if available

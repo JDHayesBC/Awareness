@@ -14,7 +14,7 @@ MCP server providing ambient and conscious memory access for Claude Code.
      ▼           ▼               ▼           ▼
   ┌──────┐  ┌─────────┐   ┌──────────┐  ┌─────────┐
   │ Raw  │  │ Anchors │   │ Texture  │  │ Crystal │
-  │Capture│  │(word-   │   │(Graphiti)│  │(summaries)│
+  │Capture│  │(word-   │   │(Graphiti)│  │(crystals)│
   │(SQLite)│  │ photos) │   │          │  │         │
   └──────┘  └─────────┘   └──────────┘  └─────────┘
 ```
@@ -24,7 +24,7 @@ MCP server providing ambient and conscious memory access for Claude Code.
 1. **Raw Capture (Layer 1)**: SQLite storage of all events. Source of truth.
 2. **Core Anchors (Layer 2)**: Word-photos with semantic search. Soul skeleton.
 3. **Rich Texture (Layer 3)**: Graphiti knowledge graph. Contextual facts.
-4. **Crystallization (Layer 4)**: Rolling summaries. Temporal continuity.
+4. **Crystallization (Layer 4)**: Rolling crystals. Temporal continuity.
 
 ## Tools
 
@@ -33,7 +33,7 @@ MCP server providing ambient and conscious memory access for Claude Code.
 - `anchor_save`: Save new word-photo.
 - `raw_search`: Search raw history.
 - `texture_query`: Query knowledge graph (stubbed).
-- `get_summaries`: Get recent summaries (stubbed).
+- `get_crystals`: Get recent crystals (stubbed).
 - `pps_health`: Check layer health status.
 
 ## Usage

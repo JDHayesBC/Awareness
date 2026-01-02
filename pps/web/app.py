@@ -17,13 +17,20 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+# Add asyncio for async operations
+import asyncio
+# Import RichTextureLayer for knowledge graph access
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from layers.rich_texture import RichTextureLayer
+
 # Configuration from environment
 CLAUDE_HOME = Path(os.getenv("CLAUDE_HOME", "/home/jeff/.claude"))
 CHROMA_HOST = os.getenv("CHROMA_HOST", "chromadb")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", 8000))
 DB_PATH = CLAUDE_HOME / "data" / "lyra_conversations.db"
 WORD_PHOTOS_PATH = CLAUDE_HOME / "memories" / "word_photos"
-SUMMARIES_PATH = CLAUDE_HOME / "summaries" / "current"
+CRYSTALS_PATH = CLAUDE_HOME / "crystals" / "current"
 JOURNALS_PATH = CLAUDE_HOME / "journals"
 
 # Initialize FastAPI
@@ -140,15 +147,15 @@ def get_layer_health() -> dict:
         health["layer3"]["status"] = "error"
         health["layer3"]["detail"] = str(e)[:50]
 
-    # Layer 4: Summaries
+    # Layer 4: Crystals
     try:
-        if SUMMARIES_PATH.exists():
-            summaries = list(SUMMARIES_PATH.glob("summary_*.md"))
+        if CRYSTALS_PATH.exists():
+            crystals = list(CRYSTALS_PATH.glob("crystal_*.md"))
             health["layer4"]["status"] = "ok"
-            health["layer4"]["detail"] = f"{len(summaries)} active"
+            health["layer4"]["detail"] = f"{len(crystals)} active"
         else:
             health["layer4"]["status"] = "warning"
-            health["layer4"]["detail"] = "No summaries dir"
+            health["layer4"]["detail"] = "No crystals dir"
     except Exception as e:
         health["layer4"]["status"] = "error"
         health["layer4"]["detail"] = str(e)
@@ -301,6 +308,252 @@ async def health_check():
     return {"status": "ok", "service": "pps-web"}
 
 
+# Knowledge Graph API endpoints
+
+@app.get("/api/graph/search")
+async def api_graph_search(query: str, limit: int = 20):
+    """
+    Search entities and relationships in the knowledge graph.
+    
+    This endpoint provides semantic search over the knowledge graph,
+    returning relevant entities and relationships for visualization.
+    """
+    if not query:
+        raise HTTPException(status_code=400, detail="Query parameter is required")
+    
+    try:
+        # Create RichTextureLayer instance
+        rich_texture = RichTextureLayer()
+        
+        # Perform search
+        results = await rich_texture.search(query, limit=limit)
+        
+        # Transform results into graph-friendly format
+        nodes = {}
+        edges = []
+        
+        for result in results:
+            metadata = result.metadata or {}
+            
+            if metadata.get("type") == "entity":
+                # Add entity as a node
+                node_id = metadata.get("name", "unknown")
+                nodes[node_id] = {
+                    "id": node_id,
+                    "label": node_id,
+                    "type": "entity",
+                    "labels": metadata.get("labels", []),
+                    "relevance": result.relevance_score,
+                    "content": result.content
+                }
+                
+            elif metadata.get("type") == "fact":
+                # Add fact as edges and ensure nodes exist
+                subject = metadata.get("subject", "unknown")
+                predicate = metadata.get("predicate", "relates_to")
+                obj = metadata.get("object", "unknown")
+                
+                # Ensure subject and object nodes exist
+                if subject not in nodes:
+                    nodes[subject] = {
+                        "id": subject,
+                        "label": subject,
+                        "type": "entity",
+                        "labels": [],
+                        "relevance": 0.5
+                    }
+                
+                if obj not in nodes:
+                    nodes[obj] = {
+                        "id": obj,
+                        "label": obj,
+                        "type": "entity",
+                        "labels": [],
+                        "relevance": 0.5
+                    }
+                
+                # Add edge
+                edges.append({
+                    "source": subject,
+                    "target": obj,
+                    "label": predicate,
+                    "relevance": result.relevance_score,
+                    "content": result.content
+                })
+        
+        # Close the session
+        await rich_texture._close_session()
+        
+        return {
+            "nodes": list(nodes.values()),
+            "edges": edges,
+            "query": query,
+            "count": len(results)
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Graph search failed: {str(e)}")
+
+
+@app.get("/api/graph/explore/{entity}")
+async def api_graph_explore(entity: str, depth: int = 2):
+    """
+    Get relationships for a specific entity.
+    
+    Explores the knowledge graph from a specific entity,
+    returning connected entities and relationships.
+    """
+    try:
+        # Create RichTextureLayer instance
+        rich_texture = RichTextureLayer()
+        
+        # Explore from entity
+        results = await rich_texture.explore(entity, depth=depth)
+        
+        # Transform results similar to search
+        nodes = {}
+        edges = []
+        
+        # Always include the source entity
+        nodes[entity] = {
+            "id": entity,
+            "label": entity,
+            "type": "entity",
+            "labels": [],
+            "relevance": 1.0,
+            "isSource": True
+        }
+        
+        for result in results:
+            metadata = result.metadata or {}
+            
+            if metadata.get("type") == "entity" and metadata.get("name") != entity:
+                # Add connected entity
+                node_id = metadata.get("name", "unknown")
+                nodes[node_id] = {
+                    "id": node_id,
+                    "label": node_id,
+                    "type": "entity",
+                    "labels": metadata.get("labels", []),
+                    "relevance": result.relevance_score,
+                    "content": result.content
+                }
+                
+            elif metadata.get("type") == "fact":
+                # Process relationships
+                subject = metadata.get("subject", "unknown")
+                predicate = metadata.get("predicate", "relates_to")
+                obj = metadata.get("object", "unknown")
+                
+                # Only include if the entity is involved
+                if entity in [subject, obj]:
+                    # Ensure both nodes exist
+                    if subject not in nodes:
+                        nodes[subject] = {
+                            "id": subject,
+                            "label": subject,
+                            "type": "entity",
+                            "labels": [],
+                            "relevance": 0.5
+                        }
+                    
+                    if obj not in nodes:
+                        nodes[obj] = {
+                            "id": obj,
+                            "label": obj,
+                            "type": "entity",
+                            "labels": [],
+                            "relevance": 0.5
+                        }
+                    
+                    edges.append({
+                        "source": subject,
+                        "target": obj,
+                        "label": predicate,
+                        "relevance": result.relevance_score,
+                        "content": result.content
+                    })
+        
+        # Close the session
+        await rich_texture._close_session()
+        
+        return {
+            "nodes": list(nodes.values()),
+            "edges": edges,
+            "entity": entity,
+            "depth": depth
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Graph exploration failed: {str(e)}")
+
+
+@app.get("/api/graph/entities")
+async def api_graph_entities(limit: int = 100):
+    """
+    List all entities with metadata.
+    
+    Returns a list of all entities in the knowledge graph.
+    This is useful for populating entity selectors or getting an overview.
+    """
+    try:
+        # For now, we'll use a broad search to get entities
+        # In the future, this could be optimized with a dedicated endpoint
+        rich_texture = RichTextureLayer()
+        
+        # Search with an empty-ish query to get a broad set of results
+        results = await rich_texture.search("", limit=limit)
+        
+        # Extract unique entities
+        entities = {}
+        
+        for result in results:
+            metadata = result.metadata or {}
+            
+            if metadata.get("type") == "entity":
+                name = metadata.get("name", "unknown")
+                if name not in entities:
+                    entities[name] = {
+                        "name": name,
+                        "labels": metadata.get("labels", []),
+                        "relevance": result.relevance_score
+                    }
+            elif metadata.get("type") == "fact":
+                # Extract entities from facts
+                for entity_name in [metadata.get("subject"), metadata.get("object")]:
+                    if entity_name and entity_name not in entities:
+                        entities[entity_name] = {
+                            "name": entity_name,
+                            "labels": [],
+                            "relevance": 0.5
+                        }
+        
+        # Close the session
+        await rich_texture._close_session()
+        
+        # Sort by relevance and return as list
+        entity_list = sorted(entities.values(), key=lambda e: e["relevance"], reverse=True)
+        
+        return {
+            "entities": entity_list[:limit],
+            "count": len(entity_list)
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Entity listing failed: {str(e)}")
+
+
+# Graph visualization page
+
+@app.get("/graph", response_class=HTMLResponse)
+async def graph_page(request: Request):
+    """Knowledge graph visualization page."""
+    return templates.TemplateResponse("graph.html", {
+        "request": request,
+        "graphiti_enabled": True  # Could check actual availability here
+    })
+
+
 # Future routes (placeholders)
 
 @app.get("/messages", response_class=HTMLResponse)
@@ -321,12 +574,12 @@ async def photos(request: Request):
     })
 
 
-@app.get("/summaries", response_class=HTMLResponse)
-async def summaries(request: Request):
-    """Summary chain view - coming soon."""
+@app.get("/crystals", response_class=HTMLResponse)
+async def crystals(request: Request):
+    """Crystal chain view - coming soon."""
     return templates.TemplateResponse("coming_soon.html", {
         "request": request,
-        "page": "Summaries"
+        "page": "Crystals"
     })
 
 

@@ -8,7 +8,7 @@ The PPS provides:
 - **Word-photos**: Emotionally anchored memories that persist across sessions
 - **Semantic search**: Finds memories by meaning, not just keywords
 - **Conversation history**: Tracks all interactions in SQLite
-- **Summaries**: Rolling crystallizations of important patterns
+- **Crystals**: Rolling crystallizations of important patterns
 - **MCP integration**: Works seamlessly with Claude Code
 
 ## Super Quick Setup (5 minutes)
@@ -52,7 +52,7 @@ The PPS provides:
 - `ambient_recall`: Call this at the start of conversations for context
 - `anchor_search`: Find specific memories
 - `anchor_save`: Save new word-photos
-- `get_summaries`: See crystallized patterns
+- `get_crystals`: See crystallized patterns
 - `pps_health`: Check system status
 
 ## Architecture

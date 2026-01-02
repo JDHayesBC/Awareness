@@ -107,8 +107,8 @@ services:
       - ${CLAUDE_HOME:-/home/jeff/.claude}/journals:/app/journals:ro
       # Spaces are read-only
       - ${CLAUDE_HOME:-/home/jeff/.claude}/spaces:/app/spaces:ro
-      # Summaries directory (read-write for crystallization)
-      - ${CLAUDE_HOME:-/home/jeff/.claude}/summaries:/app/summaries:rw
+      # Crystals directory (read-write for crystallization)
+      - ${CLAUDE_HOME:-/home/jeff/.claude}/crystals:/app/crystals:rw
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -132,13 +132,15 @@ services:
       - TZ=${TZ:-America/Los_Angeles}
       - CHROMA_HOST=chromadb
       - CHROMA_PORT=8000
+      - GRAPHITI_HOST=graphiti
+      - GRAPHITI_PORT=8000
       - CLAUDE_HOME=/app/claude_home
     volumes:
       # Mount identity files (read-only)
       - ${CLAUDE_HOME:-/home/jeff/.claude}/memories:/app/claude_home/memories:ro
       - ${CLAUDE_HOME:-/home/jeff/.claude}/data:/app/claude_home/data:ro
       - ${CLAUDE_HOME:-/home/jeff/.claude}/journals:/app/claude_home/journals:ro
-      - ${CLAUDE_HOME:-/home/jeff/.claude}/summaries:/app/claude_home/summaries:ro
+      - ${CLAUDE_HOME:-/home/jeff/.claude}/crystals:/app/claude_home/crystals:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s

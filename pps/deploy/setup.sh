@@ -42,7 +42,7 @@ if [ ! -f "$PPS_ROOT/docker/.env" ]; then
     DEFAULT_CLAUDE_HOME="$HOME/.claude"
     echo
     echo "Where should the Claude home directory be located?"
-    echo "This will store your memories, summaries, and data."
+    echo "This will store your memories, crystals, and data."
     echo -e "Default: ${GREEN}$DEFAULT_CLAUDE_HOME${NC}"
     read -p "Claude home directory (press Enter for default): " CLAUDE_HOME_INPUT
     
@@ -76,8 +76,8 @@ else
     # Ensure required subdirectories exist
     mkdir -p "$CLAUDE_HOME/memories/word_photos"
     mkdir -p "$CLAUDE_HOME/data"
-    mkdir -p "$CLAUDE_HOME/summaries/current"
-    mkdir -p "$CLAUDE_HOME/summaries/archive"
+    mkdir -p "$CLAUDE_HOME/crystals/current"
+    mkdir -p "$CLAUDE_HOME/crystals/archive"
     echo -e "${GREEN}✓ Claude home directory exists${NC}"
 fi
 

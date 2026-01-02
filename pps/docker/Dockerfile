@@ -23,7 +23,7 @@ COPY server.py .
 COPY docker/server_http.py .
 
 # Create directories for mounted volumes
-RUN mkdir -p /app/memories /app/data /app/journals /app/spaces /app/summaries
+RUN mkdir -p /app/memories /app/data /app/journals /app/spaces /app/crystals
 
 # Expose port for HTTP server
 EXPOSE 8000

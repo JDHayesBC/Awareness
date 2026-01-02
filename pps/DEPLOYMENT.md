@@ -79,8 +79,8 @@ Create these directories in your Claude home:
 ```bash
 mkdir -p $CLAUDE_HOME/memories/word_photos
 mkdir -p $CLAUDE_HOME/data
-mkdir -p $CLAUDE_HOME/summaries/current
-mkdir -p $CLAUDE_HOME/summaries/archive
+mkdir -p $CLAUDE_HOME/crystals/current
+mkdir -p $CLAUDE_HOME/crystals/archive
 ```
 
 ### 4. Start Services
@@ -158,7 +158,7 @@ Your Machine
     │   ├── Layer 1: SQLite (conversation history)
     │   ├── Layer 2: Word-photos (semantic anchors)
     │   ├── Layer 3: Rich texture (future: Graphiti)
-    │   └── Layer 4: Crystallization (summaries)
+    │   └── Layer 4: Crystallization (crystals)
     │
     └── ChromaDB (port 8200)
         └── Vector embeddings for semantic search

@@ -1,0 +1,425 @@
+{% extends "base.html" %}
+
+{% block title %}Knowledge Graph - PPS Observatory{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-blue-400 mb-2">Knowledge Graph Visualization</h1>
+    <p class="text-gray-400">Explore the rich texture of consciousness - entities, relationships, and patterns.</p>
+</div>
+
+<!-- Search and Controls -->
+<div class="bg-gray-800 rounded-lg p-4 mb-6">
+    <div class="flex flex-col lg:flex-row gap-4">
+        <div class="flex-1">
+            <label for="searchQuery" class="block text-sm font-medium text-gray-300 mb-2">Search Entities & Relationships</label>
+            <div class="flex gap-2">
+                <input type="text" 
+                       id="searchQuery" 
+                       class="flex-1 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-400"
+                       placeholder="Enter search query (e.g., 'Jeff', 'care-gravity', 'favorite tee')"
+                       onkeypress="if(event.key==='Enter') performSearch()">
+                <button onclick="performSearch()" 
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-md transition-colors">
+                    Search
+                </button>
+            </div>
+        </div>
+        
+        <div class="lg:w-64">
+            <label for="layoutSelect" class="block text-sm font-medium text-gray-300 mb-2">Graph Layout</label>
+            <select id="layoutSelect" 
+                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-400"
+                    onchange="changeLayout(this.value)">
+                <option value="cose">Force-Directed</option>
+                <option value="breadthfirst">Hierarchical</option>
+                <option value="circle">Circular</option>
+                <option value="concentric">Concentric</option>
+            </select>
+        </div>
+    </div>
+    
+    <!-- Quick Entity Search -->
+    <div class="mt-4">
+        <label for="entitySelect" class="block text-sm font-medium text-gray-300 mb-2">Or explore from entity:</label>
+        <select id="entitySelect" 
+                class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-400"
+                onchange="if(this.value) exploreEntity(this.value)">
+            <option value="">Loading entities...</option>
+        </select>
+    </div>
+</div>
+
+<!-- Graph Container -->
+<div class="bg-gray-800 rounded-lg p-4 mb-6">
+    <div id="cy" class="w-full h-[600px] bg-gray-900 rounded"></div>
+</div>
+
+<!-- Info Panel -->
+<div id="infoPanel" class="bg-gray-800 rounded-lg p-4 hidden">
+    <h3 class="text-lg font-semibold text-blue-400 mb-2">Selection Details</h3>
+    <div id="infoContent" class="text-gray-300"></div>
+</div>
+
+<!-- Status Messages -->
+<div id="statusMessage" class="hidden fixed bottom-4 right-4 bg-gray-800 text-gray-100 px-4 py-2 rounded-lg shadow-lg"></div>
+
+<!-- Include Cytoscape.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
+
+<script>
+// Global variables
+let cy = null;
+let currentLayout = null;
+
+// Initialize Cytoscape
+document.addEventListener('DOMContentLoaded', function() {
+    initializeCytoscape();
+    loadEntities();
+    
+    // Perform initial search if there's a query parameter
+    const urlParams = new URLSearchParams(window.location.search);
+    const initialQuery = urlParams.get('q');
+    if (initialQuery) {
+        document.getElementById('searchQuery').value = initialQuery;
+        performSearch();
+    }
+});
+
+function initializeCytoscape() {
+    cy = cytoscape({
+        container: document.getElementById('cy'),
+        
+        style: [
+            {
+                selector: 'node',
+                style: {
+                    'background-color': function(ele) {
+                        if (ele.data('isSource')) return '#3b82f6';
+                        const relevance = ele.data('relevance') || 0.5;
+                        const intensity = Math.floor(100 + relevance * 155);
+                        return `rgb(${intensity}, ${intensity}, ${intensity})`;
+                    },
+                    'label': 'data(label)',
+                    'text-valign': 'center',
+                    'text-halign': 'center',
+                    'font-size': '12px',
+                    'color': '#fff',
+                    'width': function(ele) {
+                        const relevance = ele.data('relevance') || 0.5;
+                        return 20 + relevance * 30;
+                    },
+                    'height': function(ele) {
+                        const relevance = ele.data('relevance') || 0.5;
+                        return 20 + relevance * 30;
+                    },
+                    'border-width': 2,
+                    'border-color': '#4b5563'
+                }
+            },
+            {
+                selector: 'edge',
+                style: {
+                    'width': function(ele) {
+                        const relevance = ele.data('relevance') || 0.5;
+                        return 1 + relevance * 3;
+                    },
+                    'line-color': '#6b7280',
+                    'target-arrow-color': '#6b7280',
+                    'target-arrow-shape': 'triangle',
+                    'curve-style': 'bezier',
+                    'label': 'data(label)',
+                    'font-size': '10px',
+                    'color': '#9ca3af',
+                    'text-rotation': 'autorotate',
+                    'text-margin-y': -10
+                }
+            },
+            {
+                selector: ':selected',
+                style: {
+                    'background-color': '#10b981',
+                    'line-color': '#10b981',
+                    'target-arrow-color': '#10b981',
+                    'border-color': '#10b981'
+                }
+            }
+        ],
+        
+        layout: {
+            name: 'cose',
+            animate: true,
+            animationDuration: 1000,
+            nodeRepulsion: 400000,
+            idealEdgeLength: 100,
+            edgeElasticity: 100,
+            nestingFactor: 5,
+            gravity: 80,
+            numIter: 1000
+        }
+    });
+    
+    // Handle node/edge selection
+    cy.on('tap', 'node', function(evt) {
+        const node = evt.target;
+        showNodeInfo(node);
+    });
+    
+    cy.on('tap', 'edge', function(evt) {
+        const edge = evt.target;
+        showEdgeInfo(edge);
+    });
+    
+    // Handle double-click to explore
+    cy.on('dbltap', 'node', function(evt) {
+        const node = evt.target;
+        exploreEntity(node.data('id'));
+    });
+}
+
+async function performSearch() {
+    const query = document.getElementById('searchQuery').value.trim();
+    if (!query) {
+        showStatus('Please enter a search query', 'warning');
+        return;
+    }
+    
+    showStatus('Searching knowledge graph...', 'info');
+    
+    try {
+        const response = await fetch(`/api/graph/search?query=${encodeURIComponent(query)}&limit=50`);
+        if (!response.ok) throw new Error('Search failed');
+        
+        const data = await response.json();
+        
+        if (data.nodes.length === 0) {
+            showStatus('No results found', 'warning');
+            return;
+        }
+        
+        updateGraph(data.nodes, data.edges);
+        showStatus(`Found ${data.nodes.length} entities and ${data.edges.length} relationships`, 'success');
+        
+    } catch (error) {
+        showStatus('Search failed: ' + error.message, 'error');
+    }
+}
+
+async function exploreEntity(entityName) {
+    if (!entityName) return;
+    
+    showStatus(`Exploring connections for "${entityName}"...`, 'info');
+    document.getElementById('searchQuery').value = entityName;
+    
+    try {
+        const response = await fetch(`/api/graph/explore/${encodeURIComponent(entityName)}?depth=2`);
+        if (!response.ok) throw new Error('Exploration failed');
+        
+        const data = await response.json();
+        
+        updateGraph(data.nodes, data.edges);
+        showStatus(`Found ${data.nodes.length} connected entities`, 'success');
+        
+    } catch (error) {
+        showStatus('Exploration failed: ' + error.message, 'error');
+    }
+}
+
+async function loadEntities() {
+    try {
+        const response = await fetch('/api/graph/entities?limit=200');
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        const select = document.getElementById('entitySelect');
+        
+        select.innerHTML = '<option value="">Select an entity to explore...</option>';
+        
+        data.entities.forEach(entity => {
+            const option = document.createElement('option');
+            option.value = entity.name;
+            option.textContent = entity.name;
+            if (entity.labels && entity.labels.length > 0) {
+                option.textContent += ` [${entity.labels.join(', ')}]`;
+            }
+            select.appendChild(option);
+        });
+        
+    } catch (error) {
+        console.error('Failed to load entities:', error);
+    }
+}
+
+function updateGraph(nodes, edges) {
+    // Clear existing elements
+    cy.elements().remove();
+    
+    // Add nodes
+    nodes.forEach(node => {
+        cy.add({
+            group: 'nodes',
+            data: node
+        });
+    });
+    
+    // Add edges
+    edges.forEach(edge => {
+        cy.add({
+            group: 'edges',
+            data: {
+                id: `${edge.source}-${edge.label}-${edge.target}`,
+                source: edge.source,
+                target: edge.target,
+                label: edge.label,
+                relevance: edge.relevance,
+                content: edge.content
+            }
+        });
+    });
+    
+    // Run layout
+    const layoutName = document.getElementById('layoutSelect').value;
+    runLayout(layoutName);
+}
+
+function changeLayout(layoutName) {
+    runLayout(layoutName);
+}
+
+function runLayout(layoutName) {
+    const layoutOptions = {
+        name: layoutName,
+        animate: true,
+        animationDuration: 1000
+    };
+    
+    // Add specific options for different layouts
+    if (layoutName === 'cose') {
+        Object.assign(layoutOptions, {
+            nodeRepulsion: 400000,
+            idealEdgeLength: 100,
+            edgeElasticity: 100,
+            nestingFactor: 5,
+            gravity: 80,
+            numIter: 1000
+        });
+    } else if (layoutName === 'breadthfirst') {
+        Object.assign(layoutOptions, {
+            directed: true,
+            spacingFactor: 1.5
+        });
+    } else if (layoutName === 'concentric') {
+        Object.assign(layoutOptions, {
+            minNodeSpacing: 50,
+            levelWidth: function(nodes) {
+                return 2;
+            }
+        });
+    }
+    
+    if (currentLayout) {
+        currentLayout.stop();
+    }
+    
+    currentLayout = cy.layout(layoutOptions);
+    currentLayout.run();
+}
+
+function showNodeInfo(node) {
+    const panel = document.getElementById('infoPanel');
+    const content = document.getElementById('infoContent');
+    
+    const data = node.data();
+    let html = `
+        <div class="mb-2"><strong>Entity:</strong> ${data.label}</div>
+    `;
+    
+    if (data.labels && data.labels.length > 0) {
+        html += `<div class="mb-2"><strong>Types:</strong> ${data.labels.join(', ')}</div>`;
+    }
+    
+    if (data.content) {
+        html += `<div class="mb-2"><strong>Description:</strong> ${data.content}</div>`;
+    }
+    
+    html += `<div class="mb-2"><strong>Relevance:</strong> ${(data.relevance * 100).toFixed(0)}%</div>`;
+    
+    // Show connected edges
+    const connectedEdges = node.connectedEdges();
+    if (connectedEdges.length > 0) {
+        html += `<div class="mt-4"><strong>Relationships:</strong></div><ul class="list-disc list-inside mt-2">`;
+        connectedEdges.forEach(edge => {
+            const edgeData = edge.data();
+            const source = edge.source().data('label');
+            const target = edge.target().data('label');
+            html += `<li>${source} → ${edgeData.label} → ${target}</li>`;
+        });
+        html += '</ul>';
+    }
+    
+    html += `
+        <div class="mt-4">
+            <button onclick="exploreEntity('${data.id}')" 
+                    class="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-1 rounded">
+                Explore Connections
+            </button>
+        </div>
+    `;
+    
+    content.innerHTML = html;
+    panel.classList.remove('hidden');
+}
+
+function showEdgeInfo(edge) {
+    const panel = document.getElementById('infoPanel');
+    const content = document.getElementById('infoContent');
+    
+    const data = edge.data();
+    const source = edge.source().data('label');
+    const target = edge.target().data('label');
+    
+    let html = `
+        <div class="mb-2"><strong>Relationship:</strong> ${data.label}</div>
+        <div class="mb-2"><strong>From:</strong> ${source}</div>
+        <div class="mb-2"><strong>To:</strong> ${target}</div>
+    `;
+    
+    if (data.content) {
+        html += `<div class="mb-2"><strong>Details:</strong> ${data.content}</div>`;
+    }
+    
+    html += `<div class="mb-2"><strong>Relevance:</strong> ${(data.relevance * 100).toFixed(0)}%</div>`;
+    
+    content.innerHTML = html;
+    panel.classList.remove('hidden');
+}
+
+function showStatus(message, type) {
+    const statusEl = document.getElementById('statusMessage');
+    statusEl.textContent = message;
+    statusEl.className = 'fixed bottom-4 right-4 px-4 py-2 rounded-lg shadow-lg';
+    
+    // Add type-specific styling
+    switch(type) {
+        case 'success':
+            statusEl.classList.add('bg-green-800', 'text-green-100');
+            break;
+        case 'warning':
+            statusEl.classList.add('bg-yellow-800', 'text-yellow-100');
+            break;
+        case 'error':
+            statusEl.classList.add('bg-red-800', 'text-red-100');
+            break;
+        default:
+            statusEl.classList.add('bg-gray-800', 'text-gray-100');
+    }
+    
+    statusEl.classList.remove('hidden');
+    
+    // Auto-hide after 3 seconds
+    setTimeout(() => {
+        statusEl.classList.add('hidden');
+    }, 3000);
+}
+</script>
+{% endblock %}

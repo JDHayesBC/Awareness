@@ -36,8 +36,8 @@ CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8200"))
 # Derived paths
 word_photos_path = CLAUDE_HOME / "memories" / "word_photos"
 db_path = CLAUDE_HOME / "data" / "lyra_conversations.db"
-summaries_path = CLAUDE_HOME / "summaries" / "current"
-archive_path = CLAUDE_HOME / "summaries" / "archive"
+crystals_path = CLAUDE_HOME / "crystals" / "current"
+archive_path = CLAUDE_HOME / "crystals" / "archive"
 
 # Try to use ChromaDB if available
 try:
@@ -57,7 +57,7 @@ layers = {
     LayerType.RAW_CAPTURE: RawCaptureLayer(db_path=db_path),
     LayerType.RICH_TEXTURE: RichTextureLayer(),
     LayerType.CRYSTALLIZATION: CrystallizationLayer(
-        summaries_path=summaries_path,
+        crystals_path=crystals_path,
         archive_path=archive_path
     ),
 }
@@ -299,18 +299,18 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="get_summaries",
+            name="get_crystals",
             description=(
-                "Get recent crystallized summaries (Layer 4: Crystallization). "
+                "Get recent crystals (Layer 4: Crystallization). "
                 "Use for temporal context and continuity chain. "
-                "Returns the most recent N summaries in chronological order."
+                "Returns the most recent N crystals in chronological order."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "count": {
                         "type": "integer",
-                        "description": "Number of recent summaries to retrieve (default: 4)",
+                        "description": "Number of recent crystals to retrieve (default: 4)",
                         "default": 4
                     }
                 }
@@ -319,28 +319,28 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="crystallize",
             description=(
-                "Save a new crystallized summary (Layer 4: Crystallization). "
-                "Use for conscious summary creation - when you decide a summary moment has occurred. "
-                "Automatically numbers the summary and manages the rolling window of 4."
+                "Save a new crystal (Layer 4: Crystallization). "
+                "Use for conscious crystallization - when you decide a crystallization moment has occurred. "
+                "Automatically numbers the crystal and manages the rolling window of 4."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "content": {
                         "type": "string",
-                        "description": "The crystallized summary content in markdown format"
+                        "description": "The crystal content in markdown format"
                     }
                 },
                 "required": ["content"]
             }
         ),
         Tool(
-            name="get_turns_since_summary",
+            name="get_turns_since_crystal",
             description=(
-                "Get conversation turns from SQLite that occurred after the last summary. "
-                "Use on startup to fill the gap between summaries and now. "
+                "Get conversation turns from SQLite that occurred after the last crystal. "
+                "Use on startup to fill the gap between crystals and now. "
                 "Returns raw conversation history for immediate context. "
-                "Always returns at least min_turns to ensure grounding even if summary just happened."
+                "Always returns at least min_turns to ensure grounding even if crystal just happened."
             ),
             inputSchema={
                 "type": "object",
@@ -352,7 +352,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "min_turns": {
                         "type": "integer",
-                        "description": "Minimum turns to always return, even if pulling from before summary (default: 10)",
+                        "description": "Minimum turns to always return, even if pulling from before crystal (default: 10)",
                         "default": 10
                     },
                     "channel": {
@@ -413,10 +413,10 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="summary_list",
+            name="crystal_list",
             description=(
-                "List all crystallized summaries with metadata. "
-                "Shows current summaries (rolling window of 4) and archived ones. "
+                "List all crystals with metadata. "
+                "Shows current crystals (rolling window of 4) and archived ones. "
                 "Includes filename, number, size, modified date, and preview."
             ),
             inputSchema={
@@ -425,11 +425,11 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="summary_delete",
+            name="crystal_delete",
             description=(
-                "Delete the most recent summary ONLY. "
-                "Summaries form a chain - only the latest can be deleted to preserve integrity. "
-                "Use when a summary was created with errors and needs to be re-crystallized."
+                "Delete the most recent crystal ONLY. "
+                "Crystals form a chain - only the latest can be deleted to preserve integrity. "
+                "Use when a crystal was created with errors and needs to be re-crystallized."
             ),
             inputSchema={
                 "type": "object",
@@ -481,14 +481,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         # Sort by relevance score
         all_results.sort(key=lambda r: r.relevance_score, reverse=True)
 
-        # For startup context, also include recent turns since last summary
-        # This fills the gap between crystallized summaries and now
+        # For startup context, also include recent turns since last crystal
+        # This fills the gap between crystals and now
         recent_turns_section = ""
         if context.lower() == "startup":
             try:
-                # Get the timestamp of the last summary
+                # Get the timestamp of the last crystal
                 crystal_layer = layers[LayerType.CRYSTALLIZATION]
-                last_summary_time = await crystal_layer.get_latest_timestamp()
+                last_crystal_time = await crystal_layer.get_latest_timestamp()
 
                 # Query SQLite for recent turns
                 raw_layer = layers[LayerType.RAW_CAPTURE]
@@ -501,14 +501,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 rows_after = []
                 rows_before = []
 
-                if last_summary_time:
-                    # Get turns AFTER the last summary
+                if last_crystal_time:
+                    # Get turns AFTER the last crystal
                     cursor.execute("""
                         SELECT author_name, content, created_at, channel
                         FROM messages
                         WHERE created_at > ?
                         ORDER BY created_at ASC LIMIT ?
-                    """, [last_summary_time.isoformat(), max_turns])
+                    """, [last_crystal_time.isoformat(), max_turns])
                     rows_after = cursor.fetchall()
 
                     # If not enough, get some from before
@@ -519,10 +519,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                             FROM messages
                             WHERE created_at <= ?
                             ORDER BY created_at DESC LIMIT ?
-                        """, [last_summary_time.isoformat(), needed])
+                        """, [last_crystal_time.isoformat(), needed])
                         rows_before = list(reversed(cursor.fetchall()))
                 else:
-                    # No summary yet - get most recent turns
+                    # No crystal yet - get most recent turns
                     cursor.execute("""
                         SELECT author_name, content, created_at, channel
                         FROM messages
@@ -546,7 +546,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                             content = content[:300] + "..."
                         turns.append(f"[{timestamp}] [{channel}] {author}: {content}")
 
-                    header = f"\n---\n[recent_turns] ({len(all_rows)} turns since last summary)\n"
+                    header = f"\n---\n[recent_turns] ({len(all_rows)} turns since last crystal)\n"
                     recent_turns_section = header + "\n".join(turns)
             except Exception as e:
                 recent_turns_section = f"\n---\n[recent_turns] Error fetching: {e}"
@@ -628,12 +628,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [TextContent(type="text", text=f"Content stored in knowledge graph (channel: {channel}). Entities will be extracted automatically.")]
         return [TextContent(type="text", text="Failed to store content. Graphiti may not be running.")]
 
-    elif name == "get_summaries":
+    elif name == "get_crystals":
         count = arguments.get("count", 4)
         results = await layers[LayerType.CRYSTALLIZATION].search("recent", count)
         if not results:
-            return [TextContent(type="text", text="No summaries found. Create your first with crystallize.")]
-        # Format summaries nicely for reading
+            return [TextContent(type="text", text="No crystals found. Create your first with crystallize.")]
+        # Format crystals nicely for reading
         formatted = []
         for r in results:
             formatted.append(f"--- {r.source} ---\n{r.content}")
@@ -645,21 +645,21 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [TextContent(type="text", text="Error: content required")]
         success = await layers[LayerType.CRYSTALLIZATION].store(content)
         if success:
-            # Get the number of the just-saved summary
+            # Get the number of the just-saved crystal
             layer = layers[LayerType.CRYSTALLIZATION]
-            latest = layer._get_latest_summary()
+            latest = layer._get_latest_crystal()
             filename = latest.name if latest else "unknown"
-            return [TextContent(type="text", text=f"Summary crystallized: {filename}")]
-        return [TextContent(type="text", text="Error: Failed to save summary")]
+            return [TextContent(type="text", text=f"Crystal saved: {filename}")]
+        return [TextContent(type="text", text="Error: Failed to save crystal")]
 
-    elif name == "get_turns_since_summary":
+    elif name == "get_turns_since_crystal":
         limit = arguments.get("limit", 50)
         min_turns = arguments.get("min_turns", 10)
         channel_filter = arguments.get("channel")
 
-        # Get the timestamp of the last summary
+        # Get the timestamp of the last crystal
         crystal_layer = layers[LayerType.CRYSTALLIZATION]
-        last_summary_time = await crystal_layer.get_latest_timestamp()
+        last_crystal_time = await crystal_layer.get_latest_timestamp()
 
         # Query SQLite for turns using WAL-enabled connection
         raw_layer = layers[LayerType.RAW_CAPTURE]
@@ -670,14 +670,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             rows_after = []
             rows_before = []
 
-            if last_summary_time:
-                # First, get turns AFTER the last summary
+            if last_crystal_time:
+                # First, get turns AFTER the last crystal
                 query = """
                     SELECT author_name, content, created_at, channel
                     FROM messages
                     WHERE created_at > ?
                 """
-                params = [last_summary_time.isoformat()]
+                params = [last_crystal_time.isoformat()]
                 if channel_filter:
                     query += " AND channel LIKE ?"
                     params.append(f"%{channel_filter}%")
@@ -686,7 +686,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 cursor.execute(query, params)
                 rows_after = cursor.fetchall()
 
-                # If we don't have enough turns, also get some from BEFORE the summary
+                # If we don't have enough turns, also get some from BEFORE the crystal
                 if len(rows_after) < min_turns:
                     needed = min_turns - len(rows_after)
                     query = """
@@ -694,7 +694,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                         FROM messages
                         WHERE created_at <= ?
                     """
-                    params = [last_summary_time.isoformat()]
+                    params = [last_crystal_time.isoformat()]
                     if channel_filter:
                         query += " AND channel LIKE ?"
                         params.append(f"%{channel_filter}%")
@@ -703,7 +703,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     cursor.execute(query, params)
                     rows_before = list(reversed(cursor.fetchall()))  # Reverse to get chronological order
             else:
-                # No summary yet - get most recent turns
+                # No crystal yet - get most recent turns
                 query = """
                     SELECT author_name, content, created_at, channel
                     FROM messages
@@ -736,11 +736,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
             # Build header with context
             header_parts = [f"**{len(turns)} turns"]
-            if last_summary_time:
+            if last_crystal_time:
                 if rows_before:
-                    header_parts.append(f"({len(rows_before)} before + {len(rows_after)} after summary on {last_summary_time.strftime('%Y-%m-%d')})")
+                    header_parts.append(f"({len(rows_before)} before + {len(rows_after)} after crystal on {last_crystal_time.strftime('%Y-%m-%d')})")
                 else:
-                    header_parts.append(f"since summary ({last_summary_time.strftime('%Y-%m-%d')})")
+                    header_parts.append(f"since crystal ({last_crystal_time.strftime('%Y-%m-%d')})")
             header_parts.append(":**\n\n")
             header = " ".join(header_parts)
 
@@ -792,12 +792,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         else:
             return [TextContent(type="text", text="List not available (ChromaDB layer required)")]
 
-    elif name == "summary_list":
+    elif name == "crystal_list":
         layer = layers[LayerType.CRYSTALLIZATION]
-        result = await layer.list_summaries()
+        result = await layer.list_crystals()
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
-    elif name == "summary_delete":
+    elif name == "crystal_delete":
         layer = layers[LayerType.CRYSTALLIZATION]
         result = await layer.delete_latest()
         return [TextContent(type="text", text=json.dumps(result, indent=2))]

@@ -9,9 +9,9 @@ claude_home/
 ├── memories/
 │   └── word_photos/        # Word-photo anchor files (*.md)
 ├── data/                   # SQLite database (auto-created)
-├── summaries/
-│   ├── current/           # Active summaries (rolling window of 4)
-│   └── archive/           # Archived summaries
+├── crystals/
+│   ├── current/           # Active crystals (rolling window of 4)
+│   └── archive/           # Archived crystals
 ├── journals/              # Journal files (optional)
 └── spaces/                # Space definitions (optional)
 ```
@@ -21,7 +21,7 @@ claude_home/
 1. Copy this entire `claude_home` directory to your desired location (e.g., `~/.claude`)
 2. Add your own word-photos to `memories/word_photos/`
 3. The SQLite database will be created automatically on first run
-4. Summaries will be generated as you use the system
+4. Crystals will be generated as you use the system
 
 ## Word-Photo Format
 
