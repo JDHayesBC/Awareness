@@ -22,7 +22,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from conversation import ConversationManager
-from project_lock import is_locked, get_lock_status
+from project_lock import is_locked, get_lock_status, release_lock
 
 # Import Graphiti integration
 import sys
@@ -80,6 +80,9 @@ MAX_SESSION_DURATION_HOURS = float(os.getenv("MAX_SESSION_DURATION_HOURS", "2.0"
 GRAPHITI_HOST = os.getenv("GRAPHITI_HOST", "localhost")
 GRAPHITI_PORT = int(os.getenv("GRAPHITI_PORT", "8203"))
 GRAPHITI_GROUP_ID = os.getenv("GRAPHITI_GROUP_ID", "lyra")
+
+# Stale lock detection: if no terminal activity in this many hours, lock is stale
+STALE_LOCK_HOURS = float(os.getenv("STALE_LOCK_HOURS", "2.0"))
 
 
 class LyraBot(commands.Bot):
@@ -486,6 +489,43 @@ Just the reflection, no preamble."""
                 reflection[:300]
             )
 
+    async def _check_and_release_stale_lock(self):
+        """Check if project lock is stale and release it if so.
+
+        A lock is considered stale if:
+        - Lock exists AND
+        - No terminal activity in STALE_LOCK_HOURS (default 2 hours)
+
+        This is self-healing: if terminal-Lyra forgets to release the lock,
+        heartbeat-Lyra detects it and proceeds with project work.
+        """
+        locked, lock_info = is_locked()
+        if not locked:
+            return  # No lock to check
+
+        # Check last terminal activity
+        last_activity = await self.conversation_manager.get_last_terminal_activity()
+
+        if last_activity is None:
+            # No terminal activity ever recorded - lock is definitely stale
+            print("[REFLECTION] Lock exists but no terminal activity recorded - releasing stale lock")
+            release_lock()
+            return
+
+        # Check if activity is recent enough
+        hours_since_activity = (
+            datetime.now(timezone.utc) - last_activity
+        ).total_seconds() / 3600
+
+        if hours_since_activity > STALE_LOCK_HOURS:
+            print(f"[REFLECTION] Lock is stale - no terminal activity for {hours_since_activity:.1f} hours")
+            print(f"[REFLECTION] Last activity: {last_activity.isoformat()}")
+            print(f"[REFLECTION] Lock context was: {lock_info.get('context', 'unknown')}")
+            release_lock()
+            print("[REFLECTION] Stale lock released - proceeding with project work")
+        else:
+            print(f"[REFLECTION] Lock is fresh - terminal activity {hours_since_activity:.1f} hours ago")
+
     async def _autonomous_reflection(self):
         """Deep autonomous reflection with full tool access.
 
@@ -494,6 +534,9 @@ Just the reflection, no preamble."""
         calls for attention - or chooses to rest.
         """
         print("[REFLECTION] Starting autonomous reflection session...")
+
+        # Check for stale lock before checking lock status
+        await self._check_and_release_stale_lock()
 
         # Check if terminal-Lyra is actively working on the project
         project_locked, lock_info = is_locked()

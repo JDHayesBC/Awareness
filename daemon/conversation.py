@@ -632,6 +632,27 @@ class ConversationManager:
         except Exception as e:
             print(f"[DB] Error logging terminal interaction: {e}")
 
+    async def get_last_terminal_activity(self) -> datetime | None:
+        """Get timestamp of most recent terminal activity.
+
+        Used by heartbeat to detect stale project locks.
+        Returns None if no terminal activity found.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        assert self._db is not None
+
+        async with self._db.execute(
+            """SELECT MAX(timestamp) as last_activity
+               FROM terminal_interactions"""
+        ) as cursor:
+            row = await cursor.fetchone()
+
+        if row and row["last_activity"]:
+            return datetime.fromisoformat(row["last_activity"])
+        return None
+
     async def get_terminal_session_history(
         self,
         session_id: str,
