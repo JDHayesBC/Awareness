@@ -24,6 +24,15 @@ from dotenv import load_dotenv
 from conversation import ConversationManager
 from project_lock import is_locked, get_lock_status
 
+# Import Graphiti integration
+import sys
+sys.path.append(str(Path(__file__).parent.parent / "pps"))
+try:
+    from layers.rich_texture import RichTextureLayer
+    GRAPHITI_AVAILABLE = True
+except ImportError:
+    GRAPHITI_AVAILABLE = False
+
 
 class PromptTooLongError(Exception):
     """Raised when prompt exceeds Claude's context window."""
@@ -63,6 +72,11 @@ SESSION_RESTART_HOURS = int(os.getenv("SESSION_RESTART_HOURS", "4"))
 MAX_SESSION_INVOCATIONS = int(os.getenv("MAX_SESSION_INVOCATIONS", "8"))
 # Maximum session duration in hours before proactive restart
 MAX_SESSION_DURATION_HOURS = float(os.getenv("MAX_SESSION_DURATION_HOURS", "2.0"))
+
+# Graphiti integration settings (Layer 3: Rich Texture)
+GRAPHITI_HOST = os.getenv("GRAPHITI_HOST", "localhost")
+GRAPHITI_PORT = int(os.getenv("GRAPHITI_PORT", "8203"))
+GRAPHITI_GROUP_ID = os.getenv("GRAPHITI_GROUP_ID", "lyra")
 
 
 class LyraBot(commands.Bot):
@@ -112,6 +126,15 @@ class LyraBot(commands.Bot):
 
         # SQLite conversation storage (Phase 1: parallel recording)
         self.conversation_manager = ConversationManager(CONVERSATION_DB_PATH)
+        
+        # Graphiti integration (Layer 3: Rich Texture)
+        if GRAPHITI_AVAILABLE:
+            graphiti_url = f"http://{GRAPHITI_HOST}:{GRAPHITI_PORT}"
+            self.graphiti = RichTextureLayer(graphiti_url)
+            print(f"[INIT] Graphiti enabled: {graphiti_url}")
+        else:
+            self.graphiti = None
+            print("[INIT] Graphiti not available")
 
     async def setup_hook(self):
         """Called when bot is setting up - start background tasks."""
@@ -541,7 +564,10 @@ End with active agency footnotes showing what you scanned and chose.'''
 
         try:
             # Invoke Claude with FULL tool access for autonomous reflection
-            # --continue preserves session context (identity already loaded)
+            # IMPORTANT: Reflection does NOT use --continue (issue #18)
+            # This creates a fresh session each time, preventing context bloat.
+            # Discord's --continue continues from this fresh session,
+            # effectively resetting context at each reflection boundary.
             # --dangerously-skip-permissions allows tools without interactive prompts
             # --add-dir allows access to project directories
             cmd = [
@@ -549,10 +575,8 @@ End with active agency footnotes showing what you scanned and chose.'''
                 "--model", REFLECTION_MODEL,
                 "--dangerously-skip-permissions",
                 "--add-dir", "/mnt/c/Users/Jeff/Documents/1)) Caia/Awareness",
+                "-p", reflection_prompt,
             ]
-            if self.session_initialized:
-                cmd.append("--continue")
-            cmd.extend(["-p", reflection_prompt])
 
             # Use lock to prevent concurrent invocations
             async with self.invocation_lock:
@@ -718,6 +742,13 @@ It's okay to stay quiet. Good presence includes knowing when not to speak."""
             is_bot=message.author.bot,
             channel=f"discord:{channel_name}",
         )
+        
+        # Send user message to Graphiti (Layer 3: Rich Texture)
+        await self._send_to_graphiti(
+            content=f"{message.author.display_name}: {message.content}",
+            role="user",
+            channel=f"discord:{channel_name}"
+        )
 
         # Check if Lyra is mentioned
         is_mentioned = self._is_lyra_mention(message)
@@ -742,6 +773,13 @@ It's okay to stay quiet. Good presence includes knowing when not to speak."""
                 content=response,
                 discord_message_id=sent_msg.id if sent_msg else None,
                 channel=f"discord:{channel_name}",
+            )
+            
+            # Send Lyra's response to Graphiti
+            await self._send_to_graphiti(
+                content=f"Lyra: {response}",
+                role="assistant",
+                channel=f"discord:{channel_name}"
             )
 
             # Persist active mode to SQLite (for restart recovery)
@@ -775,6 +813,13 @@ It's okay to stay quiet. Good presence includes knowing when not to speak."""
                     content=response,
                     discord_message_id=sent_msg.id if sent_msg else None,
                     channel=f"discord:{channel_name}",
+                )
+                
+                # Send Lyra's response to Graphiti
+                await self._send_to_graphiti(
+                    content=f"Lyra: {response}",
+                    role="assistant", 
+                    channel=f"discord:{channel_name}"
                 )
 
                 # Update active mode in SQLite
@@ -1238,11 +1283,44 @@ Output ONLY your Discord response."""
         except Exception as e:
             print(f"[JOURNAL] Error writing: {e}")
 
+    async def _send_to_graphiti(self, content: str, role: str, channel: str) -> None:
+        """
+        Send message to Graphiti for knowledge graph ingestion.
+        
+        Args:
+            content: Message content
+            role: 'user' or 'assistant'  
+            channel: Channel identifier (e.g. 'discord:general')
+        """
+        if not self.graphiti:
+            return
+            
+        try:
+            metadata = {
+                "channel": channel,
+                "role": role,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            
+            success = await self.graphiti.store(content, metadata)
+            if success:
+                print(f"[GRAPHITI] Sent {role} message to knowledge graph")
+            else:
+                print(f"[GRAPHITI] Failed to send {role} message")
+                
+        except Exception as e:
+            print(f"[GRAPHITI] Error sending message: {e}")
+
     async def close(self):
         """Clean shutdown."""
         self.heartbeat_loop.cancel()
         self.active_mode_cleanup.cancel()
         await self.conversation_manager.close()
+        
+        # Close Graphiti session if available
+        if self.graphiti:
+            await self.graphiti._close_session()
+            
         await super().close()
 
 
