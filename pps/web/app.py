@@ -910,6 +910,223 @@ async def heartbeat(request: Request):
     })
 
 
+# Daemon Traces API (Phase 3: Observability)
+
+def get_daemon_traces(
+    daemon_type: Optional[str] = None,
+    event_type: Optional[str] = None,
+    hours: int = 24,
+    limit: int = 100
+) -> list:
+    """Get recent daemon traces with optional filtering."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+
+    try:
+        cursor = conn.cursor()
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+        # Build query with optional filters
+        conditions = ["timestamp > ?"]
+        params = [cutoff]
+
+        if daemon_type:
+            conditions.append("daemon_type = ?")
+            params.append(daemon_type)
+        if event_type:
+            conditions.append("event_type = ?")
+            params.append(event_type)
+
+        params.append(limit)
+        where_clause = " AND ".join(conditions)
+
+        cursor.execute(f"""
+            SELECT id, session_id, daemon_type, timestamp, event_type, event_data, duration_ms
+            FROM daemon_traces
+            WHERE {where_clause}
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, params)
+
+        import json
+        traces = []
+        for row in cursor.fetchall():
+            traces.append({
+                "id": row["id"],
+                "session_id": row["session_id"],
+                "daemon_type": row["daemon_type"],
+                "timestamp": row["timestamp"],
+                "event_type": row["event_type"],
+                "event_data": json.loads(row["event_data"]) if row["event_data"] else None,
+                "duration_ms": row["duration_ms"],
+            })
+
+        conn.close()
+        return traces
+    except Exception as e:
+        return []
+
+
+def get_daemon_sessions(
+    daemon_type: Optional[str] = None,
+    hours: int = 24,
+    limit: int = 20
+) -> list:
+    """Get summaries of recent daemon sessions."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+
+    try:
+        cursor = conn.cursor()
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+        if daemon_type:
+            cursor.execute("""
+                SELECT
+                    session_id,
+                    daemon_type,
+                    MIN(timestamp) as started_at,
+                    MAX(timestamp) as ended_at,
+                    COUNT(*) as event_count,
+                    SUM(CASE WHEN event_type LIKE '%_complete' THEN 1 ELSE 0 END) as completed_events
+                FROM daemon_traces
+                WHERE timestamp > ? AND daemon_type = ?
+                GROUP BY session_id, daemon_type
+                ORDER BY started_at DESC
+                LIMIT ?
+            """, (cutoff, daemon_type, limit))
+        else:
+            cursor.execute("""
+                SELECT
+                    session_id,
+                    daemon_type,
+                    MIN(timestamp) as started_at,
+                    MAX(timestamp) as ended_at,
+                    COUNT(*) as event_count,
+                    SUM(CASE WHEN event_type LIKE '%_complete' THEN 1 ELSE 0 END) as completed_events
+                FROM daemon_traces
+                WHERE timestamp > ?
+                GROUP BY session_id, daemon_type
+                ORDER BY started_at DESC
+                LIMIT ?
+            """, (cutoff, limit))
+
+        sessions = []
+        for row in cursor.fetchall():
+            sessions.append(dict(row))
+
+        conn.close()
+        return sessions
+    except Exception as e:
+        return []
+
+
+def get_session_traces(session_id: str, limit: int = 100) -> list:
+    """Get all traces for a specific session."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, session_id, daemon_type, timestamp, event_type, event_data, duration_ms
+            FROM daemon_traces
+            WHERE session_id = ?
+            ORDER BY timestamp ASC
+            LIMIT ?
+        """, (session_id, limit))
+
+        import json
+        traces = []
+        for row in cursor.fetchall():
+            traces.append({
+                "id": row["id"],
+                "session_id": row["session_id"],
+                "daemon_type": row["daemon_type"],
+                "timestamp": row["timestamp"],
+                "event_type": row["event_type"],
+                "event_data": json.loads(row["event_data"]) if row["event_data"] else None,
+                "duration_ms": row["duration_ms"],
+            })
+
+        conn.close()
+        return traces
+    except Exception as e:
+        return []
+
+
+@app.get("/api/traces")
+async def api_traces(
+    daemon_type: Optional[str] = None,
+    event_type: Optional[str] = None,
+    hours: int = 24,
+    limit: int = 100
+):
+    """Get recent daemon traces with optional filtering."""
+    return {
+        "traces": get_daemon_traces(daemon_type, event_type, hours, limit),
+        "filters": {
+            "daemon_type": daemon_type,
+            "event_type": event_type,
+            "hours": hours,
+            "limit": limit
+        }
+    }
+
+
+@app.get("/api/traces/sessions")
+async def api_trace_sessions(
+    daemon_type: Optional[str] = None,
+    hours: int = 24,
+    limit: int = 20
+):
+    """Get summaries of recent daemon sessions."""
+    return {
+        "sessions": get_daemon_sessions(daemon_type, hours, limit),
+        "filters": {
+            "daemon_type": daemon_type,
+            "hours": hours,
+            "limit": limit
+        }
+    }
+
+
+@app.get("/api/traces/session/{session_id}")
+async def api_session_traces(session_id: str, limit: int = 100):
+    """Get all traces for a specific session."""
+    traces = get_session_traces(session_id, limit)
+    if not traces:
+        raise HTTPException(status_code=404, detail="Session not found or no traces")
+    return {
+        "session_id": session_id,
+        "traces": traces,
+        "count": len(traces)
+    }
+
+
+@app.get("/traces", response_class=HTMLResponse)
+async def traces_page(
+    request: Request,
+    daemon_type: Optional[str] = None,
+    hours: int = 24
+):
+    """Daemon traces viewer page."""
+    sessions = get_daemon_sessions(daemon_type=daemon_type, hours=hours)
+    return templates.TemplateResponse("traces.html", {
+        "request": request,
+        "sessions": sessions,
+        "filters": {
+            "daemon_type": daemon_type or "",
+            "hours": hours
+        }
+    })
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

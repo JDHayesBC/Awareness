@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+
+{% block title %}Daemon Traces | PPS Observatory{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-bold text-blue-400">Daemon Traces</h1>
+            <p class="text-gray-400 text-sm mt-1">Observability into daemon processing</p>
+        </div>
+        <div class="text-gray-500 text-sm">
+            {{ sessions | length }} sessions in last {{ filters.hours }}h
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <form method="get" action="/traces" class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="flex flex-wrap gap-4 items-end">
+            <!-- Daemon Type Filter -->
+            <div class="w-48">
+                <label class="block text-sm font-medium text-gray-300 mb-1">Daemon Type</label>
+                <select
+                    name="daemon_type"
+                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-400"
+                >
+                    <option value="">All Daemons</option>
+                    <option value="discord" {% if filters.daemon_type == 'discord' %}selected{% endif %}>Discord</option>
+                    <option value="reflection" {% if filters.daemon_type == 'reflection' %}selected{% endif %}>Reflection</option>
+                    <option value="terminal" {% if filters.daemon_type == 'terminal' %}selected{% endif %}>Terminal</option>
+                </select>
+            </div>
+
+            <!-- Time Range -->
+            <div class="w-40">
+                <label class="block text-sm font-medium text-gray-300 mb-1">Time Range</label>
+                <select
+                    name="hours"
+                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-400"
+                >
+                    <option value="1" {% if filters.hours == 1 %}selected{% endif %}>Last hour</option>
+                    <option value="6" {% if filters.hours == 6 %}selected{% endif %}>Last 6h</option>
+                    <option value="24" {% if filters.hours == 24 %}selected{% endif %}>Last 24h</option>
+                    <option value="72" {% if filters.hours == 72 %}selected{% endif %}>Last 3 days</option>
+                    <option value="168" {% if filters.hours == 168 %}selected{% endif %}>Last week</option>
+                </select>
+            </div>
+
+            <!-- Submit -->
+            <div>
+                <button
+                    type="submit"
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
+                >
+                    Filter
+                </button>
+            </div>
+
+            <!-- Clear -->
+            {% if filters.daemon_type %}
+            <div>
+                <a
+                    href="/traces"
+                    class="text-gray-400 hover:text-white px-3 py-2 inline-block"
+                >
+                    Clear
+                </a>
+            </div>
+            {% endif %}
+        </div>
+    </form>
+
+    <!-- Sessions List -->
+    <div class="space-y-4">
+        {% for session in sessions %}
+        <div class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+            <!-- Session Header -->
+            <div class="p-4 cursor-pointer hover:bg-gray-750" onclick="toggleSession('{{ session.session_id }}')">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-4">
+                        <!-- Daemon Type Badge -->
+                        <span class="text-xs px-2 py-1 rounded font-medium
+                            {% if session.daemon_type == 'discord' %}bg-indigo-900 text-indigo-300
+                            {% elif session.daemon_type == 'reflection' %}bg-purple-900 text-purple-300
+                            {% elif session.daemon_type == 'terminal' %}bg-green-900 text-green-300
+                            {% else %}bg-gray-700 text-gray-400{% endif %}
+                        ">
+                            {{ session.daemon_type | upper }}
+                        </span>
+                        <!-- Session ID -->
+                        <span class="font-mono text-gray-400 text-sm">{{ session.session_id[:12] }}...</span>
+                        <!-- Event Count -->
+                        <span class="text-gray-500 text-sm">{{ session.event_count }} events</span>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <!-- Time -->
+                        <span class="text-gray-500 text-sm">{{ session.started_at }}</span>
+                        <!-- Expand Icon -->
+                        <svg id="icon-{{ session.session_id }}" class="w-5 h-5 text-gray-500 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Session Details (Hidden by default) -->
+            <div id="details-{{ session.session_id }}" class="hidden border-t border-gray-700">
+                <div class="p-4 bg-gray-900">
+                    <div class="text-center text-gray-500 py-4" id="loading-{{ session.session_id }}">
+                        Loading traces...
+                    </div>
+                    <div id="traces-{{ session.session_id }}" class="space-y-2 hidden">
+                        <!-- Traces will be loaded here via JavaScript -->
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="bg-gray-800 rounded-lg p-8 text-center text-gray-500">
+            No daemon sessions found in the selected time range.
+            {% if filters.daemon_type %}
+            <a href="/traces" class="text-blue-400 hover:underline">Clear filters</a>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<script>
+    const loadedSessions = new Set();
+
+    async function toggleSession(sessionId) {
+        const details = document.getElementById(`details-${sessionId}`);
+        const icon = document.getElementById(`icon-${sessionId}`);
+
+        if (details.classList.contains('hidden')) {
+            // Expand
+            details.classList.remove('hidden');
+            icon.classList.add('rotate-180');
+
+            // Load traces if not already loaded
+            if (!loadedSessions.has(sessionId)) {
+                await loadSessionTraces(sessionId);
+            }
+        } else {
+            // Collapse
+            details.classList.add('hidden');
+            icon.classList.remove('rotate-180');
+        }
+    }
+
+    async function loadSessionTraces(sessionId) {
+        const loading = document.getElementById(`loading-${sessionId}`);
+        const container = document.getElementById(`traces-${sessionId}`);
+
+        try {
+            const response = await fetch(`/api/traces/session/${sessionId}`);
+            const data = await response.json();
+
+            if (data.traces && data.traces.length > 0) {
+                container.innerHTML = data.traces.map(trace => renderTrace(trace)).join('');
+                loading.classList.add('hidden');
+                container.classList.remove('hidden');
+                loadedSessions.add(sessionId);
+            } else {
+                loading.textContent = 'No traces found for this session';
+            }
+        } catch (error) {
+            loading.textContent = `Error loading traces: ${error.message}`;
+        }
+    }
+
+    function renderTrace(trace) {
+        const eventClass = getEventClass(trace.event_type);
+        const duration = trace.duration_ms ? `<span class="text-gray-500">${trace.duration_ms}ms</span>` : '';
+        const dataStr = trace.event_data ? `<pre class="text-xs text-gray-500 mt-1 overflow-x-auto">${JSON.stringify(trace.event_data, null, 2)}</pre>` : '';
+
+        return `
+            <div class="flex items-start space-x-3 py-2 border-b border-gray-800 last:border-0">
+                <span class="text-xs px-2 py-0.5 rounded ${eventClass} font-mono whitespace-nowrap">
+                    ${trace.event_type}
+                </span>
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center space-x-2">
+                        <span class="text-gray-500 text-xs">${formatTime(trace.timestamp)}</span>
+                        ${duration}
+                    </div>
+                    ${dataStr}
+                </div>
+            </div>
+        `;
+    }
+
+    function getEventClass(eventType) {
+        if (eventType.includes('error')) return 'bg-red-900 text-red-300';
+        if (eventType.includes('complete')) return 'bg-green-900 text-green-300';
+        if (eventType.includes('start')) return 'bg-blue-900 text-blue-300';
+        if (eventType.includes('graphiti')) return 'bg-purple-900 text-purple-300';
+        if (eventType.includes('message')) return 'bg-indigo-900 text-indigo-300';
+        return 'bg-gray-700 text-gray-300';
+    }
+
+    function formatTime(timestamp) {
+        const date = new Date(timestamp);
+        return date.toLocaleTimeString();
+    }
+</script>
+{% endblock %}

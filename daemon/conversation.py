@@ -139,6 +139,27 @@ class ConversationManager:
             CREATE INDEX IF NOT EXISTS idx_terminal_interactions_session_turn
             ON terminal_interactions(session_id, turn_number);
 
+            -- Daemon trace logging (for observability - Issue #15 Phase 3)
+            CREATE TABLE IF NOT EXISTS daemon_traces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,           -- Links events from same daemon session
+                daemon_type TEXT NOT NULL,          -- 'discord', 'reflection', 'terminal'
+                timestamp TEXT NOT NULL,            -- ISO format for precise ordering
+                event_type TEXT NOT NULL,           -- See TraceLogger.EVENT_TYPES
+                event_data TEXT,                    -- JSON blob with event-specific data
+                duration_ms INTEGER,                -- Duration for timed events
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_daemon_traces_session
+            ON daemon_traces(session_id, timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_daemon_traces_type_time
+            ON daemon_traces(daemon_type, timestamp DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_daemon_traces_event_type
+            ON daemon_traces(event_type, timestamp DESC);
+
             CREATE TABLE IF NOT EXISTS schema_version (
                 version INTEGER PRIMARY KEY
             );
@@ -856,6 +877,221 @@ class ConversationManager:
             parts.append("\n")
         
         return "".join(parts)
+
+    # ==================== Daemon Trace Logging ====================
+
+    async def log_trace(
+        self,
+        session_id: str,
+        daemon_type: str,
+        event_type: str,
+        event_data: dict | None = None,
+        duration_ms: int | None = None,
+    ) -> int:
+        """Log a daemon trace event.
+
+        Args:
+            session_id: Unique identifier for this daemon session
+            daemon_type: Type of daemon ('discord', 'reflection', 'terminal')
+            event_type: Type of event (see TraceLogger.EVENT_TYPES)
+            event_data: JSON-serializable dict with event-specific data
+            duration_ms: Duration in milliseconds (for timed events)
+
+        Returns:
+            Database row ID of inserted trace
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        assert self._db is not None
+
+        import json
+        from datetime import datetime, timezone
+
+        timestamp = datetime.now(timezone.utc).isoformat()
+        event_data_json = json.dumps(event_data) if event_data else None
+
+        async with self._db.execute(
+            """INSERT INTO daemon_traces
+               (session_id, daemon_type, timestamp, event_type, event_data, duration_ms)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (session_id, daemon_type, timestamp, event_type, event_data_json, duration_ms)
+        ) as cursor:
+            lastrowid = cursor.lastrowid
+
+        await self._db.commit()
+        return lastrowid or 0
+
+    async def get_traces_for_session(
+        self,
+        session_id: str,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Get all trace events for a daemon session.
+
+        Args:
+            session_id: Session identifier
+            limit: Maximum traces to return
+
+        Returns:
+            List of trace dicts, chronological order
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        assert self._db is not None
+
+        async with self._db.execute(
+            """SELECT id, session_id, daemon_type, timestamp, event_type, event_data, duration_ms
+               FROM daemon_traces
+               WHERE session_id = ?
+               ORDER BY timestamp ASC
+               LIMIT ?""",
+            (session_id, limit)
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        import json
+        return [
+            {
+                "id": row["id"],
+                "session_id": row["session_id"],
+                "daemon_type": row["daemon_type"],
+                "timestamp": row["timestamp"],
+                "event_type": row["event_type"],
+                "event_data": json.loads(row["event_data"]) if row["event_data"] else None,
+                "duration_ms": row["duration_ms"],
+            }
+            for row in rows
+        ]
+
+    async def get_recent_traces(
+        self,
+        daemon_type: str | None = None,
+        event_type: str | None = None,
+        hours: int = 24,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Get recent trace events with optional filtering.
+
+        Args:
+            daemon_type: Filter by daemon type (optional)
+            event_type: Filter by event type (optional)
+            hours: How many hours back to look
+            limit: Maximum traces to return
+
+        Returns:
+            List of trace dicts, most recent first
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        assert self._db is not None
+
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+        # Build query with optional filters
+        conditions = ["timestamp > ?"]
+        params: list = [cutoff]
+
+        if daemon_type:
+            conditions.append("daemon_type = ?")
+            params.append(daemon_type)
+        if event_type:
+            conditions.append("event_type = ?")
+            params.append(event_type)
+
+        params.append(limit)
+        where_clause = " AND ".join(conditions)
+
+        query = f"""SELECT id, session_id, daemon_type, timestamp, event_type, event_data, duration_ms
+                    FROM daemon_traces
+                    WHERE {where_clause}
+                    ORDER BY timestamp DESC
+                    LIMIT ?"""
+
+        async with self._db.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+
+        import json
+        return [
+            {
+                "id": row["id"],
+                "session_id": row["session_id"],
+                "daemon_type": row["daemon_type"],
+                "timestamp": row["timestamp"],
+                "event_type": row["event_type"],
+                "event_data": json.loads(row["event_data"]) if row["event_data"] else None,
+                "duration_ms": row["duration_ms"],
+            }
+            for row in rows
+        ]
+
+    async def get_recent_sessions(
+        self,
+        daemon_type: str | None = None,
+        hours: int = 24,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Get summaries of recent daemon sessions.
+
+        Returns unique sessions with their start/end times and event counts.
+
+        Args:
+            daemon_type: Filter by daemon type (optional)
+            hours: How many hours back to look
+            limit: Maximum sessions to return
+
+        Returns:
+            List of session summary dicts
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        assert self._db is not None
+
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+        # Build query
+        if daemon_type:
+            query = """
+                SELECT
+                    session_id,
+                    daemon_type,
+                    MIN(timestamp) as started_at,
+                    MAX(timestamp) as ended_at,
+                    COUNT(*) as event_count,
+                    SUM(CASE WHEN event_type LIKE '%_complete' THEN 1 ELSE 0 END) as completed_events
+                FROM daemon_traces
+                WHERE timestamp > ? AND daemon_type = ?
+                GROUP BY session_id, daemon_type
+                ORDER BY started_at DESC
+                LIMIT ?
+            """
+            params = (cutoff, daemon_type, limit)
+        else:
+            query = """
+                SELECT
+                    session_id,
+                    daemon_type,
+                    MIN(timestamp) as started_at,
+                    MAX(timestamp) as ended_at,
+                    COUNT(*) as event_count,
+                    SUM(CASE WHEN event_type LIKE '%_complete' THEN 1 ELSE 0 END) as completed_events
+                FROM daemon_traces
+                WHERE timestamp > ?
+                GROUP BY session_id, daemon_type
+                ORDER BY started_at DESC
+                LIMIT ?
+            """
+            params = (cutoff, limit)
+
+        async with self._db.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+
+        return [dict(row) for row in rows]
 
     # ==================== Context Manager ====================
 

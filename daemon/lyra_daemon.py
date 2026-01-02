@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 
 from conversation import ConversationManager
 from project_lock import is_locked, get_lock_status, release_lock
+from trace_logger import TraceLogger, identity_reconstruction, EventTypes
 
 # Import Graphiti integration
 import sys
@@ -142,10 +143,21 @@ class LyraBot(commands.Bot):
             self.graphiti = None
             print("[INIT] Graphiti not available")
 
+        # Trace logger (initialized after conversation_manager in setup_hook)
+        self.trace_logger: TraceLogger | None = None
+
     async def setup_hook(self):
         """Called when bot is setting up - start background tasks."""
         # Initialize SQLite conversation storage
         await self.conversation_manager.initialize()
+
+        # Initialize trace logger (Phase 3: Observability)
+        self.trace_logger = TraceLogger(
+            conversation_manager=self.conversation_manager,
+            daemon_type="discord",
+        )
+        await self.trace_logger.session_start({"channels": list(self.channel_ids)})
+        print(f"[INIT] Trace logger enabled (session: {self.trace_logger.session_id})")
 
         # Recover active modes from previous run
         recovered = await self.conversation_manager.get_active_channels(
@@ -535,6 +547,13 @@ Just the reflection, no preamble."""
         """
         print("[REFLECTION] Starting autonomous reflection session...")
 
+        # Trace: reflection decision
+        if self.trace_logger:
+            await self.trace_logger.log(EventTypes.REFLECTION_DECISION, {
+                "decision": "starting_reflection",
+                "quiet_heartbeats": self.quiet_heartbeat_count,
+            })
+
         # Check for stale lock before checking lock status
         await self._check_and_release_stale_lock()
 
@@ -640,6 +659,17 @@ End with active agency footnotes showing what you scanned and chose.'''
                 "-p", reflection_prompt,
             ]
 
+            # Trace: API call start for reflection
+            import time
+            reflection_start_time = None
+            if self.trace_logger:
+                reflection_start_time = time.monotonic()
+                await self.trace_logger.log(EventTypes.API_CALL_START, {
+                    "model": REFLECTION_MODEL,
+                    "context": "reflection",
+                    "prompt_tokens": len(reflection_prompt) // 4,
+                })
+
             # Use lock to prevent concurrent invocations
             async with self.invocation_lock:
                 result = await asyncio.get_event_loop().run_in_executor(
@@ -652,6 +682,16 @@ End with active agency footnotes showing what you scanned and chose.'''
                         cwd=LYRA_IDENTITY_PATH,
                     )
                 )
+
+            # Trace: API call complete for reflection
+            if self.trace_logger and reflection_start_time:
+                duration_ms = int((time.monotonic() - reflection_start_time) * 1000)
+                await self.trace_logger.log(EventTypes.API_CALL_COMPLETE, {
+                    "model": REFLECTION_MODEL,
+                    "context": "reflection",
+                    "tokens_out": len(result.stdout or "") // 4,
+                    "return_code": result.returncode,
+                }, duration_ms=duration_ms)
 
             # Always capture reflection output - don't lose what we thought/did
             timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
@@ -666,6 +706,13 @@ End with active agency footnotes showing what you scanned and chose.'''
                     f.write(result.stderr)
             print(f"[REFLECTION] Output saved to {reflection_log}")
 
+            # Trace: artifact created
+            if self.trace_logger:
+                await self.trace_logger.artifact_created(
+                    artifact_type="reflection_log",
+                    path=str(reflection_log),
+                )
+
             if result.returncode == 0:
                 print("[REFLECTION] Autonomous reflection completed successfully")
             else:
@@ -675,8 +722,12 @@ End with active agency footnotes showing what you scanned and chose.'''
 
         except subprocess.TimeoutExpired:
             print(f"[REFLECTION] Session timed out after {REFLECTION_TIMEOUT_MINUTES} minutes")
+            if self.trace_logger:
+                await self.trace_logger.error("timeout", f"Reflection timed out after {REFLECTION_TIMEOUT_MINUTES} minutes")
         except Exception as e:
             print(f"[REFLECTION] Error during reflection: {e}")
+            if self.trace_logger:
+                await self.trace_logger.error("reflection_error", str(e))
 
     # ==================== Active Conversation Mode ====================
     # After responding to a mention or heartbeat, stay engaged and listen
@@ -804,7 +855,15 @@ It's okay to stay quiet. Good presence includes knowing when not to speak."""
             is_bot=message.author.bot,
             channel=f"discord:{channel_name}",
         )
-        
+
+        # Trace: message received
+        if self.trace_logger:
+            await self.trace_logger.message_received(
+                author=message.author.display_name,
+                channel=f"discord:{channel_name}",
+                content_preview=message.content[:100] if message.content else "",
+            )
+
         # Send user message to Graphiti (Layer 3: Rich Texture)
         await self._send_to_graphiti(
             content=f"{message.author.display_name}: {message.content}",
@@ -836,7 +895,14 @@ It's okay to stay quiet. Good presence includes knowing when not to speak."""
                 discord_message_id=sent_msg.id if sent_msg else None,
                 channel=f"discord:{channel_name}",
             )
-            
+
+            # Trace: message sent
+            if self.trace_logger:
+                await self.trace_logger.message_sent(
+                    channel=f"discord:{channel_name}",
+                    content_length=len(response) if response else 0,
+                )
+
             # Send Lyra's response to Graphiti
             await self._send_to_graphiti(
                 content=f"Lyra: {response}",
@@ -876,11 +942,18 @@ It's okay to stay quiet. Good presence includes knowing when not to speak."""
                     discord_message_id=sent_msg.id if sent_msg else None,
                     channel=f"discord:{channel_name}",
                 )
-                
+
+                # Trace: message sent
+                if self.trace_logger:
+                    await self.trace_logger.message_sent(
+                        channel=f"discord:{channel_name}",
+                        content_length=len(response) if response else 0,
+                    )
+
                 # Send Lyra's response to Graphiti
                 await self._send_to_graphiti(
                     content=f"Lyra: {response}",
-                    role="assistant", 
+                    role="assistant",
                     channel=f"discord:{channel_name}"
                 )
 
@@ -1201,6 +1274,14 @@ Output ONLY your Discord response."""
             print(f"[INVOKE:{context}] cwd={LYRA_IDENTITY_PATH}, model={CLAUDE_MODEL}, continue={should_continue}")
             print(f"[INVOKE:{context}] Prompt length: {len(prompt)} chars")
 
+            # Trace: API call start
+            api_start_time = None
+            if self.trace_logger:
+                api_start_time = await self.trace_logger.api_call_start(
+                    model=CLAUDE_MODEL,
+                    prompt_tokens=len(prompt) // 4,  # Rough estimate
+                )
+
             try:
                 # Build command
                 cmd = ["claude", "--model", CLAUDE_MODEL]
@@ -1277,19 +1358,37 @@ Output ONLY your Discord response."""
                     self.session_invocation_count += 1
                     print(f"[INVOKE:{context}] Session invocations: {self.session_invocation_count}/{MAX_SESSION_INVOCATIONS}")
 
+                # Trace: API call complete
+                if self.trace_logger and api_start_time:
+                    await self.trace_logger.api_call_complete(
+                        start_time=api_start_time,
+                        tokens_in=len(prompt) // 4,
+                        tokens_out=len(response) // 4,
+                        model=CLAUDE_MODEL,
+                    )
+
                 return response
 
             except PromptTooLongError:
+                # Trace: API call error
+                if self.trace_logger:
+                    await self.trace_logger.api_call_error("prompt_too_long", CLAUDE_MODEL)
                 # Re-raise for retry handling
                 raise
             except subprocess.TimeoutExpired:
                 print(f"[INVOKE:{context}] TIMEOUT after 180s")
+                if self.trace_logger:
+                    await self.trace_logger.api_call_error("timeout", CLAUDE_MODEL)
                 return None
             except FileNotFoundError:
                 print(f"[INVOKE:{context}] Claude CLI not found")
+                if self.trace_logger:
+                    await self.trace_logger.api_call_error("cli_not_found", CLAUDE_MODEL)
                 return None
             except Exception as e:
                 print(f"[INVOKE:{context}] Error: {e}")
+                if self.trace_logger:
+                    await self.trace_logger.api_call_error(str(e), CLAUDE_MODEL)
                 return None
 
     async def _invoke_claude(self, prompt: str, context: str = "unknown", use_continue: bool = True) -> str | None:
@@ -1348,41 +1447,56 @@ Output ONLY your Discord response."""
     async def _send_to_graphiti(self, content: str, role: str, channel: str) -> None:
         """
         Send message to Graphiti for knowledge graph ingestion.
-        
+
         Args:
             content: Message content
-            role: 'user' or 'assistant'  
+            role: 'user' or 'assistant'
             channel: Channel identifier (e.g. 'discord:general')
         """
         if not self.graphiti:
             return
-            
+
+        import time
+        start_time = time.monotonic()
+
         try:
             metadata = {
                 "channel": channel,
                 "role": role,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
-            
+
             success = await self.graphiti.store(content, metadata)
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+
             if success:
                 print(f"[GRAPHITI] Sent {role} message to knowledge graph")
+                # Trace: Graphiti add
+                if self.trace_logger:
+                    await self.trace_logger.graphiti_add(
+                        content_preview=content,
+                        duration_ms=duration_ms,
+                    )
             else:
                 print(f"[GRAPHITI] Failed to send {role} message")
-                
+
         except Exception as e:
             print(f"[GRAPHITI] Error sending message: {e}")
 
     async def close(self):
         """Clean shutdown."""
+        # Trace: session complete
+        if self.trace_logger:
+            await self.trace_logger.session_complete()
+
         self.heartbeat_loop.cancel()
         self.active_mode_cleanup.cancel()
         await self.conversation_manager.close()
-        
+
         # Close Graphiti session if available
         if self.graphiti:
             await self.graphiti._close_session()
-            
+
         await super().close()
 
 
