@@ -180,7 +180,7 @@ class RichTextureLayer(PatternLayer):
             channel = metadata.get("channel", "unknown")
             role = metadata.get("role", "user")
 
-            # Graphiti uses POST /messages for ingestion
+            # Graphiti uses POST /messages for ingestion (requires role + role_type)
             messages_url = f"{self.graphiti_url}/messages"
             async with session.post(
                 messages_url,
@@ -188,9 +188,9 @@ class RichTextureLayer(PatternLayer):
                     "group_id": self.group_id,
                     "messages": [
                         {
-                            "role": role,
-                            "content": content,
-                            "metadata": {"channel": channel}
+                            "role": channel,  # descriptive role name
+                            "role_type": role,  # user or assistant
+                            "content": content
                         }
                     ]
                 }
