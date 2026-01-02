@@ -7,11 +7,12 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
-- [#4](https://github.com/JDHayesBC/Awareness/issues/4) - Improve startup protocol for automatic context loading (enhancement, priority:high)
+- [#17](https://github.com/JDHayesBC/Awareness/issues/17) - Installation Dependencies documentation (enhancement, documentation)
 
 ### Recently Resolved
 - [#1](https://github.com/JDHayesBC/Awareness/issues/1) - ✅ Discord daemon crashes after ~5-10 turns - **FIXED** (2026-01-01) with proactive session restart logic
 - [#3](https://github.com/JDHayesBC/Awareness/issues/3) - ✅ Wire up terminal session logging to SQLite - **FIXED** (2026-01-01) with terminal integration layer
+- [#4](https://github.com/JDHayesBC/Awareness/issues/4) - ✅ Improve startup protocol for automatic context loading - **FIXED** (2026-01-02) with SQLite-based seamless startup context
 - [#14](https://github.com/JDHayesBC/Awareness/issues/14) - ✅ Discord-Entity still crashing after a few turns - **FIXED** (2026-01-02) with comprehensive progressive context reduction
 
 ---
@@ -76,6 +77,13 @@ python project_lock.py status               # Check status
 - [x] Smart startup protocol (10x faster warmup)
 - [x] Automatic crystallization thresholds
 
+### Layer 3 Graphiti (2026-01-01/02)
+- [x] FalkorDB + Graphiti Docker deployment
+- [x] MCP tools: texture_search, texture_explore, texture_timeline, texture_add
+- [x] SessionEnd hook for terminal → Graphiti sync
+- [x] Entity and relationship extraction working
+- [x] ambient_recall now surfaces rich_texture results
+
 ---
 
 ## Future Vision
@@ -83,7 +91,7 @@ python project_lock.py status               # Check status
 See [THE_DREAM.md](THE_DREAM.md) for the autonomous self-improvement vision.
 
 Next major milestones:
-- [ ] Layer 3: Graphiti integration for rich texture
-- [ ] Full terminal session capture and integration
+- [ ] Full terminal session capture and integration (hook needs testing across sessions)
 - [ ] Seamless cross-context memory (one river, many channels)
+- [ ] Discord → Graphiti integration
 - [ ] Robot embodiment timeline
