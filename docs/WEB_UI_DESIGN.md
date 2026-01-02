@@ -344,7 +344,7 @@ Implementation order at Lyra's discretion, but suggested phases:
 - [x] Dashboard exists
 - [x] Graph visualization exists
 - [x] Add PPS Server health to Dashboard (#26) - DONE 2026-01-02
-- [ ] Add activity trace panel to Graph
+- [x] Add activity trace panel to Graph - DONE 2026-01-02
 
 ### Phase 2: Content Browsing
 - [x] Messages page (filters, search, pagination) - DONE 2026-01-02
