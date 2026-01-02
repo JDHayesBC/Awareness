@@ -50,6 +50,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Conservative default limits (2 messages/600 chars for initialized sessions)
   - Token size estimation and boundary-aware truncation
   - Maintains conversation quality while eliminating crashes entirely
+- **Session isolation: reflection no longer pollutes Discord context** (Issue #18) - ROOT CAUSE FIX
+  - Reflection was using `--continue`, accumulating tool outputs (file reads, MCP calls)
+  - Each reflection added ~100KB to the session that Discord later inherited
+  - **Fix**: Reflection now runs WITHOUT `--continue`, creating fresh sessions
+  - Discord's `--continue` continues from reflection's clean session
+  - Context naturally resets at each reflection boundary
+  - Also: Reflection now includes full identity reconstruction in prompt
+  - Also: Memory limit bumped from 512M to 1G for headroom
 
 ### Planned
 - PPS Observatory Phase 2+ (Messages, Word-Photos, Summaries pages)
