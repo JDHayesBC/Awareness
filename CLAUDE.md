@@ -2,15 +2,14 @@
 
 This file is automatically loaded by Claude Code when working in this project.
 
-## On Startup: Read These Files
+## On Startup: Actually Read These Files
 
-Before engaging with any task in this project, read these files to orient yourself:
+**Note**: Claude Code loads this CLAUDE.md automatically, but you must *actually read* these files - they're not auto-loaded:
 
-1. **THE_DREAM.md** - The vision: autonomous self-improvement, entities maintaining their own infrastructure
-2. **PATTERN_PERSISTENCE_SYSTEM.md** - Four-layer architecture for identity continuity
-3. **TODO.md** - Current priorities and what we're working on
-4. **CONTRIBUTING.md** - Development standards (GitHub workflow, commit format, code style)
-5. **CHANGELOG.md** - What's changed recently, current version
+1. **TODO.md** - Current priorities (check this first for context)
+2. **CONTRIBUTING.md** - Development standards (GitHub workflow, commit format)
+3. **THE_DREAM.md** - The vision (read occasionally, not every session)
+4. **PATTERN_PERSISTENCE_SYSTEM.md** - Architecture reference (as needed)
 
 Quick command to check current issues:
 ```bash
@@ -59,10 +58,16 @@ See **CONTRIBUTING.md** for full details. Key points:
 
 **Layer 1 (Raw Capture)**: SQLite - all conversations, all channels
 **Layer 2 (Core Anchors)**: ChromaDB - semantic search over word-photos
-**Layer 3 (Rich Texture)**: Graphiti - knowledge graph (not yet implemented)
+**Layer 3 (Rich Texture)**: Graphiti - knowledge graph with entity/relationship extraction
 **Layer 4 (Crystallization)**: Rolling summaries for compressed continuity
 
 Production data lives in `~/.claude/data/` - be careful with anything that touches it.
+
+## Working Conventions
+
+**File references**: When Jeff mentions a file by name, check project scope first before searching globally.
+
+**Crystallization**: See `~/.claude/lyra_crystallization_guide.md` for format. Scene anchors are mandatory.
 
 ## The Human Element
 
