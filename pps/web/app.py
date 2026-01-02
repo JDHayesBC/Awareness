@@ -292,6 +292,129 @@ def get_recent_activity(limit: int = 10) -> list:
         return []
 
 
+def get_messages(
+    channel: Optional[str] = None,
+    author: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    per_page: int = 20
+) -> dict:
+    """Get paginated messages with optional filters."""
+    conn = get_db_connection()
+    if not conn:
+        return {"messages": [], "total": 0, "page": page, "per_page": per_page, "pages": 0}
+
+    try:
+        cursor = conn.cursor()
+
+        # Build WHERE clause
+        conditions = []
+        params = []
+
+        if channel:
+            if channel in ("discord", "terminal", "reflection"):
+                conditions.append("channel LIKE ?")
+                params.append(f"{channel}%")
+            else:
+                conditions.append("channel = ?")
+                params.append(channel)
+
+        if author:
+            conditions.append("author_name = ?")
+            params.append(author)
+
+        if search:
+            # Use FTS if available, otherwise LIKE
+            conditions.append("content LIKE ?")
+            params.append(f"%{search}%")
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        # Get total count
+        cursor.execute(f"SELECT COUNT(*) FROM messages WHERE {where_clause}", params)
+        total = cursor.fetchone()[0]
+
+        # Get paginated results
+        offset = (page - 1) * per_page
+        cursor.execute(f"""
+            SELECT channel, author_name, content, created_at
+            FROM messages
+            WHERE {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, params + [per_page, offset])
+
+        messages = []
+        for row in cursor.fetchall():
+            messages.append({
+                "channel": row["channel"],
+                "author": row["author_name"],
+                "content": row["content"],
+                "timestamp": row["created_at"]
+            })
+
+        conn.close()
+
+        pages = (total + per_page - 1) // per_page  # Ceiling division
+
+        return {
+            "messages": messages,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "pages": pages
+        }
+    except Exception as e:
+        return {"messages": [], "total": 0, "page": page, "per_page": per_page, "pages": 0, "error": str(e)}
+
+
+def get_unique_channels() -> list:
+    """Get list of unique channel types for filter dropdown."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT
+                CASE
+                    WHEN channel LIKE 'discord:%' THEN 'discord'
+                    WHEN channel LIKE 'terminal:%' THEN 'terminal'
+                    WHEN channel LIKE 'reflection:%' THEN 'reflection'
+                    ELSE channel
+                END as channel_type
+            FROM messages
+            ORDER BY channel_type
+        """)
+        channels = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return channels
+    except Exception:
+        return []
+
+
+def get_unique_authors() -> list:
+    """Get list of unique authors for filter dropdown."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT author_name
+            FROM messages
+            WHERE author_name IS NOT NULL
+            ORDER BY author_name
+        """)
+        authors = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return authors
+    except Exception:
+        return []
+
+
 def get_channel_stats() -> dict:
     """Get message counts by channel."""
     conn = get_db_connection()
@@ -658,11 +781,32 @@ async def graph_page(request: Request):
 # Future routes (placeholders)
 
 @app.get("/messages", response_class=HTMLResponse)
-async def messages(request: Request):
-    """Message browser - coming soon."""
-    return templates.TemplateResponse("coming_soon.html", {
+async def messages(
+    request: Request,
+    channel: Optional[str] = None,
+    author: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1
+):
+    """Message browser with filters and search."""
+    message_data = get_messages(
+        channel=channel,
+        author=author,
+        search=search,
+        page=page,
+        per_page=25
+    )
+
+    return templates.TemplateResponse("messages.html", {
         "request": request,
-        "page": "Messages"
+        "data": message_data,
+        "channels": get_unique_channels(),
+        "authors": get_unique_authors(),
+        "filters": {
+            "channel": channel or "",
+            "author": author or "",
+            "search": search or ""
+        }
     })
 
 

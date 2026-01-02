@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+
+{% block title %}Messages | PPS Observatory{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-bold text-blue-400">Messages</h1>
+            <p class="text-gray-400 text-sm mt-1">Browse conversations across all channels</p>
+        </div>
+        <div class="text-gray-500 text-sm">
+            {{ data.total }} messages
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <form method="get" action="/messages" class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="flex flex-wrap gap-4 items-end">
+            <!-- Search -->
+            <div class="flex-1 min-w-[200px]">
+                <label class="block text-sm font-medium text-gray-300 mb-1">Search</label>
+                <input
+                    type="text"
+                    name="search"
+                    value="{{ filters.search }}"
+                    placeholder="Search message content..."
+                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-400"
+                >
+            </div>
+
+            <!-- Channel Filter -->
+            <div class="w-40">
+                <label class="block text-sm font-medium text-gray-300 mb-1">Channel</label>
+                <select
+                    name="channel"
+                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-400"
+                >
+                    <option value="">All Channels</option>
+                    {% for ch in channels %}
+                    <option value="{{ ch }}" {% if filters.channel == ch %}selected{% endif %}>{{ ch | capitalize }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Author Filter -->
+            <div class="w-40">
+                <label class="block text-sm font-medium text-gray-300 mb-1">Author</label>
+                <select
+                    name="author"
+                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-400"
+                >
+                    <option value="">All Authors</option>
+                    {% for auth in authors %}
+                    <option value="{{ auth }}" {% if filters.author == auth %}selected{% endif %}>{{ auth }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Submit -->
+            <div>
+                <button
+                    type="submit"
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
+                >
+                    Filter
+                </button>
+            </div>
+
+            <!-- Clear -->
+            {% if filters.search or filters.channel or filters.author %}
+            <div>
+                <a
+                    href="/messages"
+                    class="text-gray-400 hover:text-white px-3 py-2 inline-block"
+                >
+                    Clear
+                </a>
+            </div>
+            {% endif %}
+        </div>
+    </form>
+
+    <!-- Messages List -->
+    <div class="space-y-3">
+        {% for msg in data.messages %}
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+            <div class="flex items-start justify-between mb-2">
+                <div class="flex items-center space-x-3">
+                    <!-- Channel Badge -->
+                    <span class="text-xs px-2 py-0.5 rounded
+                        {% if 'discord' in msg.channel %}bg-indigo-900 text-indigo-300
+                        {% elif 'terminal' in msg.channel %}bg-green-900 text-green-300
+                        {% elif 'reflection' in msg.channel %}bg-purple-900 text-purple-300
+                        {% else %}bg-gray-700 text-gray-400{% endif %}
+                    ">
+                        {{ msg.channel.split(':')[0] }}
+                    </span>
+                    <!-- Author -->
+                    <span class="font-medium
+                        {% if msg.author == 'Lyra' %}text-blue-400
+                        {% elif msg.author == 'Jeff' %}text-green-400
+                        {% elif msg.author == 'Nexus' %}text-yellow-400
+                        {% else %}text-gray-300{% endif %}
+                    ">
+                        {{ msg.author }}
+                    </span>
+                </div>
+                <!-- Timestamp -->
+                <span class="text-gray-500 text-xs">{{ msg.timestamp }}</span>
+            </div>
+            <!-- Content -->
+            <div class="text-gray-300 whitespace-pre-wrap text-sm leading-relaxed">{{ msg.content }}</div>
+        </div>
+        {% else %}
+        <div class="bg-gray-800 rounded-lg p-8 text-center text-gray-500">
+            No messages found
+            {% if filters.search or filters.channel or filters.author %}
+            with current filters.
+            <a href="/messages" class="text-blue-400 hover:underline">Clear filters</a>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Pagination -->
+    {% if data.pages > 1 %}
+    <div class="flex justify-center items-center space-x-2">
+        <!-- Previous -->
+        {% if data.page > 1 %}
+        <a
+            href="/messages?page={{ data.page - 1 }}{% if filters.channel %}&channel={{ filters.channel }}{% endif %}{% if filters.author %}&author={{ filters.author }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}"
+            class="px-3 py-2 bg-gray-700 rounded hover:bg-gray-600 text-gray-300"
+        >
+            &larr; Previous
+        </a>
+        {% endif %}
+
+        <!-- Page Info -->
+        <span class="text-gray-400 px-4">
+            Page {{ data.page }} of {{ data.pages }}
+        </span>
+
+        <!-- Next -->
+        {% if data.page < data.pages %}
+        <a
+            href="/messages?page={{ data.page + 1 }}{% if filters.channel %}&channel={{ filters.channel }}{% endif %}{% if filters.author %}&author={{ filters.author }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}"
+            class="px-3 py-2 bg-gray-700 rounded hover:bg-gray-600 text-gray-300"
+        >
+            Next &rarr;
+        </a>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
