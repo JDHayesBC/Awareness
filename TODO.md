@@ -27,14 +27,19 @@ Use `gh issue list` to see current issues from the command line.
 
 ### Daemon Commands
 ```bash
-# Start daemon
-cd ~/awareness/daemon && source venv/bin/activate && python lyra_daemon.py
+# Start Discord daemon (direct)
+cd ~/awareness/daemon && ./run.sh discord
 
-# Check logs
-journalctl -u lyra-daemon -f
+# Start Reflection daemon (direct)
+cd ~/awareness/daemon && ./run.sh reflection
 
-# Restart via systemd
-sudo systemctl restart lyra-daemon
+# Start both (background)
+cd ~/awareness/daemon && ./run.sh both
+
+# Via systemd (if user session available)
+systemctl --user restart lyra-discord
+systemctl --user restart lyra-reflection
+./restart.sh discord  # or reflection, or all
 ```
 
 ### Project Lock (for terminal/heartbeat coordination)
@@ -99,6 +104,14 @@ python project_lock.py status               # Check status
 - [x] Web API endpoints (/api/traces, /api/traces/sessions, /api/traces/session/{id})
 - [x] Traces page UI with expandable sessions and inline trace details
 - [x] Navigation link added to PPS Observatory
+
+### Daemon Architecture Refactor (2026-01-02)
+- [x] Split monolithic lyra_daemon.py into two independent daemons
+- [x] lyra_discord.py - Discord-only with per-channel sessions
+- [x] lyra_reflection.py - Autonomous reflection with full tool access
+- [x] Shared infrastructure: claude_invoker.py, startup_protocol.py
+- [x] Use `--resume <sessionId>` instead of `--continue` for session isolation
+- [x] Updated systemd services and run scripts
 
 ---
 

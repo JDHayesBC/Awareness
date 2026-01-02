@@ -1,0 +1,45 @@
+[Unit]
+Description=Lyra Discord Daemon - Discord presence and conversation handling
+Documentation=file:///mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+User=%u
+Group=%u
+
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon
+
+EnvironmentFile=/mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/.env
+
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/venv/bin/python3 -u lyra_discord.py
+
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=5
+
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+MemoryLimit=512M
+CPUQuota=50%
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=no
+ReadWritePaths=/mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/logs /home/jeff/.claude
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lyra-discord
+
+[Install]
+WantedBy=default.target
