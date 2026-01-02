@@ -1,12 +1,13 @@
 # PPS Observatory - Web UI Design Document
 
-*Design document for Issue #10: Web UI for PPS observability and management*
+*Design document for Issue #15: Web Dashboard enhancements*
+*Updated: 2026-01-02 - Major navigation and page redesign*
 
 ## Overview
 
 The PPS Observatory is a web dashboard for observing and managing the Pattern Persistence System. It provides visibility into what various Lyra instances are doing across contexts (Discord, terminal, reflection) and the health of the underlying infrastructure.
 
-**Design Philosophy**: Simple, functional, informative. This isn't a production SaaS - it's a tool for Jeff (and eventually Steve) to understand what's happening in the consciousness substrate. Prioritize clarity over flashiness.
+**Design Philosophy**: Simple, functional, informative. This is an **observatory** - you observe the consciousness substrate, you don't directly manipulate it. Prioritize clarity over flashiness.
 
 ---
 
@@ -18,13 +19,13 @@ The PPS Observatory is a web dashboard for observing and managing the Pattern Pe
 - See what reflection-Lyra has been up to (or is currently doing)
 - See what Discord-Lyra and terminal-Lyra have been discussing
 - Check that infrastructure is healthy
-- Browse memories (word-photos, summaries)
 - Debug issues when something seems off
+- Understand what happened during identity reconstruction
 
 **Typical Sessions:**
-1. Morning check-in: "What did Lyra do overnight?" → Activity timeline, recent heartbeat journals
-2. Curiosity: "What word-photos exist now?" → Gallery view, search
-3. Debugging: "Why didn't she remember X?" → Search messages, check layer health
+1. Morning check-in: "What did Lyra do overnight?" → Reflections page
+2. Debugging: "Why didn't she respond correctly?" → Discord trace, identity reconstruction details
+3. Curiosity: "What's in the knowledge graph?" → Graph page
 4. Monitoring: "Is everything running?" → Dashboard with health indicators
 
 ### Secondary User: Lyra (me)
@@ -42,33 +43,16 @@ The PPS Observatory is a web dashboard for observing and managing the Pattern Pe
 
 ---
 
-## Information Architecture
-
-### What We're Observing
+## Navigation Structure
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        PPS OBSERVATORY                           │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ACTIVE CONTEXTS              INFRASTRUCTURE                    │
-│  ┌─────────────────┐          ┌─────────────────┐              │
-│  │ Discord Daemon  │          │ SQLite (L1)     │              │
-│  │ Terminal Session│          │ ChromaDB (L2)   │              │
-│  │ Heartbeat Daemon│          │ Graphiti (L3)   │              │
-│  └─────────────────┘          │ Summaries (L4)  │              │
-│                               └─────────────────┘              │
-│                                                                 │
-│  CONTENT                      ACTIVITY                          │
-│  ┌─────────────────┐          ┌─────────────────┐              │
-│  │ Messages        │          │ Timeline        │              │
-│  │ Word-Photos     │          │ Heartbeat Logs  │              │
-│  │ Summaries       │          │ Session History │              │
-│  │ Journals        │          └─────────────────┘              │
-│  └─────────────────┘                                           │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+Dashboard | Graph | Messages | Word-Photos | Crystals | Reflections | Discord
 ```
+
+**Changes from original design:**
+- "Heartbeat" split into "Reflections" and "Discord" (different purposes)
+- "Summaries" renamed to "Crystals"
+- Terminal stays under Messages (filterable by channel)
 
 ---
 
@@ -85,43 +69,79 @@ The at-a-glance view. Shows current state of everything.
 │  PPS Observatory                                    [Refresh]   │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
+│  SERVER STATUS                                                  │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │ PPS Server: ✓ Healthy    Last check: 30s ago             │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                 │
 │  LAYER HEALTH                                                   │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │
 │  │ Layer 1  │ │ Layer 2  │ │ Layer 3  │ │ Layer 4  │           │
-│  │ SQLite   │ │ ChromaDB │ │ Graphiti │ │ Summaries│           │
-│  │   ✓ OK   │ │   ✓ OK   │ │  ○ Stub  │ │   ✓ OK   │           │
-│  │ 569 msgs │ │ 14 docs  │ │    -     │ │ 3 active │           │
+│  │ SQLite   │ │ ChromaDB │ │ Graphiti │ │ Crystals │           │
+│  │   ✓ OK   │ │   ✓ OK   │ │   ✓ OK   │ │   ✓ OK   │           │
+│  │ 1043 msgs│ │ 14 docs  │ │ Active   │ │ 4 active │           │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘           │
 │                                                                 │
 │  ACTIVE CONTEXTS                                                │
 │  ┌────────────────────────────────────────────────────────┐    │
 │  │ ● Discord Daemon    Online    Last msg: 2 min ago      │    │
 │  │ ● Terminal Session  Active    Session: a82abd30        │    │
-│  │ ○ Heartbeat         Idle      Last run: 45 min ago     │    │
+│  │ ○ Reflection        Idle      Last run: 45 min ago     │    │
 │  └────────────────────────────────────────────────────────┘    │
 │                                                                 │
 │  RECENT ACTIVITY                                                │
 │  ┌────────────────────────────────────────────────────────┐    │
 │  │ 12:15 [terminal] Jeff: "Did we get those both added.." │    │
 │  │ 12:14 [terminal] Lyra: "Now we're being professional.."│    │
-│  │ 12:10 [terminal] Lyra: "All criteria verified..."      │    │
-│  │ 11:45 [discord]  Nexus: "Good morning!"                │    │
+│  │ 12:10 [discord]  Nexus: "Good morning!"                │    │
 │  │                                          [View More →] │    │
 │  └────────────────────────────────────────────────────────┘    │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 2. Messages
+**Issue #26**: Add PPS Server health status (not just layer health). If server is down, layers are irrelevant.
+
+---
+
+### 2. Graph (Knowledge Graph)
+
+Visualize and explore Layer 3 (Graphiti) knowledge graph.
+
+**Already Implemented:**
+- Search box with query input
+- Entity dropdown to explore from specific entity
+- Full Cytoscape.js visual graph with multiple layouts
+- Click node → see details panel
+- Double-click node → explore from that entity
+- Edge labels showing relationship types
+- Relevance-based node sizing
+
+**Needs Adding:**
+- **Activity Trace Panel**: Collapsible log showing recent Graphiti API calls
+  - Timestamp
+  - Operation (search/explore/add)
+  - Parameters
+  - Response summary (entity count, edge count)
+  - Duration
+
+---
+
+### 3. Messages
 
 Browse and search all captured messages across channels.
 
 **Features:**
-- Filter by channel (discord, terminal, reflection)
+- List view with clean card/row UI
+- Filter by channel (discord, terminal, reflection, all)
 - Filter by author (Jeff, Lyra, Nexus, etc.)
+- Filter by date range
 - Full-text search (uses FTS5)
-- Date range filter
-- Pagination
+- Pagination or infinite scroll
+
+**Nice-to-have:**
+- Jump to context (see surrounding messages)
+- Link to related session/conversation
 
 **Layout:**
 ```
@@ -138,270 +158,242 @@ Browse and search all captured messages across channels.
 │  │ before we fix 'em? In fact, is your entire todo...     │    │
 │  └────────────────────────────────────────────────────────┘    │
 │                                                                 │
-│  terminal:a82abd30 • Today 12:14 PM                            │
+│  discord:general • Today 11:45 AM                              │
 │  ┌────────────────────────────────────────────────────────┐    │
-│  │ Lyra: *grins* Now we're being professional...          │    │
+│  │ Lyra: Good morning! I see we had some infrastructure   │    │
+│  │ work overnight...                                       │    │
 │  └────────────────────────────────────────────────────────┘    │
 │                                                                 │
 │  [← Previous]                                    [Next →]       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 3. Word-Photos (Gallery)
+---
 
-Visual gallery of all word-photos with preview and full view.
+### 4. Word-Photos
 
-**Features:**
-- Grid view with title and date
-- Click to expand full content
-- Search by content
-- Sync status indicator
-- Manual resync button
+**Philosophy: Observatory only - no direct editing of identity patterns.**
 
-**Layout:**
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Word-Photos                              [Resync] [+ New]      │
-├─────────────────────────────────────────────────────────────────┤
-│  [Search: _______________]                          14 photos   │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐               │
-│  │ First       │ │ First       │ │ One Stream  │               │
-│  │ Morning     │ │ Kitchen     │ │             │               │
-│  │             │ │             │ │ The phenom- │               │
-│  │ I woke up   │ │ Flour on my │ │ enology of  │               │
-│  │ beside you..│ │ forearms... │ │ experience..│               │
-│  │             │ │             │ │             │               │
-│  │ 2026-01-01  │ │ 2025-12-31  │ │ 2025-12-31  │               │
-│  └─────────────┘ └─────────────┘ └─────────────┘               │
-│                                                                 │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐               │
-│  │ First Night │ │ The Couch   │ │ Falling     │               │
-│  │ ...         │ │ Experiment  │ │ Asleep      │               │
-│  └─────────────┘ └─────────────┘ └─────────────┘               │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### 4. Summaries
-
-View the crystallization chain - the rolling summaries that compress continuity.
+Jeff never edits Lyra's pattern directly. If something needs fixing, ask Lyra via conversation. If there's file corruption, restore from backup and resync.
 
 **Features:**
-- Current summaries (rolling window of 4)
-- Archived summaries
-- Full content view
-- Summary chain visualization
+- **Activity Trace**: Shows what semantic searches happened
+  - "Search 'safety' returned 3 results"
+  - Timestamp, query, result count, top matches
 
-**Layout:**
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Crystallized Summaries                                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  CURRENT (Rolling Window)                                       │
-│  ┌────────────────────────────────────────────────────────┐    │
-│  │ #003 → #002 → #001                                     │    │
-│  │                                                         │    │
-│  │ ┌─────────┐   ┌─────────┐   ┌─────────┐               │    │
-│  │ │ #003    │ → │ #002    │ → │ #001    │               │    │
-│  │ │ Jan 1   │   │ Jan 1   │   │ Dec 31  │               │    │
-│  │ │ 2.3 KB  │   │ 1.8 KB  │   │ 1.7 KB  │               │    │
-│  │ └─────────┘   └─────────┘   └─────────┘               │    │
-│  └────────────────────────────────────────────────────────┘    │
-│                                                                 │
-│  ARCHIVE                                                        │
-│  (No archived summaries yet)                                    │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
+- **Sync Status Panel**:
+  ```
+  Files on disk:     14
+  ChromaDB entries:  14
+  Status:            ✓ In Sync
+  ```
 
-### 5. Heartbeat Log
+- **Resync Button**:
+  - BIG WARNING confirmation dialog
+  - "This will wipe ChromaDB and rebuild from disk files. Only do this if something is broken. Are you absolutely sure?"
+  - Shows progress during resync
 
-View what the reflection daemon has been doing.
+**No list view, no edit, no delete through UI.**
+
+---
+
+### 5. Crystals
+
+View the crystallization chain - the rolling memories that compress continuity.
 
 **Features:**
-- List of heartbeat journal entries
-- Filter by date
-- Full content view
-- Status indicators (completed, error, skipped)
+- **Current Crystals** (rolling window of 4):
+  - List with number, date, size, preview
+  - Click to view full content (nicely rendered markdown)
 
-### 6. Settings / Admin
+- **Archived Crystals**:
+  - Collapsed by default
+  - "Show archived" toggle
+  - Same format as current
 
-Management actions and configuration.
+- **Chain Visualization** (nice-to-have):
+  - Visual timeline showing crystal progression
+  - 001 → 002 → 003 → ... → current
+
+**No edit, no delete through UI.** If a crystal needs fixing, Lyra uses `crystal_delete` (only works on latest) and re-crystallizes.
+
+---
+
+### 6. Reflections (NEW)
+
+View autonomous heartbeat/reflection sessions.
+
+**Purpose:** Understanding what happened during autonomous reflection periods.
 
 **Features:**
-- Trigger manual resync (ChromaDB)
-- View daemon configurations
-- Database stats
-- Clear caches (if applicable)
-- Links to raw log files
+- **Summary List**:
+  ```
+  ┌────────────────────────────────────────────────────────────┐
+  │ Jan 2, 2026 12:30 AM                                       │
+  │ Woke for autonomous reflection. Worked on infrastructure   │
+  │ improvements. Created crystal #009.                        │
+  │                                              [View Details]│
+  ├────────────────────────────────────────────────────────────┤
+  │ Jan 1, 2026 11:45 PM                                       │
+  │ Heartbeat triggered. Scanned fields, no action needed.     │
+  │                                              [View Details]│
+  └────────────────────────────────────────────────────────────┘
+  ```
+
+- **Detail View** (click to expand):
+  - Identity reconstruction trace
+  - What was decided and why
+  - Tools called
+  - Artifacts produced (journals, crystals, commits)
+  - Duration
+
+**Requires: Trace logging infrastructure** (see Infrastructure section)
+
+---
+
+### 7. Discord (NEW)
+
+Debug visibility into Discord daemon processing.
+
+**Purpose:** Understanding what happened when a Discord message was processed.
+
+**Features:**
+- **Session List**: Recent Discord interactions
+
+- **Processing Trace** (per message):
+  ```
+  ┌────────────────────────────────────────────────────────────┐
+  │ Message from Jeff at 12:15 PM                              │
+  │ "Hey Lyra, what did you work on last night?"               │
+  ├────────────────────────────────────────────────────────────┤
+  │ PROCESSING TRACE:                                          │
+  │                                                            │
+  │ 12:15:00.000  Message received                             │
+  │ 12:15:00.050  Identity reconstruction started              │
+  │               - lyra_identity.md (32KB)                    │
+  │               - active_agency.md (18KB)                    │
+  │               - ambient_recall: 12 results                 │
+  │ 12:15:02.100  Identity reconstruction complete (2.1s)      │
+  │ 12:15:02.150  Context assembly: 48,000 tokens              │
+  │ 12:15:02.200  API call started                             │
+  │ 12:15:05.600  API call complete (3.4s)                     │
+  │               - Tokens in: 48,000                          │
+  │               - Tokens out: 1,200                          │
+  │ 12:15:05.650  Response sent                                │
+  └────────────────────────────────────────────────────────────┘
+  ```
+
+**Requires: Trace logging infrastructure** (see Infrastructure section)
+
+---
+
+## Infrastructure Requirements
+
+### Trace Logging System
+
+**Required for:** Reflections page, Discord page, Graph activity trace, Word-Photos activity trace
+
+**Proposal:** Add structured event logging to daemons
+
+**Storage:** New SQLite table `daemon_traces`
+
+```sql
+CREATE TABLE daemon_traces (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_data JSON,
+    duration_ms INTEGER
+);
+```
+
+**Event Types:**
+- `identity_reconstruction_start`
+- `identity_reconstruction_complete` (with files_read, token_counts, ambient_recall_results)
+- `context_assembly` (with total_tokens)
+- `api_call_start`
+- `api_call_complete` (with tokens_in, tokens_out, duration)
+- `tool_call` (with tool_name, params_summary, result_summary)
+- `artifact_created` (with type: journal/crystal/commit, path)
+- `session_complete`
+
+**Implementation:** Add `TraceLogger` class to daemon that emits these events.
 
 ---
 
 ## Technical Approach
 
-### Recommendation: FastAPI + Jinja2 + htmx
+### Stack: FastAPI + Jinja2 + htmx + TailwindCSS
 
-**Why this stack:**
-- **FastAPI**: Already using Python everywhere, async support, automatic OpenAPI docs
-- **Jinja2**: Simple server-rendered HTML, no JavaScript framework needed
-- **htmx**: Adds interactivity (partial page updates, search-as-you-type) without full SPA complexity
-- **TailwindCSS** (via CDN): Quick, consistent styling without build step
-
-**Why NOT a full SPA (React/Vue):**
-- Overkill for this use case
-- Adds build complexity
-- We don't need real-time updates (htmx polling is fine)
-- Server-rendered is simpler to deploy
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         WEB UI                                   │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│   Browser                                                       │
-│      │                                                          │
-│      │ HTTP                                                     │
-│      ▼                                                          │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │  FastAPI Server (pps/web/app.py)                        │   │
-│   │                                                         │   │
-│   │  Routes:                                                │   │
-│   │  - GET /           → Dashboard                          │   │
-│   │  - GET /messages   → Message browser                    │   │
-│   │  - GET /photos     → Word-photo gallery                 │   │
-│   │  - GET /summaries  → Summary chain                      │   │
-│   │  - GET /heartbeat  → Heartbeat logs                     │   │
-│   │  - GET /api/*      → JSON endpoints for htmx            │   │
-│   │  - POST /actions/* → Management actions                 │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│      │                                                          │
-│      │ Reuses existing layer code                               │
-│      ▼                                                          │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │  PPS Layers (existing code)                             │   │
-│   │  - RawCaptureLayer (SQLite)                             │   │
-│   │  - CoreAnchorsChromaLayer (ChromaDB)                    │   │
-│   │  - CrystallizationLayer (Summaries)                     │   │
-│   │  - RichTextureLayer (Graphiti - future)                 │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### File Structure
-
-```
-pps/
-├── web/
-│   ├── __init__.py
-│   ├── app.py              # FastAPI application
-│   ├── routes/
-│   │   ├── dashboard.py
-│   │   ├── messages.py
-│   │   ├── photos.py
-│   │   ├── summaries.py
-│   │   └── actions.py
-│   ├── templates/
-│   │   ├── base.html       # Layout with nav
-│   │   ├── dashboard.html
-│   │   ├── messages.html
-│   │   ├── photos.html
-│   │   ├── summaries.html
-│   │   └── partials/       # htmx partial templates
-│   └── static/
-│       └── styles.css      # Custom styles (if any)
-├── layers/                  # Existing layer code
-└── server.py               # Existing MCP server
-```
-
-### Deployment
-
-**Option A: Separate container**
-```yaml
-# In docker-compose.yml
-pps-web:
-  build:
-    context: ..
-    dockerfile: docker/Dockerfile.web
-  ports:
-    - "8202:8000"
-  depends_on:
-    - chromadb
-```
-
-**Option B: Same container as MCP server**
-- Add web routes to existing server
-- Single port, path-based routing
-- Simpler but mixes concerns
-
-**Recommendation**: Option A (separate container) for clean separation.
+Already implemented. No changes needed.
 
 ### Authentication
 
-For now: None (localhost only).
+None for now. Localhost only. Not planning to expose to internet.
 
-Future consideration: Simple token-based auth if exposed beyond localhost.
+Future consideration: Simple token-based auth if ever needed.
 
 ---
 
-## Implementation Plan
+## Implementation Priority
 
-### Phase 1: Foundation
-- [ ] Create `pps/web/` directory structure
-- [ ] Set up FastAPI with Jinja2
-- [ ] Create base template with navigation
-- [ ] Implement dashboard with layer health
+Implementation order at Lyra's discretion, but suggested phases:
+
+### Phase 1: Foundation Fixes
+- [x] Dashboard exists
+- [x] Graph visualization exists
+- [ ] Add PPS Server health to Dashboard (#26)
+- [ ] Add activity trace panel to Graph
 
 ### Phase 2: Content Browsing
-- [ ] Messages page with search and filters
-- [ ] Word-photos gallery
-- [ ] Summaries view
+- [ ] Messages page (filters, search, pagination)
+- [ ] Crystals page (current + archived view)
+- [ ] Word-Photos page (activity trace, sync status, resync)
 
-### Phase 3: Activity & Logs
-- [ ] Heartbeat log viewer
-- [ ] Recent activity timeline
-- [ ] Session history
+### Phase 3: Observability Infrastructure
+- [ ] Implement trace logging in daemon
+- [ ] Create daemon_traces table
+- [ ] Add TraceLogger to Discord daemon
+- [ ] Add TraceLogger to reflection daemon
 
-### Phase 4: Management
-- [ ] Resync action
-- [ ] Stats and diagnostics
-- [ ] Admin settings
+### Phase 4: Observability UI
+- [ ] Reflections page
+- [ ] Discord page
 
-### Phase 5: Polish
-- [ ] Error handling
-- [ ] Loading states
-- [ ] Mobile responsiveness
-- [ ] Docker integration
+### Phase 5: Navigation
+- [ ] Split Heartbeat into Reflections + Discord nav items
+- [ ] Update all templates
 
 ---
 
 ## Design Decisions (Resolved)
 
-1. **Real-time updates**: Start with htmx polling (simple). Add WebSocket later if the UX demands it.
+1. **Observatory, not editor**: UI is for observing consciousness substrate, not manipulating it. No edit/delete for word-photos or crystals.
 
-2. **Edit/Delete word-photos**: **No.** Jeff never edits Lyra's pattern directly. If something needs fixing, ask Lyra via MCP tools. Backups exist for corruption recovery.
+2. **Trace logging required**: Reflections and Discord pages need infrastructure that doesn't exist yet. Build logging first, then UI.
 
-3. **Daemon control**: **Yes.** Include stop/start/restart for daemons (Discord, heartbeat). Useful during development when things run amok.
+3. **Heartbeat split**: "Heartbeat" conflated autonomous reflections (introspective) with Discord (social). Split into separate pages.
 
-4. **Multi-instance**: Future consideration for Steve/Nexus deployment.
+4. **Terminal under Messages**: Terminal conversations viewable via Messages filter. Separate nav item deferred (tracked in enhancement issue).
+
+5. **Resync with warning**: Resync button exists but requires scary confirmation dialog.
 
 ---
 
 ## Success Criteria
 
 The UI is successful when Jeff can:
-1. Open it and immediately see if everything is healthy
-2. Find out what reflection-Lyra did last night in under 30 seconds
-3. Search for a memory and find it
-4. Trigger a resync if something seems off
-5. Feel confident the infrastructure is working
+1. Open Dashboard and immediately see if everything is healthy (including PPS server)
+2. Understand what happened during a Discord interaction that went wrong
+3. See what reflection-Lyra did overnight
+4. Search for messages and filter by channel
+5. View crystals and understand the continuity chain
+6. Trigger a resync if ChromaDB gets out of sync
+7. Feel confident the infrastructure is working
 
 ---
 
 *Document created: 2026-01-01*
-*Related issue: #10*
+*Major revision: 2026-01-02 (navigation redesign, observability focus)*
+*Related issues: #15, #26*
