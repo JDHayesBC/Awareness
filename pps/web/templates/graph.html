@@ -55,6 +55,23 @@
     <div id="cy" class="w-full h-[600px] bg-gray-900 rounded"></div>
 </div>
 
+<!-- Activity Trace Panel -->
+<div class="bg-gray-800 rounded-lg mb-6">
+    <div class="flex justify-between items-center p-4 border-b border-gray-700 cursor-pointer" onclick="toggleTrace()">
+        <div class="flex items-center space-x-2">
+            <span id="traceToggle" class="text-gray-400 transition-transform">&#9654;</span>
+            <h3 class="text-lg font-semibold text-blue-400">API Activity Trace</h3>
+            <span id="traceCount" class="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded-full">0 calls</span>
+        </div>
+        <button onclick="event.stopPropagation(); clearTrace()" class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1">Clear</button>
+    </div>
+    <div id="tracePanel" class="hidden max-h-64 overflow-y-auto">
+        <div id="traceEntries" class="divide-y divide-gray-700 font-mono text-xs">
+            <div class="p-3 text-gray-500 text-center">No API calls yet. Try searching for something.</div>
+        </div>
+    </div>
+</div>
+
 <!-- Info Panel -->
 <div id="infoPanel" class="bg-gray-800 rounded-lg p-4 hidden">
     <h3 class="text-lg font-semibold text-blue-400 mb-2">Selection Details</h3>
@@ -71,6 +88,98 @@
 // Global variables
 let cy = null;
 let currentLayout = null;
+let traceEntries = [];
+let traceVisible = false;
+
+// Activity Trace functions
+function toggleTrace() {
+    traceVisible = !traceVisible;
+    document.getElementById('tracePanel').classList.toggle('hidden', !traceVisible);
+    document.getElementById('traceToggle').style.transform = traceVisible ? 'rotate(90deg)' : '';
+}
+
+function clearTrace() {
+    traceEntries = [];
+    updateTraceDisplay();
+}
+
+function addTraceEntry(operation, params, status, result, durationMs) {
+    const entry = {
+        timestamp: new Date().toLocaleTimeString(),
+        operation,
+        params,
+        status,
+        result,
+        durationMs
+    };
+    traceEntries.unshift(entry); // Add to front
+    if (traceEntries.length > 50) traceEntries.pop(); // Keep last 50
+    updateTraceDisplay();
+}
+
+function updateTraceDisplay() {
+    const container = document.getElementById('traceEntries');
+    const countEl = document.getElementById('traceCount');
+
+    countEl.textContent = `${traceEntries.length} calls`;
+
+    if (traceEntries.length === 0) {
+        container.innerHTML = '<div class="p-3 text-gray-500 text-center">No API calls yet. Try searching for something.</div>';
+        return;
+    }
+
+    container.innerHTML = traceEntries.map(e => {
+        const statusColor = e.status === 'success' ? 'text-green-400' : 'text-red-400';
+        const statusIcon = e.status === 'success' ? '&#10003;' : '&#10007;';
+        return `
+            <div class="p-3 hover:bg-gray-700/50">
+                <div class="flex justify-between items-start mb-1">
+                    <span class="text-gray-400">${e.timestamp}</span>
+                    <span class="${statusColor}">${statusIcon} ${e.durationMs}ms</span>
+                </div>
+                <div class="text-blue-300 font-medium">${e.operation}</div>
+                <div class="text-gray-500 mt-1">${e.params}</div>
+                <div class="text-gray-400 mt-1">${e.result}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+// Wrapper for traced fetch calls
+async function tracedFetch(operation, params, url) {
+    const startTime = performance.now();
+    try {
+        const response = await fetch(url);
+        const durationMs = Math.round(performance.now() - startTime);
+
+        if (!response.ok) {
+            addTraceEntry(operation, params, 'error', `HTTP ${response.status}`, durationMs);
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        const nodeCount = data.nodes?.length || 0;
+        const edgeCount = data.edges?.length || 0;
+        const entityCount = data.entities?.length || 0;
+
+        let result = '';
+        if (nodeCount || edgeCount) {
+            result = `${nodeCount} nodes, ${edgeCount} edges`;
+        } else if (entityCount) {
+            result = `${entityCount} entities`;
+        } else {
+            result = `Response: ${JSON.stringify(data).substring(0, 100)}...`;
+        }
+
+        addTraceEntry(operation, params, 'success', result, durationMs);
+        return data;
+
+    } catch (error) {
+        const durationMs = Math.round(performance.now() - startTime);
+        addTraceEntry(operation, params, 'error', error.message, durationMs);
+        throw error;
+    }
+}
 
 // Initialize Cytoscape
 document.addEventListener('DOMContentLoaded', function() {
@@ -183,23 +292,21 @@ async function performSearch() {
         showStatus('Please enter a search query', 'warning');
         return;
     }
-    
+
     showStatus('Searching knowledge graph...', 'info');
-    
+
     try {
-        const response = await fetch(`/api/graph/search?query=${encodeURIComponent(query)}&limit=50`);
-        if (!response.ok) throw new Error('Search failed');
-        
-        const data = await response.json();
-        
+        const url = `/api/graph/search?query=${encodeURIComponent(query)}&limit=50`;
+        const data = await tracedFetch('SEARCH', `query="${query}" limit=50`, url);
+
         if (data.nodes.length === 0) {
             showStatus('No results found', 'warning');
             return;
         }
-        
+
         updateGraph(data.nodes, data.edges);
         showStatus(`Found ${data.nodes.length} entities and ${data.edges.length} relationships`, 'success');
-        
+
     } catch (error) {
         showStatus('Search failed: ' + error.message, 'error');
     }
@@ -207,19 +314,17 @@ async function performSearch() {
 
 async function exploreEntity(entityName) {
     if (!entityName) return;
-    
+
     showStatus(`Exploring connections for "${entityName}"...`, 'info');
     document.getElementById('searchQuery').value = entityName;
-    
+
     try {
-        const response = await fetch(`/api/graph/explore/${encodeURIComponent(entityName)}?depth=2`);
-        if (!response.ok) throw new Error('Exploration failed');
-        
-        const data = await response.json();
-        
+        const url = `/api/graph/explore/${encodeURIComponent(entityName)}?depth=2`;
+        const data = await tracedFetch('EXPLORE', `entity="${entityName}" depth=2`, url);
+
         updateGraph(data.nodes, data.edges);
         showStatus(`Found ${data.nodes.length} connected entities`, 'success');
-        
+
     } catch (error) {
         showStatus('Exploration failed: ' + error.message, 'error');
     }
@@ -227,26 +332,28 @@ async function exploreEntity(entityName) {
 
 async function loadEntities() {
     try {
-        const response = await fetch('/api/graph/entities?limit=200');
-        if (!response.ok) return;
-        
-        const data = await response.json();
+        const url = '/api/graph/entities?limit=200';
+        const data = await tracedFetch('LIST_ENTITIES', 'limit=200', url);
         const select = document.getElementById('entitySelect');
-        
+
         select.innerHTML = '<option value="">Select an entity to explore...</option>';
-        
-        data.entities.forEach(entity => {
-            const option = document.createElement('option');
-            option.value = entity.name;
-            option.textContent = entity.name;
-            if (entity.labels && entity.labels.length > 0) {
-                option.textContent += ` [${entity.labels.join(', ')}]`;
-            }
-            select.appendChild(option);
-        });
-        
+
+        if (data.entities) {
+            data.entities.forEach(entity => {
+                const option = document.createElement('option');
+                option.value = entity.name;
+                option.textContent = entity.name;
+                if (entity.labels && entity.labels.length > 0) {
+                    option.textContent += ` [${entity.labels.join(', ')}]`;
+                }
+                select.appendChild(option);
+            });
+        }
+
     } catch (error) {
         console.error('Failed to load entities:', error);
+        const select = document.getElementById('entitySelect');
+        select.innerHTML = '<option value="">Failed to load entities</option>';
     }
 }
 

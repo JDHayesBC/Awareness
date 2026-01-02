@@ -96,6 +96,11 @@ class RichTextureLayer(PatternLayer):
                         score = 1.0 - (i / max(len(facts), 1)) * 0.5
                         content = self._format_fact(fact)
 
+                        # Extract subject/object from fact text since API doesn't provide them
+                        fact_text = fact.get("fact", "")
+                        predicate = fact.get("name", "RELATES_TO")
+                        subject, obj = self._extract_entities_from_fact(fact_text, predicate)
+
                         results.append(SearchResult(
                             content=content,
                             source=fact.get("uuid", "unknown"),
@@ -103,9 +108,9 @@ class RichTextureLayer(PatternLayer):
                             relevance_score=score,
                             metadata={
                                 "type": "fact",
-                                "subject": fact.get("source_node_name"),
-                                "predicate": fact.get("name"),
-                                "object": fact.get("target_node_name"),
+                                "subject": subject,
+                                "predicate": predicate,
+                                "object": obj,
                                 "valid_at": fact.get("valid_at"),
                             }
                         ))
@@ -159,6 +164,51 @@ class RichTextureLayer(PatternLayer):
         if summary:
             return f"[{label_str}] {name}: {summary}"
         return f"[{label_str}] {name}"
+
+    def _extract_entities_from_fact(self, fact_text: str, predicate: str) -> tuple[str, str]:
+        """
+        Extract subject and object from a fact string.
+
+        Facts are typically in the form "Subject verb Object" or "Subject is/has Object".
+        This is a heuristic approach since the Graphiti API returns facts as text.
+
+        Examples:
+            "Jeff owns Bitsy" → ("Jeff", "Bitsy")
+            "Jeff is debugging MCP servers" → ("Jeff", "MCP servers")
+            "Lyra loves care-gravity" → ("Lyra", "care-gravity")
+        """
+        if not fact_text:
+            return ("unknown", "unknown")
+
+        # Common verb patterns to split on
+        verb_patterns = [
+            " owns ", " has ", " is ", " are ", " was ", " were ",
+            " loves ", " likes ", " wants ", " needs ", " uses ",
+            " created ", " made ", " built ", " wrote ",
+            " debugs ", " debugging ", " develops ", " developing ",
+            " subscribed to ", " subscribes to ",
+        ]
+
+        fact_lower = fact_text.lower()
+
+        for pattern in verb_patterns:
+            if pattern in fact_lower:
+                idx = fact_lower.find(pattern)
+                subject = fact_text[:idx].strip()
+                obj = fact_text[idx + len(pattern):].strip()
+                # Clean up trailing punctuation
+                obj = obj.rstrip(".,;:!?")
+                if subject and obj:
+                    return (subject, obj)
+
+        # Fallback: split on first space after first word
+        parts = fact_text.split(" ", 2)
+        if len(parts) >= 3:
+            return (parts[0], parts[2].rstrip(".,;:!?"))
+        elif len(parts) == 2:
+            return (parts[0], parts[1].rstrip(".,;:!?"))
+
+        return (fact_text, "unknown")
 
     async def store(self, content: str, metadata: Optional[dict] = None) -> bool:
         """

@@ -603,25 +603,34 @@ async def api_graph_search(query: str, limit: int = 20):
         
         for result in results:
             metadata = result.metadata or {}
-            
+
             if metadata.get("type") == "entity":
                 # Add entity as a node
-                node_id = metadata.get("name", "unknown")
+                # Use 'or' to handle None values (not just missing keys)
+                node_id = metadata.get("name") or "unknown"
+                # Skip invalid node IDs
+                if not node_id or not isinstance(node_id, str):
+                    continue
                 nodes[node_id] = {
                     "id": node_id,
                     "label": node_id,
                     "type": "entity",
-                    "labels": metadata.get("labels", []),
+                    "labels": metadata.get("labels") or [],
                     "relevance": result.relevance_score,
                     "content": result.content
                 }
-                
+
             elif metadata.get("type") == "fact":
                 # Add fact as edges and ensure nodes exist
-                subject = metadata.get("subject", "unknown")
-                predicate = metadata.get("predicate", "relates_to")
-                obj = metadata.get("object", "unknown")
-                
+                # Use 'or' to handle None values
+                subject = metadata.get("subject") or "unknown"
+                predicate = metadata.get("predicate") or "relates_to"
+                obj = metadata.get("object") or "unknown"
+
+                # Skip facts with invalid node IDs
+                if not isinstance(subject, str) or not isinstance(obj, str):
+                    continue
+
                 # Ensure subject and object nodes exist
                 if subject not in nodes:
                     nodes[subject] = {
@@ -631,7 +640,7 @@ async def api_graph_search(query: str, limit: int = 20):
                         "labels": [],
                         "relevance": 0.5
                     }
-                
+
                 if obj not in nodes:
                     nodes[obj] = {
                         "id": obj,
@@ -640,7 +649,7 @@ async def api_graph_search(query: str, limit: int = 20):
                         "labels": [],
                         "relevance": 0.5
                     }
-                
+
                 # Add edge
                 edges.append({
                     "source": subject,
