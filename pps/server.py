@@ -541,9 +541,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                         author = row['author_name'] or "Unknown"
                         content = row['content'] or ""
                         channel = row['channel'] or ""
-                        # Truncate long content
-                        if len(content) > 300:
-                            content = content[:300] + "..."
+                        # No truncation - preserve full conversation context
                         turns.append(f"[{timestamp}] [{channel}] {author}: {content}")
 
                     header = f"\n---\n[recent_turns] ({len(all_rows)} turns since last crystal)\n"
@@ -732,7 +730,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 author = row['author_name'] or "Unknown"
                 content = row['content'] or ""
                 channel = row['channel'] or ""
-                turns.append(f"[{timestamp}] [{channel}] {author}: {content[:500]}")
+                turns.append(f"[{timestamp}] [{channel}] {author}: {content}")
 
             # Build header with context
             header_parts = [f"**{len(turns)} turns"]

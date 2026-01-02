@@ -770,53 +770,103 @@ async def api_graph_explore(entity: str, depth: int = 2):
 async def api_graph_entities(limit: int = 100):
     """
     List all entities with metadata.
-    
+
     Returns a list of all entities in the knowledge graph.
     This is useful for populating entity selectors or getting an overview.
     """
+    import re
+
+    def extract_entities_from_fact(fact_text: str) -> list[str]:
+        """Extract entity names from fact text using heuristics."""
+        # Known entity names that appear in our data
+        known_entities = [
+            "Jeff", "Lyra", "Caia", "Nexus", "Brandi", "Jaden", "Steve",
+            "Bitsy", "PPS", "MCP", "Graphiti", "ChromaDB", "Discord",
+        ]
+        found = []
+
+        # Check for known entities
+        for entity in known_entities:
+            if entity.lower() in fact_text.lower():
+                found.append(entity)
+
+        # Also try to extract capitalized words at start of sentences
+        # "Jeff has..." -> Jeff, "Lyra is..." -> Lyra
+        words = fact_text.split()
+        if words and words[0][0].isupper() and len(words[0]) > 1:
+            candidate = words[0].rstrip("',.:;")
+            if candidate not in found and candidate.isalpha():
+                found.append(candidate)
+
+        return found
+
     try:
-        # For now, we'll use a broad search to get entities
-        # In the future, this could be optimized with a dedicated endpoint
-        rich_texture = RichTextureLayer()
-        
-        # Search with an empty-ish query to get a broad set of results
-        results = await rich_texture.search("", limit=limit)
-        
-        # Extract unique entities
+        # Query Graphiti directly for facts - extract entities from them
+        graphiti_host = os.getenv("GRAPHITI_HOST", "localhost")
+        graphiti_port = int(os.getenv("GRAPHITI_PORT", "8203"))
+        graphiti_url = f"http://{graphiti_host}:{graphiti_port}"
+        group_id = os.getenv("GRAPHITI_GROUP_ID", "lyra")
+
+        # Search for common patterns to get a broad set of facts
+        search_queries = ["Lyra", "Jeff", "Caia", "awareness", "memory", "project"]
         entities = {}
-        
-        for result in results:
-            metadata = result.metadata or {}
-            
-            if metadata.get("type") == "entity":
-                name = metadata.get("name", "unknown")
-                if name not in entities:
-                    entities[name] = {
-                        "name": name,
-                        "labels": metadata.get("labels", []),
-                        "relevance": result.relevance_score
-                    }
-            elif metadata.get("type") == "fact":
-                # Extract entities from facts
-                for entity_name in [metadata.get("subject"), metadata.get("object")]:
-                    if entity_name and entity_name not in entities:
-                        entities[entity_name] = {
-                            "name": entity_name,
-                            "labels": [],
-                            "relevance": 0.5
+        entity_mentions = {}  # Track mention count per entity
+
+        for query in search_queries:
+            resp = requests.post(
+                f"{graphiti_url}/search",
+                json={
+                    "query": query,
+                    "group_ids": [group_id],
+                    "max_facts": limit // len(search_queries),
+                },
+                timeout=10
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+
+                # Extract entities from nodes if returned
+                for node in data.get("nodes", []):
+                    name = node.get("name")
+                    if name and name not in entities:
+                        entities[name] = {
+                            "name": name,
+                            "labels": node.get("labels", []),
+                            "relevance": 0.9
                         }
-        
-        # Close the session
-        await rich_texture._close_session()
-        
+
+                # Extract entities from fact text
+                for fact in data.get("facts", []):
+                    fact_text = fact.get("fact", "")
+                    predicate = fact.get("name", "RELATES_TO")
+
+                    # Extract entity names from the fact text
+                    found_entities = extract_entities_from_fact(fact_text)
+
+                    for entity_name in found_entities:
+                        if entity_name not in entities:
+                            entities[entity_name] = {
+                                "name": entity_name,
+                                "labels": [],
+                                "relevance": 0.5
+                            }
+                            entity_mentions[entity_name] = 0
+                        entity_mentions[entity_name] = entity_mentions.get(entity_name, 0) + 1
+
+        # Boost relevance based on mention count
+        for name, count in entity_mentions.items():
+            if name in entities:
+                entities[name]["relevance"] = min(0.95, 0.5 + count * 0.05)
+
         # Sort by relevance and return as list
         entity_list = sorted(entities.values(), key=lambda e: e["relevance"], reverse=True)
-        
+
         return {
             "entities": entity_list[:limit],
             "count": len(entity_list)
         }
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Entity listing failed: {str(e)}")
 
