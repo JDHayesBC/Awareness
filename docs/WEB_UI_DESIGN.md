@@ -348,7 +348,7 @@ Implementation order at Lyra's discretion, but suggested phases:
 
 ### Phase 2: Content Browsing
 - [ ] Messages page (filters, search, pagination)
-- [ ] Crystals page (current + archived view)
+- [x] Crystals page (current + archived view) - DONE 2026-01-02
 - [ ] Word-Photos page (activity trace, sync status, resync)
 
 ### Phase 3: Observability Infrastructure
