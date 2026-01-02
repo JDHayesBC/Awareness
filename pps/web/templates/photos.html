@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% block title %}Word-Photos | PPS Observatory{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-bold text-blue-400">Word-Photos</h1>
+            <p class="text-gray-400 text-sm mt-1">Core identity anchors - emotionally resonant memories</p>
+        </div>
+    </div>
+
+    <!-- Philosophy Note -->
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="flex items-start space-x-3">
+            <span class="text-2xl">&#128274;</span>
+            <div>
+                <p class="text-gray-300 font-medium">Observatory Only</p>
+                <p class="text-gray-500 text-sm mt-1">
+                    Word-photos are identity anchors. They cannot be edited or deleted through this interface.
+                    If something needs fixing, do it through conversation with Lyra. If there's file corruption,
+                    restore from backup and use the resync button below.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sync Status -->
+    <section>
+        <h2 class="text-lg font-semibold mb-3 text-gray-300">Sync Status</h2>
+        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Files on Disk -->
+                <div class="text-center">
+                    <div class="text-4xl font-bold text-white">{{ sync.disk_count }}</div>
+                    <div class="text-gray-400 text-sm mt-1">Files on Disk</div>
+                </div>
+
+                <!-- Sync Arrow -->
+                <div class="flex items-center justify-center">
+                    {% if sync.synced %}
+                    <div class="flex items-center space-x-2 text-green-400">
+                        <span class="text-2xl">&#10003;</span>
+                        <span class="font-medium">In Sync</span>
+                    </div>
+                    {% elif sync.error %}
+                    <div class="flex items-center space-x-2 text-red-400">
+                        <span class="text-2xl">&#10007;</span>
+                        <span class="font-medium">Error</span>
+                    </div>
+                    {% else %}
+                    <div class="flex items-center space-x-2 text-yellow-400">
+                        <span class="text-2xl">&#9888;</span>
+                        <span class="font-medium">Out of Sync</span>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- ChromaDB Entries -->
+                <div class="text-center">
+                    <div class="text-4xl font-bold text-white">{{ sync.chroma_count }}</div>
+                    <div class="text-gray-400 text-sm mt-1">ChromaDB Entries</div>
+                </div>
+            </div>
+
+            {% if sync.error %}
+            <div class="mt-4 p-3 bg-red-900/30 border border-red-700 rounded text-red-300 text-sm">
+                ChromaDB Error: {{ sync.error }}
+            </div>
+            {% endif %}
+        </div>
+    </section>
+
+    <!-- File List -->
+    <section>
+        <h2 class="text-lg font-semibold mb-3 text-gray-300">Files on Disk</h2>
+        <div class="bg-gray-800 rounded-lg border border-gray-700 divide-y divide-gray-700">
+            {% for file in sync.disk_files %}
+            <div class="p-3 flex items-center justify-between">
+                <span class="text-gray-300 font-mono text-sm">{{ file }}</span>
+            </div>
+            {% else %}
+            <div class="p-4 text-gray-500 text-center">No word-photos found</div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <!-- Resync Section -->
+    <section>
+        <h2 class="text-lg font-semibold mb-3 text-gray-300">Maintenance</h2>
+        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+            <div class="flex items-start space-x-4">
+                <div class="flex-1">
+                    <h3 class="font-medium text-white">Resync ChromaDB</h3>
+                    <p class="text-gray-500 text-sm mt-1">
+                        Wipes the ChromaDB collection and rebuilds it from disk files.
+                        Only use this if something is broken.
+                    </p>
+                </div>
+                <button
+                    onclick="confirmResync()"
+                    class="px-4 py-2 bg-red-700 hover:bg-red-600 text-white font-medium rounded transition-colors"
+                >
+                    Resync
+                </button>
+            </div>
+
+            <!-- Resync Result -->
+            <div id="resync-result" class="hidden mt-4 p-3 rounded text-sm"></div>
+        </div>
+    </section>
+</div>
+
+<!-- Confirmation Modal -->
+<div id="confirm-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+    <div class="bg-gray-800 rounded-lg p-6 max-w-md mx-4 border border-gray-600">
+        <h3 class="text-xl font-bold text-red-400 mb-4">&#9888; Warning: Destructive Operation</h3>
+        <p class="text-gray-300 mb-4">
+            This will <strong>completely wipe</strong> the ChromaDB word-photo collection and rebuild it from disk files.
+        </p>
+        <p class="text-gray-400 text-sm mb-6">
+            Only do this if:
+        </p>
+        <ul class="list-disc list-inside text-gray-400 text-sm mb-6 space-y-1">
+            <li>The sync status shows a problem</li>
+            <li>You've restored files from backup</li>
+            <li>Something is genuinely broken</li>
+        </ul>
+        <p class="text-yellow-400 font-medium mb-6">
+            Are you absolutely sure?
+        </p>
+        <div class="flex justify-end space-x-3">
+            <button
+                onclick="closeModal()"
+                class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
+            >
+                Cancel
+            </button>
+            <button
+                onclick="doResync()"
+                class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white font-medium rounded transition-colors"
+            >
+                Yes, Resync Now
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+function confirmResync() {
+    document.getElementById('confirm-modal').classList.remove('hidden');
+}
+
+function closeModal() {
+    document.getElementById('confirm-modal').classList.add('hidden');
+}
+
+async function doResync() {
+    closeModal();
+
+    const resultDiv = document.getElementById('resync-result');
+    resultDiv.classList.remove('hidden', 'bg-green-900/30', 'bg-red-900/30', 'text-green-300', 'text-red-300');
+    resultDiv.textContent = 'Resyncing...';
+    resultDiv.classList.add('bg-gray-700', 'text-gray-300');
+
+    try {
+        const response = await fetch('/photos/resync', { method: 'POST' });
+        const data = await response.json();
+
+        resultDiv.classList.remove('bg-gray-700', 'text-gray-300');
+
+        if (data.success) {
+            resultDiv.classList.add('bg-green-900/30', 'text-green-300');
+            resultDiv.textContent = 'Resync complete! Refreshing page...';
+            setTimeout(() => window.location.reload(), 1500);
+        } else {
+            resultDiv.classList.add('bg-red-900/30', 'text-red-300');
+            resultDiv.textContent = 'Resync failed: ' + (data.error || 'Unknown error');
+        }
+    } catch (error) {
+        resultDiv.classList.remove('bg-gray-700', 'text-gray-300');
+        resultDiv.classList.add('bg-red-900/30', 'text-red-300');
+        resultDiv.textContent = 'Resync failed: ' + error.message;
+    }
+}
+
+// Close modal on escape key
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeModal();
+});
+
+// Close modal on backdrop click
+document.getElementById('confirm-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'confirm-modal') closeModal();
+});
+</script>
+{% endblock %}

@@ -415,6 +415,51 @@ def get_unique_authors() -> list:
         return []
 
 
+def get_word_photo_sync_status() -> dict:
+    """Check sync status between disk files and ChromaDB."""
+    import chromadb
+
+    result = {
+        "disk_files": [],
+        "chroma_count": 0,
+        "synced": False,
+        "error": None
+    }
+
+    # Get files on disk
+    if WORD_PHOTOS_PATH.exists():
+        result["disk_files"] = sorted([f.name for f in WORD_PHOTOS_PATH.glob("*.md")])
+    result["disk_count"] = len(result["disk_files"])
+
+    # Get ChromaDB count
+    try:
+        client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
+        collection = client.get_or_create_collection(
+            name="word_photos",
+            metadata={"hnsw:space": "cosine"}
+        )
+        result["chroma_count"] = collection.count()
+        result["synced"] = result["disk_count"] == result["chroma_count"]
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
+
+
+def do_word_photo_resync() -> dict:
+    """Trigger resync via PPS server."""
+    pps_url = f"http://{PPS_SERVER_HOST}:{PPS_SERVER_PORT}"
+
+    try:
+        resp = requests.post(f"{pps_url}/tools/anchor_resync", timeout=30)
+        if resp.status_code == 200:
+            return {"success": True, "data": resp.json()}
+        else:
+            return {"success": False, "error": f"HTTP {resp.status_code}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def get_channel_stats() -> dict:
     """Get message counts by channel."""
     conn = get_db_connection()
@@ -811,12 +856,21 @@ async def messages(
 
 
 @app.get("/photos", response_class=HTMLResponse)
-async def photos(request: Request):
-    """Word-photo gallery - coming soon."""
-    return templates.TemplateResponse("coming_soon.html", {
+async def photos(request: Request, resync_result: Optional[str] = None):
+    """Word-photos sync status and management."""
+    sync_status = get_word_photo_sync_status()
+    return templates.TemplateResponse("photos.html", {
         "request": request,
-        "page": "Word-Photos"
+        "sync": sync_status,
+        "resync_result": resync_result
     })
+
+
+@app.post("/photos/resync")
+async def photos_resync():
+    """Trigger word-photo resync (nuclear option)."""
+    result = do_word_photo_resync()
+    return result
 
 
 @app.get("/crystals", response_class=HTMLResponse)
