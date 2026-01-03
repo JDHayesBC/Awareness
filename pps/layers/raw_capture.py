@@ -100,8 +100,13 @@ class RawCaptureLayer(PatternLayer):
                     return []
             
             # Perform FTS5 search
-            # Use match operator for full-text search
-            search_query = f'"{query}"'  # Quoted for phrase search
+            # Pass query directly - FTS5 supports rich syntax:
+            #   word1 word2     → AND (both required)
+            #   word1 OR word2  → OR (either)
+            #   "exact phrase"  → phrase match
+            #   word*           → prefix
+            #   NOT word        → exclusion
+            search_query = query
             
             cursor.execute('''
                 SELECT 
