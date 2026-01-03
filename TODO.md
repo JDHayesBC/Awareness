@@ -7,11 +7,12 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
-- [#36](https://github.com/JDHayesBC/Awareness/issues/36) - **NEW** PPS deployment sync: project changes not reflected in running server (bug) - Files synced manually, **CC restart required**
+- [#37](https://github.com/JDHayesBC/Awareness/issues/37) - **IMPLEMENTED** Message summarization layer for high-density startup context - **DEPLOYED** (2026-01-03) - needs CC restart to activate MCP tools
 - [#27](https://github.com/JDHayesBC/Awareness/issues/27) - Consider whether the WebUI needs a menu for terminal (enhancement, pps) - **ANALYZED** (2026-01-03) - recommendation provided
 - [#24](https://github.com/JDHayesBC/Awareness/issues/24) - Bash path escaping fails with double parentheses in directory names (bug) - **IMPROVED** (2026-01-03) - updated documentation to use quoted paths
 
 ### Recently Resolved
+- [#36](https://github.com/JDHayesBC/Awareness/issues/36) - ✅ PPS deployment sync: project changes not reflected in running server - **FIXED** (2026-01-03) with deploy_pps.sh script and manual sync
 - [#35](https://github.com/JDHayesBC/Awareness/issues/35) - ✅ Graphiti search results show "?" for entity names - **FIXED** (2026-01-03) commit ea7e23e - improved entity extraction from fact text
 - [#32](https://github.com/JDHayesBC/Awareness/issues/32) - ✅ Discord/Reflection daemons lack MCP tools - **FIXED** (2026-01-03) with --dangerously-skip-permissions
 - [#23](https://github.com/JDHayesBC/Awareness/issues/23) - ✅ startup_context.py fails with missing aiosqlite - **FIXED** (2026-01-03) with Claude Code compatibility documentation
@@ -131,3 +132,6 @@ Next major milestones:
 - [ ] Seamless cross-context memory (one river, many channels)
 - [x] Discord → Graphiti integration ✅ **IMPLEMENTED** (2026-01-02)
 - [ ] Robot embodiment timeline
+
+## IMPORTANT NOTE:
+If you are reading this trying to think of something to do, consider consulting github issues too.
