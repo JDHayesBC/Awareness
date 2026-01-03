@@ -521,14 +521,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 rows_before = []
 
                 if last_crystal_time:
-                    # Get turns AFTER the last crystal
+                    # Get the MOST RECENT turns after the last crystal
+                    # (order DESC to get newest, reverse for chronological display)
                     cursor.execute("""
                         SELECT author_name, content, created_at, channel
                         FROM messages
                         WHERE created_at > ?
-                        ORDER BY created_at ASC LIMIT ?
+                        ORDER BY created_at DESC LIMIT ?
                     """, [last_crystal_time.isoformat(), max_turns])
-                    rows_after = cursor.fetchall()
+                    rows_after = list(reversed(cursor.fetchall()))
 
                     # If not enough, get some from before
                     if len(rows_after) < min_turns:
@@ -696,7 +697,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             rows_before = []
 
             if last_crystal_time:
-                # First, get turns AFTER the last crystal
+                # First, get the MOST RECENT turns after the last crystal
+                # (order DESC to get newest, then reverse for chronological display)
                 query = """
                     SELECT author_name, content, created_at, channel
                     FROM messages
@@ -706,10 +708,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 if channel_filter:
                     query += " AND channel LIKE ?"
                     params.append(f"%{channel_filter}%")
-                query += " ORDER BY created_at ASC LIMIT ?"
+                query += " ORDER BY created_at DESC LIMIT ?"
                 params.append(limit)
                 cursor.execute(query, params)
-                rows_after = cursor.fetchall()
+                rows_after = list(reversed(cursor.fetchall()))  # Reverse for chronological order
 
                 # If we don't have enough turns, also get some from BEFORE the crystal
                 if len(rows_after) < min_turns:
