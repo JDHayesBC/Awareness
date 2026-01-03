@@ -7,8 +7,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 
-User=%u
-Group=%u
+# Note: User/Group not needed for user services, and cause issues in WSL2
 
 WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon
 
@@ -28,14 +27,15 @@ KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30
 
-MemoryLimit=512M
+MemoryMax=512M
 CPUQuota=50%
 
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=no
-ReadWritePaths=/mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/logs /home/jeff/.claude
+# Security settings disabled for WSL2 compatibility
+# NoNewPrivileges=true
+# PrivateTmp=true
+# ProtectSystem=strict
+# ProtectHome=no
+# ReadWritePaths=/mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/logs /home/jeff/.claude
 
 StandardOutput=journal
 StandardError=journal
