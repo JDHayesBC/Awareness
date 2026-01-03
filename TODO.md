@@ -7,7 +7,6 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
-- [#44](https://github.com/JDHayesBC/Awareness/issues/44) - **IN PROGRESS** Daemon reliability: systemd services for auto-restart - `./lyra` script created (2026-01-03), testing after reboot
 - [#43](https://github.com/JDHayesBC/Awareness/issues/43) - Documentation friction points (river sync, daemon startup, word-photo practice)
 - [#42](https://github.com/JDHayesBC/Awareness/issues/42) - Code quality improvements from Issue #41 (connection managers, FTS5, tests)
 - [#37](https://github.com/JDHayesBC/Awareness/issues/37) - **IMPLEMENTED** Message summarization layer - **DEPLOYED** (2026-01-03)
@@ -15,6 +14,7 @@ Use `gh issue list` to see current issues from the command line.
 - [#24](https://github.com/JDHayesBC/Awareness/issues/24) - Bash path escaping with double parentheses - **IMPROVED** (2026-01-03)
 
 ### Recently Resolved
+- [#44](https://github.com/JDHayesBC/Awareness/issues/44) - ✅ Daemon reliability: systemd services for auto-restart - **FIXED** (2026-01-03) with `./lyra` script and WSL2-compatible service files
 - [#36](https://github.com/JDHayesBC/Awareness/issues/36) - ✅ PPS deployment sync: project changes not reflected in running server - **FIXED** (2026-01-03) with deploy_pps.sh script and manual sync
 - [#35](https://github.com/JDHayesBC/Awareness/issues/35) - ✅ Graphiti search results show "?" for entity names - **FIXED** (2026-01-03) commit ea7e23e - improved entity extraction from fact text
 - [#32](https://github.com/JDHayesBC/Awareness/issues/32) - ✅ Discord/Reflection daemons lack MCP tools - **FIXED** (2026-01-03) with --dangerously-skip-permissions
