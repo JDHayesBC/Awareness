@@ -6,6 +6,7 @@ Creates high-density summaries of work sessions, technical discussions,
 and project developments while preserving key decisions and outcomes.
 """
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -205,7 +206,7 @@ class MessageSummariesLayer(PatternLayer):
                 metadata['start_message_id'],
                 metadata['end_message_id'],
                 metadata['message_count'],
-                str(metadata.get('channels', [])),  # Store as JSON string
+                json.dumps(metadata.get('channels', [])),  # Store as proper JSON
                 time_span_start,
                 time_span_end,
                 metadata.get('summary_type', 'work')
@@ -450,7 +451,7 @@ class MessageSummariesLayer(PatternLayer):
                 start_id,
                 end_id,
                 message_count,
-                str(channels),  # Store as JSON string
+                json.dumps(channels),  # Store as proper JSON
                 time_span_start,
                 time_span_end,
                 summary_type

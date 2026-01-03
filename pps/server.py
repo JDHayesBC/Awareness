@@ -596,12 +596,16 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             + "\n"
         )
 
-        # Search all layers in parallel
+        # Search all layers in parallel (including message summaries)
         all_results: list[SearchResult] = []
         tasks = [
             layer.search(context, limit)
             for layer in layers.values()
         ]
+        # Also search message summaries - they're not in the layers dict
+        # but should surface during ambient recall
+        tasks.append(message_summaries.search(context, limit))
+
         layer_results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for results in layer_results:
