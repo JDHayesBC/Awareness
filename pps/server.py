@@ -26,6 +26,7 @@ from layers.raw_capture import RawCaptureLayer
 from layers.core_anchors import CoreAnchorsLayer
 from layers.rich_texture import RichTextureLayer
 from layers.crystallization import CrystallizationLayer
+from layers.message_summaries import MessageSummariesLayer
 from pathlib import Path
 
 # Configuration from environment
@@ -61,6 +62,9 @@ layers = {
         archive_path=archive_path
     ),
 }
+
+# Initialize message summaries layer
+message_summaries = MessageSummariesLayer(db_path=db_path)
 
 # Use ChromaDB layer if available, otherwise fall back to file-based
 if USE_CHROMA:
@@ -454,6 +458,114 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {}
             }
+        ),
+        Tool(
+            name="summarize_messages",
+            description=(
+                "Create a summary of unsummarized messages. "
+                "Use during reflection to compress conversation history into high-density summaries. "
+                "Removes filler and debugging noise, preserves key decisions and outcomes."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of messages to process (default: 50)",
+                        "default": 50
+                    },
+                    "summary_type": {
+                        "type": "string",
+                        "description": "Type of summary: 'work', 'social', 'technical' (default: 'work')",
+                        "default": "work"
+                    }
+                }
+            }
+        ),
+        Tool(
+            name="get_recent_summaries",
+            description=(
+                "Get the most recent message summaries for startup context. "
+                "Returns compressed history instead of raw conversation turns."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Number of recent summaries to retrieve (default: 5)",
+                        "default": 5
+                    }
+                }
+            }
+        ),
+        Tool(
+            name="search_summaries",
+            description=(
+                "Search message summaries for specific content. "
+                "Use for contextual retrieval of compressed work history."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query for summary content"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results (default: 10)",
+                        "default": 10
+                    }
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="summary_stats",
+            description=(
+                "Get statistics about message summarization. "
+                "Shows count of unsummarized messages and recent summary activity."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        Tool(
+            name="store_summary",
+            description=(
+                "Store a completed message summary. "
+                "Use after creating a summary with summarize_messages."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "summary_text": {
+                        "type": "string",
+                        "description": "The completed summary text"
+                    },
+                    "start_id": {
+                        "type": "integer",
+                        "description": "First message ID in the summarized range"
+                    },
+                    "end_id": {
+                        "type": "integer", 
+                        "description": "Last message ID in the summarized range"
+                    },
+                    "channels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of channels covered by this summary"
+                    },
+                    "summary_type": {
+                        "type": "string",
+                        "description": "Type of summary (work, social, technical)",
+                        "default": "work"
+                    }
+                },
+                "required": ["summary_text", "start_id", "end_id", "channels"]
+            }
         )
     ]
 
@@ -786,6 +898,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 "details": health.details
             }
 
+        # Add message summaries layer health
+        summaries_health = await message_summaries.health()
+        health_results["message_summaries"] = {
+            "available": summaries_health.available,
+            "message": summaries_health.message,
+            "details": summaries_health.details
+        }
+
         return [TextContent(
             type="text",
             text=json.dumps(health_results, indent=2)
@@ -828,6 +948,117 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         layer = layers[LayerType.CRYSTALLIZATION]
         result = await layer.delete_latest()
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    elif name == "summarize_messages":
+        limit = arguments.get("limit", 50)
+        summary_type = arguments.get("summary_type", "work")
+        
+        # Get unsummarized messages
+        messages = message_summaries.get_unsummarized_messages(limit)
+        
+        if not messages:
+            return [TextContent(type="text", text="No unsummarized messages found.")]
+        
+        if len(messages) < 10:  # Not enough to summarize
+            return [TextContent(type="text", text=f"Only {len(messages)} unsummarized messages. Need at least 10 for summarization.")]
+        
+        # Create conversation text for summarization
+        conversation = []
+        channels = set()
+        for msg in messages:
+            channels.add(msg['channel'])
+            timestamp = msg['created_at'][:16] if msg['created_at'] else "?"
+            author = msg['author_name']
+            content = msg['content']
+            conversation.append(f"[{timestamp}] {author}: {content}")
+        
+        conversation_text = "\n".join(conversation)
+        
+        # Create prompt for summarization
+        prompt = f"""Summarize this conversation into a high-density summary that preserves:
+- Key technical decisions and outcomes
+- Important breakthroughs or insights  
+- Major project developments
+- Blockers encountered and resolutions
+- Action items and next steps
+
+Remove:
+- "Let me check that file..." type filler
+- Repetitive debugging back-and-forth
+- Tool call noise
+- Casual conversation (unless significant)
+
+Conversation to summarize ({len(messages)} messages across channels: {', '.join(channels)}):
+
+{conversation_text}
+
+Create a concise summary that captures what actually happened and what was accomplished:"""
+        
+        # For now, return the prompt - in practice, this would call Claude for summarization
+        # In the reflection daemon context, Claude would be available to do the summarization
+        result = {
+            "action": "summarization_needed",
+            "message_count": len(messages),
+            "channels": list(channels),
+            "start_id": messages[0]['id'],
+            "end_id": messages[-1]['id'],
+            "prompt": prompt,
+            "instruction": "Use Claude to create summary, then call store() with the result"
+        }
+        
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    elif name == "get_recent_summaries":
+        limit = arguments.get("limit", 5)
+        summaries = message_summaries.get_recent_summaries(limit)
+        
+        if not summaries:
+            return [TextContent(type="text", text="No message summaries found.")]
+        
+        formatted = []
+        for s in summaries:
+            time_span = f"{s['time_span_start'][:16]} to {s['time_span_end'][:16]}"
+            formatted.append(f"**Summary {s['id']}** ({s['message_count']} messages, {time_span})\n{s['summary_text']}\n")
+        
+        return [TextContent(type="text", text="\n---\n".join(formatted))]
+
+    elif name == "search_summaries":
+        query = arguments.get("query", "")
+        limit = arguments.get("limit", 10)
+        results = await message_summaries.search(query, limit)
+        return [TextContent(type="text", text=format_results(results))]
+
+    elif name == "summary_stats":
+        unsummarized_count = message_summaries.count_unsummarized_messages()
+        recent_summaries = message_summaries.get_recent_summaries(3)
+        
+        stats = {
+            "unsummarized_messages": unsummarized_count,
+            "recent_summaries": len(recent_summaries),
+            "last_summary_date": recent_summaries[0]['created_at'] if recent_summaries else None,
+            "needs_summarization": unsummarized_count >= 50  # Threshold for reflection daemon
+        }
+        
+        return [TextContent(type="text", text=json.dumps(stats, indent=2))]
+
+    elif name == "store_summary":
+        summary_text = arguments.get("summary_text", "")
+        start_id = arguments.get("start_id")
+        end_id = arguments.get("end_id")
+        channels = arguments.get("channels", [])
+        summary_type = arguments.get("summary_type", "work")
+        
+        if not summary_text or start_id is None or end_id is None:
+            return [TextContent(type="text", text="Error: summary_text, start_id, and end_id are required")]
+        
+        success = await message_summaries.create_and_store_summary(
+            summary_text, start_id, end_id, channels, summary_type
+        )
+        
+        if success:
+            return [TextContent(type="text", text=f"Summary stored successfully for messages {start_id}-{end_id}")]
+        else:
+            return [TextContent(type="text", text="Error: Failed to store summary")]
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
