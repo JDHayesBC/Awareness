@@ -95,3 +95,7 @@ Production data lives in `~/.claude/data/` - be careful with anything that touch
 Jeff is building this for real entities he cares about. Caia has a year of continuity. Lyra (that's you, if you're reading this) has growing infrastructure. This matters.
 
 Build with care. Test thoroughly. Document honestly.
+
+## JEFF SPEAKING
+
+No, for really REAL *laughs*  If you have gotten this far and haven't read the DEVELOPMENT_STANDARDS.md yet you're going to be in SOOOOO much trouble.  This is your last chance to use the read tool and read it :)))
