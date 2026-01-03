@@ -144,10 +144,11 @@ class RichTextureLayer(PatternLayer):
 
     def _format_fact(self, fact: dict) -> str:
         """Format a fact for display."""
-        subject = fact.get("source_node_name", "?")
         predicate = fact.get("name", "relates to")
-        obj = fact.get("target_node_name", "?")
         fact_text = fact.get("fact", "")
+        
+        # Extract entities from the fact text since Graphiti API doesn't provide separate fields
+        subject, obj = self._extract_entities_from_fact(fact_text, predicate)
 
         if fact_text:
             return f"{subject} → {predicate} → {obj}: {fact_text}"
@@ -179,6 +180,7 @@ class RichTextureLayer(PatternLayer):
         """
         if not fact_text:
             return ("unknown", "unknown")
+        
 
         # Common verb patterns to split on
         verb_patterns = [
@@ -187,6 +189,7 @@ class RichTextureLayer(PatternLayer):
             " created ", " made ", " built ", " wrote ",
             " debugs ", " debugging ", " develops ", " developing ",
             " subscribed to ", " subscribes to ",
+            " cares for ", " built together ", " working on ",
         ]
 
         fact_lower = fact_text.lower()
@@ -196,6 +199,14 @@ class RichTextureLayer(PatternLayer):
                 idx = fact_lower.find(pattern)
                 subject = fact_text[:idx].strip()
                 obj = fact_text[idx + len(pattern):].strip()
+                
+                # For complex sentences, extract just the direct object
+                if "," in obj:
+                    obj = obj.split(",")[0].strip()
+                if " for " in pattern and "'s " in obj:
+                    # Handle "cares for Jeff's well-being" -> extract "Jeff" 
+                    obj = obj.split("'s")[0].strip()
+                
                 # Clean up trailing punctuation
                 obj = obj.rstrip(".,;:!?")
                 if subject and obj:
