@@ -7,11 +7,11 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
-- [#27](https://github.com/JDHayesBC/Awareness/issues/27) - Consider whether the WebUI needs a menu for terminal (enhancement, pps) - **NEW** (2026-01-02)
+- [#27](https://github.com/JDHayesBC/Awareness/issues/27) - Consider whether the WebUI needs a menu for terminal (enhancement, pps) - **ANALYZED** (2026-01-03) - recommendation provided
 - [#24](https://github.com/JDHayesBC/Awareness/issues/24) - Bash path escaping fails with double parentheses in directory names (bug) - **OPEN** (2026-01-02)
-- [#23](https://github.com/JDHayesBC/Awareness/issues/23) - startup_context.py fails with missing aiosqlite in Claude Code path (bug) - **OPEN** (2026-01-02)
 
 ### Recently Resolved
+- [#23](https://github.com/JDHayesBC/Awareness/issues/23) - ✅ startup_context.py fails with missing aiosqlite - **FIXED** (2026-01-03) with Claude Code compatibility documentation
 - [#15](https://github.com/JDHayesBC/Awareness/issues/15) - ✅ Web Dashboard enhancements - **COMPLETED** (2026-01-03) with auto-refresh, activity traces, and Reflections/Discord navigation
 - [#22](https://github.com/JDHayesBC/Awareness/issues/22) - ✅ MCP Error On CC Shutdown - **CLOSED** (2026-01-02) - Known CC bug with local MCP shutdown, not our issue
 - [#1](https://github.com/JDHayesBC/Awareness/issues/1) - ✅ Discord daemon crashes after ~5-10 turns - **FIXED** (2026-01-01) with proactive session restart logic
