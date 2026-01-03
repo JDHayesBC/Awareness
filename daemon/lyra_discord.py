@@ -542,7 +542,11 @@ async def main():
     try:
         await bot.start(DISCORD_BOT_TOKEN)
     except KeyboardInterrupt:
-        print("\nShutting down...")
+        print("\n[SHUTDOWN] Keyboard interrupt received")
+    except Exception as e:
+        print(f"[FATAL] Unhandled exception: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         await bot.close()
 

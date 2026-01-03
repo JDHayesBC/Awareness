@@ -185,6 +185,8 @@ class ClaudeInvoker:
             cmd = ["claude", "--model", model]
             if should_continue:
                 cmd.append("--continue")
+            # Pre-approve MCP tools for non-interactive use
+            cmd.extend(["--allowedTools", "mcp__pps__*", "mcp__github__*"])
             cmd.extend(["-p", prompt])
 
             result = await asyncio.get_event_loop().run_in_executor(
