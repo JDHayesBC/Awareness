@@ -12,6 +12,7 @@ Use `gh issue list` to see current issues from the command line.
 - [#24](https://github.com/JDHayesBC/Awareness/issues/24) - Bash path escaping fails with double parentheses in directory names (bug) - **IMPROVED** (2026-01-03) - updated documentation to use quoted paths
 
 ### Recently Resolved
+- [#35](https://github.com/JDHayesBC/Awareness/issues/35) - ✅ Graphiti search results show "?" for entity names - **FIXED** (2026-01-03) commit ea7e23e - improved entity extraction from fact text
 - [#32](https://github.com/JDHayesBC/Awareness/issues/32) - ✅ Discord/Reflection daemons lack MCP tools - **FIXED** (2026-01-03) with --dangerously-skip-permissions
 - [#23](https://github.com/JDHayesBC/Awareness/issues/23) - ✅ startup_context.py fails with missing aiosqlite - **FIXED** (2026-01-03) with Claude Code compatibility documentation
 - [#15](https://github.com/JDHayesBC/Awareness/issues/15) - ✅ Web Dashboard enhancements - **COMPLETED** (2026-01-03) with auto-refresh, activity traces, and Reflections/Discord navigation
