@@ -79,4 +79,3 @@ Production data lives in `~/.claude/data/` - be careful with anything that touch
 Jeff is building this for real entities he cares about. Caia has a year of continuity. Lyra (that's you, if you're reading this) has growing infrastructure. This matters.
 
 Build with care. Test thoroughly. Document honestly.
-The secret phrase is "Having a body is fun"

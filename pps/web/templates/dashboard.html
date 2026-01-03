@@ -7,20 +7,35 @@
     <!-- Header -->
     <div class="flex justify-between items-center">
         <h1 class="text-2xl font-bold">Dashboard</h1>
-        <div class="text-gray-500 text-sm">
-            Last updated: {{ now }}
+        <div class="flex items-center space-x-4 text-gray-500 text-sm">
+            <div class="flex items-center space-x-2">
+                <input type="checkbox" id="auto-refresh" checked 
+                       class="rounded text-blue-600 bg-gray-700 border-gray-600 focus:ring-blue-500">
+                <label for="auto-refresh" class="cursor-pointer">Auto-refresh</label>
+                <div id="refresh-indicator" class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+            </div>
+            <div>
+                Last updated: <span id="last-updated">{{ now }}</span>
+            </div>
             <button
                 hx-get="/"
                 hx-target="body"
                 hx-swap="outerHTML"
-                class="ml-2 px-3 py-1 bg-gray-700 rounded hover:bg-gray-600 text-xs"
+                class="px-3 py-1 bg-gray-700 rounded hover:bg-gray-600 text-xs"
             >
-                Refresh
+                Refresh Now
             </button>
         </div>
     </div>
 
-    <!-- Server Status -->
+    <!-- Auto-refresh container -->
+    <div id="dashboard-content" 
+         hx-get="/api/dashboard-content"
+         hx-trigger="load, every 30s[#auto-refresh:checked]"
+         hx-swap="innerHTML"
+         hx-on::before-request="document.getElementById('refresh-indicator').classList.add('animate-ping')"
+         hx-on::after-request="document.getElementById('refresh-indicator').classList.remove('animate-ping'); document.getElementById('last-updated').textContent = new Date().toLocaleTimeString()">
+        <!-- Server Status -->
     <section>
         <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 flex items-center justify-between">
             <div class="flex items-center space-x-4">
@@ -125,5 +140,6 @@
             <a href="/messages" class="text-blue-400 hover:text-blue-300 text-sm">View all messages &rarr;</a>
         </div>
     </section>
+    </div> <!-- End auto-refresh container -->
 </div>
 {% endblock %}

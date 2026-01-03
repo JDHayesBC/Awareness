@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+
+{% block title %}Discord - PPS Observatory{% endblock %}
+
+{% block content %}
+<div class="bg-gray-800 rounded-lg p-6">
+    <div class="mb-6">
+        <h1 class="text-2xl font-bold mb-2">Discord Processing</h1>
+        <p class="text-gray-400">Debug visibility into Discord daemon message processing.</p>
+    </div>
+
+    <!-- Filters -->
+    <div class="bg-gray-700 rounded-lg p-4 mb-6">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+                <label class="block text-sm font-medium mb-2">Time Range</label>
+                <select id="hours-filter" 
+                        class="w-full bg-gray-600 rounded px-3 py-2 text-sm"
+                        hx-get="/api/discord"
+                        hx-trigger="change"
+                        hx-target="#discord-list"
+                        hx-include="#channel-filter">
+                    <option value="24">Last 24 hours</option>
+                    <option value="48">Last 48 hours</option>
+                    <option value="168">Last 7 days</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-2">Channel</label>
+                <select id="channel-filter"
+                        class="w-full bg-gray-600 rounded px-3 py-2 text-sm"
+                        hx-get="/api/discord"
+                        hx-trigger="change"
+                        hx-target="#discord-list"
+                        hx-include="#hours-filter">
+                    <option value="">All Channels</option>
+                    <option value="general">General</option>
+                    <option value="awareness">Awareness</option>
+                    <option value="test">Test</option>
+                </select>
+            </div>
+            <div class="flex items-end">
+                <button class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm w-full"
+                        hx-get="/api/discord"
+                        hx-target="#discord-list"
+                        hx-include="#hours-filter,#channel-filter">
+                    Refresh
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Discord Sessions List -->
+    <div id="discord-list" class="space-y-4">
+        {% if sessions %}
+            {% for session in sessions %}
+            <div class="bg-gray-700 rounded-lg p-4">
+                <div class="flex justify-between items-start mb-3">
+                    <div>
+                        <h3 class="font-semibold">{{ session.timestamp }}</h3>
+                        <p class="text-sm text-gray-400">
+                            Channel: #{{ session.channel }} | 
+                            Author: {{ session.author }}
+                        </p>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-sm text-gray-400">{{ session.processing_time }}ms</span>
+                    </div>
+                </div>
+                
+                <!-- Message Content -->
+                <div class="bg-gray-800 rounded p-3 mb-3">
+                    <p class="text-sm font-medium text-gray-300 mb-1">Message:</p>
+                    <p class="text-sm">{{ session.message_content }}</p>
+                </div>
+                
+                <!-- Processing Summary -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-3">
+                    <div class="bg-gray-800 rounded px-3 py-2">
+                        <p class="text-gray-400">Identity Load</p>
+                        <p class="font-semibold">{{ session.identity_load_time }}ms</p>
+                    </div>
+                    <div class="bg-gray-800 rounded px-3 py-2">
+                        <p class="text-gray-400">Context Size</p>
+                        <p class="font-semibold">{{ session.context_tokens }} tokens</p>
+                    </div>
+                    <div class="bg-gray-800 rounded px-3 py-2">
+                        <p class="text-gray-400">API Time</p>
+                        <p class="font-semibold">{{ session.api_time }}ms</p>
+                    </div>
+                    <div class="bg-gray-800 rounded px-3 py-2">
+                        <p class="text-gray-400">Response Tokens</p>
+                        <p class="font-semibold">{{ session.response_tokens }}</p>
+                    </div>
+                </div>
+                
+                <button class="text-blue-400 hover:text-blue-300 text-sm"
+                        onclick="toggleTrace('{{ session.session_id }}')">
+                    View Processing Trace →
+                </button>
+                
+                <!-- Expandable Trace Details -->
+                <div id="trace-{{ session.session_id }}" class="hidden mt-4">
+                    <div class="bg-gray-800 rounded p-4 space-y-2 font-mono text-xs">
+                        {% for event in session.trace_events %}
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">{{ event.timestamp }}</span>
+                            <span class="text-gray-300">{{ event.event_type }}</span>
+                            <span class="text-gray-500">{{ event.details }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="bg-gray-700 rounded-lg p-8 text-center">
+                <p class="text-gray-400">No Discord sessions found in the selected time range.</p>
+                <p class="text-sm text-gray-500 mt-2">Discord processing traces will appear here when messages are processed.</p>
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Daemon Status -->
+<div class="mt-6 bg-gray-800 rounded-lg p-4">
+    <h2 class="font-semibold mb-3">Discord Daemon Status</h2>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+        <div>
+            <p class="text-gray-400">Status</p>
+            <p class="font-semibold {% if daemon_status == 'online' %}status-ok{% else %}status-error{% endif %}">
+                {{ daemon_status|default('Unknown') }}
+            </p>
+        </div>
+        <div>
+            <p class="text-gray-400">Last Message</p>
+            <p class="font-semibold">{{ last_message_time|default('N/A') }}</p>
+        </div>
+        <div>
+            <p class="text-gray-400">Messages Today</p>
+            <p class="font-semibold">{{ messages_today|default(0) }}</p>
+        </div>
+    </div>
+</div>
+
+<script>
+function toggleTrace(sessionId) {
+    const traceDiv = document.getElementById('trace-' + sessionId);
+    if (traceDiv.classList.contains('hidden')) {
+        // Fetch detailed trace if not already loaded
+        if (!traceDiv.dataset.loaded) {
+            fetch('/api/discord/trace/' + sessionId)
+                .then(r => r.json())
+                .then(data => {
+                    // Render trace events
+                    let html = '<div class="bg-gray-800 rounded p-4 space-y-2 font-mono text-xs">';
+                    data.events.forEach(event => {
+                        html += `<div class="flex justify-between">
+                            <span class="text-gray-400">${event.timestamp}</span>
+                            <span class="text-gray-300">${event.event_type}</span>
+                            <span class="text-gray-500">${event.details || ''}</span>
+                        </div>`;
+                    });
+                    html += '</div>';
+                    traceDiv.innerHTML = html;
+                    traceDiv.dataset.loaded = 'true';
+                });
+        }
+        traceDiv.classList.remove('hidden');
+    } else {
+        traceDiv.classList.add('hidden');
+    }
+}
+</script>
+{% endblock %}

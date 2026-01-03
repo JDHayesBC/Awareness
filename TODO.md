@@ -7,7 +7,12 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
-- [#15](https://github.com/JDHayesBC/Awareness/issues/15) - Web Dashboard enhancements (enhancement, pps)
+- [#15](https://github.com/JDHayesBC/Awareness/issues/15) - Web Dashboard enhancements (enhancement, pps) - **IN PROGRESS** (2026-01-02)
+  - ✅ Split Heartbeat into Reflections/Discord navigation
+  - ✅ Created Reflections page (stub awaiting trace data)
+  - ✅ Created Discord page (stub awaiting trace data)  
+  - ✅ Added auto-refresh to Dashboard with visual indicator
+  - ✅ Added activity trace to Word-Photos page
 
 ### Recently Resolved
 - [#22](https://github.com/JDHayesBC/Awareness/issues/22) - ✅ MCP Error On CC Shutdown - **CLOSED** (2026-01-02) - Known CC bug with local MCP shutdown, not our issue

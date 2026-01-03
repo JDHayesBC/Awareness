@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block title %}Reflections - PPS Observatory{% endblock %}
+
+{% block content %}
+<div class="bg-gray-800 rounded-lg p-6">
+    <div class="mb-6">
+        <h1 class="text-2xl font-bold mb-2">Reflections</h1>
+        <p class="text-gray-400">View autonomous reflection sessions and their outcomes.</p>
+    </div>
+
+    <!-- Filters -->
+    <div class="bg-gray-700 rounded-lg p-4 mb-6">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+                <label class="block text-sm font-medium mb-2">Time Range</label>
+                <select id="hours-filter" 
+                        class="w-full bg-gray-600 rounded px-3 py-2 text-sm"
+                        hx-get="/api/reflections"
+                        hx-trigger="change"
+                        hx-target="#reflections-list"
+                        hx-include="#outcome-filter">
+                    <option value="24">Last 24 hours</option>
+                    <option value="48">Last 48 hours</option>
+                    <option value="168">Last 7 days</option>
+                    <option value="720">Last 30 days</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-2">Outcome</label>
+                <select id="outcome-filter"
+                        class="w-full bg-gray-600 rounded px-3 py-2 text-sm"
+                        hx-get="/api/reflections"
+                        hx-trigger="change"
+                        hx-target="#reflections-list"
+                        hx-include="#hours-filter">
+                    <option value="">All</option>
+                    <option value="crystallized">Crystallized</option>
+                    <option value="journaled">Journaled</option>
+                    <option value="no_action">No Action</option>
+                </select>
+            </div>
+            <div class="flex items-end">
+                <button class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm w-full"
+                        hx-get="/api/reflections"
+                        hx-target="#reflections-list"
+                        hx-include="#hours-filter,#outcome-filter">
+                    Refresh
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reflections List -->
+    <div id="reflections-list" class="space-y-4">
+        {% if sessions %}
+            {% for session in sessions %}
+            <div class="bg-gray-700 rounded-lg p-4 hover:bg-gray-600 transition-colors">
+                <div class="flex justify-between items-start mb-2">
+                    <div>
+                        <h3 class="font-semibold">{{ session.started_at }}</h3>
+                        <p class="text-sm text-gray-400">Session: {{ session.session_id[:8] }}...</p>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-sm text-gray-400">{{ session.duration_formatted }}</span>
+                        {% if session.outcome == "crystallized" %}
+                            <span class="inline-block px-2 py-1 text-xs bg-blue-600 rounded ml-2">Crystallized</span>
+                        {% elif session.outcome == "journaled" %}
+                            <span class="inline-block px-2 py-1 text-xs bg-green-600 rounded ml-2">Journaled</span>
+                        {% else %}
+                            <span class="inline-block px-2 py-1 text-xs bg-gray-600 rounded ml-2">No Action</span>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <p class="text-sm mb-3">{{ session.summary }}</p>
+                
+                <button class="text-blue-400 hover:text-blue-300 text-sm"
+                        hx-get="/api/reflections/{{ session.session_id }}"
+                        hx-target="#session-{{ session.session_id }}"
+                        hx-swap="outerHTML">
+                    View Details →
+                </button>
+                
+                <div id="session-{{ session.session_id }}"></div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="bg-gray-700 rounded-lg p-8 text-center">
+                <p class="text-gray-400">No reflection sessions found in the selected time range.</p>
+                <p class="text-sm text-gray-500 mt-2">Reflection sessions run autonomously when triggered by the heartbeat daemon.</p>
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Note about trace requirements -->
+<div class="mt-6 bg-blue-900 bg-opacity-20 border border-blue-700 rounded-lg p-4">
+    <div class="flex items-start">
+        <svg class="w-5 h-5 text-blue-400 mt-0.5 mr-3" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+        </svg>
+        <div>
+            <p class="text-sm text-blue-300 font-medium">Trace Logging Status</p>
+            <p class="text-sm text-gray-400 mt-1">
+                {% if trace_logging_enabled %}
+                    Trace logging is active. Reflection sessions are being recorded.
+                {% else %}
+                    Trace logging infrastructure is ready but reflection daemon needs instrumentation updates.
+                {% endif %}
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}

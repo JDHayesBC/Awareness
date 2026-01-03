@@ -571,6 +571,27 @@ async def api_activity(limit: int = 10):
     return get_recent_activity(limit)
 
 
+@app.get("/api/dashboard-content", response_class=HTMLResponse)
+async def api_dashboard_content(request: Request):
+    """Dashboard content for auto-refresh."""
+    # Get all the data
+    server = get_server_health()
+    layers = get_layer_health()
+    activity = get_recent_activity(10)
+    channels = get_channel_stats()
+    daemons = get_daemon_status()
+    
+    # Render just the content part
+    return templates.TemplateResponse("partials/dashboard_content.html", {
+        "request": request,
+        "server": server,
+        "layers": layers,
+        "activity": activity,
+        "channels": channels,
+        "daemons": daemons
+    })
+
+
 @app.get("/health")
 async def health_check():
     """Simple health check for Docker."""
@@ -932,6 +953,81 @@ async def photos_resync():
     return result
 
 
+@app.get("/api/photos/activity")
+async def api_photos_activity(hours: int = 24, limit: int = 20):
+    """Get recent word-photo search activity from daemon traces."""
+    conn = get_db_connection()
+    if not conn:
+        return HTMLResponse('<div class="text-gray-500 text-center">No activity data available</div>')
+    
+    try:
+        cursor = conn.cursor()
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        
+        # Look for anchor_search events in daemon traces
+        cursor.execute("""
+            SELECT timestamp, event_data
+            FROM daemon_traces
+            WHERE event_type = 'tool_call' 
+                AND json_extract(event_data, '$.tool_name') = 'mcp__pps__anchor_search'
+                AND timestamp > ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (cutoff, limit))
+        
+        html = '<div class="space-y-2">'
+        
+        events = cursor.fetchall()
+        if events:
+            import json
+            for event in events:
+                try:
+                    data = json.loads(event["event_data"])
+                    query = data.get("params", {}).get("query", "Unknown")
+                    result_count = data.get("result_summary", {}).get("count", 0)
+                    timestamp = datetime.fromisoformat(event["timestamp"]).strftime("%H:%M:%S")
+                    
+                    html += f'''
+                    <div class="flex justify-between items-center py-2 border-b border-gray-700 last:border-0">
+                        <div class="flex-1">
+                            <span class="text-gray-400 text-sm">{timestamp}</span>
+                            <span class="text-gray-300 ml-3">Search: "{query}"</span>
+                        </div>
+                        <span class="text-gray-500 text-sm">{result_count} results</span>
+                    </div>
+                    '''
+                except:
+                    continue
+        else:
+            # If no traces, show recent word-photo reads as fallback
+            cursor.execute("""
+                SELECT created_at, content
+                FROM messages
+                WHERE author_name = 'Lyra' 
+                    AND content LIKE '%word_photo%' 
+                    AND created_at > ?
+                ORDER BY created_at DESC
+                LIMIT 5
+            """, (cutoff,))
+            
+            fallback_events = cursor.fetchall()
+            if fallback_events:
+                html += '<div class="text-gray-500 text-sm mb-2">No trace data available. Showing recent mentions:</div>'
+                for event in fallback_events:
+                    timestamp = datetime.fromisoformat(event["created_at"]).strftime("%H:%M:%S")
+                    html += f'<div class="text-gray-400 text-sm py-1">{timestamp} - Word-photo access detected</div>'
+            else:
+                html += '<div class="text-gray-500 text-center">No recent word-photo activity</div>'
+        
+        html += '</div>'
+        conn.close()
+        return HTMLResponse(html)
+        
+    except Exception as e:
+        return HTMLResponse(f'<div class="text-gray-500 text-center">Error loading activity: {str(e)}</div>')
+
+
 @app.get("/crystals", response_class=HTMLResponse)
 async def crystals(request: Request):
     """Crystal chain view - view current and archived crystals."""
@@ -951,13 +1047,152 @@ async def api_crystal_content(filename: str):
     return {"filename": filename, "content": content}
 
 
-@app.get("/heartbeat", response_class=HTMLResponse)
-async def heartbeat(request: Request):
-    """Heartbeat log viewer - coming soon."""
-    return templates.TemplateResponse("coming_soon.html", {
+@app.get("/reflections", response_class=HTMLResponse)
+async def reflections(request: Request, hours: int = 24):
+    """Reflection sessions viewer."""
+    # Get reflection sessions from daemon_traces
+    sessions = get_daemon_sessions(daemon_type="reflection", hours=hours)
+    
+    # Check if trace logging is enabled
+    conn = get_db_connection()
+    trace_logging_enabled = False
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='daemon_traces'")
+            trace_logging_enabled = cursor.fetchone() is not None
+            conn.close()
+        except:
+            pass
+    
+    return templates.TemplateResponse("reflections.html", {
         "request": request,
-        "page": "Heartbeat Log"
+        "sessions": sessions,
+        "trace_logging_enabled": trace_logging_enabled
     })
+
+
+@app.get("/discord", response_class=HTMLResponse)
+async def discord(request: Request, hours: int = 24, channel: Optional[str] = None):
+    """Discord processing viewer."""
+    # Get Discord sessions from daemon_traces
+    sessions = get_daemon_sessions(daemon_type="discord", hours=hours)
+    
+    # Get daemon status info
+    daemon_status = "unknown"
+    last_message_time = None
+    messages_today = 0
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Check last Discord message
+            cursor.execute("""
+                SELECT created_at FROM messages 
+                WHERE channel LIKE 'discord:%' 
+                ORDER BY created_at DESC LIMIT 1
+            """)
+            row = cursor.fetchone()
+            if row:
+                last_message_time = row["created_at"]
+                # Simple heuristic: if last message < 10 min ago, daemon is "online"
+                from datetime import datetime, timedelta
+                last_msg_dt = datetime.fromisoformat(row["created_at"].replace(" ", "T"))
+                if datetime.now() - last_msg_dt < timedelta(minutes=10):
+                    daemon_status = "online"
+                else:
+                    daemon_status = "idle"
+            
+            # Count today's messages
+            today = datetime.now().strftime("%Y-%m-%d")
+            cursor.execute("""
+                SELECT COUNT(*) as count FROM messages 
+                WHERE channel LIKE 'discord:%' AND created_at >= ?
+            """, (today,))
+            messages_today = cursor.fetchone()["count"]
+            
+            conn.close()
+        except:
+            pass
+    
+    return templates.TemplateResponse("discord.html", {
+        "request": request,
+        "sessions": sessions,
+        "daemon_status": daemon_status,
+        "last_message_time": last_message_time,
+        "messages_today": messages_today
+    })
+
+
+@app.get("/heartbeat", response_class=HTMLResponse)
+async def heartbeat_redirect(request: Request):
+    """Redirect old heartbeat URL to reflections."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/reflections", status_code=301)
+
+
+# API endpoints for new reflection/discord pages
+
+@app.get("/api/reflections")
+async def api_reflections(hours: int = 24, outcome: Optional[str] = None):
+    """Get reflection sessions with optional filtering."""
+    sessions = get_daemon_sessions(daemon_type="reflection", hours=hours)
+    
+    # Add formatted fields and filter by outcome if specified
+    for session in sessions:
+        # Format duration
+        if session.get("started_at") and session.get("ended_at"):
+            start = datetime.fromisoformat(session["started_at"])
+            end = datetime.fromisoformat(session["ended_at"])
+            duration = (end - start).total_seconds()
+            if duration < 60:
+                session["duration_formatted"] = f"{int(duration)}s"
+            else:
+                session["duration_formatted"] = f"{int(duration // 60)}m {int(duration % 60)}s"
+        
+        # Determine outcome (placeholder logic - would need actual trace analysis)
+        session["outcome"] = "no_action"  # Default
+        session["summary"] = "Autonomous reflection completed."
+    
+    return {"sessions": sessions}
+
+
+@app.get("/api/discord")
+async def api_discord(hours: int = 24, channel: Optional[str] = None):
+    """Get Discord processing sessions."""
+    sessions = get_daemon_sessions(daemon_type="discord", hours=hours)
+    
+    # Add placeholder fields (would come from actual trace data)
+    for session in sessions:
+        session["channel"] = "general"  # Would extract from trace
+        session["author"] = "User"  # Would extract from trace
+        session["message_content"] = "Message content would appear here..."
+        session["processing_time"] = 250
+        session["identity_load_time"] = 50
+        session["context_tokens"] = 48000
+        session["api_time"] = 180
+        session["response_tokens"] = 1200
+        session["trace_events"] = []  # Would populate from traces
+    
+    return {"sessions": sessions}
+
+
+@app.get("/api/discord/trace/{session_id}")
+async def api_discord_trace(session_id: str):
+    """Get detailed trace for a Discord session."""
+    traces = get_session_traces(session_id)
+    
+    # Format events for display
+    events = []
+    for trace in traces:
+        events.append({
+            "timestamp": trace["timestamp"],
+            "event_type": trace["event_type"],
+            "details": trace.get("event_data", {}).get("summary", "")
+        })
+    
+    return {"session_id": session_id, "events": events}
 
 
 # Daemon Traces API (Phase 3: Observability)

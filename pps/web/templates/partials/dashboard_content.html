@@ -1,0 +1,107 @@
+<!-- Server Status -->
+<section>
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 flex items-center justify-between">
+        <div class="flex items-center space-x-4">
+            <span class="status-{{ server.status }} text-2xl">
+                {% if server.status == 'ok' %}✓{% elif server.status == 'error' %}✗{% elif server.status == 'warning' %}⚠{% else %}?{% endif %}
+            </span>
+            <div>
+                <div class="text-lg font-semibold text-white">
+                    PPS Server:
+                    {% if server.status == 'ok' %}Healthy{% elif server.status == 'error' %}Offline{% elif server.status == 'warning' %}Degraded{% else %}Unknown{% endif %}
+                </div>
+                <div class="text-gray-500 text-sm">{{ server.detail }}</div>
+            </div>
+        </div>
+        <div class="text-gray-500 text-sm">
+            Last check: {{ server.last_check }}
+        </div>
+    </div>
+</section>
+
+<!-- Layer Health -->
+<section>
+    <h2 class="text-lg font-semibold mb-3 text-gray-300">Layer Health</h2>
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        {% for key, layer in layers.items() %}
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-sm font-medium text-gray-400">{{ layer.name }}</span>
+                <span class="status-{{ layer.status }}">
+                    {% if layer.status == 'ok' %}✓{% elif layer.status == 'error' %}✗{% elif layer.status == 'warning' %}⚠{% else %}?{% endif %}
+                </span>
+            </div>
+            <div class="text-2xl font-bold text-white">
+                {% if layer.status == 'ok' %}OK{% elif layer.status == 'error' %}Error{% elif layer.status == 'warning' %}Warning{% else %}Unknown{% endif %}
+            </div>
+            <div class="text-gray-500 text-xs mt-1">{{ layer.detail }}</div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+<!-- Daemon Status -->
+<section class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <!-- Active Contexts -->
+    <div>
+        <h2 class="text-lg font-semibold mb-3 text-gray-300">Active Contexts</h2>
+        <div class="bg-gray-800 rounded-lg border border-gray-700 divide-y divide-gray-700">
+            {% for daemon, info in daemons.items() %}
+            <div class="p-3 flex items-center justify-between">
+                <div>
+                    <span class="font-medium capitalize">{{ daemon }}</span>
+                    {% if info.detail %}
+                    <span class="text-gray-500 text-sm ml-2">{{ info.detail }}</span>
+                    {% endif %}
+                </div>
+                <span class="status-{{ info.status }} font-medium">
+                    {{ info.status|upper }}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Channel Stats -->
+    <div>
+        <h2 class="text-lg font-semibold mb-3 text-gray-300">Messages by Channel</h2>
+        <div class="bg-gray-800 rounded-lg border border-gray-700 divide-y divide-gray-700">
+            {% for channel, count in channels.items() %}
+            <div class="p-3 flex items-center justify-between">
+                <span class="capitalize">{{ channel }}</span>
+                <span class="text-blue-400 font-medium">{{ count }}</span>
+            </div>
+            {% else %}
+            <div class="p-3 text-gray-500">No messages yet</div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<!-- Recent Activity -->
+<section>
+    <h2 class="text-lg font-semibold mb-3 text-gray-300">Recent Activity</h2>
+    <div class="bg-gray-800 rounded-lg border border-gray-700 divide-y divide-gray-700">
+        {% for item in activity %}
+        <div class="p-3">
+            <div class="flex items-center justify-between mb-1">
+                <div class="flex items-center space-x-2">
+                    <span class="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-400">
+                        {{ item.channel.split(':')[0] }}
+                    </span>
+                    <span class="font-medium {% if item.author == 'Lyra' %}text-blue-400{% else %}text-gray-300{% endif %}">
+                        {{ item.author }}
+                    </span>
+                </div>
+                <span class="text-gray-500 text-xs">{{ item.timestamp }}</span>
+            </div>
+            <div class="text-gray-400 text-sm">{{ item.content }}</div>
+        </div>
+        {% else %}
+        <div class="p-3 text-gray-500">No recent activity</div>
+        {% endfor %}
+    </div>
+    <div class="mt-2 text-right">
+        <a href="/messages" class="text-blue-400 hover:text-blue-300 text-sm">View all messages →</a>
+    </div>
+</section>

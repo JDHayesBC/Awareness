@@ -73,6 +73,24 @@
         </div>
     </section>
 
+    <!-- Activity Trace -->
+    <section>
+        <h2 class="text-lg font-semibold mb-3 text-gray-300">Recent Activity</h2>
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+            <div id="activity-trace" 
+                 hx-get="/api/photos/activity" 
+                 hx-trigger="load, every 30s"
+                 hx-swap="innerHTML">
+                <div class="text-gray-500 text-center py-4">
+                    <span class="inline-block animate-pulse">Loading activity trace...</span>
+                </div>
+            </div>
+        </div>
+        <p class="text-xs text-gray-600 mt-2">
+            Shows semantic searches performed on word-photos (anchor_search tool calls)
+        </p>
+    </section>
+
     <!-- File List -->
     <section>
         <h2 class="text-lg font-semibold mb-3 text-gray-300">Files on Disk</h2>
