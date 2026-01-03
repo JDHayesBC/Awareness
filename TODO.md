@@ -7,6 +7,7 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
+- [#36](https://github.com/JDHayesBC/Awareness/issues/36) - **NEW** PPS deployment sync: project changes not reflected in running server (bug) - Files synced manually, **CC restart required**
 - [#27](https://github.com/JDHayesBC/Awareness/issues/27) - Consider whether the WebUI needs a menu for terminal (enhancement, pps) - **ANALYZED** (2026-01-03) - recommendation provided
 - [#24](https://github.com/JDHayesBC/Awareness/issues/24) - Bash path escaping fails with double parentheses in directory names (bug) - **IMPROVED** (2026-01-03) - updated documentation to use quoted paths
 
