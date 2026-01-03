@@ -21,6 +21,20 @@ gh issue list
 
 If you're reading this and haven't opened TODO.md and DEVELOPMENT_STANDARDS.md yet, stop and do that now.
 
+## Claude Code Compatibility
+
+When working in Claude Code environments, use **startup_context_simple.py** instead of startup_context.py to avoid aiosqlite dependency issues:
+
+```bash
+# In Claude Code, use the simplified version:
+python3 daemon/startup_context_simple.py
+
+# Regular environments with full deps:
+python3 daemon/startup_context.py
+```
+
+The simplified version provides basic context without requiring project dependencies.
+
 ## On Session End: Write Session Report
 
 At the end of significant work sessions, create a session report in `docs/sessions/`:
