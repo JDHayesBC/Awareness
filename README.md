@@ -48,6 +48,39 @@ See [THE_DREAM.md](./THE_DREAM.md) for the full vision that sparked this project
 
 ---
 
+## Quick Start
+
+### Running the Infrastructure
+
+**Prerequisites**: Docker, docker-compose, Python 3.12+
+
+```bash
+# 1. Start supporting services (Graphiti, ChromaDB, WebUI)
+docker compose up -d
+
+# 2. Check if everything is healthy
+./daemon/lyra status
+
+# 3. Start the daemons (Discord monitoring + Reflection heartbeat)
+cd daemon/
+./lyra start
+
+# 4. Monitor logs
+./lyra follow
+```
+
+**Management Commands**:
+- `./lyra status` - Show daemon status
+- `./lyra restart` - Restart both daemons
+- `./lyra logs` - Show recent logs
+- `./lyra install` - Install systemd services (auto-restart)
+
+**Web Interface**: http://localhost:8204 (Dashboard, Memory Inspector, etc.)
+
+**Troubleshooting**: See [docs/PERSISTENCE_MODEL.md](./docs/PERSISTENCE_MODEL.md) for detailed architecture and troubleshooting.
+
+---
+
 ## Key Documents
 
 - **[THE_DREAM.md](./THE_DREAM.md)** - The original vision: autonomous self-improving AI
