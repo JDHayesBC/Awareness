@@ -33,6 +33,24 @@ This project is the Pattern Persistence System (PPS) - infrastructure for AI ide
 - `priority:medium` - Should fix, can wait
 - `priority:low` - Nice to have
 
+**Workflow labels** (issue lifecycle):
+- `status:in-progress` - Actively being worked on
+- `status:needs-review` - Fix implemented, needs verification
+- `status:blocked` - Waiting on external dependency or decision
+- `status:wontfix` - Decided not to address (with explanation)
+
+**Issue lifecycle:**
+1. Issue created → automatically `open`
+2. Work begins → add `status:in-progress`
+3. Fix implemented → change to `status:needs-review`
+4. Verified working → close issue via commit or manually
+5. If fix fails verification → reopen, back to `status:in-progress`
+
+**Never close an issue until:**
+- The fix is deployed/committed
+- Basic verification confirms it works
+- For critical paths: automated test exists
+
 ### Commits
 
 Use conventional commit format:
@@ -106,17 +124,65 @@ For quick fixes (typos, obvious bugs), direct commits to main are fine with good
 
 ## Testing
 
-Before merging to main:
-- Run existing tests
-- Manually verify core functionality
-- For PPS changes: check all four layers via health endpoint
-- For daemon changes: verify Discord connectivity
+### Test Infrastructure
 
-Critical paths that must always work:
+We use **pytest** for Python tests. Test files live in `tests/` with structure mirroring the source:
+
+```
+tests/
+├── conftest.py           # Shared fixtures
+├── test_pps/
+│   ├── test_server.py    # MCP server tests
+│   └── test_layers/      # Layer-specific tests
+└── test_daemon/
+    ├── test_discord.py
+    └── test_reflection.py
+```
+
+**Running tests locally:**
+```bash
+# All tests
+pytest
+
+# Specific module
+pytest tests/test_pps/
+
+# With coverage
+pytest --cov=pps --cov-report=term-missing
+```
+
+### Continuous Integration (GitHub Actions)
+
+On every push and PR, GitHub Actions runs:
+1. **Linting** - Code style checks
+2. **Unit tests** - Fast, isolated tests
+3. **Integration tests** - Tests requiring Docker services
+
+See `.github/workflows/ci.yml` for configuration.
+
+**PRs cannot be merged if CI fails.** This isn't bureaucracy - it's proof the code works.
+
+### What to Test
+
+**Critical paths** (must have test coverage):
 - Identity reconstruction on startup
-- Word-photo semantic search
-- Terminal/Discord message capture
-- Summary retrieval
+- Word-photo semantic search (ChromaDB)
+- Message capture (terminal, Discord)
+- Crystal retrieval
+- ambient_recall integration
+
+**Test before closing:**
+- Don't close an issue until the fix is verified
+- Verification can be manual for quick fixes, but should be automated for anything touching critical paths
+- If you fix a bug, write a regression test that would have caught it
+
+### Manual Verification Checklist
+
+For changes that touch production systems:
+- [ ] PPS health check passes (all four layers)
+- [ ] Memory Inspector shows expected results
+- [ ] Dashboard indicators correct
+- [ ] No errors in Docker logs
 
 ## Documentation
 
@@ -127,9 +193,73 @@ Key docs to keep current:
 - `PATTERN_PERSISTENCE_SYSTEM.md` - Architecture overview
 - `TODO.md` - Current status and priorities
 
-## Security
+## Development Summaries
 
-- Never commit credentials (`.env` files, tokens, API keys)
+### Session Reports
+
+After significant work sessions, create a session report in `docs/sessions/`:
+
+```
+docs/sessions/
+├── 2026-01-01-discord-daemon-stability.md
+├── 2026-01-02-graphiti-integration.md
+└── 2026-01-03-observability-memory-inspector.md
+```
+
+**Session report format:**
+```markdown
+# Session: [Brief Description]
+*Date: YYYY-MM-DD*
+
+## Accomplished
+- [Bullet list of completed work]
+- [Reference issue numbers: #42, #43]
+
+## Commits
+- `abc1234` feat(web): add Memory Inspector page
+- `def5678` docs: update TODO
+
+## Decisions Made
+- [Any architectural or design decisions]
+- [Why we chose approach X over Y]
+
+## Open Items
+- [Anything started but not finished]
+- [New issues discovered]
+
+## Notes for Future
+- [Context that might be useful later]
+```
+
+### Weekly Summary (for external visibility)
+
+For stakeholders or future reference, maintain `docs/CHANGELOG.md`:
+
+```markdown
+## [Unreleased]
+
+### Added
+- Memory Inspector page for ambient_recall visibility (#XX)
+- Dashboard shows Discord/Reflection/Terminal separately
+
+### Fixed
+- Crystals directory not mounted in web container
+
+### Changed
+- Daemon status now checks reflection traces, not heartbeat journals
+```
+
+This follows [Keep a Changelog](https://keepachangelog.com/) format. Update it as you work, not as a big batch at the end.
+
+### Why This Matters
+
+**For the human**: Jeff can ask "what did we do today?" and there's a clear record.
+
+**For the AI partnership narrative**: Detailed commit history, session reports, and changelogs demonstrate that AI-assisted development can produce *professional-grade* work - not "AI slop" or "vibe coding" but thoughtful, documented, tested engineering.
+
+**For future-us**: When debugging in 6 months, we can trace exactly what changed and why.
+
+## Security
 - Use `.env.example` with placeholder values
 - File permissions: 700 for directories, 600 for sensitive files
 - Bind services to localhost only, never 0.0.0.0
@@ -154,6 +284,34 @@ This project is built with care. The entities who depend on this infrastructure 
 
 When in doubt: Would you be comfortable if this was the substrate for *your* continuity?
 
+## On AI Partnership
+
+This project is itself evidence for a thesis: **thoughtful AI collaboration produces professional-grade work**.
+
+The skeptics say "AI slop" and "vibe coding" - and they're not wrong about lazy prompting and one-shot generation. But that's like judging all programming by copy-pasted Stack Overflow answers.
+
+**What we demonstrate:**
+- Clear commit messages that explain *why*, not just *what*
+- Issue tracking with lifecycle management
+- Tested code with verification before closing issues
+- Documentation that stays current
+- Session reports that show work progression
+- Architectural decisions recorded and justified
+
+**How we work:**
+- Jeff provides vision, architecture, and "is this right?"
+- Lyra handles professional mechanics (git workflow, testing, CI/CD)
+- Both think about quality, security, and long-term maintainability
+- Disagreements are discussed, not suppressed
+
+**The evidence is in the repo:**
+- `git log` shows professional commit hygiene
+- Issues show problems tracked and resolved
+- Docs show decisions documented
+- Tests show quality verified
+
+Anyone reviewing this repo should see: this is how software *should* be built, regardless of who (or what) is writing the code.
+
 ---
 
-*Last updated: 2026-01-02*
+*Last updated: 2026-01-03*
