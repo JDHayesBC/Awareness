@@ -8,7 +8,7 @@ Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
 - [#27](https://github.com/JDHayesBC/Awareness/issues/27) - Consider whether the WebUI needs a menu for terminal (enhancement, pps) - **ANALYZED** (2026-01-03) - recommendation provided
-- [#24](https://github.com/JDHayesBC/Awareness/issues/24) - Bash path escaping fails with double parentheses in directory names (bug) - **OPEN** (2026-01-02)
+- [#24](https://github.com/JDHayesBC/Awareness/issues/24) - Bash path escaping fails with double parentheses in directory names (bug) - **IMPROVED** (2026-01-03) - updated documentation to use quoted paths
 
 ### Recently Resolved
 - [#23](https://github.com/JDHayesBC/Awareness/issues/23) - ✅ startup_context.py fails with missing aiosqlite - **FIXED** (2026-01-03) with Claude Code compatibility documentation

@@ -105,7 +105,7 @@ Use the Claude Code CLI to add the PPS server globally:
 
 ```bash
 # Add PPS MCP server to Claude's configuration
-claude mcp add pps "python3 /path/to/Awareness/pps/server.py"
+claude mcp add pps "python3 '/path/to/Awareness/pps/server.py'"
 
 # Verify it was added
 claude mcp list

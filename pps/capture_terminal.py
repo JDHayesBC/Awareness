@@ -14,6 +14,9 @@ Usage:
     
     # Manual logging mode (for integration into existing tools)
     python capture_terminal.py --manual --session-id "my-session"
+    
+Note: When using paths with special characters (like "))" in directory names),
+always quote your paths properly in commands to avoid shell syntax errors.
 """
 
 import argparse

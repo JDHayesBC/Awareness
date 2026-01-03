@@ -27,11 +27,13 @@ When working in Claude Code environments, use **startup_context_simple.py** inst
 
 ```bash
 # In Claude Code, use the simplified version:
-python3 daemon/startup_context_simple.py
+python3 "daemon/startup_context_simple.py"
 
 # Regular environments with full deps:
-python3 daemon/startup_context.py
+python3 "daemon/startup_context.py"
 ```
+
+**Important**: Always quote file paths in bash commands. This project may be installed in directories with special characters (like `))` in the path), which require proper quoting to avoid shell syntax errors.
 
 The simplified version provides basic context without requiring project dependencies.
 
