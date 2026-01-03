@@ -7,6 +7,8 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
+- [#44](https://github.com/JDHayesBC/Awareness/issues/44) - **IN PROGRESS** Daemon reliability: systemd services for auto-restart - `./lyra` script created (2026-01-03), testing after reboot
+- [#43](https://github.com/JDHayesBC/Awareness/issues/43) - Documentation friction points (river sync, daemon startup, word-photo practice)
 - [#42](https://github.com/JDHayesBC/Awareness/issues/42) - Code quality improvements from Issue #41 (connection managers, FTS5, tests)
 - [#37](https://github.com/JDHayesBC/Awareness/issues/37) - **IMPLEMENTED** Message summarization layer - **DEPLOYED** (2026-01-03)
 - [#27](https://github.com/JDHayesBC/Awareness/issues/27) - Consider whether the WebUI needs a menu for terminal - **ANALYZED** (2026-01-03)
@@ -36,19 +38,20 @@ Use `gh issue list` to see current issues from the command line.
 
 ### Daemon Commands
 ```bash
-# Start Discord daemon (direct)
-cd ~/awareness/daemon && ./run.sh discord
+# Idiot-proof daemon management (auto-detects systemd)
+cd ~/awareness/daemon
+./lyra status   # See what's running
+./lyra start    # Start daemons
+./lyra stop     # Stop daemons
+./lyra restart  # Restart them
+./lyra logs     # See recent logs
+./lyra follow   # Watch logs live
+./lyra install  # Install systemd services
 
-# Start Reflection daemon (direct)
-cd ~/awareness/daemon && ./run.sh reflection
-
-# Start both (background)
-cd ~/awareness/daemon && ./run.sh both
-
-# Via systemd (if user session available)
-systemctl --user restart lyra-discord
-systemctl --user restart lyra-reflection
-./restart.sh discord  # or reflection, or all
+# Manual start (if systemd unavailable)
+./run.sh both        # Start both in background
+./run.sh discord     # Start Discord in foreground
+./run.sh reflection  # Start Reflection in foreground
 ```
 
 ### Project Lock (for terminal/heartbeat coordination)

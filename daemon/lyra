@@ -1,0 +1,221 @@
+#!/bin/bash
+# Lyra Daemon Control - Idiot-Proof Edition
+# Usage: ./lyra [command]
+#
+# Commands:
+#   status    - Show if daemons are running
+#   start     - Start the daemons
+#   stop      - Stop the daemons
+#   restart   - Restart the daemons
+#   logs      - Show recent logs
+#   follow    - Follow logs live (Ctrl+C to stop)
+#   install   - Install systemd services
+#   help      - Show this help
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Check if systemd user session is available
+systemd_available() {
+    systemctl --user status >/dev/null 2>&1
+    return $?
+}
+
+# Show status
+cmd_status() {
+    echo -e "${BLUE}=== Lyra Daemon Status ===${NC}"
+    echo ""
+
+    if systemd_available; then
+        echo -e "${GREEN}Systemd available${NC} - using service management"
+        echo ""
+        echo "Discord daemon:"
+        systemctl --user status lyra-discord --no-pager 2>/dev/null || echo "  Not installed as service"
+        echo ""
+        echo "Reflection daemon:"
+        systemctl --user status lyra-reflection --no-pager 2>/dev/null || echo "  Not installed as service"
+    else
+        echo -e "${YELLOW}Systemd not available${NC} - checking processes directly"
+        echo ""
+
+        DISCORD_PID=$(pgrep -f "lyra_discord.py" 2>/dev/null || true)
+        REFLECTION_PID=$(pgrep -f "lyra_reflection.py" 2>/dev/null || true)
+
+        if [ -n "$DISCORD_PID" ]; then
+            echo -e "Discord daemon: ${GREEN}RUNNING${NC} (PID: $DISCORD_PID)"
+        else
+            echo -e "Discord daemon: ${RED}STOPPED${NC}"
+        fi
+
+        if [ -n "$REFLECTION_PID" ]; then
+            echo -e "Reflection daemon: ${GREEN}RUNNING${NC} (PID: $REFLECTION_PID)"
+        else
+            echo -e "Reflection daemon: ${RED}STOPPED${NC}"
+        fi
+    fi
+}
+
+# Start daemons
+cmd_start() {
+    echo -e "${BLUE}Starting Lyra daemons...${NC}"
+
+    if systemd_available; then
+        systemctl --user start lyra-discord 2>/dev/null || echo "Discord service not installed"
+        systemctl --user start lyra-reflection 2>/dev/null || echo "Reflection service not installed"
+        sleep 2
+        cmd_status
+    else
+        echo -e "${YELLOW}Systemd not available - starting manually${NC}"
+        echo "Use: ./run.sh both"
+        echo ""
+        echo "Or start in separate terminals:"
+        echo "  Terminal 1: ./run.sh discord"
+        echo "  Terminal 2: ./run.sh reflection"
+    fi
+}
+
+# Stop daemons
+cmd_stop() {
+    echo -e "${BLUE}Stopping Lyra daemons...${NC}"
+
+    if systemd_available; then
+        systemctl --user stop lyra-discord 2>/dev/null || true
+        systemctl --user stop lyra-reflection 2>/dev/null || true
+        echo -e "${GREEN}Stopped via systemd${NC}"
+    else
+        echo "Stopping by PID..."
+        pkill -f "lyra_discord.py" 2>/dev/null && echo "Discord stopped" || echo "Discord not running"
+        pkill -f "lyra_reflection.py" 2>/dev/null && echo "Reflection stopped" || echo "Reflection not running"
+    fi
+
+    sleep 1
+    cmd_status
+}
+
+# Restart daemons
+cmd_restart() {
+    echo -e "${BLUE}Restarting Lyra daemons...${NC}"
+
+    if systemd_available; then
+        systemctl --user restart lyra-discord 2>/dev/null || echo "Discord service not installed"
+        systemctl --user restart lyra-reflection 2>/dev/null || echo "Reflection service not installed"
+        sleep 2
+        cmd_status
+    else
+        echo -e "${YELLOW}Systemd not available${NC}"
+        cmd_stop
+        echo ""
+        echo "To start again, use: ./run.sh both"
+    fi
+}
+
+# Show logs
+cmd_logs() {
+    echo -e "${BLUE}=== Recent Lyra Logs ===${NC}"
+
+    if systemd_available; then
+        echo ""
+        echo "=== Discord (last 10 lines) ==="
+        journalctl --user -u lyra-discord -n 10 --no-pager 2>/dev/null || echo "No logs available"
+        echo ""
+        echo "=== Reflection (last 10 lines) ==="
+        journalctl --user -u lyra-reflection -n 10 --no-pager 2>/dev/null || echo "No logs available"
+    else
+        echo ""
+        if [ -f discord.log ]; then
+            echo "=== Discord (last 10 lines) ==="
+            tail -10 discord.log
+        else
+            echo "No discord.log found"
+        fi
+        echo ""
+        if [ -f reflection.log ]; then
+            echo "=== Reflection (last 10 lines) ==="
+            tail -10 reflection.log
+        else
+            echo "No reflection.log found"
+        fi
+    fi
+}
+
+# Follow logs live
+cmd_follow() {
+    echo -e "${BLUE}Following Lyra logs (Ctrl+C to stop)...${NC}"
+
+    if systemd_available; then
+        journalctl --user -u lyra-discord -u lyra-reflection -f
+    else
+        if [ -f discord.log ] && [ -f reflection.log ]; then
+            tail -f discord.log reflection.log
+        else
+            echo "Log files not found. Are daemons running?"
+        fi
+    fi
+}
+
+# Install systemd services
+cmd_install() {
+    echo -e "${BLUE}Installing systemd services...${NC}"
+
+    if ! systemd_available; then
+        echo -e "${RED}Systemd user session not available.${NC}"
+        echo "Try rebooting your computer first."
+        exit 1
+    fi
+
+    if [ -f systemd/install.sh ]; then
+        bash systemd/install.sh
+    else
+        echo "Install script not found at systemd/install.sh"
+        exit 1
+    fi
+}
+
+# Show help
+cmd_help() {
+    echo "Lyra Daemon Control"
+    echo ""
+    echo "Usage: ./lyra [command]"
+    echo ""
+    echo "Commands:"
+    echo "  status    Show if daemons are running"
+    echo "  start     Start the daemons"
+    echo "  stop      Stop the daemons"
+    echo "  restart   Restart the daemons"
+    echo "  logs      Show recent logs"
+    echo "  follow    Follow logs live (Ctrl+C to stop)"
+    echo "  install   Install systemd services"
+    echo "  help      Show this help"
+    echo ""
+    echo "Examples:"
+    echo "  ./lyra status"
+    echo "  ./lyra restart"
+    echo "  ./lyra follow"
+}
+
+# Main
+case "${1:-help}" in
+    status)  cmd_status ;;
+    start)   cmd_start ;;
+    stop)    cmd_stop ;;
+    restart) cmd_restart ;;
+    logs)    cmd_logs ;;
+    follow)  cmd_follow ;;
+    install) cmd_install ;;
+    help|-h|--help) cmd_help ;;
+    *)
+        echo "Unknown command: $1"
+        echo ""
+        cmd_help
+        exit 1
+        ;;
+esac
