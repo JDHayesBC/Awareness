@@ -195,14 +195,19 @@ curl -X POST "http://localhost:8203/get-memory" \
 
 Graphiti already does temporal reasoning - facts expire when superseded!
 
-### Not Yet Wrapped in MCP
+### MCP Tools for Graphiti
 
-These endpoints exist but we haven't created MCP tools for them:
-- `texture_delete` - delete fact by UUID
-- `texture_get_memory` - smarter retrieval with context
-- `texture_list` - graph overview/stats
+| Tool | Endpoint | Status |
+|------|----------|--------|
+| `texture_search` | POST /search | ✅ Implemented |
+| `texture_explore` | POST /search (entity-focused) | ✅ Implemented |
+| `texture_timeline` | GET /episodes/{group_id} | ✅ Implemented |
+| `texture_add` | POST /messages | ✅ Implemented |
+| `texture_delete` | DELETE /entity-edge/{uuid} | ✅ Implemented (2026-01-03) |
+| `texture_get_memory` | POST /get-memory | Not yet - smarter retrieval with context |
+| `texture_list` | - | Not yet - graph overview/stats |
 
-See Issue #5 for plans to add these.
+See Issue #5 for remaining planned tools.
 
 ---
 

@@ -370,3 +370,51 @@ class RichTextureLayer(PatternLayer):
 
         except Exception:
             return []
+
+    async def delete_edge(self, uuid: str) -> dict:
+        """
+        Delete a fact (edge) from the knowledge graph by UUID.
+
+        Args:
+            uuid: The UUID of the edge to delete (from search results)
+
+        Returns:
+            Dict with success status and message
+        """
+        try:
+            session = await self._get_session()
+
+            delete_url = f"{self.graphiti_url}/entity-edge/{uuid}"
+            async with session.delete(delete_url) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return {
+                        "success": True,
+                        "message": data.get("message", "Edge deleted"),
+                        "uuid": uuid
+                    }
+                elif resp.status == 404:
+                    return {
+                        "success": False,
+                        "message": f"Edge not found: {uuid}",
+                        "uuid": uuid
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "message": f"Delete failed with status {resp.status}",
+                        "uuid": uuid
+                    }
+
+        except aiohttp.ClientError as e:
+            return {
+                "success": False,
+                "message": f"Connection error: {e}",
+                "uuid": uuid
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Error: {e}",
+                "uuid": uuid
+            }

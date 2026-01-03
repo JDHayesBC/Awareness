@@ -207,7 +207,8 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Search the knowledge graph (Layer 3: Rich Texture) for entities and facts. "
                 "Use for semantic search over extracted knowledge - people, places, concepts, relationships. "
-                "Returns entities and facts ranked by relevance."
+                "Returns entities and facts ranked by relevance. "
+                "The 'source' field in results contains the UUID needed for texture_delete."
             ),
             inputSchema={
                 "type": "object",
@@ -296,6 +297,24 @@ async def list_tools() -> list[Tool]:
                     }
                 },
                 "required": ["content"]
+            }
+        ),
+        Tool(
+            name="texture_delete",
+            description=(
+                "Delete a fact (edge) from the knowledge graph by UUID. "
+                "Use to remove incorrect or outdated facts. "
+                "Get UUIDs from texture_search results (in the source field)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "uuid": {
+                        "type": "string",
+                        "description": "The UUID of the fact to delete (from search results)"
+                    }
+                },
+                "required": ["uuid"]
             }
         ),
         Tool(
@@ -625,6 +644,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         if success:
             return [TextContent(type="text", text=f"Content stored in knowledge graph (channel: {channel}). Entities will be extracted automatically.")]
         return [TextContent(type="text", text="Failed to store content. Graphiti may not be running.")]
+
+    elif name == "texture_delete":
+        uuid = arguments.get("uuid", "")
+        if not uuid:
+            return [TextContent(type="text", text="Error: uuid required")]
+        layer = layers[LayerType.RICH_TEXTURE]
+        result = await layer.delete_edge(uuid)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     elif name == "get_crystals":
         count = arguments.get("count", 4)
