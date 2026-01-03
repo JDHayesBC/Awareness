@@ -7,9 +7,10 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
-- [#37](https://github.com/JDHayesBC/Awareness/issues/37) - **IMPLEMENTED** Message summarization layer for high-density startup context - **DEPLOYED** (2026-01-03) - needs CC restart to activate MCP tools
-- [#27](https://github.com/JDHayesBC/Awareness/issues/27) - Consider whether the WebUI needs a menu for terminal (enhancement, pps) - **ANALYZED** (2026-01-03) - recommendation provided
-- [#24](https://github.com/JDHayesBC/Awareness/issues/24) - Bash path escaping fails with double parentheses in directory names (bug) - **IMPROVED** (2026-01-03) - updated documentation to use quoted paths
+- [#42](https://github.com/JDHayesBC/Awareness/issues/42) - Code quality improvements from Issue #41 (connection managers, FTS5, tests)
+- [#37](https://github.com/JDHayesBC/Awareness/issues/37) - **IMPLEMENTED** Message summarization layer - **DEPLOYED** (2026-01-03)
+- [#27](https://github.com/JDHayesBC/Awareness/issues/27) - Consider whether the WebUI needs a menu for terminal - **ANALYZED** (2026-01-03)
+- [#24](https://github.com/JDHayesBC/Awareness/issues/24) - Bash path escaping with double parentheses - **IMPROVED** (2026-01-03)
 
 ### Recently Resolved
 - [#36](https://github.com/JDHayesBC/Awareness/issues/36) - ✅ PPS deployment sync: project changes not reflected in running server - **FIXED** (2026-01-03) with deploy_pps.sh script and manual sync
@@ -104,7 +105,7 @@ python project_lock.py status               # Check status
 - [x] ambient_recall now surfaces rich_texture results
 - [x] Discord → Graphiti integration ✅ **IMPLEMENTED** (2026-01-02)
 
-### Phase 3: Observability Infrastructure (2026-01-02)
+### Phase 3: Observability Infrastructure (2026-01-02/03)
 - [x] daemon_traces SQLite table for structured event logging
 - [x] TraceLogger class with standard event types
 - [x] Discord daemon instrumentation (messages, API calls, Graphiti)
@@ -112,6 +113,8 @@ python project_lock.py status               # Check status
 - [x] Web API endpoints (/api/traces, /api/traces/sessions, /api/traces/session/{id})
 - [x] Traces page UI with expandable sessions and inline trace details
 - [x] Navigation link added to PPS Observatory
+- [x] Memory Inspector page (/memory) for ambient_recall visibility ✅ (2026-01-03)
+- [x] Dashboard daemon indicators updated: Discord, Reflection, Terminal (was Heartbeat)
 
 ### Daemon Architecture Refactor (2026-01-02)
 - [x] Split monolithic lyra_daemon.py into two independent daemons
