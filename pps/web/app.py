@@ -492,17 +492,20 @@ def get_channel_stats() -> dict:
 
 def get_daemon_status() -> dict:
     """Get status of daemons (best effort from available info)."""
+    from datetime import datetime, timedelta
+
     status = {
         "discord": {"status": "unknown", "detail": ""},
-        "heartbeat": {"status": "unknown", "detail": ""},
+        "reflection": {"status": "unknown", "detail": ""},
         "terminal": {"status": "unknown", "detail": ""}
     }
 
-    # Check for recent Discord messages
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+
+            # Check for recent Discord messages
             cursor.execute("""
                 SELECT created_at FROM messages
                 WHERE channel LIKE 'discord:%'
@@ -526,19 +529,40 @@ def get_daemon_status() -> dict:
             if row:
                 status["terminal"]["status"] = "active"
                 status["terminal"]["detail"] = f"Last: {row['created_at']}"
+            else:
+                status["terminal"]["status"] = "idle"
+                status["terminal"]["detail"] = "No messages"
+
+            # Check for recent reflection activity from daemon_traces
+            one_hour_ago = (datetime.now() - timedelta(hours=1)).isoformat()
+            cursor.execute("""
+                SELECT MAX(timestamp) as last_activity
+                FROM daemon_traces
+                WHERE daemon_type = 'reflection' AND timestamp > ?
+            """, (one_hour_ago,))
+            row = cursor.fetchone()
+            if row and row["last_activity"]:
+                status["reflection"]["status"] = "active"
+                status["reflection"]["detail"] = f"Last: {row['last_activity'][:19]}"
+            else:
+                # Check heartbeat journals as fallback
+                heartbeat_path = JOURNALS_PATH / "heartbeat"
+                if heartbeat_path.exists():
+                    journals = sorted(heartbeat_path.glob("*.md"), reverse=True)
+                    if journals:
+                        latest = journals[0]
+                        status["reflection"]["status"] = "idle"
+                        status["reflection"]["detail"] = f"Journal: {latest.name}"
+                    else:
+                        status["reflection"]["status"] = "idle"
+                        status["reflection"]["detail"] = "No recent activity"
+                else:
+                    status["reflection"]["status"] = "idle"
+                    status["reflection"]["detail"] = "No recent activity"
 
             conn.close()
         except Exception:
             pass
-
-    # Check for recent heartbeat journals
-    heartbeat_path = JOURNALS_PATH / "heartbeat"
-    if heartbeat_path.exists():
-        journals = sorted(heartbeat_path.glob("*.md"), reverse=True)
-        if journals:
-            latest = journals[0]
-            status["heartbeat"]["status"] = "active"
-            status["heartbeat"]["detail"] = latest.name
 
     return status
 
@@ -1410,6 +1434,103 @@ async def traces_page(
             "hours": hours
         }
     })
+
+
+# Memory Inspector - See what ambient_recall returns
+
+@app.get("/memory", response_class=HTMLResponse)
+async def memory_inspector(request: Request):
+    """Memory Inspector page - see what ambient_recall returns."""
+    return templates.TemplateResponse("memory.html", {
+        "request": request
+    })
+
+
+@app.get("/api/memory/query")
+async def api_memory_query(context: str = "startup", limit: int = 5):
+    """Query ambient_recall and return detailed results for inspection."""
+    import json
+
+    pps_url = f"http://{PPS_SERVER_HOST}:{PPS_SERVER_PORT}"
+
+    try:
+        # Call the PPS server's ambient_recall endpoint
+        resp = requests.post(
+            f"{pps_url}/tools/ambient_recall",
+            json={"context": context, "limit_per_layer": limit},
+            timeout=30
+        )
+
+        if resp.status_code != 200:
+            return {
+                "error": f"PPS server returned {resp.status_code}",
+                "results": [],
+                "stats": {}
+            }
+
+        data = resp.json()
+
+        # Parse the results and group by layer
+        results_by_layer = {
+            "raw_capture": [],
+            "core_anchors": [],
+            "rich_texture": [],
+            "crystallization": [],
+            "recent_turns": [],
+            "message_summaries": []
+        }
+
+        total_chars = 0
+        total_items = 0
+
+        # Handle both old format (results array) and new format with sections
+        if "results" in data:
+            for item in data.get("results", []):
+                layer = item.get("layer", "unknown")
+                content = item.get("content", "")
+                total_chars += len(content)
+                total_items += 1
+
+                results_by_layer.setdefault(layer, []).append({
+                    "content": content[:500] + "..." if len(content) > 500 else content,
+                    "full_length": len(content),
+                    "source": item.get("source", ""),
+                    "relevance": item.get("relevance_score", 0),
+                    "metadata": item.get("metadata", {})
+                })
+
+        # Also check for clock/time_note
+        clock = data.get("clock")
+        time_note = data.get("time_note")
+
+        # Estimate tokens (rough: 4 chars per token)
+        estimated_tokens = total_chars // 4
+
+        return {
+            "query": context,
+            "limit_per_layer": limit,
+            "results_by_layer": results_by_layer,
+            "stats": {
+                "total_items": total_items,
+                "total_chars": total_chars,
+                "estimated_tokens": estimated_tokens,
+                "clock": clock,
+                "time_note": time_note
+            }
+        }
+
+    except requests.exceptions.ConnectionError:
+        return {
+            "error": "Cannot connect to PPS server",
+            "results": [],
+            "stats": {}
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "results": [],
+            "stats": {}
+        }
 
 
 if __name__ == "__main__":

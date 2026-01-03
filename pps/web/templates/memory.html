@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+
+{% block title %}Memory Inspector | PPS Observatory{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-bold text-blue-400">Memory Inspector</h1>
+            <p class="text-gray-400 text-sm mt-1">See what ambient_recall returns for any query</p>
+        </div>
+    </div>
+
+    <!-- Query Form -->
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="flex flex-wrap gap-4 items-end">
+            <div class="flex-1 min-w-64">
+                <label class="block text-sm font-medium text-gray-300 mb-1">Context Query</label>
+                <input
+                    type="text"
+                    id="context-query"
+                    value="startup"
+                    placeholder="Enter context (e.g., 'startup', 'debugging', 'what did we work on')"
+                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-400"
+                >
+            </div>
+            <div class="w-32">
+                <label class="block text-sm font-medium text-gray-300 mb-1">Limit per Layer</label>
+                <select
+                    id="limit-select"
+                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-400"
+                >
+                    <option value="3">3</option>
+                    <option value="5" selected>5</option>
+                    <option value="10">10</option>
+                    <option value="20">20</option>
+                </select>
+            </div>
+            <div>
+                <button
+                    onclick="runQuery()"
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2 rounded-md transition-colors"
+                >
+                    Query Memory
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Summary -->
+    <div id="stats-panel" class="hidden bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <h2 class="text-lg font-semibold text-gray-300 mb-3">Query Results Summary</h2>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="text-center">
+                <div id="stat-items" class="text-2xl font-bold text-blue-400">-</div>
+                <div class="text-gray-500 text-sm">Total Items</div>
+            </div>
+            <div class="text-center">
+                <div id="stat-chars" class="text-2xl font-bold text-green-400">-</div>
+                <div class="text-gray-500 text-sm">Characters</div>
+            </div>
+            <div class="text-center">
+                <div id="stat-tokens" class="text-2xl font-bold text-purple-400">-</div>
+                <div class="text-gray-500 text-sm">Est. Tokens</div>
+            </div>
+            <div class="text-center">
+                <div id="stat-clock" class="text-2xl font-bold text-yellow-400">-</div>
+                <div class="text-gray-500 text-sm">Clock</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Results by Layer -->
+    <div id="results-container" class="space-y-4">
+        <div class="text-center text-gray-500 py-8">
+            Enter a query and click "Query Memory" to see what ambient_recall returns.
+        </div>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loading" class="hidden text-center text-gray-400 py-8">
+        <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-400"></div>
+        <div class="mt-2">Querying memory layers...</div>
+    </div>
+
+    <!-- Error State -->
+    <div id="error-panel" class="hidden bg-red-900/50 rounded-lg p-4 border border-red-700 text-red-300">
+        <span id="error-message"></span>
+    </div>
+</div>
+
+<script>
+async function runQuery() {
+    const context = document.getElementById('context-query').value || 'startup';
+    const limit = document.getElementById('limit-select').value;
+
+    // Show loading
+    document.getElementById('loading').classList.remove('hidden');
+    document.getElementById('results-container').classList.add('hidden');
+    document.getElementById('stats-panel').classList.add('hidden');
+    document.getElementById('error-panel').classList.add('hidden');
+
+    try {
+        const response = await fetch(`/api/memory/query?context=${encodeURIComponent(context)}&limit=${limit}`);
+        const data = await response.json();
+
+        document.getElementById('loading').classList.add('hidden');
+
+        if (data.error) {
+            document.getElementById('error-message').textContent = data.error;
+            document.getElementById('error-panel').classList.remove('hidden');
+            return;
+        }
+
+        // Update stats
+        document.getElementById('stats-panel').classList.remove('hidden');
+        document.getElementById('stat-items').textContent = data.stats.total_items || 0;
+        document.getElementById('stat-chars').textContent = (data.stats.total_chars || 0).toLocaleString();
+        document.getElementById('stat-tokens').textContent = '~' + ((data.stats.estimated_tokens || 0).toLocaleString());
+        document.getElementById('stat-clock').textContent = data.stats.clock || '-';
+
+        // Render results by layer
+        renderResults(data.results_by_layer);
+        document.getElementById('results-container').classList.remove('hidden');
+
+    } catch (error) {
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('error-message').textContent = 'Failed to query: ' + error.message;
+        document.getElementById('error-panel').classList.remove('hidden');
+    }
+}
+
+function renderResults(resultsByLayer) {
+    const container = document.getElementById('results-container');
+
+    const layerInfo = {
+        'crystallization': { name: 'Layer 4: Crystallization', color: 'purple', icon: '💎' },
+        'core_anchors': { name: 'Layer 2: Core Anchors (Word-Photos)', color: 'blue', icon: '📸' },
+        'rich_texture': { name: 'Layer 3: Rich Texture (Graph)', color: 'green', icon: '🕸️' },
+        'raw_capture': { name: 'Layer 1: Raw Capture', color: 'gray', icon: '📝' },
+        'recent_turns': { name: 'Recent Turns', color: 'yellow', icon: '💬' },
+        'message_summaries': { name: 'Message Summaries', color: 'orange', icon: '📋' }
+    };
+
+    let html = '';
+
+    for (const [layer, items] of Object.entries(resultsByLayer)) {
+        if (!items || items.length === 0) continue;
+
+        const info = layerInfo[layer] || { name: layer, color: 'gray', icon: '📄' };
+        const totalChars = items.reduce((sum, item) => sum + (item.full_length || 0), 0);
+
+        html += `
+            <div class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+                <div class="p-4 border-b border-gray-700 flex items-center justify-between cursor-pointer hover:bg-gray-750" onclick="toggleLayer('${layer}')">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-xl">${info.icon}</span>
+                        <span class="font-semibold text-${info.color}-400">${info.name}</span>
+                        <span class="text-gray-500 text-sm">${items.length} items</span>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <span class="text-gray-500 text-sm">${totalChars.toLocaleString()} chars (~${Math.round(totalChars/4)} tokens)</span>
+                        <svg id="icon-${layer}" class="w-5 h-5 text-gray-500 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                        </svg>
+                    </div>
+                </div>
+                <div id="content-${layer}" class="hidden p-4 bg-gray-900 space-y-3">
+                    ${items.map((item, idx) => `
+                        <div class="border-b border-gray-800 pb-3 last:border-0 last:pb-0">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-xs text-gray-500 font-mono">${item.source || 'unknown'}</span>
+                                <span class="text-xs text-gray-600">relevance: ${(item.relevance || 0).toFixed(2)} | ${item.full_length} chars</span>
+                            </div>
+                            <pre class="text-sm text-gray-300 whitespace-pre-wrap font-mono bg-gray-800 p-2 rounded overflow-x-auto">${escapeHtml(item.content)}</pre>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    if (!html) {
+        html = '<div class="text-center text-gray-500 py-8">No results found for this query.</div>';
+    }
+
+    container.innerHTML = html;
+}
+
+function toggleLayer(layer) {
+    const content = document.getElementById(`content-${layer}`);
+    const icon = document.getElementById(`icon-${layer}`);
+
+    if (content.classList.contains('hidden')) {
+        content.classList.remove('hidden');
+        icon.classList.add('rotate-180');
+    } else {
+        content.classList.add('hidden');
+        icon.classList.remove('rotate-180');
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Run startup query on page load
+document.addEventListener('DOMContentLoaded', () => {
+    runQuery();
+});
+</script>
+{% endblock %}
