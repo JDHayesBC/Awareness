@@ -145,4 +145,65 @@ If MCP tools aren't available:
 
 ---
 
+## Graphiti API Reference (Layer 3)
+
+*Added 2026-01-03 - Exploration revealed capabilities beyond what we'd wrapped*
+
+### Endpoints Available
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/search` | POST | Semantic search for facts/entities |
+| `/messages` | POST | Ingest content (auto-extracts entities) |
+| `/healthcheck` | GET | Health status |
+| `/episodes/{group_id}` | GET | List episodes by time |
+| `/get-memory` | POST | **Smart contextual retrieval** |
+| `/entity-edge/{uuid}` | GET | Get specific fact |
+| `/entity-edge/{uuid}` | DELETE | **Delete a fact** |
+| `/entity-node` | POST | Add entity |
+| `/group/{group_id}` | GET | Group info |
+| `/clear` | POST | Nuclear option - clear graph |
+
+### Key Discovery: Deletion Works
+
+Facts can be deleted by UUID:
+```bash
+curl -X DELETE "http://localhost:8203/entity-edge/{uuid}"
+# Returns: {"message": "Entity Edge deleted", "success": true}
+```
+
+UUIDs come from search results in the `source` field.
+
+### Key Discovery: `/get-memory` is Smarter
+
+Unlike `/search`, `/get-memory` takes conversation context and returns:
+- Contextually relevant facts
+- Temporal metadata: `valid_at`, `invalid_at`, `expired_at`
+
+```bash
+curl -X POST "http://localhost:8203/get-memory" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "group_id": "lyra",
+    "max_facts": 10,
+    "center_node_uuid": null,
+    "messages": [
+      {"role": "user", "role_type": "user", "content": "conversation context here"}
+    ]
+  }'
+```
+
+Graphiti already does temporal reasoning - facts expire when superseded!
+
+### Not Yet Wrapped in MCP
+
+These endpoints exist but we haven't created MCP tools for them:
+- `texture_delete` - delete fact by UUID
+- `texture_get_memory` - smarter retrieval with context
+- `texture_list` - graph overview/stats
+
+See Issue #5 for plans to add these.
+
+---
+
 *This reference exists because we kept hitting MCP scoping issues. When future-me has tool availability problems, start here.*
