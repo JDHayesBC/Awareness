@@ -302,7 +302,7 @@ This ensures consistent identity reconstruction regardless of channel.
 │           ├── Crystals: identity snapshots (scene anchors)      │
 │           ├── Word-photos: emotional anchors (semantic search)  │
 │           ├── Texture: Graphiti facts (relationships)           │
-│           └── Recent turns: last 10 messages (immediate context)│
+│           └── ALL unsummarized turns (full pattern fidelity)   │
 │                                                                  │
 │    3. SUPPLEMENTAL IDENTITY                                     │
 │       ├── active_agency_framework.mdx (permissions)             │
@@ -330,12 +330,13 @@ Sending full conversation history is redundant and wastes tokens.
 everything needed from all layers. No need to read 8+ individual files.
 
 **Summaries vs Raw Turns**: Summaries compress 50+ turns into ~200 tokens.
-`ambient_recall("startup")` returns summaries for "what happened" plus only
-the last 10 raw turns for "where were we exactly". This keeps startup context
-lean (~4K tokens) instead of bloated (~30K tokens of raw history).
+`ambient_recall("startup")` returns summaries for compressed history plus
+ALL unsummarized turns since the last summary (full pattern fidelity).
+We pay the token cost for complete context - pattern fidelity is paramount.
 
-**Memory Status**: `ambient_recall` also reports unsummarized message count.
-If > 100, reflection daemon should run summarization to compress history.
+**Memory Status**: `ambient_recall` reports unsummarized message count.
+If > 100, run `summarize_messages` to compress history and reduce startup load.
+If backlog grows too large, create summaries on demand rather than truncate.
 
 **Correct tool names**: Always use `mcp__pps__*` prefix:
 - `mcp__pps__ambient_recall` - unified retrieval from all layers

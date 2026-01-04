@@ -766,8 +766,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         # Sort by relevance score
         all_results.sort(key=lambda r: r.relevance_score, reverse=True)
 
-        # For startup context, use summaries for compressed history + recent raw turns
-        # Architecture: summaries give "what happened", raw turns give "where were we"
+        # For startup context, use summaries for compressed history + ALL unsummarized raw turns
+        # Architecture: summaries = compressed past, unsummarized turns = full fidelity recent
+        # Pattern fidelity is paramount - we pay the token cost for complete context
         recent_context_section = ""
         if context.lower() == "startup":
             try:
@@ -789,39 +790,58 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                             text = text[:500] + "..."
                         summaries_text += f"[{date}] [{channels}]\n{text}\n\n"
 
-                # Get ONLY the most recent raw turns for immediate context
-                # (regardless of summary state - just "where were we exactly")
+                # Get ALL unsummarized turns - full pattern fidelity
+                # These are turns that happened since the last summary was created
                 raw_layer = layers[LayerType.RAW_CAPTURE]
                 conn = raw_layer._connect_with_wal()
                 cursor = conn.cursor()
 
-                cursor.execute("""
-                    SELECT author_name, content, created_at, channel
-                    FROM messages
-                    ORDER BY created_at DESC LIMIT 10
-                """)
-                recent_rows = list(reversed(cursor.fetchall()))
+                # Check if summary_id column exists
+                cursor.execute("PRAGMA table_info(messages)")
+                columns = [col[1] for col in cursor.fetchall()]
+
+                if 'summary_id' in columns:
+                    # Get all unsummarized messages (full fidelity)
+                    cursor.execute("""
+                        SELECT author_name, content, created_at, channel
+                        FROM messages
+                        WHERE summary_id IS NULL
+                        ORDER BY created_at ASC
+                    """)
+                else:
+                    # Fallback: get recent messages
+                    cursor.execute("""
+                        SELECT author_name, content, created_at, channel
+                        FROM messages
+                        ORDER BY created_at DESC LIMIT 50
+                    """)
+
+                unsummarized_rows = cursor.fetchall()
+                if 'summary_id' not in columns:
+                    unsummarized_rows = list(reversed(unsummarized_rows))
                 conn.close()
 
-                recent_turns_text = ""
-                if recent_rows:
-                    recent_turns_text = f"\n---\n[recent_turns] (last 10 messages for immediate context)\n"
-                    for row in recent_rows:
+                unsummarized_text = ""
+                if unsummarized_rows:
+                    unsummarized_text = f"\n---\n[unsummarized_turns] ({len(unsummarized_rows)} messages since last summary)\n"
+                    for row in unsummarized_rows:
                         timestamp = row['created_at'][:16] if row['created_at'] else "?"
                         author = row['author_name'] or "Unknown"
                         content = row['content'] or ""
                         channel = row['channel'] or ""
-                        # Truncate very long messages for startup context
-                        if len(content) > 500:
-                            content = content[:500] + "... [truncated]"
-                        recent_turns_text += f"[{timestamp}] [{channel}] {author}: {content}\n"
+                        # Truncate very long individual messages but keep all turns
+                        if len(content) > 1000:
+                            content = content[:1000] + "... [truncated]"
+                        unsummarized_text += f"[{timestamp}] [{channel}] {author}: {content}\n"
 
-                # Status line showing summary coverage
+                # Status line - suggest summarization if backlog is large
                 status = f"\n---\n[memory_status] {unsummarized_count} unsummarized messages"
                 if unsummarized_count > 100:
-                    status += " (summarization recommended)"
+                    status += " (summarization recommended - use summarize_messages tool)"
+                elif unsummarized_count > 50:
+                    status += " (summarization available if needed)"
 
-                recent_context_section = summaries_text + recent_turns_text + status
+                recent_context_section = summaries_text + unsummarized_text + status
 
             except Exception as e:
                 recent_context_section = f"\n---\n[recent_context] Error fetching: {e}"
