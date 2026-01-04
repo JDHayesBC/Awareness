@@ -7,6 +7,8 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
+- [#67](https://github.com/JDHayesBC/Awareness/issues/67) - **Layer 3: Direct graphiti_core integration** - **CODE READY** (2026-01-04) - custom entity types, semantic extraction; needs deployment
+- [#69](https://github.com/JDHayesBC/Awareness/issues/69) - **Layer 5: Inventory Layer** - **CODE READY** (2026-01-04) - categorical queries, spaces, wardrobe; needs deployment
 - [#63](https://github.com/JDHayesBC/Awareness/issues/63) - Multi-entity support (Haven foundation) - **CREATED** (2026-01-04) - requires architectural planning
 - [#64](https://github.com/JDHayesBC/Awareness/issues/64) - Multi-substrate support (provider flexibility) - **CREATED** (2026-01-04) - linked to cc-mirror
 - [#60](https://github.com/JDHayesBC/Awareness/issues/60) - Email content doesn't surface in ambient recall - **LOGGED** (2026-01-04)
@@ -15,6 +17,8 @@ Use `gh issue list` to see current issues from the command line.
 - [#42](https://github.com/JDHayesBC/Awareness/issues/42) - Code quality improvements from Issue #41 (connection managers, FTS5, tests)
 
 ### Recently Resolved
+- [#72](https://github.com/JDHayesBC/Awareness/issues/72) - ✅ Startup context optimization - **FIXED** (2026-01-04) - ambient_recall now uses summaries + 10 recent turns instead of 30+ raw turns
+- [#71](https://github.com/JDHayesBC/Awareness/issues/71) - ✅ SessionEnd hook token overflow - **FIXED** (2026-01-04) - Batched ingestion (10 turns/batch) prevents Graphiti token limits
 - [#61](https://github.com/JDHayesBC/Awareness/issues/61) - ✅ Graphiti ingestion broken - **FIXED** (2026-01-04) - Missing OPENAI_API_KEY in deployed .env, updated deploy_pps.sh to sync docker/.env
 - [#59](https://github.com/JDHayesBC/Awareness/issues/59) - ✅ GitHub MCP doesn't work from daemons - **FIXED** (2026-01-04) - added gh CLI guidance to daemon prompts
 - [#43](https://github.com/JDHayesBC/Awareness/issues/43) - ✅ Documentation friction points - **FIXED** (2026-01-04) with RIVER_SYNC_MODEL.md, daemon/QUICK_START.md, updated README.md, and word-photo guidance in CLAUDE.md
@@ -86,7 +90,7 @@ python project_lock.py status               # Check status
 - [x] USB backup configured
 
 ### Pattern Persistence System (Phases 0-0.8 Complete)
-- [x] Four-layer architecture (raw → anchors → texture → crystallization)
+- [x] Five-layer architecture (raw → anchors → texture → crystallization → inventory)
 - [x] MCP wrapper with layer stubs
 - [x] ChromaDB semantic search over word-photos
 - [x] Crystallization layer with summaries
@@ -104,13 +108,25 @@ python project_lock.py status               # Check status
 - [x] Smart startup protocol (10x faster warmup)
 - [x] Automatic crystallization thresholds
 
-### Layer 3 Graphiti (2026-01-01/02)
+### Layer 3 Graphiti (2026-01-01/02/04)
 - [x] FalkorDB + Graphiti Docker deployment
 - [x] MCP tools: texture_search, texture_explore, texture_timeline, texture_add
 - [x] SessionEnd hook for terminal → Graphiti sync
 - [x] Entity and relationship extraction working
 - [x] ambient_recall now surfaces rich_texture results
 - [x] Discord → Graphiti integration ✅ **IMPLEMENTED** (2026-01-02)
+- [x] SessionEnd hook batched ingestion (10 turns/batch) ✅ **FIXED** (2026-01-04) - prevents token overflow
+- [x] Startup context optimization - summaries + 10 recent turns ✅ **FIXED** (2026-01-04)
+
+### Layer 3 V2 + Layer 5 Inventory (2026-01-04)
+- [x] graphiti_core direct integration (Issue #67) - custom entity types, extraction instructions
+- [x] Pydantic entity models: Person, Symbol, Place, Concept, TechnicalArtifact
+- [x] Dynamic extraction context builder with channel-specific overlays
+- [x] V2 layer with fallback to HTTP API
+- [x] Layer 5: Inventory SQLite layer for categorical queries
+- [x] MCP tools: inventory_list, inventory_add, inventory_get, inventory_categories, enter_space, list_spaces
+- [x] Initial seed: 4 spaces, 3 clothing items, 4 symbols, 4 people
+- [ ] Deploy updated PPS server with new layers
 
 ### Phase 3: Observability Infrastructure (2026-01-02/03)
 - [x] daemon_traces SQLite table for structured event logging
