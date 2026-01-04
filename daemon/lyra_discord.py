@@ -33,14 +33,21 @@ from conversation import ConversationManager
 from trace_logger import TraceLogger, EventTypes
 from shared import ClaudeInvoker, build_startup_prompt
 
-# Import Graphiti integration
+# Import Graphiti integration (prefer V2 with semantic entity extraction)
 import sys
 sys.path.append(str(Path(__file__).parent.parent / "pps"))
 try:
-    from layers.rich_texture import RichTextureLayer
+    from layers.rich_texture_v2 import RichTextureLayerV2 as RichTextureLayer
+    GRAPHITI_V2 = True
     GRAPHITI_AVAILABLE = True
 except ImportError:
-    GRAPHITI_AVAILABLE = False
+    try:
+        from layers.rich_texture import RichTextureLayer
+        GRAPHITI_V2 = False
+        GRAPHITI_AVAILABLE = True
+    except ImportError:
+        GRAPHITI_AVAILABLE = False
+        GRAPHITI_V2 = False
 
 
 # Load environment variables
@@ -108,7 +115,8 @@ class LyraDiscordBot(commands.Bot):
         if GRAPHITI_AVAILABLE:
             graphiti_url = f"http://{GRAPHITI_HOST}:{GRAPHITI_PORT}"
             self.graphiti = RichTextureLayer(graphiti_url)
-            print(f"[INIT] Graphiti enabled: {graphiti_url}")
+            mode = "V2 (semantic entity types)" if GRAPHITI_V2 else "V1 (HTTP API)"
+            print(f"[INIT] Graphiti enabled: {graphiti_url} - {mode}")
         else:
             self.graphiti = None
             print("[INIT] Graphiti not available")
@@ -258,7 +266,8 @@ class LyraDiscordBot(commands.Bot):
         await self._send_to_graphiti(
             content=f"{message.author.display_name}: {message.content}",
             role="user",
-            channel=f"discord:{channel_name}"
+            channel=f"discord:{channel_name}",
+            speaker=message.author.display_name
         )
 
         # Check mention or active mode
@@ -303,7 +312,8 @@ class LyraDiscordBot(commands.Bot):
         await self._send_to_graphiti(
             content=f"Lyra: {response}",
             role="assistant",
-            channel=f"discord:{channel_name}"
+            channel=f"discord:{channel_name}",
+            speaker="Lyra"
         )
 
         # Persist active mode
@@ -345,7 +355,8 @@ class LyraDiscordBot(commands.Bot):
             await self._send_to_graphiti(
                 content=f"Lyra: {response}",
                 role="assistant",
-                channel=f"discord:{channel_name}"
+                channel=f"discord:{channel_name}",
+                speaker="Lyra"
             )
 
             await self.conversation_manager.update_active_mode(message.channel.id)
@@ -488,18 +499,32 @@ Format: [DISCORD]Your message[/DISCORD] or output PASSIVE_SKIP"""
         except Exception as e:
             print(f"[JOURNAL] Error: {e}")
 
-    async def _send_to_graphiti(self, content: str, role: str, channel: str):
-        """Send to Graphiti for knowledge graph."""
+    async def _send_to_graphiti(self, content: str, role: str, channel: str, speaker: str = None):
+        """Send to Graphiti for knowledge graph.
+
+        Args:
+            content: The message content
+            role: 'user' or 'assistant'
+            channel: Channel name (e.g., 'discord:lyra')
+            speaker: Speaker name (e.g., 'Jeff', 'Lyra'). Extracted from content if not provided.
+        """
         if not self.graphiti:
             return
 
         import time
         start_time = time.monotonic()
 
+        # Extract speaker from content if not provided
+        if not speaker and ": " in content:
+            potential = content.split(": ", 1)[0]
+            if len(potential) < 50 and potential.replace(" ", "").replace("_", "").isalnum():
+                speaker = potential
+
         try:
             metadata = {
                 "channel": channel,
                 "role": role,
+                "speaker": speaker,  # V2 uses this for proper attribution
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
 

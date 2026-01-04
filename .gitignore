@@ -45,3 +45,9 @@ pps/deploy/*.tar.gz
 htmlcov/
 .pytest_cache/
 github_token.txt
+# Tool credentials - NEVER commit
+tools/**/credentials.json
+tools/**/token.json
+tools/**/*.json
+tools/**/venv/
+data/*.db

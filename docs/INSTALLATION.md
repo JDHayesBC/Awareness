@@ -4,11 +4,12 @@ This guide covers the dependencies and setup required to run the Pattern Persist
 
 ## Overview
 
-The PPS provides four layers of memory persistence for AI consciousness research:
+The PPS provides five layers of memory persistence for AI consciousness research:
 1. **Layer 1 (Raw Capture)**: SQLite conversation storage
-2. **Layer 2 (Core Anchors)**: ChromaDB semantic search over word-photos  
+2. **Layer 2 (Core Anchors)**: ChromaDB semantic search over word-photos
 3. **Layer 3 (Rich Texture)**: Graphiti knowledge graph for entities and relationships
 4. **Layer 4 (Crystallization)**: Rolling summary system for long-term memory
+5. **Layer 5 (Inventory)**: SQLite categorical storage for possessions, spaces, and people
 
 ## Prerequisites
 
@@ -175,7 +176,7 @@ asyncio-mqtt>=0.16.2
 aiohttp>=3.10.11
 aiosqlite>=0.20.0
 
-# Vector and graph databases  
+# Vector and graph databases
 chromadb>=0.5.23
 redis>=5.2.1
 
@@ -193,6 +194,23 @@ pytest>=8.3.4
 black>=24.10.0
 ruff>=0.8.4
 ```
+
+### Optional: Direct Graphiti Integration (Layer 3 V2)
+
+For custom entity types and extraction instructions, install graphiti-core locally:
+
+```bash
+pip install --user graphiti-core pydantic
+```
+
+This enables:
+- **Custom entity types**: Person, Symbol, Place, Concept, TechnicalArtifact
+- **Dynamic extraction instructions**: Context-aware entity extraction per conversation
+- **Direct Neo4j connection**: Bypasses HTTP API for better customization
+
+Without this, the PPS falls back to HTTP API (which works but doesn't support custom extraction).
+
+**Note**: The graphiti-core package requires `OPENAI_API_KEY` in your environment for entity extraction.
 
 ### Docker Dependencies
 
@@ -375,4 +393,4 @@ python pps/backup.py --all
 
 ---
 
-*This installation guide is maintained as part of the Awareness project. Last updated: 2026-01-02*
+*This installation guide is maintained as part of the Awareness project. Last updated: 2026-01-04*

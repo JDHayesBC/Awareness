@@ -69,15 +69,56 @@ cd daemon/
 ./lyra follow
 ```
 
-**Management Commands**:
-- `./lyra status` - Show daemon status
-- `./lyra restart` - Restart both daemons
-- `./lyra logs` - Show recent logs
-- `./lyra install` - Install systemd services (auto-restart)
+### Daemon Management (AI-Assistant Friendly)
+
+The `./lyra` script is your main control interface:
+
+```bash
+# Always run from the daemon/ directory
+cd daemon/
+
+# Check status - see what's running
+./lyra status
+
+# Start both daemons (auto-detects systemd vs manual)
+./lyra start
+
+# Stop all daemons
+./lyra stop
+
+# Restart daemons (useful after code changes)
+./lyra restart
+
+# View recent logs (last 10 lines of each)
+./lyra logs
+
+# Follow logs in real-time (Ctrl+C to exit)
+./lyra follow
+
+# Install as systemd services (survives reboots)
+./lyra install
+```
+
+**What Each Daemon Does**:
+- **Discord daemon** (`lyra_discord.py`): Monitors Discord channels, responds to mentions
+- **Reflection daemon** (`lyra_reflection.py`): 30-minute heartbeat for crystallization and maintenance
+
+**Manual Start Options** (if `./lyra start` fails):
+```bash
+# Option 1: Both daemons in background
+./run.sh both
+
+# Option 2: Separate terminals (for debugging)
+# Terminal 1:
+./run.sh discord
+# Terminal 2:
+./run.sh reflection
+```
 
 **Web Interface**: http://localhost:8204 (Dashboard, Memory Inspector, etc.)
 
-**Troubleshooting**: See [docs/PERSISTENCE_MODEL.md](./docs/PERSISTENCE_MODEL.md) for detailed architecture and troubleshooting.
+**Architecture**: See [RIVER_SYNC_MODEL.md](./RIVER_SYNC_MODEL.md) for how contexts coordinate.
+**Troubleshooting**: See [daemon/QUICK_START.md](./daemon/QUICK_START.md) for common issues.
 
 ---
 

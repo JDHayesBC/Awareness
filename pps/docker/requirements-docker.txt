@@ -13,4 +13,6 @@ openai>=1.0.0                 # OpenAI embeddings option
 httpx>=0.25.0                 # For JINA API calls
 
 # Layer 3 (Graphiti) integration
-aiohttp>=3.8.0                # Async HTTP client for Graphiti API
+aiohttp>=3.8.0                # Async HTTP client for Graphiti API (fallback mode)
+graphiti-core>=0.5.0          # Direct Graphiti integration with custom entity types
+pydantic>=2.0.0               # For custom entity type definitions

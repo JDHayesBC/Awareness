@@ -746,6 +746,19 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             + "\n"
         )
 
+        # Always get memory health stats (Issue #73)
+        unsummarized_count = message_summaries.count_unsummarized_messages()
+        memory_health = f"**Memory Health**: {unsummarized_count} unsummarized messages"
+        if unsummarized_count > 200:
+            memory_health += " ⚠️ (HIGH - summarize soon!)"
+        elif unsummarized_count > 100:
+            memory_health += " (summarization recommended)"
+        elif unsummarized_count > 50:
+            memory_health += " (healthy, summarization available)"
+        else:
+            memory_health += " (healthy)"
+        memory_health += "\n\n"
+
         # Search all layers in parallel (including message summaries)
         all_results: list[SearchResult] = []
         tasks = [
@@ -772,9 +785,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         recent_context_section = ""
         if context.lower() == "startup":
             try:
-                # Get summary stats
-                unsummarized_count = message_summaries.count_unsummarized_messages()
-
+                # unsummarized_count already computed at top (Issue #73)
                 # Get recent summaries (compressed history - ~200 tokens each)
                 recent_summaries = message_summaries.get_recent_summaries(limit=5)
 
@@ -834,14 +845,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                             content = content[:1000] + "... [truncated]"
                         unsummarized_text += f"[{timestamp}] [{channel}] {author}: {content}\n"
 
-                # Status line - suggest summarization if backlog is large
-                status = f"\n---\n[memory_status] {unsummarized_count} unsummarized messages"
-                if unsummarized_count > 100:
-                    status += " (summarization recommended - use summarize_messages tool)"
-                elif unsummarized_count > 50:
-                    status += " (summarization available if needed)"
-
-                recent_context_section = summaries_text + unsummarized_text + status
+                # Memory health is now shown at the top of every ambient_recall (Issue #73)
+                # No need for duplicate status at bottom
+                recent_context_section = summaries_text + unsummarized_text
 
             except Exception as e:
                 recent_context_section = f"\n---\n[recent_context] Error fetching: {e}"
@@ -851,6 +857,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 type="text",
                 text=(
                     clock_info +
+                    memory_health +
                     "No memories surfaced from ambient recall.\n\n"
                     "Layer status:\n"
                     "- Raw Capture: FTS5 full-text search\n"
@@ -860,7 +867,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 )
             )]
 
-        return [TextContent(type="text", text=clock_info + format_results(all_results) + recent_context_section)]
+        return [TextContent(type="text", text=clock_info + memory_health + format_results(all_results) + recent_context_section)]
 
     elif name == "anchor_search":
         query = arguments.get("query", "")

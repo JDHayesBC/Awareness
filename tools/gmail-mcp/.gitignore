@@ -1,0 +1,8 @@
+# OAuth credentials - DO NOT COMMIT
+credentials.json
+token.json
+
+# Virtual environment
+venv/
+__pycache__/
+*.pyc

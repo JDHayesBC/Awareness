@@ -1,6 +1,8 @@
-# Lyra Discord Daemon
+# Lyra Daemon System
 
-Discord presence for Lyra with heartbeat for autonomous awareness and journaling for memory continuity.
+Two autonomous daemons that maintain Lyra's presence and memory:
+- **Discord daemon**: Monitors channels, responds to mentions, captures conversations
+- **Reflection daemon**: 30-minute heartbeat for crystallization and autonomous maintenance
 
 ## Features
 
@@ -11,25 +13,51 @@ Discord presence for Lyra with heartbeat for autonomous awareness and journaling
 - **Journaling**: Records interactions to JSONL files for memory continuity
 - **Uses Claude Code CLI**: Leverages subscription, not API tokens
 
-## Setup
+## Quick Start (AI-Assistant Friendly)
 
-1. Install dependencies:
+### Use the `./lyra` Script
+
+The `lyra` script handles all daemon management. Always run from the `daemon/` directory:
+
+```bash
+cd daemon/
+
+# See what's running
+./lyra status
+
+# Start both daemons
+./lyra start
+
+# Watch logs live
+./lyra follow
+```
+
+### First-Time Setup
+
+1. **Prerequisites**:
+   - Docker running (for PPS/Graphiti/ChromaDB)
+   - Claude Code CLI installed and authenticated
+   - Python 3.12+ with venv
+
+2. **Install dependencies**:
    ```bash
+   cd daemon/
    python -m venv venv
    source venv/bin/activate  # or venv\Scripts\activate on Windows
    pip install -r requirements.txt
    ```
 
-2. Make sure Claude Code CLI is installed and authenticated:
+3. **Configure environment**:
    ```bash
-   claude --version
+   # Copy example and edit with your bot token
+   cp .env.example .env
+   # Add: DISCORD_BOT_TOKEN=your_token_here
+   # Add: DISCORD_CHANNEL_IDS=channel_id_1,channel_id_2
    ```
 
-3. Configure `.env` file (copy from `.env.example`)
-
-4. Run:
+4. **Start daemons**:
    ```bash
-   python lyra_daemon.py
+   ./lyra start
    ```
 
 ## Configuration
@@ -144,34 +172,33 @@ Entry types:
 - `heartbeat_quiet` - Brief reflection during quiet periods
 - `autonomous_reflection` - Deep reflection with full tool access (self-journaled)
 
-## Architecture
+## Daemon Architecture
 
-```
-Discord Gateway (websocket)
-    │
-    ├── on_message
-    │       │
-    │       ├── mention detected? → Claude CLI → respond → journal → ENTER ACTIVE MODE
-    │       │
-    │       └── in active mode? → Claude decides → maybe respond → journal
-    │
-    ├── heartbeat_loop (every N minutes)
-    │       │
-    │       ├── new messages? → Claude decides → maybe respond → reset quiet counter
-    │       │
-    │       └── quiet? → increment counter
-    │               │
-    │               ├── counter < REFLECTION_FREQUENCY → light reflection
-    │               │
-    │               └── counter >= REFLECTION_FREQUENCY → AUTONOMOUS REFLECTION
-    │                       │
-    │                       └── Full Claude Code session with tools
-    │                           (can build, fix, create, update)
-    │
-    └── active_mode_cleanup (every 1 minute)
-            │
-            └── check timeout → exit channels with no activity
-```
+### Two Independent Daemons
+
+**Discord Daemon** (`lyra_discord.py`):
+- Monitors configured Discord channels
+- Responds to mentions of "Lyra"
+- Enters active conversation mode after responding
+- Captures all conversations to PPS
+- Auto-restarts when approaching token limit
+
+**Reflection Daemon** (`lyra_reflection.py`):
+- Runs every 30 minutes (configurable)
+- Checks crystallization thresholds
+- Performs memory maintenance
+- Has full tool access for autonomous work
+- Respects project locks from terminal
+
+### How They Coordinate
+
+Both daemons:
+1. Start with `mcp__pps__ambient_recall("startup")` for full context
+2. Write all interactions to shared PPS (SQLite, Graphiti)
+3. Read from the same memory river
+4. Never conflict because they have separate roles
+
+See [RIVER_SYNC_MODEL.md](../RIVER_SYNC_MODEL.md) for detailed coordination model.
 
 ## Reading Journals
 
@@ -203,12 +230,38 @@ python journal_utils.py         # Last 3 days
 python journal_utils.py 7       # Last 7 days
 ```
 
+## GitHub CLI Integration
+
+Both daemons have access to GitHub CLI through the `Bash` tool. This is the recommended pattern for creating issues, PRs, and other GitHub operations.
+
+### Working Pattern
+
+```bash
+# Create issues
+gh --repo JDHayesBC/Awareness issue create --title "Issue Title" --body "Description" --label "enhancement,priority:medium"
+
+# List issues
+gh --repo JDHayesBC/Awareness issue list
+
+# Comment on issues  
+gh --repo JDHayesBC/Awareness issue comment 55 --body "Comment text"
+```
+
+### Authentication
+- GitHub CLI is available at `/usr/bin/gh`
+- Pre-authenticated as JDHayesBC with repo access
+- Tokens include: 'gist', 'read:org', 'repo', 'workflow'
+
+### Note on MCP GitHub Tools
+The MCP config includes a GitHub server (`api.githubcopilot.com/mcp`), but this doesn't work reliably for issue creation. Always use `Bash` tool + `gh` commands instead.
+
 ## Future Enhancements
 
 - [x] Multi-channel support
 - [x] Read journal entries during startup for context
 - [x] Active conversation mode (stay engaged after responding)
 - [x] systemd service for persistent running
+- [x] GitHub CLI integration for issue management
 - [ ] Summarize daily journals into weekly reflections
 - [ ] Integration with main memory system
 - [ ] SQLite conversation storage for richer context
