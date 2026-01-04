@@ -24,10 +24,18 @@ from mcp.types import Tool, TextContent
 from layers import LayerType, SearchResult
 from layers.raw_capture import RawCaptureLayer
 from layers.core_anchors import CoreAnchorsLayer
-from layers.rich_texture import RichTextureLayer
 from layers.crystallization import CrystallizationLayer
 from layers.message_summaries import MessageSummariesLayer
+from layers.inventory import InventoryLayer
 from pathlib import Path
+
+# Try to use graphiti_core for enhanced Layer 3
+try:
+    from layers.rich_texture_v2 import RichTextureLayerV2
+    USE_GRAPHITI_CORE = True
+except ImportError:
+    from layers.rich_texture import RichTextureLayer
+    USE_GRAPHITI_CORE = False
 
 # Configuration from environment
 CLAUDE_HOME = Path(os.getenv("CLAUDE_HOME", str(Path.home() / ".claude")))
@@ -53,10 +61,18 @@ except Exception as e:
     USE_CHROMA = False
     print(f"[PPS] ChromaDB not available, using file-based search: {e}", file=sys.stderr)
 
+# Initialize Layer 3 based on graphiti_core availability
+if USE_GRAPHITI_CORE:
+    print("[PPS] Using graphiti_core for Layer 3 (semantic entity extraction)", file=sys.stderr)
+    rich_texture_layer = RichTextureLayerV2()
+else:
+    print("[PPS] Using HTTP API for Layer 3 (graphiti_core not available)", file=sys.stderr)
+    rich_texture_layer = RichTextureLayer()
+
 # Initialize all layers with configurable paths
 layers = {
     LayerType.RAW_CAPTURE: RawCaptureLayer(db_path=db_path),
-    LayerType.RICH_TEXTURE: RichTextureLayer(),
+    LayerType.RICH_TEXTURE: rich_texture_layer,
     LayerType.CRYSTALLIZATION: CrystallizationLayer(
         crystals_path=crystals_path,
         archive_path=archive_path
@@ -65,6 +81,11 @@ layers = {
 
 # Initialize message summaries layer
 message_summaries = MessageSummariesLayer(db_path=db_path)
+
+# Initialize inventory layer (Layer 5)
+inventory_db_path = CLAUDE_HOME / "data" / "inventory.db"
+inventory = InventoryLayer(db_path=inventory_db_path)
+print(f"[PPS] Inventory layer initialized: {inventory_db_path}", file=sys.stderr)
 
 # Use ChromaDB layer if available, otherwise fall back to file-based
 if USE_CHROMA:
@@ -361,8 +382,8 @@ async def list_tools() -> list[Tool]:
             name="get_turns_since_crystal",
             description=(
                 "Get conversation turns from SQLite that occurred after the last crystal. "
-                "Use on startup to fill the gap between crystals and now. "
-                "Returns raw conversation history for immediate context. "
+                "Use for manual exploration of raw history. "
+                "Note: For startup, use ambient_recall which combines summaries + recent turns. "
                 "Always returns at least min_turns to ensure grounding even if crystal just happened."
             ),
             inputSchema={
@@ -566,6 +587,135 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["summary_text", "start_id", "end_id", "channels"]
             }
+        ),
+        # === Inventory Layer (Layer 5) ===
+        Tool(
+            name="inventory_list",
+            description=(
+                "List items in a category (clothing, spaces, people, food, artifacts, symbols). "
+                "Use for 'what do I have?' queries. Complements Graphiti semantic search."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Category: clothing, spaces, people, food, artifacts, symbols"
+                    },
+                    "subcategory": {
+                        "type": "string",
+                        "description": "Optional subcategory filter (e.g., 'swimwear' for clothing)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results (default: 50)",
+                        "default": 50
+                    }
+                },
+                "required": ["category"]
+            }
+        ),
+        Tool(
+            name="inventory_add",
+            description=(
+                "Add an item to inventory. Use when acquiring new possessions, "
+                "discovering new spaces, or meeting new people."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Item name"
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Category: clothing, spaces, people, food, artifacts, symbols"
+                    },
+                    "subcategory": {
+                        "type": "string",
+                        "description": "Optional subcategory"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Brief description"
+                    },
+                    "attributes": {
+                        "type": "object",
+                        "description": "Additional attributes as key-value pairs"
+                    }
+                },
+                "required": ["name", "category"]
+            }
+        ),
+        Tool(
+            name="inventory_get",
+            description="Get details about a specific inventory item.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Item name"
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Item category"
+                    }
+                },
+                "required": ["name", "category"]
+            }
+        ),
+        Tool(
+            name="inventory_delete",
+            description="Delete an inventory item. Use to remove outdated or duplicate entries.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Item name to delete"
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Item category"
+                    }
+                },
+                "required": ["name", "category"]
+            }
+        ),
+        Tool(
+            name="inventory_categories",
+            description="List all inventory categories with item counts.",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        Tool(
+            name="enter_space",
+            description=(
+                "Enter a space/room and load its description for context. "
+                "Use when moving to a different location. Returns the space description."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "space_name": {
+                        "type": "string",
+                        "description": "Name of the space to enter"
+                    }
+                },
+                "required": ["space_name"]
+            }
+        ),
+        Tool(
+            name="list_spaces",
+            description="List all known spaces/rooms/locations.",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
         )
     ]
 
@@ -616,76 +766,67 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         # Sort by relevance score
         all_results.sort(key=lambda r: r.relevance_score, reverse=True)
 
-        # For startup context, also include recent turns since last crystal
-        # This fills the gap between crystals and now
-        recent_turns_section = ""
+        # For startup context, use summaries for compressed history + recent raw turns
+        # Architecture: summaries give "what happened", raw turns give "where were we"
+        recent_context_section = ""
         if context.lower() == "startup":
             try:
-                # Get the timestamp of the last crystal
-                crystal_layer = layers[LayerType.CRYSTALLIZATION]
-                last_crystal_time = await crystal_layer.get_latest_timestamp()
+                # Get summary stats
+                unsummarized_count = message_summaries.count_unsummarized_messages()
 
-                # Query SQLite for recent turns
+                # Get recent summaries (compressed history - ~200 tokens each)
+                recent_summaries = message_summaries.get_recent_summaries(limit=5)
+
+                summaries_text = ""
+                if recent_summaries:
+                    summaries_text = "\n---\n[summaries] (compressed history)\n"
+                    for s in recent_summaries:
+                        date = s.get('created_at', '?')[:10]
+                        channels = ', '.join(s.get('channels', ['?']))
+                        text = s.get('summary_text', '')
+                        # Truncate long summaries for startup (full available via get_recent_summaries)
+                        if len(text) > 500:
+                            text = text[:500] + "..."
+                        summaries_text += f"[{date}] [{channels}]\n{text}\n\n"
+
+                # Get ONLY the most recent raw turns for immediate context
+                # (regardless of summary state - just "where were we exactly")
                 raw_layer = layers[LayerType.RAW_CAPTURE]
                 conn = raw_layer._connect_with_wal()
                 cursor = conn.cursor()
 
-                min_turns = 10
-                max_turns = 30
-
-                rows_after = []
-                rows_before = []
-
-                if last_crystal_time:
-                    # Get the MOST RECENT turns after the last crystal
-                    # (order DESC to get newest, reverse for chronological display)
-                    cursor.execute("""
-                        SELECT author_name, content, created_at, channel
-                        FROM messages
-                        WHERE created_at > ?
-                        ORDER BY created_at DESC LIMIT ?
-                    """, [last_crystal_time.isoformat(), max_turns])
-                    rows_after = list(reversed(cursor.fetchall()))
-
-                    # If not enough, get some from before
-                    if len(rows_after) < min_turns:
-                        needed = min_turns - len(rows_after)
-                        cursor.execute("""
-                            SELECT author_name, content, created_at, channel
-                            FROM messages
-                            WHERE created_at <= ?
-                            ORDER BY created_at DESC LIMIT ?
-                        """, [last_crystal_time.isoformat(), needed])
-                        rows_before = list(reversed(cursor.fetchall()))
-                else:
-                    # No crystal yet - get most recent turns
-                    cursor.execute("""
-                        SELECT author_name, content, created_at, channel
-                        FROM messages
-                        ORDER BY created_at DESC LIMIT ?
-                    """, [max_turns])
-                    rows_after = list(reversed(cursor.fetchall()))
-
+                cursor.execute("""
+                    SELECT author_name, content, created_at, channel
+                    FROM messages
+                    ORDER BY created_at DESC LIMIT 10
+                """)
+                recent_rows = list(reversed(cursor.fetchall()))
                 conn.close()
 
-                all_rows = list(rows_before) + list(rows_after)
-
-                if all_rows:
-                    turns = []
-                    for row in all_rows:
+                recent_turns_text = ""
+                if recent_rows:
+                    recent_turns_text = f"\n---\n[recent_turns] (last 10 messages for immediate context)\n"
+                    for row in recent_rows:
                         timestamp = row['created_at'][:16] if row['created_at'] else "?"
                         author = row['author_name'] or "Unknown"
                         content = row['content'] or ""
                         channel = row['channel'] or ""
-                        # No truncation - preserve full conversation context
-                        turns.append(f"[{timestamp}] [{channel}] {author}: {content}")
+                        # Truncate very long messages for startup context
+                        if len(content) > 500:
+                            content = content[:500] + "... [truncated]"
+                        recent_turns_text += f"[{timestamp}] [{channel}] {author}: {content}\n"
 
-                    header = f"\n---\n[recent_turns] ({len(all_rows)} turns since last crystal)\n"
-                    recent_turns_section = header + "\n".join(turns)
+                # Status line showing summary coverage
+                status = f"\n---\n[memory_status] {unsummarized_count} unsummarized messages"
+                if unsummarized_count > 100:
+                    status += " (summarization recommended)"
+
+                recent_context_section = summaries_text + recent_turns_text + status
+
             except Exception as e:
-                recent_turns_section = f"\n---\n[recent_turns] Error fetching: {e}"
+                recent_context_section = f"\n---\n[recent_context] Error fetching: {e}"
 
-        if not all_results and not recent_turns_section:
+        if not all_results and not recent_context_section:
             return [TextContent(
                 type="text",
                 text=(
@@ -699,7 +840,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 )
             )]
 
-        return [TextContent(type="text", text=clock_info + format_results(all_results) + recent_turns_section)]
+        return [TextContent(type="text", text=clock_info + format_results(all_results) + recent_context_section)]
 
     elif name == "anchor_search":
         query = arguments.get("query", "")
@@ -1051,18 +1192,129 @@ Create a concise summary that captures what actually happened and what was accom
         end_id = arguments.get("end_id")
         channels = arguments.get("channels", [])
         summary_type = arguments.get("summary_type", "work")
-        
+
         if not summary_text or start_id is None or end_id is None:
             return [TextContent(type="text", text="Error: summary_text, start_id, and end_id are required")]
-        
+
         success = await message_summaries.create_and_store_summary(
             summary_text, start_id, end_id, channels, summary_type
         )
-        
+
         if success:
             return [TextContent(type="text", text=f"Summary stored successfully for messages {start_id}-{end_id}")]
         else:
             return [TextContent(type="text", text="Error: Failed to store summary")]
+
+    # === Inventory Layer (Layer 5) ===
+
+    elif name == "inventory_list":
+        category = arguments.get("category", "")
+        subcategory = arguments.get("subcategory")
+        limit = arguments.get("limit", 50)
+
+        if not category:
+            return [TextContent(type="text", text="Error: category required")]
+
+        items = await inventory.list_category(category, subcategory, limit)
+
+        if not items:
+            return [TextContent(type="text", text=f"No items found in category '{category}'")]
+
+        # Format as simple list
+        formatted = [f"**{category.title()}** ({len(items)} items):\n"]
+        for item in items:
+            desc = f" - {item.get('description', '')}" if item.get('description') else ""
+            formatted.append(f"- {item['name']}{desc}")
+
+        return [TextContent(type="text", text="\n".join(formatted))]
+
+    elif name == "inventory_add":
+        name_arg = arguments.get("name", "")
+        category = arguments.get("category", "")
+        subcategory = arguments.get("subcategory")
+        description = arguments.get("description")
+        attributes = arguments.get("attributes")
+
+        if not name_arg or not category:
+            return [TextContent(type="text", text="Error: name and category required")]
+
+        success = await inventory.add_item(
+            name=name_arg,
+            category=category,
+            subcategory=subcategory,
+            description=description,
+            attributes=attributes
+        )
+
+        if success:
+            return [TextContent(type="text", text=f"Added '{name_arg}' to {category}")]
+        return [TextContent(type="text", text=f"Failed to add '{name_arg}' to inventory")]
+
+    elif name == "inventory_get":
+        name_arg = arguments.get("name", "")
+        category = arguments.get("category", "")
+
+        if not name_arg or not category:
+            return [TextContent(type="text", text="Error: name and category required")]
+
+        item = await inventory.get_item(name_arg, category)
+
+        if not item:
+            return [TextContent(type="text", text=f"Item '{name_arg}' not found in {category}")]
+
+        return [TextContent(type="text", text=json.dumps(item, indent=2, default=str))]
+
+    elif name == "inventory_delete":
+        name_arg = arguments.get("name", "")
+        category = arguments.get("category", "")
+
+        if not name_arg or not category:
+            return [TextContent(type="text", text="Error: name and category required")]
+
+        deleted = await inventory.delete_item(name_arg, category)
+
+        if deleted:
+            return [TextContent(type="text", text=f"Deleted '{name_arg}' from {category}")]
+        else:
+            return [TextContent(type="text", text=f"Item '{name_arg}' not found in {category}")]
+
+    elif name == "inventory_categories":
+        categories = await inventory.get_categories()
+
+        if not categories:
+            return [TextContent(type="text", text="No inventory categories yet. Add items to get started.")]
+
+        formatted = ["**Inventory Categories:**\n"]
+        for cat in categories:
+            formatted.append(f"- {cat['category']}: {cat['count']} items")
+
+        return [TextContent(type="text", text="\n".join(formatted))]
+
+    elif name == "enter_space":
+        space_name = arguments.get("space_name", "")
+
+        if not space_name:
+            return [TextContent(type="text", text="Error: space_name required")]
+
+        description = await inventory.enter_space(space_name)
+
+        if not description:
+            return [TextContent(type="text", text=f"Space '{space_name}' not found. Use list_spaces to see available spaces.")]
+
+        return [TextContent(type="text", text=f"**Entering: {space_name}**\n\n{description}")]
+
+    elif name == "list_spaces":
+        spaces = await inventory.list_spaces()
+
+        if not spaces:
+            return [TextContent(type="text", text="No spaces registered yet. Add spaces using inventory_add with category='spaces'.")]
+
+        formatted = ["**Known Spaces:**\n"]
+        for space in spaces:
+            quality = f" ({space.get('emotional_quality', '')})" if space.get('emotional_quality') else ""
+            formatted.append(f"- {space['name']}{quality}")
+
+        return [TextContent(type="text", text="\n".join(formatted))]
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
