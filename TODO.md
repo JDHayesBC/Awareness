@@ -7,16 +7,16 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
-- [#67](https://github.com/JDHayesBC/Awareness/issues/67) - **Layer 3: Direct graphiti_core integration** - **CODE READY** (2026-01-04) - custom entity types, semantic extraction; needs deployment
-- [#69](https://github.com/JDHayesBC/Awareness/issues/69) - **Layer 5: Inventory Layer** - **CODE READY** (2026-01-04) - categorical queries, spaces, wardrobe; needs deployment
 - [#63](https://github.com/JDHayesBC/Awareness/issues/63) - Multi-entity support (Haven foundation) - **CREATED** (2026-01-04) - requires architectural planning
 - [#64](https://github.com/JDHayesBC/Awareness/issues/64) - Multi-substrate support (provider flexibility) - **CREATED** (2026-01-04) - linked to cc-mirror
 - [#60](https://github.com/JDHayesBC/Awareness/issues/60) - Email content doesn't surface in ambient recall - **LOGGED** (2026-01-04)
 - [#62](https://github.com/JDHayesBC/Awareness/issues/62) - Email state tracking via Gmail labels - **LOGGED** (2026-01-04)
-- [#54](https://github.com/JDHayesBC/Awareness/issues/54) - Gmail Integration Testing & Email Management - **IN PROGRESS** (2026-01-04) - OAuth working, 50 emails processed
+- [#54](https://github.com/JDHayesBC/Awareness/issues/54) - Gmail Integration Testing & Email Management - **IN PROGRESS** (2026-01-04) - OAuth working, 50 emails processed; MCP tools built but blocked by reflection env path restrictions
 - [#42](https://github.com/JDHayesBC/Awareness/issues/42) - Code quality improvements from Issue #41 (connection managers, FTS5, tests)
 
 ### Recently Resolved
+- [#67](https://github.com/JDHayesBC/Awareness/issues/67) - ✅ Layer 3: Direct graphiti_core integration - **DEPLOYED** (2026-01-04) - custom entity types, semantic extraction; deployed via deploy_pps.sh
+- [#69](https://github.com/JDHayesBC/Awareness/issues/69) - ✅ Layer 5: Inventory Layer - **DEPLOYED** (2026-01-04) - categorical queries, spaces, wardrobe; deployed via deploy_pps.sh
 - [#72](https://github.com/JDHayesBC/Awareness/issues/72) - ✅ Startup context optimization - **FIXED** (2026-01-04) - ambient_recall now uses summaries + 10 recent turns instead of 30+ raw turns
 - [#71](https://github.com/JDHayesBC/Awareness/issues/71) - ✅ SessionEnd hook token overflow - **FIXED** (2026-01-04) - Batched ingestion (10 turns/batch) prevents Graphiti token limits
 - [#61](https://github.com/JDHayesBC/Awareness/issues/61) - ✅ Graphiti ingestion broken - **FIXED** (2026-01-04) - Missing OPENAI_API_KEY in deployed .env, updated deploy_pps.sh to sync docker/.env
@@ -126,7 +126,7 @@ python project_lock.py status               # Check status
 - [x] Layer 5: Inventory SQLite layer for categorical queries
 - [x] MCP tools: inventory_list, inventory_add, inventory_get, inventory_categories, enter_space, list_spaces
 - [x] Initial seed: 4 spaces, 3 clothing items, 4 symbols, 4 people
-- [ ] Deploy updated PPS server with new layers
+- [x] Deploy updated PPS server with new layers ✅ **DEPLOYED** (2026-01-04)
 
 ### Phase 3: Observability Infrastructure (2026-01-02/03)
 - [x] daemon_traces SQLite table for structured event logging
