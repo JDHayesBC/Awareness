@@ -223,6 +223,8 @@ Use Task tool with:
 ```
 
 This runs in the background. Don't wait for it - proceed with other tasks.
+Before journaling (step F), use TaskOutput to check what the curator found.
+Review its report - if it was too conservative or too aggressive, note that for next time.
 
 ### C. Project Context
 
