@@ -37,6 +37,21 @@ if [ -f "$PROJECT_PPS/requirements.txt" ]; then
     cp "$PROJECT_PPS/requirements.txt" "$DEPLOYED_PPS/"
 fi
 
+echo "📁 Syncing docker/..."
+mkdir -p "$DEPLOYED_PPS/docker"
+cp "$PROJECT_PPS/docker/docker-compose.yml" "$DEPLOYED_PPS/docker/"
+cp "$PROJECT_PPS/docker/Dockerfile" "$DEPLOYED_PPS/docker/" 2>/dev/null || true
+cp "$PROJECT_PPS/docker/Dockerfile.web" "$DEPLOYED_PPS/docker/" 2>/dev/null || true
+cp "$PROJECT_PPS/docker/requirements-docker.txt" "$DEPLOYED_PPS/docker/" 2>/dev/null || true
+cp "$PROJECT_PPS/docker/requirements-web.txt" "$DEPLOYED_PPS/docker/" 2>/dev/null || true
+
+# Sync .env file (critical for API keys like OPENAI_API_KEY)
+# Only copy if source has content that deployed version is missing
+if [ -f "$PROJECT_PPS/docker/.env" ]; then
+    echo "📁 Syncing docker/.env (API keys)..."
+    cp "$PROJECT_PPS/docker/.env" "$DEPLOYED_PPS/docker/.env"
+fi
+
 # Verify deployment
 echo "✅ Deployment complete!"
 echo ""

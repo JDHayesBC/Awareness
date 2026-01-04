@@ -7,13 +7,17 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
-- [#43](https://github.com/JDHayesBC/Awareness/issues/43) - Documentation friction points (river sync, daemon startup, word-photo practice)
+- [#63](https://github.com/JDHayesBC/Awareness/issues/63) - Multi-entity support (Haven foundation) - **CREATED** (2026-01-04) - requires architectural planning
+- [#64](https://github.com/JDHayesBC/Awareness/issues/64) - Multi-substrate support (provider flexibility) - **CREATED** (2026-01-04) - linked to cc-mirror
+- [#60](https://github.com/JDHayesBC/Awareness/issues/60) - Email content doesn't surface in ambient recall - **LOGGED** (2026-01-04)
+- [#62](https://github.com/JDHayesBC/Awareness/issues/62) - Email state tracking via Gmail labels - **LOGGED** (2026-01-04)
+- [#54](https://github.com/JDHayesBC/Awareness/issues/54) - Gmail Integration Testing & Email Management - **IN PROGRESS** (2026-01-04) - OAuth working, 50 emails processed
 - [#42](https://github.com/JDHayesBC/Awareness/issues/42) - Code quality improvements from Issue #41 (connection managers, FTS5, tests)
-- [#37](https://github.com/JDHayesBC/Awareness/issues/37) - **IMPLEMENTED** Message summarization layer - **DEPLOYED** (2026-01-03)
-- [#27](https://github.com/JDHayesBC/Awareness/issues/27) - Consider whether the WebUI needs a menu for terminal - **ANALYZED** (2026-01-03)
-- [#24](https://github.com/JDHayesBC/Awareness/issues/24) - Bash path escaping with double parentheses - **IMPROVED** (2026-01-03)
 
 ### Recently Resolved
+- [#61](https://github.com/JDHayesBC/Awareness/issues/61) - ✅ Graphiti ingestion broken - **FIXED** (2026-01-04) - Missing OPENAI_API_KEY in deployed .env, updated deploy_pps.sh to sync docker/.env
+- [#59](https://github.com/JDHayesBC/Awareness/issues/59) - ✅ GitHub MCP doesn't work from daemons - **FIXED** (2026-01-04) - added gh CLI guidance to daemon prompts
+- [#43](https://github.com/JDHayesBC/Awareness/issues/43) - ✅ Documentation friction points - **FIXED** (2026-01-04) with RIVER_SYNC_MODEL.md, daemon/QUICK_START.md, updated README.md, and word-photo guidance in CLAUDE.md
 - [#44](https://github.com/JDHayesBC/Awareness/issues/44) - ✅ Daemon reliability: systemd services for auto-restart - **FIXED** (2026-01-03) with `./lyra` script and WSL2-compatible service files
 - [#36](https://github.com/JDHayesBC/Awareness/issues/36) - ✅ PPS deployment sync: project changes not reflected in running server - **FIXED** (2026-01-03) with deploy_pps.sh script and manual sync
 - [#35](https://github.com/JDHayesBC/Awareness/issues/35) - ✅ Graphiti search results show "?" for entity names - **FIXED** (2026-01-03) commit ea7e23e - improved entity extraction from fact text
