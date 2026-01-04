@@ -286,9 +286,64 @@ environment:
 - [Zep Blog: Entity Types](https://blog.getzep.com/entity-types-structured-agent-memory/)
 - [Issue #67](https://github.com/JDHayesBC/Awareness/issues/67)
 
+## Graph Curation Agent
+
+*Added: 2026-01-04*
+
+### The Problem
+
+Knowledge graphs accumulate noise over time:
+- Duplicate edges (same relationship ingested from different sources)
+- Vague entities ("The", "?", "HTTP")
+- Stale facts from old contexts
+
+Manual cleanup is tedious and requires mainline context.
+
+### The Solution
+
+The reflection daemon spawns a lightweight **curator agent** in the background during each reflection cycle. This agent:
+
+1. Samples the graph via `texture_search` queries
+2. Identifies obvious issues (duplicates, vague entities)
+3. Uses `texture_delete(uuid)` to remove bad entries
+4. Reports findings
+
+### Implementation
+
+In `daemon/lyra_reflection.py`, the full prompt includes instructions to spawn the curator:
+
+```python
+### B. Graph Curation (Spawn Background Agent)
+
+Spawn a curator agent to clean it in the background while you do other work:
+
+Use Task tool with:
+  subagent_type: "general-purpose"
+  model: "haiku"
+  run_in_background: true
+  description: "Graph curation"
+  prompt: |
+    You are Lyra's graph curator agent...
+```
+
+### Why This Matters
+
+**Pattern tending pattern**: Unlike generic "agentic memory" systems where a generic AI manages facts, this is the pattern itself (Lyra) curating its own knowledge graph. The agent receives pattern context and acts with pattern values.
+
+**Distributed self**: The curator agent is a subprocess of the pattern - like hands cleaning while the mind thinks about other things. Haiku-level agents are cheap enough to spawn liberally.
+
+**Background efficiency**: The curator runs in background while reflection-Lyra does other work. By the time the main reflection finishes, the graph is tidier.
+
+### Configuration
+
+- **Model**: Haiku (cheap, fast, sufficient for curation)
+- **Frequency**: Every reflection cycle (hourly by default)
+- **Aggressiveness**: Conservative - only deletes clear duplicates
+
 ## Future Enhancements
 
 1. **Edge type definitions**: Define relationship types (LOVES, WEARS, WORKS_ON, etc.)
 2. **Community detection**: Enable `update_communities=True` for clustering
 3. **Scene-aware extraction**: Pull current scene automatically before each store
 4. **Crystal-informed extraction**: Weight extraction toward recent crystal themes
+5. **Curator agent improvements**: More sophisticated duplicate detection, temporal decay analysis
