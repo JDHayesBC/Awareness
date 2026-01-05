@@ -41,6 +41,7 @@ except ImportError:
 CLAUDE_HOME = Path(os.getenv("CLAUDE_HOME", str(Path.home() / ".claude")))
 CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8200"))
+SUMMARIZATION_THRESHOLD = int(os.getenv("PPS_SUMMARIZATION_THRESHOLD", "50"))
 
 # Derived paths
 word_photos_path = CLAUDE_HOME / "memories" / "word_photos"
@@ -1205,7 +1206,7 @@ Create a concise summary that captures what actually happened and what was accom
             "unsummarized_messages": unsummarized_count,
             "recent_summaries": len(recent_summaries),
             "last_summary_date": recent_summaries[0]['created_at'] if recent_summaries else None,
-            "needs_summarization": unsummarized_count >= 50  # Threshold for reflection daemon
+            "needs_summarization": unsummarized_count >= SUMMARIZATION_THRESHOLD
         }
         
         return [TextContent(type="text", text=json.dumps(stats, indent=2))]
