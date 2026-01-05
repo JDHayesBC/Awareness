@@ -51,3 +51,5 @@ tools/**/token.json
 tools/**/*.json
 tools/**/venv/
 data/*.db
+tools/google_oauth_credentials.txt
+tools/jeff-gmail-mcp/venv/
