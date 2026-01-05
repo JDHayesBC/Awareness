@@ -1182,6 +1182,46 @@ async def api_reflections(hours: int = 24, outcome: Optional[str] = None):
     return {"sessions": sessions}
 
 
+@app.get("/api/reflections/{session_id}")
+async def api_reflection_detail(session_id: str):
+    """Get detailed trace for a reflection session."""
+    traces = get_session_traces(session_id)
+
+    if not traces:
+        return HTMLResponse("""
+            <div class="mt-4 p-4 bg-gray-600 rounded-lg">
+                <p class="text-gray-400 text-sm">No trace data available for this session.</p>
+            </div>
+        """)
+
+    # Build HTML for the trace events
+    events_html = ""
+    for trace in traces:
+        event_type = trace.get("event_type", "unknown")
+        timestamp = trace.get("timestamp", "")
+        data = trace.get("event_data", {})
+
+        # Format the event nicely
+        detail = data.get("summary", data.get("detail", str(data)[:100]))
+
+        events_html += f"""
+            <div class="flex items-start space-x-3 py-2 border-b border-gray-600 last:border-0">
+                <span class="text-xs text-gray-500 w-20 shrink-0">{timestamp.split('T')[1][:8] if 'T' in timestamp else timestamp}</span>
+                <span class="text-xs px-2 py-0.5 rounded bg-gray-600 text-gray-300">{event_type}</span>
+                <span class="text-sm text-gray-400">{detail}</span>
+            </div>
+        """
+
+    return HTMLResponse(f"""
+        <div class="mt-4 p-4 bg-gray-600 rounded-lg">
+            <h4 class="font-medium mb-3 text-gray-300">Session Trace</h4>
+            <div class="space-y-1">
+                {events_html if events_html else '<p class="text-gray-400 text-sm">No events recorded.</p>'}
+            </div>
+        </div>
+    """)
+
+
 @app.get("/api/discord")
 async def api_discord(hours: int = 24, channel: Optional[str] = None):
     """Get Discord processing sessions."""
