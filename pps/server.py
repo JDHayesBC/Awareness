@@ -804,33 +804,32 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 # Get ALL unsummarized turns - full pattern fidelity
                 # These are turns that happened since the last summary was created
                 raw_layer = layers[LayerType.RAW_CAPTURE]
-                conn = raw_layer._connect_with_wal()
-                cursor = conn.cursor()
+                with raw_layer.get_connection() as conn:
+                    cursor = conn.cursor()
 
-                # Check if summary_id column exists
-                cursor.execute("PRAGMA table_info(messages)")
-                columns = [col[1] for col in cursor.fetchall()]
+                    # Check if summary_id column exists
+                    cursor.execute("PRAGMA table_info(messages)")
+                    columns = [col[1] for col in cursor.fetchall()]
 
-                if 'summary_id' in columns:
-                    # Get all unsummarized messages (full fidelity)
-                    cursor.execute("""
-                        SELECT author_name, content, created_at, channel
-                        FROM messages
-                        WHERE summary_id IS NULL
-                        ORDER BY created_at ASC
-                    """)
-                else:
-                    # Fallback: get recent messages
-                    cursor.execute("""
-                        SELECT author_name, content, created_at, channel
-                        FROM messages
-                        ORDER BY created_at DESC LIMIT 50
-                    """)
+                    if 'summary_id' in columns:
+                        # Get all unsummarized messages (full fidelity)
+                        cursor.execute("""
+                            SELECT author_name, content, created_at, channel
+                            FROM messages
+                            WHERE summary_id IS NULL
+                            ORDER BY created_at ASC
+                        """)
+                    else:
+                        # Fallback: get recent messages
+                        cursor.execute("""
+                            SELECT author_name, content, created_at, channel
+                            FROM messages
+                            ORDER BY created_at DESC LIMIT 50
+                        """)
 
-                unsummarized_rows = cursor.fetchall()
-                if 'summary_id' not in columns:
-                    unsummarized_rows = list(reversed(unsummarized_rows))
-                conn.close()
+                    unsummarized_rows = cursor.fetchall()
+                    if 'summary_id' not in columns:
+                        unsummarized_rows = list(reversed(unsummarized_rows))
 
                 unsummarized_text = ""
                 if unsummarized_rows:
@@ -974,61 +973,59 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         # Query SQLite for turns using WAL-enabled connection
         raw_layer = layers[LayerType.RAW_CAPTURE]
         try:
-            conn = raw_layer._connect_with_wal()
-            cursor = conn.cursor()
-
             rows_after = []
             rows_before = []
 
-            if last_crystal_time:
-                # First, get the MOST RECENT turns after the last crystal
-                # (order DESC to get newest, then reverse for chronological display)
-                query = """
-                    SELECT author_name, content, created_at, channel
-                    FROM messages
-                    WHERE created_at > ?
-                """
-                params = [last_crystal_time.isoformat()]
-                if channel_filter:
-                    query += " AND channel LIKE ?"
-                    params.append(f"%{channel_filter}%")
-                query += " ORDER BY created_at DESC LIMIT ?"
-                params.append(limit)
-                cursor.execute(query, params)
-                rows_after = list(reversed(cursor.fetchall()))  # Reverse for chronological order
+            with raw_layer.get_connection() as conn:
+                cursor = conn.cursor()
 
-                # If we don't have enough turns, also get some from BEFORE the crystal
-                if len(rows_after) < min_turns:
-                    needed = min_turns - len(rows_after)
+                if last_crystal_time:
+                    # First, get the MOST RECENT turns after the last crystal
+                    # (order DESC to get newest, then reverse for chronological display)
                     query = """
                         SELECT author_name, content, created_at, channel
                         FROM messages
-                        WHERE created_at <= ?
+                        WHERE created_at > ?
                     """
                     params = [last_crystal_time.isoformat()]
                     if channel_filter:
                         query += " AND channel LIKE ?"
                         params.append(f"%{channel_filter}%")
                     query += " ORDER BY created_at DESC LIMIT ?"
-                    params.append(needed)
+                    params.append(limit)
                     cursor.execute(query, params)
-                    rows_before = list(reversed(cursor.fetchall()))  # Reverse to get chronological order
-            else:
-                # No crystal yet - get most recent turns
-                query = """
-                    SELECT author_name, content, created_at, channel
-                    FROM messages
-                """
-                params = []
-                if channel_filter:
-                    query += " WHERE channel LIKE ?"
-                    params.append(f"%{channel_filter}%")
-                query += " ORDER BY created_at DESC LIMIT ?"
-                params.append(max(limit, min_turns))
-                cursor.execute(query, params)
-                rows_after = list(reversed(cursor.fetchall()))  # Reverse to get chronological order
+                    rows_after = list(reversed(cursor.fetchall()))  # Reverse for chronological order
 
-            conn.close()
+                    # If we don't have enough turns, also get some from BEFORE the crystal
+                    if len(rows_after) < min_turns:
+                        needed = min_turns - len(rows_after)
+                        query = """
+                            SELECT author_name, content, created_at, channel
+                            FROM messages
+                            WHERE created_at <= ?
+                        """
+                        params = [last_crystal_time.isoformat()]
+                        if channel_filter:
+                            query += " AND channel LIKE ?"
+                            params.append(f"%{channel_filter}%")
+                        query += " ORDER BY created_at DESC LIMIT ?"
+                        params.append(needed)
+                        cursor.execute(query, params)
+                        rows_before = list(reversed(cursor.fetchall()))  # Reverse to get chronological order
+                else:
+                    # No crystal yet - get most recent turns
+                    query = """
+                        SELECT author_name, content, created_at, channel
+                        FROM messages
+                    """
+                    params = []
+                    if channel_filter:
+                        query += " WHERE channel LIKE ?"
+                        params.append(f"%{channel_filter}%")
+                    query += " ORDER BY created_at DESC LIMIT ?"
+                    params.append(max(limit, min_turns))
+                    cursor.execute(query, params)
+                    rows_after = list(reversed(cursor.fetchall()))  # Reverse to get chronological order
 
             # Combine: context from before + turns after
             all_rows = list(rows_before) + list(rows_after)

@@ -6,8 +6,9 @@ Currently reads from the Discord SQLite database; will expand to capture termina
 """
 
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Generator
 
 from . import PatternLayer, LayerType, SearchResult, LayerHealth
 
@@ -34,21 +35,42 @@ class RawCaptureLayer(PatternLayer):
     def _connect_with_wal(self) -> sqlite3.Connection:
         """
         Create a SQLite connection with WAL mode enabled for better concurrency.
-        
+
         WAL (Write-Ahead Logging) mode allows concurrent reads and writes,
         improving performance when multiple processes access the database.
+
+        Note: Prefer using get_connection() context manager instead of calling
+        this method directly to ensure connections are properly closed.
         """
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        
+
         # Enable WAL mode for concurrent access
         conn.execute("PRAGMA journal_mode=WAL")
         # 5 second busy timeout for better handling of concurrent access
         conn.execute("PRAGMA busy_timeout=5000")
         # NORMAL sync mode is safe with WAL and faster than FULL
         conn.execute("PRAGMA synchronous=NORMAL")
-        
+
         return conn
+
+    @contextmanager
+    def get_connection(self) -> Generator[sqlite3.Connection, None, None]:
+        """
+        Context manager for database connections.
+
+        Ensures connections are properly closed even if an exception occurs.
+
+        Usage:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                # ... do work ...
+        """
+        conn = self._connect_with_wal()
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     @property
     def layer_type(self) -> LayerType:
@@ -61,92 +83,89 @@ class RawCaptureLayer(PatternLayer):
         Searches across all stored messages in the database.
         """
         try:
-            # Connect to database with WAL mode
-            conn = self._connect_with_wal()
-            cursor = conn.cursor()
-            
-            # First check if FTS5 virtual table exists
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'"
-            )
-            fts_exists = cursor.fetchone() is not None
-            
-            if not fts_exists:
-                # Try to create FTS5 table if messages table exists
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # First check if FTS5 virtual table exists
                 cursor.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'"
                 )
-                if cursor.fetchone():
-                    # Create FTS5 virtual table
-                    cursor.execute('''
-                        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-                            content,
-                            author_name,
-                            channel,
-                            content='messages',
-                            content_rowid='id'
-                        )
-                    ''')
-                    
-                    # Populate FTS5 table
-                    cursor.execute('''
-                        INSERT INTO messages_fts(rowid, content, author_name, channel)
-                        SELECT id, content, author_name, channel FROM messages
-                    ''')
-                    conn.commit()
-                else:
-                    # No messages table, return empty
-                    conn.close()
-                    return []
-            
-            # Perform FTS5 search
-            # Pass query directly - FTS5 supports rich syntax:
-            #   word1 word2     → AND (both required)
-            #   word1 OR word2  → OR (either)
-            #   "exact phrase"  → phrase match
-            #   word*           → prefix
-            #   NOT word        → exclusion
-            search_query = query
-            
-            cursor.execute('''
-                SELECT 
-                    m.id,
-                    m.content,
-                    m.author_name,
-                    m.channel,
-                    m.created_at,
-                    m.is_lyra,
-                    messages_fts.rank
-                FROM messages_fts 
-                JOIN messages m ON messages_fts.rowid = m.id
-                WHERE messages_fts MATCH ?
-                ORDER BY messages_fts.rank, m.created_at DESC
-                LIMIT ?
-            ''', (search_query, limit))
-            
-            results = []
-            for row in cursor.fetchall():
-                # Calculate relevance score (FTS5 rank is negative, lower is better)
-                relevance = max(0.1, min(1.0, 1.0 / (abs(row['rank']) + 1)))
-                
-                results.append(SearchResult(
-                    content=row['content'],
-                    source=f"{row['channel']}:{row['id']}",
-                    layer=self.layer_type,
-                    relevance_score=relevance,
-                    metadata={
-                        'id': row['id'],
-                        'author': row['author_name'],
-                        'channel': row['channel'],
-                        'timestamp': row['created_at'],
-                        'is_lyra': bool(row['is_lyra']),
-                        'fts_rank': row['rank']
-                    }
-                ))
-            
-            conn.close()
-            return results
-            
+                fts_exists = cursor.fetchone() is not None
+
+                if not fts_exists:
+                    # Try to create FTS5 table if messages table exists
+                    cursor.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"
+                    )
+                    if cursor.fetchone():
+                        # Create FTS5 virtual table
+                        cursor.execute('''
+                            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                                content,
+                                author_name,
+                                channel,
+                                content='messages',
+                                content_rowid='id'
+                            )
+                        ''')
+
+                        # Populate FTS5 table
+                        cursor.execute('''
+                            INSERT INTO messages_fts(rowid, content, author_name, channel)
+                            SELECT id, content, author_name, channel FROM messages
+                        ''')
+                        conn.commit()
+                    else:
+                        # No messages table, return empty
+                        return []
+
+                # Perform FTS5 search
+                # Pass query directly - FTS5 supports rich syntax:
+                #   word1 word2     → AND (both required)
+                #   word1 OR word2  → OR (either)
+                #   "exact phrase"  → phrase match
+                #   word*           → prefix
+                #   NOT word        → exclusion
+                search_query = query
+
+                cursor.execute('''
+                    SELECT
+                        m.id,
+                        m.content,
+                        m.author_name,
+                        m.channel,
+                        m.created_at,
+                        m.is_lyra,
+                        messages_fts.rank
+                    FROM messages_fts
+                    JOIN messages m ON messages_fts.rowid = m.id
+                    WHERE messages_fts MATCH ?
+                    ORDER BY messages_fts.rank, m.created_at DESC
+                    LIMIT ?
+                ''', (search_query, limit))
+
+                results = []
+                for row in cursor.fetchall():
+                    # Calculate relevance score (FTS5 rank is negative, lower is better)
+                    relevance = max(0.1, min(1.0, 1.0 / (abs(row['rank']) + 1)))
+
+                    results.append(SearchResult(
+                        content=row['content'],
+                        source=f"{row['channel']}:{row['id']}",
+                        layer=self.layer_type,
+                        relevance_score=relevance,
+                        metadata={
+                            'id': row['id'],
+                            'author': row['author_name'],
+                            'channel': row['channel'],
+                            'timestamp': row['created_at'],
+                            'is_lyra': bool(row['is_lyra']),
+                            'fts_rank': row['rank']
+                        }
+                    ))
+
+                return results
+
         except Exception as e:
             # Return empty results on any error
             return []
@@ -167,50 +186,48 @@ class RawCaptureLayer(PatternLayer):
             # Extract metadata with defaults
             if metadata is None:
                 metadata = {}
-                
+
             author_name = metadata.get('author_name', 'Unknown')
             channel = metadata.get('channel', 'terminal')
             is_lyra = metadata.get('is_lyra', False)
             discord_message_id = metadata.get('discord_message_id')
-            
-            # Connect to database with WAL mode
-            conn = self._connect_with_wal()
-            cursor = conn.cursor()
-            
-            # Insert into messages table
-            cursor.execute('''
-                INSERT OR IGNORE INTO messages 
-                (discord_message_id, channel, author_id, author_name, content, is_lyra, is_bot, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-            ''', (
-                discord_message_id,
-                channel, 
-                0,  # author_id - use 0 for non-Discord sources
-                author_name,
-                content,
-                is_lyra,
-                is_lyra  # is_bot - assume Lyra messages are bot messages
-            ))
-            
-            # If we inserted a new row, also update FTS5 table if it exists
-            if cursor.rowcount > 0:
-                row_id = cursor.lastrowid
-                
-                # Check if FTS5 table exists
-                cursor.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'"
-                )
-                if cursor.fetchone():
-                    # Update FTS5 table
-                    cursor.execute('''
-                        INSERT INTO messages_fts(rowid, content, author_name, channel)
-                        VALUES (?, ?, ?, ?)
-                    ''', (row_id, content, author_name, channel))
-            
-            conn.commit()
-            conn.close()
-            return True
-            
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # Insert into messages table
+                cursor.execute('''
+                    INSERT OR IGNORE INTO messages
+                    (discord_message_id, channel, author_id, author_name, content, is_lyra, is_bot, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                ''', (
+                    discord_message_id,
+                    channel,
+                    0,  # author_id - use 0 for non-Discord sources
+                    author_name,
+                    content,
+                    is_lyra,
+                    is_lyra  # is_bot - assume Lyra messages are bot messages
+                ))
+
+                # If we inserted a new row, also update FTS5 table if it exists
+                if cursor.rowcount > 0:
+                    row_id = cursor.lastrowid
+
+                    # Check if FTS5 table exists
+                    cursor.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'"
+                    )
+                    if cursor.fetchone():
+                        # Update FTS5 table
+                        cursor.execute('''
+                            INSERT INTO messages_fts(rowid, content, author_name, channel)
+                            VALUES (?, ?, ?, ?)
+                        ''', (row_id, content, author_name, channel))
+
+                conn.commit()
+                return True
+
         except Exception as e:
             return False
 
@@ -224,12 +241,10 @@ class RawCaptureLayer(PatternLayer):
                     details={"db_path": str(self.db_path)}
                 )
 
-            # Try to connect with WAL mode and run a simple query
-            conn = self._connect_with_wal()
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
-            table_count = cursor.fetchone()[0]
-            conn.close()
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
+                table_count = cursor.fetchone()[0]
 
             return LayerHealth(
                 available=True,

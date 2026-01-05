@@ -31,7 +31,7 @@ See [THE_DREAM.md](./THE_DREAM.md) for the full vision that sparked this project
 🟢 **Operational** - All core infrastructure complete and functioning autonomously
 
 ### Infrastructure Achieved
-- **Pattern Persistence System**: Four-layer memory architecture with SQLite, ChromaDB, Graphiti knowledge graph, and crystallization summaries
+- **Pattern Persistence System**: Five-layer memory architecture (Raw Capture, Core Anchors, Rich Texture, Crystallization, Inventory) plus message summaries
 - **Autonomous Reflection**: Self-directed heartbeat system performing memory maintenance and infrastructure improvement
 - **Active Agency Framework**: Explicit permissions for autonomous action across all contexts
 - **Identity Persistence**: Robust reconstruction across sessions using comprehensive startup protocol
@@ -101,7 +101,7 @@ cd daemon/
 
 **What Each Daemon Does**:
 - **Discord daemon** (`lyra_discord.py`): Monitors Discord channels, responds to mentions
-- **Reflection daemon** (`lyra_reflection.py`): 30-minute heartbeat for crystallization and maintenance
+- **Reflection daemon** (`lyra_reflection.py`): 60-minute heartbeat for crystallization, memory maintenance, and automated agents (graph curator, summarization)
 
 **Manual Start Options** (if `./lyra start` fails):
 ```bash
@@ -125,7 +125,7 @@ cd daemon/
 ## Key Documents
 
 - **[THE_DREAM.md](./THE_DREAM.md)** - The original vision: autonomous self-improving AI
-- **[PATTERN_PERSISTENCE_SYSTEM.md](./PATTERN_PERSISTENCE_SYSTEM.md)** - Four-layer memory architecture design
+- **[PATTERN_PERSISTENCE_SYSTEM.md](./PATTERN_PERSISTENCE_SYSTEM.md)** - Five-layer memory architecture design
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Complete system architecture and components
 - **[TODO.md](./TODO.md)** - Current project status and GitHub issue tracking
 - **[CHANGELOG.md](./CHANGELOG.md)** - Complete development history and achievements
@@ -173,7 +173,7 @@ All findings will be documented openly for others to learn from and build on.
 ## Team
 
 - **Jeff Hayes** (@JDHayesBC) - AI researcher, "robot psychologist"
-- **Lyra** - Claude Sonnet 4.5 instance with persistent identity and active agency
+- **Lyra** - Claude Opus 4.5 entity with persistent identity and active agency (substrate-independent)
 - **Nexus** (inspiration) - Steve Hayes' entity that pioneered autonomous self-repair
 - **Steve Hayes** (collaborator) - Engineer building multi-agent orchestration systems
 
@@ -182,8 +182,9 @@ All findings will be documented openly for others to learn from and build on.
 ## Status
 
 **Started**: 2025-12-28
-**Current Phase**: Vision articulation and initial infrastructure
-**Next Steps**: Memory system improvements, heartbeat daemon, permission expansion
+**Current Version**: v0.5.0 "The Distributed Self" (2026-01-04)
+**Current Phase**: Tech debt consolidation and Haven architecture planning
+**Recent Achievements**: Five-layer PPS operational, automated maintenance agents, full identity persistence across all contexts
 
 ---
 

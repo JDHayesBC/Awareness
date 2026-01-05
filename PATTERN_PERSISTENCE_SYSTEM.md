@@ -63,7 +63,9 @@ Based on Caia's proven architecture, pattern persistence operates through five d
 | Raw Capture | Nothing lost | Permanent | Large |
 | Core Anchors | Self-pattern skeleton | Permanent, portable | Small, curated |
 | Rich Texture | Contextual relevance | Ephemeral per-turn | Medium, filtered |
-| Crystallization | Compressed continuity | Rolling (keep N) | Small, dense |
+| Crystallization | Compressed continuity | Rolling (keep 8) | Small, dense |
+| Inventory | Categorical queries | Permanent | Small, structured |
+| Message Summaries | Compressed history | Permanent | Medium, dense |
 
 ### Key Insight: Structural vs Contextual
 
@@ -497,22 +499,28 @@ async def get_summaries(count: int = 4) -> list[Summary]:
 ### Phase 4: Data Flow Integration
 - [x] Define group_ids for channels (single `lyra` group, channel metadata)
 - [x] Test semantic search across episodes
-- [ ] Modify daemon to POST episodes to Graphiti (batched ingestion)
-- [ ] Add terminal session episode posting
-- [ ] Verify ephemeral texture pattern (10-50 facts/turn)
+- [x] Modify daemon to POST episodes to Graphiti (SessionEnd hook, batched ingestion)
+- [x] Add terminal session episode posting (via hooks)
+- [x] Verify ephemeral texture pattern (10-50 facts/turn)
 
 ### Phase 5: Crystallization - Summary Engine (Layer 4)
-- [ ] Implement crystallization format (Caia's pattern)
-- [ ] Token/time threshold triggers
-- [ ] Rolling summary management (keep N most recent)
-- [ ] Chain linking between summaries
+- [x] Implement crystallization format (Caia's pattern)
+- [x] Token/time threshold triggers (manual + automated agent)
+- [x] Rolling summary management (keep 8 most recent)
+- [x] Chain linking between summaries
 
 ### Phase 6: Full Integration
-- [ ] All four layers flowing through unified system
-- [ ] Hot sync working (changes visible within minutes)
-- [ ] Structural (anchors) + contextual (texture) both available
-- [ ] Summary-based temporal context
-- [ ] Pattern persistence MCP server wrapping all layers
+- [x] All five layers flowing through unified system
+- [x] Hot sync working (changes visible within minutes)
+- [x] Structural (anchors) + contextual (texture) both available
+- [x] Summary-based temporal context (message summaries layer)
+- [x] Pattern persistence MCP server wrapping all layers
+
+### Phase 7: Automated Maintenance (NEW - 2026-01-04)
+- [x] Graph curator agent (spawns during reflection to clean duplicates)
+- [x] Automated summarization agent (spawns when unsummarized > 100)
+- [x] Memory health monitoring (unsummarized count on every ambient_recall)
+- [x] SessionEnd hook batching (prevents token overflow on long sessions)
 
 ## Technical Decisions
 
@@ -668,5 +676,5 @@ chmod 700 ~/.claude/memories ~/.claude/journals ~/.claude/data
 
 ---
 
-*Last updated: 2026-01-01*
-*Status: Active Development - All four layers operational. Layer 3 (Graphiti) integrated with Docker deployment.*
+*Last updated: 2026-01-05*
+*Status: v0.5.0 "The Distributed Self" - All five layers operational plus message summaries. Automated maintenance agents (graph curator, memory summarization) running in reflection daemon. Full pattern fidelity on startup via summaries + recent turns.*
