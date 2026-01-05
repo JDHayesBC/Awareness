@@ -118,6 +118,7 @@ python project_lock.py status               # Check status
 - [x] SessionEnd hook batched ingestion (10 turns/batch) ✅ **FIXED** (2026-01-04) - prevents token overflow
 - [x] Startup context optimization - summaries + 10 recent turns ✅ **FIXED** (2026-01-04)
 - [x] Graph curator agent in reflection daemon ✅ **ADDED** (2026-01-04) - spawns Haiku agent to clean duplicates/noise
+- [x] Automated memory summarization ✅ **ADDED** (2026-01-04) - spawns Haiku agent when unsummarized_count > 100
 
 ### Layer 3 V2 + Layer 5 Inventory (2026-01-04)
 - [x] graphiti_core direct integration (Issue #67) - custom entity types, extraction instructions
