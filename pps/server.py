@@ -395,6 +395,11 @@ async def list_tools() -> list[Tool]:
                         "description": "Maximum turns to retrieve (default: 50)",
                         "default": 50
                     },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Skip this many turns before returning results. Use for pagination when ambient_recall shows 'showing X of Y'. (default: 0)",
+                        "default": 0
+                    },
                     "min_turns": {
                         "type": "integer",
                         "description": "Minimum turns to always return, even if pulling from before crystal (default: 10)",
@@ -840,7 +845,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     # Show how many we're displaying vs total unsummarized
                     showing = len(unsummarized_rows)
                     if unsummarized_count > showing:
-                        unsummarized_text = f"\n---\n[unsummarized_turns] (showing {showing} of {unsummarized_count} - oldest omitted, run summarizer)\n"
+                        unsummarized_text = f"\n---\n[unsummarized_turns] (showing {showing} of {unsummarized_count} - use get_turns_since_crystal with offset={showing} for older, or run summarizer)\n"
                     else:
                         unsummarized_text = f"\n---\n[unsummarized_turns] ({showing} messages since last summary)\n"
                     for row in unsummarized_rows:
@@ -972,6 +977,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     elif name == "get_turns_since_crystal":
         limit = arguments.get("limit", 50)
+        offset = arguments.get("offset", 0)
         min_turns = arguments.get("min_turns", 10)
         channel_filter = arguments.get("channel")
 
@@ -991,6 +997,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 if last_crystal_time:
                     # First, get the MOST RECENT turns after the last crystal
                     # (order DESC to get newest, then reverse for chronological display)
+                    # offset allows pagination: offset=0 gets newest, offset=50 gets next batch
                     query = """
                         SELECT author_name, content, created_at, channel
                         FROM messages
@@ -1000,8 +1007,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     if channel_filter:
                         query += " AND channel LIKE ?"
                         params.append(f"%{channel_filter}%")
-                    query += " ORDER BY created_at DESC LIMIT ?"
-                    params.append(limit)
+                    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                    params.extend([limit, offset])
                     cursor.execute(query, params)
                     rows_after = list(reversed(cursor.fetchall()))  # Reverse for chronological order
 
@@ -1031,8 +1038,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     if channel_filter:
                         query += " WHERE channel LIKE ?"
                         params.append(f"%{channel_filter}%")
-                    query += " ORDER BY created_at DESC LIMIT ?"
-                    params.append(max(limit, min_turns))
+                    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                    params.extend([max(limit, min_turns), offset])
                     cursor.execute(query, params)
                     rows_after = list(reversed(cursor.fetchall()))  # Reverse to get chronological order
 
@@ -1053,6 +1060,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
             # Build header with context
             header_parts = [f"**{len(turns)} turns"]
+            if offset > 0:
+                header_parts.append(f"(offset {offset})")
             if last_crystal_time:
                 if rows_before:
                     header_parts.append(f"({len(rows_before)} before + {len(rows_after)} after crystal on {last_crystal_time.strftime('%Y-%m-%d')})")
