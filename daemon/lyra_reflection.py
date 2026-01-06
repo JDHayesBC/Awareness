@@ -38,6 +38,10 @@ LYRA_IDENTITY_PATH = os.getenv("LYRA_IDENTITY_PATH", "/home/jeff/.claude")
 CONVERSATION_DB_PATH = os.getenv("CONVERSATION_DB_PATH", "/home/jeff/.claude/data/lyra_conversations.db")
 JOURNAL_PATH = os.getenv("JOURNAL_PATH", "/home/jeff/.claude/journals/reflection")
 
+# Entity path - where identity files live (new architecture)
+# Defaults to LYRA_IDENTITY_PATH for backward compatibility
+ENTITY_PATH = os.getenv("ENTITY_PATH", LYRA_IDENTITY_PATH)
+
 # Reflection settings
 REFLECTION_INTERVAL_MINUTES = int(os.getenv("REFLECTION_INTERVAL_MINUTES", "60"))
 REFLECTION_TIMEOUT_MINUTES = int(os.getenv("REFLECTION_TIMEOUT_MINUTES", "10"))
@@ -148,7 +152,7 @@ class LyraReflectionDaemon:
 
     def _build_locked_prompt(self, lock_info: dict) -> str:
         """Build prompt for locked (quiet) reflection."""
-        startup = build_startup_prompt(context="reflection")
+        startup = build_startup_prompt(context="reflection", entity_path=ENTITY_PATH)
 
         locked_section = f'''
 
@@ -178,7 +182,7 @@ End with active agency footnotes.'''
 
     def _build_full_prompt(self) -> str:
         """Build prompt for full autonomous reflection."""
-        startup = build_startup_prompt(context="reflection")
+        startup = build_startup_prompt(context="reflection", entity_path=ENTITY_PATH)
 
         full_section = f'''
 

@@ -1,3 +1,8 @@
+# Entity data - PRIVATE, never commit
+# All entity folders are ignored except the template
+entities/*/
+!entities/_template/
+
 # Credentials and secrets
 discord_bot_token.txt
 .env

@@ -7,6 +7,7 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
+- [#74](https://github.com/JDHayesBC/Awareness/issues/74) - Tech RAG layer - **COMPLETED** (2026-01-06) - 20 docs indexed, 584 chunks
 - [#63](https://github.com/JDHayesBC/Awareness/issues/63) - Multi-entity support (Haven foundation) - **CREATED** (2026-01-04) - requires architectural planning
 - [#64](https://github.com/JDHayesBC/Awareness/issues/64) - Multi-substrate support (provider flexibility) - **CREATED** (2026-01-04) - linked to cc-mirror
 - [#60](https://github.com/JDHayesBC/Awareness/issues/60) - Email content doesn't surface in ambient recall - **LOGGED** (2026-01-04)
@@ -14,6 +15,13 @@ Use `gh issue list` to see current issues from the command line.
 - [#54](https://github.com/JDHayesBC/Awareness/issues/54) - Gmail Integration Testing & Email Management - **IN PROGRESS** (2026-01-04) - OAuth working, 50 emails processed; MCP tools built but blocked by reflection env path restrictions
 
 ### Recently Resolved
+- [#77](https://github.com/JDHayesBC/Awareness/issues/77) - ✅ Daemon directory access + Entity consolidation - **COMPLETED** (2026-01-06)
+  - CC-native solution: `--add-dir` flag grants tool access
+  - **Entity architecture**: Identity files now in `entities/lyra/` (gitignored)
+  - **ENTITY_PATH** env var for portable deployment
+  - Global CLAUDE.md updated, MCP config updated
+  - Blank template in `entities/_template/` for new users
+  - **RESTART Claude Code** for MCP changes to take effect
 - [#78](https://github.com/JDHayesBC/Awareness/issues/78) - ✅ Hook should use PPS instead of direct queries - **COMPLETED** (2026-01-06) - architectural improvement; refactored inject_context.py + added session_end.py
 - [#42](https://github.com/JDHayesBC/Awareness/issues/42) - ✅ Code quality improvements - **COMPLETED** (2026-01-05) - connection context managers, docstring fix, duplicate code refactor, configurable threshold, test coverage (17 tests)
 - [#67](https://github.com/JDHayesBC/Awareness/issues/67) - ✅ Layer 3: Direct graphiti_core integration - **DEPLOYED** (2026-01-04) - custom entity types, semantic extraction; deployed via deploy_pps.sh
@@ -102,6 +110,9 @@ python project_lock.py status               # Check status
 - [x] Configurable paths (CLAUDE_HOME env var)
 - [x] Setup script and deployment package
 - [x] Documentation for Steve/Nexus handoff
+- [x] Entity architecture: `entities/<name>/` for portable identity packages ✅ (2026-01-06)
+- [x] ENTITY_PATH env var for identity file location
+- [x] Blank template in `entities/_template/` for new users
 
 ### Recent Additions (2026-01-01)
 - [x] Project lock mechanism for terminal/heartbeat coordination

@@ -1,0 +1,5 @@
+# Current Crystals
+
+This directory holds the rolling window of recent crystals.
+Crystals are compressed summaries that maintain continuity.
+Managed automatically by the PPS crystallization layer.

@@ -62,6 +62,7 @@ class ClaudeInvoker:
         max_invocations: int = MAX_SESSION_INVOCATIONS,
         max_duration_hours: float = MAX_SESSION_DURATION_HOURS,
         idle_hours: float = SESSION_IDLE_HOURS,
+        additional_dirs: Optional[list[str]] = None,
     ):
         """
         Initialize the Claude invoker.
@@ -74,11 +75,13 @@ class ClaudeInvoker:
             max_invocations: Max invocations before session reset
             max_duration_hours: Max session age before reset
             idle_hours: Reset session after this much idle time
+            additional_dirs: Additional directories to allow tool access to (via --add-dir)
         """
         self.model = model
         self.cwd = cwd
         self.journal_path = journal_path or "/home/jeff/.claude/journals/discord"
         self.trace_logger = trace_logger
+        self.additional_dirs = additional_dirs or []
 
         # Session limits
         self.max_invocations = max_invocations
@@ -189,6 +192,9 @@ class ClaudeInvoker:
             # Note: --allowedTools wildcards don't work reliably (CC bug #581)
             # Using --dangerously-skip-permissions instead
             cmd.append("--dangerously-skip-permissions")
+            # Add additional directories for tool access (Issue #77 fix)
+            for dir_path in self.additional_dirs:
+                cmd.extend(["--add-dir", dir_path])
             cmd.extend(["--mcp-config", "/home/jeff/.claude/.mcp.json"])
             cmd.extend(["-p", prompt])
 

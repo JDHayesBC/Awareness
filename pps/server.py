@@ -39,16 +39,21 @@ except ImportError:
     USE_GRAPHITI_CORE = False
 
 # Configuration from environment
-CLAUDE_HOME = Path(os.getenv("CLAUDE_HOME", str(Path.home() / ".claude")))
+# ENTITY_PATH is the new standard - path to entity folder (e.g., awareness/entities/lyra)
+# CLAUDE_HOME kept for backwards compatibility
+ENTITY_PATH = Path(os.getenv("ENTITY_PATH", os.getenv("CLAUDE_HOME", str(Path.home() / ".claude"))))
+CLAUDE_HOME = Path(os.getenv("CLAUDE_HOME", str(Path.home() / ".claude")))  # For shared data
 CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8200"))
 SUMMARIZATION_THRESHOLD = int(os.getenv("PPS_SUMMARIZATION_THRESHOLD", "50"))
 
-# Derived paths
-word_photos_path = CLAUDE_HOME / "memories" / "word_photos"
+# Entity-specific paths (use ENTITY_PATH)
+word_photos_path = ENTITY_PATH / "memories" / "word_photos"
+crystals_path = ENTITY_PATH / "crystals" / "current"
+archive_path = ENTITY_PATH / "crystals" / "archive"
+
+# Shared data paths (use CLAUDE_HOME for now - TODO: move to entity or repo)
 db_path = CLAUDE_HOME / "data" / "lyra_conversations.db"
-crystals_path = CLAUDE_HOME / "crystals" / "current"
-archive_path = CLAUDE_HOME / "crystals" / "archive"
 
 # Try to use ChromaDB if available
 try:

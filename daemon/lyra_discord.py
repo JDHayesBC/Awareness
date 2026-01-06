@@ -64,6 +64,13 @@ JOURNAL_PATH = os.getenv("JOURNAL_PATH", "/home/jeff/.claude/journals/discord")
 LYRA_IDENTITY_PATH = os.getenv("LYRA_IDENTITY_PATH", "/home/jeff/.claude")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "sonnet")
 
+# Entity path - where identity files live (new architecture)
+# Defaults to LYRA_IDENTITY_PATH for backward compatibility
+ENTITY_PATH = os.getenv("ENTITY_PATH", LYRA_IDENTITY_PATH)
+
+# Project directory for --add-dir (Issue #77 fix)
+PROJECT_DIR = Path(os.getenv("AWARENESS_PROJECT_DIR", str(Path(__file__).parent.parent)))
+
 # Graphiti configuration
 GRAPHITI_HOST = os.getenv("GRAPHITI_HOST", "localhost")
 GRAPHITI_PORT = int(os.getenv("GRAPHITI_PORT", "8203"))
@@ -106,6 +113,7 @@ class LyraDiscordBot(commands.Bot):
             model=CLAUDE_MODEL,
             cwd=LYRA_IDENTITY_PATH,
             journal_path=JOURNAL_PATH,
+            additional_dirs=[str(PROJECT_DIR)],  # Issue #77: allow project access
         )
 
         # SQLite conversation storage
@@ -164,7 +172,7 @@ class LyraDiscordBot(commands.Bot):
         print(f"[WARMUP] Starting session for channel {channel_id}...")
         start_time = datetime.now(timezone.utc)
 
-        prompt = build_startup_prompt(context="discord")
+        prompt = build_startup_prompt(context="discord", entity_path=ENTITY_PATH)
 
         # This first call initializes the session
         response = await self.invoker.invoke(
