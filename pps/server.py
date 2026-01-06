@@ -802,8 +802,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                             text = text[:500] + "..."
                         summaries_text += f"[{date}] [{channels}]\n{text}\n\n"
 
-                # Get ALL unsummarized turns - full pattern fidelity
-                # These are turns that happened since the last summary was created
+                # Get recent unsummarized turns with a sensible limit
+                # Full fidelity is great but not at the cost of context explosion
+                MAX_UNSUMMARIZED_FOR_STARTUP = 50
                 raw_layer = layers[LayerType.RAW_CAPTURE]
                 with raw_layer.get_connection() as conn:
                     cursor = conn.cursor()
@@ -813,28 +814,35 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     columns = [col[1] for col in cursor.fetchall()]
 
                     if 'summary_id' in columns:
-                        # Get all unsummarized messages (full fidelity)
+                        # Get most recent unsummarized messages (limit to prevent explosion)
+                        # ORDER BY DESC + LIMIT gives us the newest, then we reverse
                         cursor.execute("""
                             SELECT author_name, content, created_at, channel
                             FROM messages
                             WHERE summary_id IS NULL
-                            ORDER BY created_at ASC
-                        """)
+                            ORDER BY created_at DESC
+                            LIMIT ?
+                        """, (MAX_UNSUMMARIZED_FOR_STARTUP,))
                     else:
                         # Fallback: get recent messages
                         cursor.execute("""
                             SELECT author_name, content, created_at, channel
                             FROM messages
-                            ORDER BY created_at DESC LIMIT 50
-                        """)
+                            ORDER BY created_at DESC LIMIT ?
+                        """, (MAX_UNSUMMARIZED_FOR_STARTUP,))
 
                     unsummarized_rows = cursor.fetchall()
-                    if 'summary_id' not in columns:
-                        unsummarized_rows = list(reversed(unsummarized_rows))
+                    # Reverse to get chronological order (we fetched DESC for LIMIT efficiency)
+                    unsummarized_rows = list(reversed(unsummarized_rows))
 
                 unsummarized_text = ""
                 if unsummarized_rows:
-                    unsummarized_text = f"\n---\n[unsummarized_turns] ({len(unsummarized_rows)} messages since last summary)\n"
+                    # Show how many we're displaying vs total unsummarized
+                    showing = len(unsummarized_rows)
+                    if unsummarized_count > showing:
+                        unsummarized_text = f"\n---\n[unsummarized_turns] (showing {showing} of {unsummarized_count} - oldest omitted, run summarizer)\n"
+                    else:
+                        unsummarized_text = f"\n---\n[unsummarized_turns] ({showing} messages since last summary)\n"
                     for row in unsummarized_rows:
                         timestamp = row['created_at'][:16] if row['created_at'] else "?"
                         author = row['author_name'] or "Unknown"
