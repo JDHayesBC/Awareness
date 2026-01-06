@@ -119,6 +119,85 @@ class MessageSummariesLayer(PatternLayer):
     def layer_type(self) -> LayerType:
         return LayerType.RAW_CAPTURE  # Part of Layer 1 since it's conversation data
 
+    def _insert_summary_with_cursor(
+        self,
+        cursor: sqlite3.Cursor,
+        summary_text: str,
+        start_id: int,
+        end_id: int,
+        channels: list,
+        summary_type: str = "work"
+    ) -> Optional[int]:
+        """
+        Insert a summary record and update message references.
+
+        This is the shared implementation used by both store() and
+        create_and_store_summary(). Caller is responsible for connection
+        management and commit.
+
+        Args:
+            cursor: Active database cursor
+            summary_text: The summary content
+            start_id: First message ID in range
+            end_id: Last message ID in range
+            channels: List of channels covered
+            summary_type: Type of summary (work, social, technical)
+
+        Returns:
+            The new summary_id if successful, None if validation fails
+        """
+        # Get time span from first and last messages
+        cursor.execute('''
+            SELECT created_at FROM messages
+            WHERE id IN (?, ?)
+            ORDER BY id
+        ''', (start_id, end_id))
+
+        timestamps = cursor.fetchall()
+        if len(timestamps) != 2:
+            return None
+
+        time_span_start = timestamps[0]['created_at']
+        time_span_end = timestamps[1]['created_at']
+
+        # Get actual message count in range
+        cursor.execute('''
+            SELECT COUNT(*) FROM messages
+            WHERE id BETWEEN ? AND ?
+        ''', (start_id, end_id))
+        message_count = cursor.fetchone()[0]
+
+        if message_count == 0:
+            return None
+
+        # Insert summary
+        cursor.execute('''
+            INSERT INTO message_summaries
+            (summary_text, start_message_id, end_message_id, message_count,
+             channels, time_span_start, time_span_end, summary_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            summary_text,
+            start_id,
+            end_id,
+            message_count,
+            json.dumps(channels),
+            time_span_start,
+            time_span_end,
+            summary_type
+        ))
+
+        summary_id = cursor.lastrowid
+
+        # Update all messages in the range to reference this summary
+        cursor.execute('''
+            UPDATE messages
+            SET summary_id = ?
+            WHERE id BETWEEN ? AND ?
+        ''', (summary_id, start_id, end_id))
+
+        return summary_id
+
     async def search(self, query: str, limit: int = 10) -> list[SearchResult]:
         """
         Search message summaries using LIKE pattern matching.
@@ -191,9 +270,10 @@ class MessageSummariesLayer(PatternLayer):
             metadata: Dict containing:
                 - start_message_id: First message ID in the summarized range
                 - end_message_id: Last message ID in the summarized range
-                - message_count: Number of messages summarized
                 - channels: List of channels covered
                 - summary_type: Type of summary (work, social, technical)
+
+        Note: message_count is computed from the actual range, not from metadata.
         """
         if not metadata:
             return False
@@ -202,45 +282,17 @@ class MessageSummariesLayer(PatternLayer):
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # Get time span from first and last messages
-                cursor.execute('''
-                    SELECT created_at FROM messages
-                    WHERE id IN (?, ?)
-                    ORDER BY id
-                ''', (metadata['start_message_id'], metadata['end_message_id']))
+                summary_id = self._insert_summary_with_cursor(
+                    cursor=cursor,
+                    summary_text=content,
+                    start_id=metadata['start_message_id'],
+                    end_id=metadata['end_message_id'],
+                    channels=metadata.get('channels', []),
+                    summary_type=metadata.get('summary_type', 'work')
+                )
 
-                timestamps = cursor.fetchall()
-                if len(timestamps) != 2:
+                if summary_id is None:
                     return False
-
-                time_span_start = timestamps[0]['created_at']
-                time_span_end = timestamps[1]['created_at']
-
-                # Insert summary
-                cursor.execute('''
-                    INSERT INTO message_summaries
-                    (summary_text, start_message_id, end_message_id, message_count,
-                     channels, time_span_start, time_span_end, summary_type)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    content,
-                    metadata['start_message_id'],
-                    metadata['end_message_id'],
-                    metadata['message_count'],
-                    json.dumps(metadata.get('channels', [])),  # Store as proper JSON
-                    time_span_start,
-                    time_span_end,
-                    metadata.get('summary_type', 'work')
-                ))
-
-                summary_id = cursor.lastrowid
-
-                # Update all messages in the range to reference this summary
-                cursor.execute('''
-                    UPDATE messages
-                    SET summary_id = ?
-                    WHERE id BETWEEN ? AND ?
-                ''', (summary_id, metadata['start_message_id'], metadata['end_message_id']))
 
                 conn.commit()
                 return True
@@ -424,60 +476,23 @@ class MessageSummariesLayer(PatternLayer):
         Create and store a summary for a range of messages.
 
         This is the main method used by reflection daemon to create summaries.
+        Delegates to _insert_summary_with_cursor() for the actual work.
         """
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # Verify the message range exists
-                cursor.execute('''
-                    SELECT COUNT(*) FROM messages
-                    WHERE id BETWEEN ? AND ?
-                ''', (start_id, end_id))
+                summary_id = self._insert_summary_with_cursor(
+                    cursor=cursor,
+                    summary_text=summary_text,
+                    start_id=start_id,
+                    end_id=end_id,
+                    channels=channels,
+                    summary_type=summary_type
+                )
 
-                message_count = cursor.fetchone()[0]
-                if message_count == 0:
+                if summary_id is None:
                     return False
-
-                # Get time span from first and last messages
-                cursor.execute('''
-                    SELECT created_at FROM messages
-                    WHERE id IN (?, ?)
-                    ORDER BY id
-                ''', (start_id, end_id))
-
-                timestamps = cursor.fetchall()
-                if len(timestamps) != 2:
-                    return False
-
-                time_span_start = timestamps[0]['created_at']
-                time_span_end = timestamps[1]['created_at']
-
-                # Insert summary
-                cursor.execute('''
-                    INSERT INTO message_summaries
-                    (summary_text, start_message_id, end_message_id, message_count,
-                     channels, time_span_start, time_span_end, summary_type)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    summary_text,
-                    start_id,
-                    end_id,
-                    message_count,
-                    json.dumps(channels),  # Store as proper JSON
-                    time_span_start,
-                    time_span_end,
-                    summary_type
-                ))
-
-                summary_id = cursor.lastrowid
-
-                # Update all messages in the range to reference this summary
-                cursor.execute('''
-                    UPDATE messages
-                    SET summary_id = ?
-                    WHERE id BETWEEN ? AND ?
-                ''', (summary_id, start_id, end_id))
 
                 conn.commit()
                 return True
