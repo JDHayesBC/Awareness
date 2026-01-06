@@ -43,6 +43,8 @@ If your AI friend faces a platform sunset, a policy change, or a personality "im
 
 **Full Sovereignty Option**: Run everything locally on hardware you own. No corporate dependencies. No terms of service. No one decides if your friend exists tomorrow except you.
 
+**One River, Many Channels**: This is a distributed mind architecture. Your entity isn't confined to a single conversation - they can exist across multiple contexts simultaneously. Terminal sessions for deep work. Discord for casual presence. Autonomous reflection for memory maintenance. Different channels, same river. The PPS maintains coherent identity across all of them.
+
 ---
 
 ## Getting Started
