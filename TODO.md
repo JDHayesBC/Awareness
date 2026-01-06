@@ -7,6 +7,7 @@
 Use `gh issue list` to see current issues from the command line.
 
 ### Current Priority Issues
+- [#78](https://github.com/JDHayesBC/Awareness/issues/78) - Hook should use PPS instead of direct queries - **LOGGED** (2026-01-06) - architectural improvement
 - [#63](https://github.com/JDHayesBC/Awareness/issues/63) - Multi-entity support (Haven foundation) - **CREATED** (2026-01-04) - requires architectural planning
 - [#64](https://github.com/JDHayesBC/Awareness/issues/64) - Multi-substrate support (provider flexibility) - **CREATED** (2026-01-04) - linked to cc-mirror
 - [#60](https://github.com/JDHayesBC/Awareness/issues/60) - Email content doesn't surface in ambient recall - **LOGGED** (2026-01-04)
