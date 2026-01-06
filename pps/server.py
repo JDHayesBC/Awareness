@@ -27,6 +27,7 @@ from layers.core_anchors import CoreAnchorsLayer
 from layers.crystallization import CrystallizationLayer
 from layers.message_summaries import MessageSummariesLayer
 from layers.inventory import InventoryLayer
+from layers.tech_rag import TechRAGLayer
 from pathlib import Path
 
 # Try to use graphiti_core for enhanced Layer 3
@@ -87,6 +88,19 @@ message_summaries = MessageSummariesLayer(db_path=db_path)
 inventory_db_path = CLAUDE_HOME / "data" / "inventory.db"
 inventory = InventoryLayer(db_path=inventory_db_path)
 print(f"[PPS] Inventory layer initialized: {inventory_db_path}", file=sys.stderr)
+
+# Initialize Tech RAG layer (Layer 6) - only if ChromaDB is available
+tech_rag = None
+if USE_CHROMA:
+    tech_docs_path = CLAUDE_HOME / "tech_docs"
+    tech_rag = TechRAGLayer(
+        tech_docs_path=tech_docs_path,
+        chroma_host=CHROMA_HOST,
+        chroma_port=CHROMA_PORT
+    )
+    print(f"[PPS] Tech RAG initialized: {tech_docs_path}", file=sys.stderr)
+else:
+    print("[PPS] Tech RAG not available (requires ChromaDB)", file=sys.stderr)
 
 # Use ChromaDB layer if available, otherwise fall back to file-based
 if USE_CHROMA:
@@ -721,6 +735,78 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {}
+            }
+        ),
+        # === Tech RAG (Layer 6) ===
+        Tool(
+            name="tech_search",
+            description=(
+                "Search technical documentation in the Tech RAG. "
+                "Use for finding architecture info, API docs, design decisions. "
+                "Family knowledge - searchable by any entity."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What to search for in technical docs"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results (default: 5)",
+                        "default": 5
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Optional category filter (e.g., 'architecture', 'api')"
+                    }
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="tech_ingest",
+            description=(
+                "Ingest a markdown file into the Tech RAG. "
+                "Automatically chunks for better retrieval. "
+                "Use to index architecture docs, guides, design documents."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filepath": {
+                        "type": "string",
+                        "description": "Path to the markdown file to ingest"
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Category tag (e.g., 'architecture', 'api', 'guide')"
+                    }
+                },
+                "required": ["filepath"]
+            }
+        ),
+        Tool(
+            name="tech_list",
+            description="List all documents indexed in the Tech RAG.",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        Tool(
+            name="tech_delete",
+            description="Delete a document from the Tech RAG by doc_id.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "doc_id": {
+                        "type": "string",
+                        "description": "Document ID to delete (filename without extension)"
+                    }
+                },
+                "required": ["doc_id"]
             }
         )
     ]
@@ -1357,6 +1443,65 @@ Create a concise summary that captures what actually happened and what was accom
             formatted.append(f"- {space['name']}{quality}")
 
         return [TextContent(type="text", text="\n".join(formatted))]
+
+    # === Tech RAG (Layer 6) ===
+
+    elif name == "tech_search":
+        if tech_rag is None:
+            return [TextContent(type="text", text="Tech RAG not available (requires ChromaDB)")]
+
+        query = arguments.get("query", "")
+        limit = arguments.get("limit", 5)
+        category = arguments.get("category")
+
+        if not query:
+            return [TextContent(type="text", text="Error: query required")]
+
+        results = await tech_rag.search(query, limit, category)
+
+        if not results:
+            return [TextContent(type="text", text="No results found in Tech RAG.")]
+
+        # Format results
+        formatted = []
+        for r in results:
+            formatted.append(
+                f"**{r.source}** (score: {r.relevance_score:.2f})\n"
+                f"{r.content}\n"
+            )
+        return [TextContent(type="text", text="\n---\n".join(formatted))]
+
+    elif name == "tech_ingest":
+        if tech_rag is None:
+            return [TextContent(type="text", text="Tech RAG not available (requires ChromaDB)")]
+
+        filepath = arguments.get("filepath", "")
+        category = arguments.get("category")
+
+        if not filepath:
+            return [TextContent(type="text", text="Error: filepath required")]
+
+        result = await tech_rag.ingest(filepath, category)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    elif name == "tech_list":
+        if tech_rag is None:
+            return [TextContent(type="text", text="Tech RAG not available (requires ChromaDB)")]
+
+        result = await tech_rag.list_docs()
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    elif name == "tech_delete":
+        if tech_rag is None:
+            return [TextContent(type="text", text="Tech RAG not available (requires ChromaDB)")]
+
+        doc_id = arguments.get("doc_id", "")
+
+        if not doc_id:
+            return [TextContent(type="text", text="Error: doc_id required")]
+
+        result = await tech_rag.delete_doc(doc_id)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
