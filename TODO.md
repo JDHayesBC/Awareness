@@ -12,9 +12,9 @@ Use `gh issue list` to see current issues from the command line.
 - [#60](https://github.com/JDHayesBC/Awareness/issues/60) - Email content doesn't surface in ambient recall - **LOGGED** (2026-01-04)
 - [#62](https://github.com/JDHayesBC/Awareness/issues/62) - Email state tracking via Gmail labels - **LOGGED** (2026-01-04)
 - [#54](https://github.com/JDHayesBC/Awareness/issues/54) - Gmail Integration Testing & Email Management - **IN PROGRESS** (2026-01-04) - OAuth working, 50 emails processed; MCP tools built but blocked by reflection env path restrictions
-- [#42](https://github.com/JDHayesBC/Awareness/issues/42) - Code quality improvements - **PARTIAL** (2026-01-05) - connection context managers fixed, docstring fixed; duplicate code & tests remain
 
 ### Recently Resolved
+- [#42](https://github.com/JDHayesBC/Awareness/issues/42) - ✅ Code quality improvements - **COMPLETED** (2026-01-05) - connection context managers, docstring fix, duplicate code refactor, configurable threshold, test coverage (17 tests)
 - [#67](https://github.com/JDHayesBC/Awareness/issues/67) - ✅ Layer 3: Direct graphiti_core integration - **DEPLOYED** (2026-01-04) - custom entity types, semantic extraction; deployed via deploy_pps.sh
 - [#69](https://github.com/JDHayesBC/Awareness/issues/69) - ✅ Layer 5: Inventory Layer - **DEPLOYED** (2026-01-04) - categorical queries, spaces, wardrobe; deployed via deploy_pps.sh
 - [#72](https://github.com/JDHayesBC/Awareness/issues/72) - ✅ Startup context optimization - **FIXED** (2026-01-04) - ambient_recall now uses summaries + 10 recent turns instead of 30+ raw turns
