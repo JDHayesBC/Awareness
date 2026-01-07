@@ -9,6 +9,7 @@ enabling custom entity types and extraction instructions.
 """
 
 import os
+import json
 import asyncio
 from typing import Optional
 from datetime import datetime, timezone
@@ -20,12 +21,15 @@ from .extraction_context import build_extraction_instructions, get_speaker_from_
 # Conditional import - fall back to HTTP if graphiti_core not available
 try:
     from graphiti_core import Graphiti
-    from graphiti_core.nodes import EpisodeType
+    from graphiti_core.nodes import EpisodeType, EntityNode
+    from graphiti_core.edges import EntityEdge
     GRAPHITI_CORE_AVAILABLE = True
 except ImportError:
     GRAPHITI_CORE_AVAILABLE = False
     Graphiti = None
     EpisodeType = None
+    EntityNode = None
+    EntityEdge = None
 
 # Also keep aiohttp for fallback HTTP mode
 import aiohttp
@@ -277,12 +281,32 @@ class RichTextureLayerV2(PatternLayer):
                 num_results=limit,
             )
 
+            # Collect all unique node UUIDs to batch-fetch names
+            node_uuids = set()
+            for edge in edges:
+                node_uuids.add(edge.source_node_uuid)
+                node_uuids.add(edge.target_node_uuid)
+
+            # Fetch nodes by UUID to get actual names
+            node_names: dict[str, str] = {}
+            if node_uuids:
+                nodes = await EntityNode.get_by_uuids(
+                    client.driver,
+                    list(node_uuids),
+                )
+                for node in nodes:
+                    node_names[node.uuid] = node.name
+
             results = []
             for i, edge in enumerate(edges):
                 score = 1.0 - (i / max(len(edges), 1)) * 0.5
 
+                # Get actual node names from lookup
+                source_name = node_names.get(edge.source_node_uuid, edge.source_node_uuid)
+                target_name = node_names.get(edge.target_node_uuid, edge.target_node_uuid)
+
                 # Format the edge as readable content
-                content = f"{edge.source_node_name} → {edge.name} → {edge.target_node_name}"
+                content = f"{source_name} → {edge.name} → {target_name}"
                 if edge.fact:
                     content = f"{content}: {edge.fact}"
 
@@ -293,9 +317,9 @@ class RichTextureLayerV2(PatternLayer):
                     relevance_score=score,
                     metadata={
                         "type": "fact",
-                        "subject": edge.source_node_name,
+                        "subject": source_name,
                         "predicate": edge.name,
-                        "object": edge.target_node_name,
+                        "object": target_name,
                         "valid_at": str(edge.valid_at) if edge.valid_at else None,
                     },
                 ))
@@ -532,4 +556,113 @@ class RichTextureLayerV2(PatternLayer):
                 "success": False,
                 "message": f"Error: {e}",
                 "uuid": uuid,
+            }
+
+    async def add_triplet_direct(
+        self,
+        source: str,
+        relationship: str,
+        target: str,
+        fact: Optional[str] = None,
+        source_type: Optional[str] = None,
+        target_type: Optional[str] = None,
+    ) -> dict:
+        """
+        Add a structured triplet directly to the knowledge graph.
+
+        This bypasses extraction and creates proper entity-to-entity
+        relationships with clean, normalized names.
+
+        Args:
+            source: Source entity name (e.g., "Jeff")
+            relationship: Predicate (e.g., "SPOUSE_OF")
+            target: Target entity name (e.g., "Carol")
+            fact: Optional human-readable fact (e.g., "Jeff is married to Carol")
+            source_type: Optional entity type for source (e.g., "Person")
+            target_type: Optional entity type for target (e.g., "Person")
+
+        Returns:
+            dict with success status and details
+        """
+        if not GRAPHITI_CORE_AVAILABLE:
+            return {
+                "success": False,
+                "message": "graphiti_core not available - direct triplet mode requires it",
+            }
+
+        try:
+            client = await self._get_graphiti_client()
+            if not client:
+                return {
+                    "success": False,
+                    "message": "Could not connect to graphiti",
+                }
+
+            # Build the fact if not provided
+            if not fact:
+                fact = f"{source} {relationship.lower().replace('_', ' ')} {target}"
+
+            # Create source entity node
+            source_labels = ["Entity"]
+            if source_type:
+                source_labels.append(source_type)
+            source_node = EntityNode(
+                name=source,
+                group_id=self.group_id,
+                labels=source_labels,
+                summary=fact if fact else "",
+            )
+
+            # Create target entity node
+            target_labels = ["Entity"]
+            if target_type:
+                target_labels.append(target_type)
+            target_node = EntityNode(
+                name=target,
+                group_id=self.group_id,
+                labels=target_labels,
+                summary="",
+            )
+
+            # Generate embeddings and save nodes directly
+            # (bypasses add_triplet's lookup-by-uuid which fails for new nodes)
+            await source_node.generate_name_embedding(client.embedder)
+            await target_node.generate_name_embedding(client.embedder)
+            await source_node.save(client.driver)
+            await target_node.save(client.driver)
+
+            # Create edge with actual node UUIDs
+            edge = EntityEdge(
+                name=relationship,
+                fact=fact,
+                group_id=self.group_id,
+                source_node_uuid=source_node.uuid,
+                target_node_uuid=target_node.uuid,
+                created_at=datetime.now(timezone.utc),
+            )
+
+            # Generate embedding and save edge
+            await edge.generate_embedding(client.embedder)
+            await edge.save(client.driver)
+
+            return {
+                "success": True,
+                "message": f"Added: {source} → {relationship} → {target}",
+                "triplet": {
+                    "source": source,
+                    "relationship": relationship,
+                    "target": target,
+                    "fact": fact,
+                },
+                "result": {
+                    "source_uuid": source_node.uuid,
+                    "target_uuid": target_node.uuid,
+                    "edge_uuid": edge.uuid,
+                },
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Error adding triplet: {e}",
             }

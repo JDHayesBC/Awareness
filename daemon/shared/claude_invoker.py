@@ -193,6 +193,8 @@ class ClaudeInvoker:
             # Using --dangerously-skip-permissions instead
             cmd.append("--dangerously-skip-permissions")
             # Add additional directories for tool access (Issue #77 fix)
+            if self.additional_dirs:
+                print(f"[INVOKE:{context}] Adding dirs: {self.additional_dirs}")
             for dir_path in self.additional_dirs:
                 cmd.extend(["--add-dir", dir_path])
             cmd.extend(["--mcp-config", "/home/jeff/.claude/.mcp.json"])

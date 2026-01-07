@@ -23,19 +23,29 @@ import asyncio
 # Import RichTextureLayer for knowledge graph access
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from layers.rich_texture import RichTextureLayer
+try:
+    from layers.rich_texture_v2 import RichTextureLayerV2 as RichTextureLayer
+    print("[pps-web] Using RichTextureLayerV2 (direct mode)")
+except ImportError:
+    from layers.rich_texture import RichTextureLayer
+    print("[pps-web] Using RichTextureLayer (HTTP mode)")
 
 # Configuration from environment
-CLAUDE_HOME = Path(os.getenv("CLAUDE_HOME", "/home/jeff/.claude"))
+CLAUDE_HOME = Path(os.getenv("CLAUDE_HOME", "/app/claude_home"))
+ENTITY_PATH = Path(os.getenv("ENTITY_PATH", "/app/entity"))
 CHROMA_HOST = os.getenv("CHROMA_HOST", "chromadb")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", 8000))
 PPS_SERVER_HOST = os.getenv("PPS_SERVER_HOST", "pps-server")
 PPS_SERVER_PORT = int(os.getenv("PPS_SERVER_PORT", 8000))
+
+# Shared data paths (SQLite, journals)
 DB_PATH = CLAUDE_HOME / "data" / "lyra_conversations.db"
-WORD_PHOTOS_PATH = CLAUDE_HOME / "memories" / "word_photos"
-CRYSTALS_PATH = CLAUDE_HOME / "crystals" / "current"
-CRYSTALS_ARCHIVE_PATH = CLAUDE_HOME / "crystals" / "archive"
 JOURNALS_PATH = CLAUDE_HOME / "journals"
+
+# Entity-specific paths (word-photos, crystals)
+WORD_PHOTOS_PATH = ENTITY_PATH / "memories" / "word_photos"
+CRYSTALS_PATH = ENTITY_PATH / "crystals" / "current"
+CRYSTALS_ARCHIVE_PATH = ENTITY_PATH / "crystals" / "archive"
 
 # Initialize FastAPI
 app = FastAPI(
@@ -705,7 +715,7 @@ async def api_graph_search(query: str, limit: int = 20):
                 })
         
         # Close the session
-        await rich_texture._close_session()
+        await rich_texture.close()
         
         return {
             "nodes": list(nodes.values()),
@@ -798,7 +808,7 @@ async def api_graph_explore(entity: str, depth: int = 2):
                     })
         
         # Close the session
-        await rich_texture._close_session()
+        await rich_texture.close()
         
         return {
             "nodes": list(nodes.values()),

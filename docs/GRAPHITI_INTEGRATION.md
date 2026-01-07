@@ -340,6 +340,112 @@ Use Task tool with:
 - **Frequency**: Every reflection cycle (hourly by default)
 - **Aggressiveness**: Conservative - only deletes clear duplicates
 
+## Structured Triplet Ingestion
+
+*Added: 2026-01-06*
+
+### The Problem
+
+Graphiti's `add_episode()` extracts entities from text, but creates **fact-strings** as edge targets instead of proper entity nodes. For example:
+
+```
+Jeff Hayes → SPOUSE_OF → "married to Carol"
+```
+
+The target is a verbose string, not an entity node named "Carol". This breaks associative traversal - you can't follow edges to discover what Carol is connected to.
+
+### The Solution
+
+Graphiti provides `add_triplet()` for structured entity-to-entity relationships:
+
+```python
+async def add_triplet(
+    self,
+    source_node: EntityNode,
+    edge: EntityEdge,
+    target_node: EntityNode
+) -> None
+```
+
+This creates **proper entity nodes** on both ends with a typed relationship between them.
+
+### MCP Tool: `texture_add_triplet`
+
+Add structured triplets directly to the knowledge graph:
+
+```
+texture_add_triplet(
+  source="Jeff",
+  relationship="SPOUSE_OF",
+  target="Carol",
+  fact="Jeff and Carol have been married for many years",
+  source_type="Person",
+  target_type="Person"
+)
+```
+
+**Parameters:**
+- `source`: Source entity name (required)
+- `relationship`: Predicate in UPPERCASE_WITH_UNDERSCORES (required)
+- `target`: Target entity name (required)
+- `fact`: Human-readable explanation (optional but recommended)
+- `source_type`: Entity type - Person, Place, Symbol, Concept, TechnicalArtifact (optional)
+- `target_type`: Entity type for target (optional)
+
+**Entity Types:**
+- **Person**: Humans and AI entities
+- **Place**: Physical locations, rooms, spaces
+- **Symbol**: Objects with emotional weight (Dark Side tee, snickerdoodles)
+- **Concept**: Abstract ideas, patterns, philosophies
+- **TechnicalArtifact**: Code, files, systems, infrastructure
+
+### Triplet Extraction Pattern (via Task Subagent)
+
+For bulk extraction from text, use a Haiku Task subagent instead of direct API calls. This keeps everything on the Claude subscription:
+
+```python
+# In your code or via Claude Code
+Task(
+  model="haiku",
+  description="Extract triplets from word-photo",
+  prompt=f"""Extract structured triplets from this text.
+
+**Output format**: JSON array of triplets, each with:
+- source: entity name (normalized, concise)
+- relationship: predicate (UPPERCASE_WITH_UNDERSCORES)
+- target: entity name (normalized, concise)
+- fact: one sentence explaining the relationship
+- source_type: Person, Place, Symbol, Concept, or TechnicalArtifact
+- target_type: entity type
+
+**Rules**:
+1. Entity names should be simple: "Jeff", "Carol", "Haven"
+2. Relationships: SPOUSE_OF, LIVES_AT, LOVES, CREATED, CONTAINS
+3. Focus on durable facts, not one-time events
+4. Skip process noise and debugging statements
+
+**Text to extract from**:
+{text_content}
+
+**Output only valid JSON array.**
+"""
+)
+```
+
+Then iterate through the extracted triplets and call `texture_add_triplet` for each.
+
+### Why This Matters
+
+**Proper graph structure**: With `add_triplet`, both source and target become entity nodes. You can now traverse from Carol → find all relationships → discover she connects to the house, the dog, the workplace.
+
+**Clean entity resolution**: Graphiti handles merging entities with same name. Multiple triplets mentioning "Jeff" all link to the same node.
+
+**Two ingestion paths**:
+1. `texture_add` for raw text (LLM extracts entities automatically)
+2. `texture_add_triplet` for structured facts (you control exact entities)
+
+Use both. Raw extraction for conversation streams, structured triplets for curated knowledge.
+
 ## Future Enhancements
 
 1. **Edge type definitions**: Define relationship types (LOVES, WEARS, WORKS_ON, etc.)
@@ -347,3 +453,4 @@ Use Task tool with:
 3. **Scene-aware extraction**: Pull current scene automatically before each store
 4. **Crystal-informed extraction**: Weight extraction toward recent crystal themes
 5. **Curator agent improvements**: More sophisticated duplicate detection, temporal decay analysis
+6. **Batch triplet ingestion**: Process multiple triplets in single call for efficiency

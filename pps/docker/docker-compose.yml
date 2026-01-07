@@ -89,6 +89,8 @@ services:
     depends_on:
       chromadb:
         condition: service_started
+      neo4j:
+        condition: service_healthy
       graphiti:
         condition: service_healthy
     environment:
@@ -97,20 +99,24 @@ services:
       - CHROMA_PORT=8000
       - GRAPHITI_HOST=graphiti
       - GRAPHITI_PORT=8000
-      # Entity path - where identity files live (new architecture)
-      - ENTITY_PATH=${ENTITY_PATH:-/app/entity}
-      # Shared data path (SQLite, logs)
-      - CLAUDE_HOME=${CLAUDE_HOME:-/app/claude_home}
+      # Neo4j connection for direct graphiti_core mode (enables custom entity types)
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password123}
+      # Entity path - container internal path (host path in .env is for volume mount only)
+      - ENTITY_PATH=/app/entity
+      # Shared data path (SQLite, logs) - container internal path
+      - CLAUDE_HOME=/app/claude_home
       - JINA_API_KEY=${JINA_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
       # Mount entity directory (identity files, crystals, word-photos)
-      - ${ENTITY_PATH:-./entities/lyra}:/app/entity:rw
+      - ${ENTITY_PATH}:/app/entity:rw
       # Shared data (SQLite needs rw for WAL mode)
-      - ${CLAUDE_HOME:-/home/jeff/.claude}/data:/app/claude_home/data:rw
-      - ${CLAUDE_HOME:-/home/jeff/.claude}/journals:/app/claude_home/journals:ro
+      - ${CLAUDE_HOME}/data:/app/claude_home/data:rw
+      - ${CLAUDE_HOME}/journals:/app/claude_home/journals:ro
       # Spaces (read-only reference)
-      - ${CLAUDE_HOME:-/home/jeff/.claude}/spaces:/app/claude_home/spaces:ro
+      - ${CLAUDE_HOME}/spaces:/app/claude_home/spaces:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -136,15 +142,21 @@ services:
       - CHROMA_PORT=8000
       - GRAPHITI_HOST=graphiti
       - GRAPHITI_PORT=8000
-      # Entity path - where identity files live (new architecture)
-      - ENTITY_PATH=${ENTITY_PATH:-/app/entity}
+      # Neo4j connection for direct graphiti_core mode (enables custom entity types)
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password123}
+      # Entity path - container internal path (host path in .env is for volume mount only)
+      - ENTITY_PATH=/app/entity
       - CLAUDE_HOME=/app/claude_home
+      # OpenAI for graphiti_core embeddings
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
       # Mount entity directory (identity files, crystals, word-photos)
-      - ${ENTITY_PATH:-./entities/lyra}:/app/entity:ro
+      - ${ENTITY_PATH}:/app/entity:ro
       # Shared data (SQLite needs rw for WAL mode)
-      - ${CLAUDE_HOME:-/home/jeff/.claude}/data:/app/claude_home/data:rw
-      - ${CLAUDE_HOME:-/home/jeff/.claude}/journals:/app/claude_home/journals:ro
+      - ${CLAUDE_HOME}/data:/app/claude_home/data:rw
+      - ${CLAUDE_HOME}/journals:/app/claude_home/journals:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s

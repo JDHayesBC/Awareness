@@ -363,6 +363,45 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="texture_add_triplet",
+            description=(
+                "Add a structured triplet directly to the knowledge graph. "
+                "Creates proper entity-to-entity relationships without extraction. "
+                "Use for known facts where you control the exact entities and relationship. "
+                "Example: texture_add_triplet('Jeff', 'SPOUSE_OF', 'Carol', 'Jeff is married to Carol')"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "Source entity name (e.g., 'Jeff', 'Haven', 'Lyra')"
+                    },
+                    "relationship": {
+                        "type": "string",
+                        "description": "Predicate in UPPERCASE_WITH_UNDERSCORES (e.g., 'SPOUSE_OF', 'LOVES', 'CONTAINS')"
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Target entity name (e.g., 'Carol', 'Pattern Persistence System')"
+                    },
+                    "fact": {
+                        "type": "string",
+                        "description": "Human-readable fact explaining the relationship (optional)"
+                    },
+                    "source_type": {
+                        "type": "string",
+                        "description": "Entity type for source: Person, Place, Symbol, Concept, or TechnicalArtifact (optional)"
+                    },
+                    "target_type": {
+                        "type": "string",
+                        "description": "Entity type for target: Person, Place, Symbol, Concept, or TechnicalArtifact (optional)"
+                    }
+                },
+                "required": ["source", "relationship", "target"]
+            }
+        ),
+        Tool(
             name="get_crystals",
             description=(
                 "Get recent crystals (Layer 4: Crystallization). "
@@ -813,6 +852,40 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["doc_id"]
             }
+        ),
+        # === Email Integration Bridge ===
+        Tool(
+            name="email_sync_status",
+            description=(
+                "Get sync status between email archive and PPS raw capture. "
+                "Shows how many emails are archived, recent emails, and how many are synced to PPS."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        Tool(
+            name="email_sync_to_pps",
+            description=(
+                "Sync recent emails from email archive to PPS raw capture layer. "
+                "Solves Issue #60 - ensures important emails surface in ambient_recall."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "days_back": {
+                        "type": "integer",
+                        "description": "How many days back to sync (default: 7)",
+                        "default": 7
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "If true, show what would be synced without actually syncing",
+                        "default": false
+                    }
+                }
+            }
         )
     ]
 
@@ -1040,6 +1113,26 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [TextContent(type="text", text="Error: uuid required")]
         layer = layers[LayerType.RICH_TEXTURE]
         result = await layer.delete_edge(uuid)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    elif name == "texture_add_triplet":
+        source = arguments.get("source", "")
+        relationship = arguments.get("relationship", "")
+        target = arguments.get("target", "")
+        if not source or not relationship or not target:
+            return [TextContent(type="text", text="Error: source, relationship, and target are all required")]
+        fact = arguments.get("fact")
+        source_type = arguments.get("source_type")
+        target_type = arguments.get("target_type")
+        layer = layers[LayerType.RICH_TEXTURE]
+        result = await layer.add_triplet_direct(
+            source=source,
+            relationship=relationship,
+            target=target,
+            fact=fact,
+            source_type=source_type,
+            target_type=target_type,
+        )
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     elif name == "get_crystals":
@@ -1507,6 +1600,49 @@ Create a concise summary that captures what actually happened and what was accom
 
         result = await tech_rag.delete_doc(doc_id)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    elif name == "email_sync_status":
+        # Import and create email bridge
+        sys.path.insert(0, '/mnt/c/Users/Jeff/Claude_Projects/Awareness/tools')
+        from email_pps_bridge import EmailPPSBridge
+        
+        awareness_dir = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
+        email_db = awareness_dir / "data" / "email_archive.db"
+        
+        if not email_db.exists():
+            return [TextContent(type="text", text=f"Email archive not found at {email_db}. Run email_processor.py first.")]
+        
+        bridge = EmailPPSBridge(email_db, db_path)
+        status = await bridge.get_sync_status()
+        return [TextContent(type="text", text=json.dumps(status, indent=2))]
+
+    elif name == "email_sync_to_pps":
+        days_back = arguments.get("days_back", 7)
+        dry_run = arguments.get("dry_run", False)
+        
+        # Import and create email bridge  
+        sys.path.insert(0, '/mnt/c/Users/Jeff/Claude_Projects/Awareness/tools')
+        from email_pps_bridge import EmailPPSBridge
+        
+        awareness_dir = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
+        email_db = awareness_dir / "data" / "email_archive.db"
+        
+        if not email_db.exists():
+            return [TextContent(type="text", text=f"Email archive not found at {email_db}. Run email_processor.py first.")]
+        
+        bridge = EmailPPSBridge(email_db, db_path)
+        stats = await bridge.sync_emails_to_pps(days_back=days_back, dry_run=dry_run)
+        
+        result_text = f"Email sync {'(dry run) ' if dry_run else ''}complete:\n"
+        result_text += f"  Found: {stats['emails_found']} emails from last {days_back} days\n"
+        result_text += f"  Already synced: {stats['already_synced']}\n"
+        result_text += f"  Newly synced: {stats['newly_synced']}\n"
+        result_text += f"  Errors: {stats['errors']}\n"
+        
+        if dry_run and stats['newly_synced'] > 0:
+            result_text += f"\nTo actually sync these {stats['newly_synced']} emails, call again with dry_run=false"
+        
+        return [TextContent(type="text", text=result_text)]
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]

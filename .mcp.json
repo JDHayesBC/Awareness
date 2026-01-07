@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "pps": {
+      "type": "stdio",
+      "command": "/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python",
+      "args": ["/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/server.py"],
+      "env": {
+        "TZ": "America/Los_Angeles",
+        "CLAUDE_HOME": "/home/jeff/.claude",
+        "ENTITY_PATH": "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra",
+        "CHROMA_PORT": "8200"
+      }
+    }
+  }
+}

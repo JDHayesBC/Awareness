@@ -22,8 +22,8 @@ COPY layers/ ./layers/
 COPY server.py .
 COPY docker/server_http.py .
 
-# Create directories for mounted volumes
-RUN mkdir -p /app/memories /app/data /app/journals /app/spaces /app/crystals
+# Create mount points for volumes (actual data comes from volume mounts)
+RUN mkdir -p /app/entity /app/claude_home
 
 # Expose port for HTTP server
 EXPOSE 8000
