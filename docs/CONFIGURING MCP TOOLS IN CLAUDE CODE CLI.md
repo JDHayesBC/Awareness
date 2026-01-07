@@ -256,3 +256,18 @@ MAX_MCP_OUTPUT_TOKENS=50000 claude # Increase output limit (default: 25,000)
 | Enterprise | `managed-mcp.json` (system directories) | IT-managed |
 
 This reference reflects the official Anthropic documentation for Claude Code CLI as of January 2026.
+
+---
+
+## Awareness Project Philosophy: Light Touch on Global
+
+**For this project, we use project scope (`.mcp.json`) for MCP servers.**
+
+Why:
+- **Portability**: Steve (or anyone) clones the repo and gets the config automatically
+- **No global pollution**: We don't touch `~/.claude.json` user-level mcpServers
+- **Self-contained**: Everything needed is in the project directory
+
+The local venv (`pps/venv/`) keeps Python dependencies project-local. The `.mcp.json` keeps MCP config project-scoped. Nothing reaches into user-global space.
+
+**Remember**: After restart, project-scoped servers need manual activation via `/mcp enable <name>`.

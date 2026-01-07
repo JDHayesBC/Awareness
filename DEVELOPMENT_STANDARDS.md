@@ -264,6 +264,21 @@ This follows [Keep a Changelog](https://keepachangelog.com/) format. Update it a
 - File permissions: 700 for directories, 600 for sensitive files
 - Bind services to localhost only, never 0.0.0.0
 
+## Configuration Philosophy: Light Touch on Global
+
+**Keep as light a touch on global config as possible.**
+
+Think about someone like Steve wanting to take a look at this project. He's not going to want us reconfiguring his global `~/.claude.json`.
+
+**For MCP servers**: Use project scope (`.mcp.json` in project root), NOT user/global scope.
+- Steve clones the repo → gets the config automatically
+- No pollution of his personal Claude config
+- Self-contained, portable
+
+**For Python dependencies**: Use project-local venv (`pps/venv/`), NOT system Python.
+
+**Remember**: After Claude Code restart, project-scoped MCP servers need manual activation via `/mcp enable <name>`.
+
 ## Working Dynamic
 
 Jeff was a professional C++ developer - two decades ago. He has deep engineering intuition but modern practices (git workflows, conventional commits, CI/CD, containerization, MCP protocols) are from a different era than his hands-on experience.
