@@ -156,16 +156,22 @@ class LyraDiscordBot(commands.Bot):
         """Called when bot successfully connects."""
         print(f"[READY] Logged in as {self.user}")
         print(f"[READY] Monitoring channels: {self.channel_ids}")
+        print(f"[READY] Home channel: {self.home_channel_id}")
 
         # Recover active modes from SQLite
-        active_modes = await self.conversation_manager.get_active_modes()
+        print(f"[READY] Recovering active modes...")
+        active_modes = await self.conversation_manager.get_active_channels()
+        print(f"[READY] Got {len(active_modes)} active modes")
         for channel_id in active_modes:
             self.active_channels[channel_id] = datetime.now(timezone.utc)
             print(f"[READY] Recovered active mode for channel {channel_id}")
 
         # Warmup session for home channel
+        print(f"[READY] About to warmup, home_channel_id={self.home_channel_id}")
         if self.home_channel_id:
+            print(f"[READY] Calling _warmup_session...")
             await self._warmup_session(str(self.home_channel_id))
+            print(f"[READY] Warmup complete")
 
     async def _warmup_session(self, channel_id: str):
         """Warmup Claude session for a channel."""
@@ -186,6 +192,15 @@ class LyraDiscordBot(commands.Bot):
             elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
             print(f"[WARMUP] Session ready in {elapsed:.1f}s")
             print(f"[WARMUP] Response: {response[:200]}...")
+
+            # Verify startup protocol was followed (Issue #82)
+            # Check for evidence that ambient_recall was actually called
+            response_lower = response.lower()
+            if any(marker in response_lower for marker in ["unsummarized", "memory health", "word-photo", "crystal"]):
+                print(f"[WARMUP] ✓ ambient_recall appears to have been called")
+            else:
+                print(f"[WARMUP] ⚠ WARNING: No evidence of ambient_recall in response")
+                print(f"[WARMUP] Discord-me may not have full context from other channels")
         else:
             print(f"[WARMUP] Session warmup failed")
 
