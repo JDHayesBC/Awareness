@@ -100,7 +100,7 @@ class RichTextureLayerV2(PatternLayer):
                     password=self.neo4j_password,
                 )
                 # Build indices on first use
-                await self._graphiti_client.build_indices()
+                await self._graphiti_client.build_indices_and_constraints()
             except Exception as e:
                 print(f"Failed to initialize graphiti_core: {e}")
                 self._use_direct_mode = False
