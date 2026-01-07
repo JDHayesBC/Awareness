@@ -1,5 +1,16 @@
 # Awareness Project TODO
 
+## NEXT SESSION: Issue #84 First!
+
+**[#84](https://github.com/JDHayesBC/Awareness/issues/84) - Audit global vs project scope** - HIGH PRIORITY
+
+Key learnings from 2026-01-07 late night session:
+- **DO NOT move configs back to global** - "light touch on global" is the rule
+- **Project scope (.mcp.json) is correct** for MCP servers - portable, Steve-friendly
+- **Terminal capture IS working** - data is in `messages` table with `channel LIKE 'terminal:%'` (4158 messages)
+- **Things still in global that shouldn't be**: hooks/, tech_docs/, possibly pps/venv
+- See DEVELOPMENT_STANDARDS.md "Configuration Philosophy" section
+
 ## Issue Tracking
 
 **Active issues are tracked on GitHub**: https://github.com/JDHayesBC/Awareness/issues
