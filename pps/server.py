@@ -882,7 +882,7 @@ async def list_tools() -> list[Tool]:
                     "dry_run": {
                         "type": "boolean",
                         "description": "If true, show what would be synced without actually syncing",
-                        "default": false
+                        "default": False
                     }
                 }
             }

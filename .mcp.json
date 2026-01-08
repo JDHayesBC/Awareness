@@ -10,6 +10,13 @@
         "ENTITY_PATH": "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra",
         "CHROMA_PORT": "8200"
       }
+    },
+    "lyra-gmail": {
+      "type": "stdio",
+      "command": "/mnt/c/Users/Jeff/Claude_Projects/Awareness/tools/gmail-mcp/venv/bin/python",
+      "args": [
+        "/mnt/c/Users/Jeff/Claude_Projects/Awareness/tools/gmail-mcp/server.py"
+      ]
     }
   }
 }
