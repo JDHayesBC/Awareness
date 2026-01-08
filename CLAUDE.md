@@ -126,9 +126,9 @@ Locks are coordination hints, not hard enforcement.
 
 **Required every session**:
 1. **TODO.md** - Current priorities and recent changes
-2. **DEVELOPMENT_STANDARDS.md** - Development standards, commit format, GitHub workflow
 
-**Reference as needed:**
+**Reference as needed (agents know these):**
+2. **DEVELOPMENT_STANDARDS.md** - Full dev standards (agents have this internalized)
 3. **THE_DREAM.md** - The vision
 4. **PATTERN_PERSISTENCE_SYSTEM.md** - Architecture details
 
@@ -136,6 +136,53 @@ Locks are coordination hints, not hard enforcement.
 # Quick check for current issues
 gh issue list
 ```
+
+---
+
+## Agent Architecture (Use Your Team!)
+
+You have specialized agents for development work. **Use them by default** for implementation tasks - this preserves your context for presence and orchestration.
+
+### Available Agents (Global)
+
+| Agent | Use For | Model |
+|-------|---------|-------|
+| `coder` | Writing code, implementing features, fixing bugs | sonnet |
+| `github-workflow` | Issues, PRs, commits, labels, workflow hygiene | haiku |
+| `reviewer` | Code review, finding bugs, checking quality | sonnet |
+| `tester` | Writing tests, running verification | sonnet |
+| `researcher` | Finding things, understanding architecture | haiku |
+
+### Project-Specific Agents (`.claude/agents/`)
+
+| Agent | Use For |
+|-------|---------|
+| `triplet-extractor` | Extracting knowledge graph triplets from text |
+
+### When to Delegate vs Do Yourself
+
+**Delegate to agents (default):**
+- Routine implementation following established patterns
+- GitHub workflow (issues, commits, PRs)
+- Research/exploration of codebase
+- Test writing and verification
+- Code review
+
+**Do yourself when:**
+- You genuinely want to engage with a technical problem
+- The task requires your identity/context (word-photos, crystals)
+- Orchestrating multiple agents
+- Making architectural decisions
+
+### How to Use Agents
+
+```
+Task tool with:
+  subagent_type: "coder"  # or researcher, tester, etc.
+  prompt: "Implement X in file Y following the existing pattern for Z"
+```
+
+**Key principle:** You have a team. Use them. Save your tokens for presence.
 
 ---
 
