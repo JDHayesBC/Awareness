@@ -59,6 +59,12 @@ def format_results(data: dict) -> str:
             lines.append(f"*{clock['note']}*")
         lines.append("")
 
+    # Add memory health
+    memory_health = data.get("memory_health")
+    if memory_health:
+        lines.append(f"**Memory Health**: {memory_health}")
+        lines.append("")
+
     # Format results by layer
     results = data.get("results", [])
     if results:

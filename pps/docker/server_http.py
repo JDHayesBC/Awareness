@@ -64,6 +64,7 @@ from layers import LayerType
 from layers.raw_capture import RawCaptureLayer
 from layers.core_anchors import CoreAnchorsLayer
 from layers.crystallization import CrystallizationLayer
+from layers.message_summaries import MessageSummariesLayer
 
 # Import V2 rich texture layer with add_triplet_direct support
 try:
@@ -124,6 +125,10 @@ def get_layers():
 
 # Initialize layers
 layers = get_layers()
+
+# Initialize message summaries for unsummarized count
+data_path = CLAUDE_HOME / "data" / "lyra_conversations.db"
+message_summaries = MessageSummariesLayer(db_path=data_path)
 
 
 @asynccontextmanager
@@ -221,6 +226,17 @@ async def ambient_recall(request: AmbientRecallRequest):
     else:
         time_note = None
 
+    # Get unsummarized count for memory health
+    unsummarized_count = message_summaries.count_unsummarized_messages()
+    if unsummarized_count > 200:
+        memory_note = "(critical - run summarizer immediately)"
+    elif unsummarized_count > 100:
+        memory_note = "(summarization recommended)"
+    elif unsummarized_count > 50:
+        memory_note = "(healthy)"
+    else:
+        memory_note = "(healthy)"
+
     return {
         "clock": {
             "timestamp": now.isoformat(),
@@ -228,6 +244,8 @@ async def ambient_recall(request: AmbientRecallRequest):
             "hour": hour,
             "note": time_note
         },
+        "unsummarized_count": unsummarized_count,
+        "memory_health": f"{unsummarized_count} unsummarized messages {memory_note}",
         "results": all_results
     }
 
