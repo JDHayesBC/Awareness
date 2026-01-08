@@ -3,8 +3,8 @@
 Claude Code Hook: Inject RAG Context (UserPromptSubmit)
 
 This hook fires BEFORE the user's prompt is sent to the model.
-It uses the Pattern Persistence System (PPS) via MCP tools
-to inject relevant context alongside the prompt.
+It uses the Pattern Persistence System (PPS) HTTP API to inject
+relevant context alongside the prompt.
 
 Hook input (from stdin):
 {
@@ -24,13 +24,17 @@ Hook output (to stdout):
 """
 
 import json
-import subprocess
 import sys
+import urllib.request
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 
 # Debug log
 DEBUG_LOG = Path.home() / ".claude" / "data" / "hooks_debug.log"
+
+# PPS HTTP API endpoint (pps-server container)
+PPS_API_URL = "http://localhost:8201/tools/ambient_recall"
 
 
 def debug(msg: str):
@@ -42,37 +46,69 @@ def debug(msg: str):
         pass
 
 
+def format_results(data: dict) -> str:
+    """Format ambient_recall results for context injection."""
+    lines = []
+
+    # Add clock/time context
+    clock = data.get("clock", {})
+    if clock:
+        lines.append(f"**Current time**: {clock.get('display', 'unknown')}")
+        if clock.get("note"):
+            lines.append(f"*{clock['note']}*")
+        lines.append("")
+
+    # Format results by layer
+    results = data.get("results", [])
+    if results:
+        # Group by layer
+        by_layer = {}
+        for r in results:
+            layer = r.get("layer", "unknown")
+            if layer not in by_layer:
+                by_layer[layer] = []
+            by_layer[layer].append(r)
+
+        # Format each layer's results
+        for layer, items in by_layer.items():
+            lines.append(f"**[{layer}]**")
+            for item in items[:3]:  # Limit per layer
+                content = item.get("content", "")[:500]  # Truncate long content
+                lines.append(f"- {content}")
+            lines.append("")
+
+    return "\n".join(lines) if lines else ""
+
+
 def query_pps_ambient_recall(context: str) -> str:
     """
-    Use PPS MCP tools to get ambient recall context.
-    This replaces direct ChromaDB/Graphiti queries.
+    Query PPS HTTP API directly for ambient recall context.
+    Much faster than spawning a claude subprocess.
     """
     try:
-        # Use subprocess to call claude with MCP tool
-        cmd = [
-            "claude",
-            "--model", "haiku",
-            f"Call mcp__pps__ambient_recall with context='{context}'. Return only the formatted_context field from the response, nothing else."
-        ]
-        
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=15
+        payload = json.dumps({
+            "context": context,
+            "limit_per_layer": 3
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            PPS_API_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
         )
-        
-        if result.returncode == 0 and result.stdout.strip():
-            # The response should be the formatted context ready for injection
-            response = result.stdout.strip()
-            debug(f"PPS returned context: {len(response)} chars")
-            return response
-        else:
-            debug(f"MCP call failed: {result.stderr}")
-            return ""
-            
-    except subprocess.TimeoutExpired:
-        debug("MCP call timeout")
+
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            formatted = format_results(data)
+            debug(f"PPS returned context: {len(formatted)} chars")
+            return formatted
+
+    except urllib.error.URLError as e:
+        debug(f"PPS API connection error: {e}")
+        return ""
+    except json.JSONDecodeError as e:
+        debug(f"PPS API JSON error: {e}")
         return ""
     except Exception as e:
         debug(f"PPS ambient_recall error: {e}")
