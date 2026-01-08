@@ -49,6 +49,14 @@ class AddTripletRequest(BaseModel):
     target_type: str | None = None
 
 
+class StoreMessageRequest(BaseModel):
+    content: str
+    author_name: str = "Unknown"
+    channel: str = "terminal"
+    is_lyra: bool = False
+    session_id: str | None = None
+
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -303,6 +311,37 @@ async def pps_health():
         }
 
     return health_results
+
+
+@app.post("/tools/store_message")
+async def store_message(request: StoreMessageRequest):
+    """
+    Store a message in the raw capture layer.
+    Used by hooks to capture terminal conversations per-turn.
+    """
+    layer = layers[LayerType.RAW_CAPTURE]
+
+    # Build channel with session_id if provided
+    channel = request.channel
+    if request.session_id:
+        channel = f"{request.channel}:{request.session_id}"
+
+    metadata = {
+        "author_name": request.author_name,
+        "channel": channel,
+        "is_lyra": request.is_lyra,
+    }
+
+    success = await layer.store(request.content, metadata)
+
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to store message")
+
+    return {
+        "success": True,
+        "channel": channel,
+        "author": request.author_name
+    }
 
 
 if __name__ == "__main__":

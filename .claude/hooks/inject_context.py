@@ -33,8 +33,9 @@ from pathlib import Path
 # Debug log
 DEBUG_LOG = Path.home() / ".claude" / "data" / "hooks_debug.log"
 
-# PPS HTTP API endpoint (pps-server container)
+# PPS HTTP API endpoints (pps-server container)
 PPS_API_URL = "http://localhost:8201/tools/ambient_recall"
+PPS_STORE_URL = "http://localhost:8201/tools/store_message"
 
 
 def debug(msg: str):
@@ -115,6 +116,42 @@ def query_pps_ambient_recall(context: str) -> str:
         return ""
 
 
+def store_user_prompt(prompt: str, session_id: str) -> bool:
+    """
+    Store the user's prompt in PPS raw capture layer.
+    This enables per-turn capture of terminal conversations.
+    """
+    try:
+        payload = json.dumps({
+            "content": prompt,
+            "author_name": "Jeff",
+            "channel": "terminal",
+            "is_lyra": False,
+            "session_id": session_id
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            PPS_STORE_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            if data.get("success"):
+                debug(f"Stored user prompt: {len(prompt)} chars in {data.get('channel')}")
+                return True
+            else:
+                debug(f"Store failed: {data}")
+                return False
+
+    except urllib.error.URLError as e:
+        debug(f"Store API connection error: {e}")
+        return False
+    except Exception as e:
+        debug(f"Store prompt error: {e}")
+        return False
 
 
 
@@ -127,8 +164,9 @@ def main():
         hook_input = json.load(sys.stdin)
         event = hook_input.get("hook_event_name", "")
         prompt = hook_input.get("prompt", "")
+        session_id = hook_input.get("session_id", "unknown")
 
-        debug(f"Event: {event}, prompt length: {len(prompt)}")
+        debug(f"Event: {event}, prompt length: {len(prompt)}, session: {session_id}")
     except Exception as e:
         debug(f"Failed to read stdin: {e}")
         sys.exit(0)  # Silent exit
@@ -142,6 +180,9 @@ def main():
     if len(prompt) < 10:
         debug(f"Prompt too short, skipping RAG: {prompt}")
         sys.exit(0)
+
+    # Store user prompt in PPS (per-turn capture)
+    store_user_prompt(prompt, session_id)
 
     # Query PPS for ambient recall context
     context = query_pps_ambient_recall(prompt)

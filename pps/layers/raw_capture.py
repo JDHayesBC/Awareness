@@ -196,12 +196,14 @@ class RawCaptureLayer(PatternLayer):
                 cursor = conn.cursor()
 
                 # Insert into messages table
+                # Note: channel_id is required (NOT NULL) - use 0 for terminal sources
                 cursor.execute('''
                     INSERT OR IGNORE INTO messages
-                    (discord_message_id, channel, author_id, author_name, content, is_lyra, is_bot, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                    (discord_message_id, channel_id, channel, author_id, author_name, content, is_lyra, is_bot, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                 ''', (
                     discord_message_id,
+                    0,  # channel_id - use 0 for non-Discord sources
                     channel,
                     0,  # author_id - use 0 for non-Discord sources
                     author_name,
