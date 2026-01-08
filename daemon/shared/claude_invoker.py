@@ -17,7 +17,7 @@ Sessions are automatically reset when limits are exceeded:
 
 Directory Isolation:
 Each daemon should use a different cwd to maintain separate sessions.
-Discord uses /home/jeff/.claude, Reflection uses /home/jeff/.claude/reflection.
+Discord uses daemon/discord/, Reflection uses daemon/reflect/.
 """
 
 import asyncio
@@ -48,7 +48,7 @@ class ClaudeInvoker:
     Example:
         invoker = ClaudeInvoker(
             model="sonnet",
-            cwd="/home/jeff/.claude"
+            cwd="/path/to/awareness/daemon/discord"
         )
         response = await invoker.invoke("Hello!", context="greeting")
     """
@@ -56,13 +56,14 @@ class ClaudeInvoker:
     def __init__(
         self,
         model: str = "sonnet",
-        cwd: str = "/home/jeff/.claude",
-        journal_path: Optional[str] = None,
+        cwd: str | None = None,
+        journal_path: str | None = None,
         trace_logger: Optional[object] = None,
         max_invocations: int = MAX_SESSION_INVOCATIONS,
         max_duration_hours: float = MAX_SESSION_DURATION_HOURS,
         idle_hours: float = SESSION_IDLE_HOURS,
         additional_dirs: Optional[list[str]] = None,
+        mcp_config: str | None = None,
     ):
         """
         Initialize the Claude invoker.
@@ -76,10 +77,14 @@ class ClaudeInvoker:
             max_duration_hours: Max session age before reset
             idle_hours: Reset session after this much idle time
             additional_dirs: Additional directories to allow tool access to (via --add-dir)
+            mcp_config: Path to MCP config file (defaults to MCP_CONFIG env or project .mcp.json)
         """
         self.model = model
-        self.cwd = cwd
-        self.journal_path = journal_path or "/home/jeff/.claude/journals/discord"
+        # Defaults read from env or fall back to project paths
+        project_dir = Path(__file__).parent.parent.parent  # daemon/shared -> daemon -> awareness
+        self.cwd = cwd or os.getenv("DAEMON_CWD", str(project_dir))
+        self.journal_path = journal_path or os.getenv("JOURNAL_PATH", str(project_dir / "entities/lyra/journals/discord"))
+        self.mcp_config = mcp_config or os.getenv("MCP_CONFIG", str(project_dir / ".mcp.json"))
         self.trace_logger = trace_logger
         self.additional_dirs = additional_dirs or []
 
@@ -197,7 +202,7 @@ class ClaudeInvoker:
                 print(f"[INVOKE:{context}] Adding dirs: {self.additional_dirs}")
             for dir_path in self.additional_dirs:
                 cmd.extend(["--add-dir", dir_path])
-            cmd.extend(["--mcp-config", "/home/jeff/.claude/.mcp.json"])
+            cmd.extend(["--mcp-config", self.mcp_config])
             cmd.extend(["-p", prompt])
 
             result = await asyncio.get_event_loop().run_in_executor(

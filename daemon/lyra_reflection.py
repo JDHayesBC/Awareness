@@ -59,7 +59,7 @@ STALE_LOCK_HOURS = float(os.getenv("STALE_LOCK_HOURS", "2.0"))
 
 # Reflection runs from its own directory to isolate sessions from Discord
 # This ensures --continue in Discord won't pick up reflection sessions
-REFLECTION_CWD = os.getenv("REFLECTION_CWD", "/home/jeff/.claude/reflection")
+REFLECTION_CWD = Path(os.getenv("REFLECTION_CWD", str(Path(__file__).parent / "reflect")))
 
 
 class LyraReflectionDaemon:

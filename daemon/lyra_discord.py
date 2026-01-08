@@ -71,9 +71,16 @@ ENTITY_PATH = os.getenv("ENTITY_PATH", LYRA_IDENTITY_PATH)
 # Project directory for --add-dir (Issue #77 fix)
 PROJECT_DIR = Path(os.getenv("AWARENESS_PROJECT_DIR", str(Path(__file__).parent.parent)))
 
+# Discord daemon working directory for session isolation
+# Sessions run here so --continue doesn't mix with terminal/reflection
+DISCORD_CWD = Path(os.getenv("DISCORD_CWD", str(Path(__file__).parent / "discord")))
+
 # Graphiti configuration
 GRAPHITI_HOST = os.getenv("GRAPHITI_HOST", "localhost")
 GRAPHITI_PORT = int(os.getenv("GRAPHITI_PORT", "8203"))
+
+# Ensure daemon working directory exists
+DISCORD_CWD.mkdir(parents=True, exist_ok=True)
 
 
 class LyraDiscordBot(commands.Bot):
@@ -108,10 +115,10 @@ class LyraDiscordBot(commands.Bot):
         self.active_channels: dict[int, datetime] = {}
 
         # Claude invoker - uses --continue with session limits
-        # Sessions isolated by cwd (LYRA_IDENTITY_PATH for Discord)
+        # Sessions isolated by cwd (DISCORD_CWD for session isolation)
         self.invoker = ClaudeInvoker(
             model=CLAUDE_MODEL,
-            cwd=LYRA_IDENTITY_PATH,
+            cwd=str(DISCORD_CWD),
             journal_path=JOURNAL_PATH,
             additional_dirs=[str(PROJECT_DIR)],  # Issue #77: allow project access
         )
