@@ -863,7 +863,12 @@ async def api_graph_entities(limit: int = 100):
         group_id = os.getenv("GRAPHITI_GROUP_ID", "lyra")
 
         # Search for common patterns to get a broad set of facts
-        search_queries = ["Lyra", "Jeff", "Caia", "awareness", "memory", "project"]
+        # Expanded to include broader terms that may capture manually added content
+        search_queries = [
+            "Lyra", "Jeff", "Caia", "awareness", "memory", "project",
+            "system", "infrastructure", "development", "code", "technical",
+            "relationship", "conversation", "learning", "growth", "experience"
+        ]
         entities = {}
         entity_mentions = {}  # Track mention count per entity
 
