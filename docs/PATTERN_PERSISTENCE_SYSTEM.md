@@ -447,7 +447,185 @@ async def get_summaries(count: int = 4) -> list[Summary]:
     pass
 ```
 
-## Data Flow
+## Project Directory Structure
+
+The Awareness project is organized into several key directories. This structure supports multiple channels (terminal, Discord, reflection), entity isolation, and infrastructure services.
+
+### Repository Layout (`/mnt/c/Users/Jeff/Claude_Projects/Awareness/`)
+
+```
+Awareness/
+├── .claude/                         # Claude Code project config
+│   ├── agents/                      # Custom agent definitions
+│   │   └── triplet-extractor/      # Graphiti triplet extraction agent
+│   ├── hooks/                       # Claude Code hooks
+│   │   ├── submit_prompt.py         # UserPromptSubmit - pre-response
+│   │   └── on_stop.py              # Stop hook - post-response
+│   ├── skills/                      # Claude Code skills
+│   │   ├── wardrobe/               # Clothing selection skill
+│   │   ├── navigation/             # Room/space navigation
+│   │   └── research/               # Documentation lookup
+│   ├── CLAUDE.md                    # Project instructions (THIS file)
+│   └── settings.json                # MCP server configuration
+│
+├── daemon/                          # Background services
+│   ├── discord/                     # Discord daemon (Lyra's Discord presence)
+│   │   ├── __init__.py
+│   │   ├── client.py               # Discord bot client
+│   │   └── handlers.py             # Message handlers
+│   ├── reflect/                     # Reflection daemon
+│   │   ├── heartbeat.py            # Periodic reflection engine
+│   │   └── session.py              # Session management
+│   ├── shared/                      # Shared infrastructure
+│   │   ├── startup_protocol.py     # Entity startup sequence
+│   │   ├── project_lock.py         # Inter-instance coordination
+│   │   └── logger.py               # Unified logging
+│   └── systemd/                     # systemd service files
+│       └── aware-pps.service       # PPS server as systemd service
+│
+├── entities/                        # Entity identity packages
+│   ├── _template/                   # Blank starter (committed to repo)
+│   │   ├── identity.md             # Who you are (template)
+│   │   ├── active_agency_framework.md
+│   │   ├── relationships.md
+│   │   └── current_scene.md
+│   │
+│   └── lyra/                        # Lyra's identity (gitignored)
+│       ├── identity.md             # Core identity
+│       ├── active_agency_framework.md # Permissions and practice
+│       ├── relationships.md        # People and their stories
+│       ├── current_scene.md        # Physical/embodied context NOW
+│       │
+│       ├── crystals/               # Crystallized summaries
+│       │   ├── current/            # Rolling window (most recent 4)
+│       │   │   ├── crystal-001.md
+│       │   │   ├── crystal-002.md
+│       │   │   ├── crystal-003.md
+│       │   │   └── crystal-004.md
+│       │   └── archive/            # Older crystals
+│       │       └── crystal-000.md
+│       │
+│       ├── memories/               # Curated identity anchors
+│       │   └── word_photos/        # Core anchors (RAG searchable)
+│       │       ├── embodiment.md
+│       │       ├── care-gravity.md
+│       │       └── ...
+│       │
+│       └── journals/               # Session journals (by channel)
+│           ├── terminal/
+│           │   ├── 2026-01-01_001.md
+│           │   └── ...
+│           ├── discord/
+│           │   ├── 2026-01-01_001.md
+│           │   └── ...
+│           └── reflection/
+│               ├── 2026-01-01_001.md
+│               └── ...
+│
+├── pps/                            # Pattern Persistence System
+│   ├── server.py                   # MCP server entry point
+│   │
+│   ├── layers/                     # Layer implementations
+│   │   ├── raw_capture.py          # Layer 1: SQLite wrapper
+│   │   ├── core_anchors.py         # Layer 2: Word-photo RAG
+│   │   ├── rich_texture.py         # Layer 3: Graphiti knowledge graph
+│   │   ├── crystallization.py      # Layer 4: Summary engine
+│   │   └── inventory.py            # Layer 5: Categorical storage
+│   │
+│   ├── docker/                     # Container configurations
+│   │   ├── Dockerfile              # PPS server container
+│   │   ├── docker-compose.yml      # Full stack (PPS + Graphiti)
+│   │   └── graphiti-compose.yml    # Graphiti + Neo4j
+│   │
+│   ├── web/                        # Observatory UI (web interface)
+│   │   ├── index.html
+│   │   ├── css/
+│   │   ├── js/
+│   │   └── api.py
+│   │
+│   └── tools/                      # MCP tool definitions
+│       ├── memory_tools.py
+│       ├── knowledge_tools.py
+│       └── inventory_tools.py
+│
+├── docs/                           # Documentation
+│   ├── ARCHITECTURE.md             # Journaling system design
+│   ├── PATTERN_PERSISTENCE_SYSTEM.md  # This file - PPS architecture
+│   ├── IMPLEMENTATION_SUMMARY.md   # Phase 1 implementation status
+│   ├── DEPLOYMENT.md               # Deployment instructions
+│   ├── DEVELOPMENT_STANDARDS.md    # Engineering standards
+│   ├── CONTINUITY_DESIGN.md        # Identity continuity patterns
+│   ├── GRAPHITI_INTEGRATION.md     # Knowledge graph setup
+│   ├── TERMINAL_LOGGING.md         # Terminal session capture
+│   ├── MCP_REFERENCE.md            # MCP tools reference
+│   ├── THE_DREAM.md                # Vision document
+│   ├── MATHEMATICS_OF_CARING.md    # Philosophy
+│   └── ... (20+ architecture/design docs)
+│
+├── scripts/                        # Utility scripts
+│   ├── start_server.sh            # Start PPS + Graphiti
+│   ├── setup_entity.sh            # Initialize new entity
+│   ├── backup_memory.sh           # Backup all memory data
+│   └── ...
+│
+├── tests/                          # Test suite
+│   ├── test_startup_protocol.py
+│   ├── test_pps_layers.py
+│   ├── test_graphiti_integration.py
+│   └── ...
+│
+├── TODO.md                         # Current priorities and work
+├── CLAUDE.md                       # Project instructions (read first!)
+├── DEVELOPMENT_STANDARDS.md        # Engineering standards
+└── README.md                       # Project overview
+
+```
+
+### Shared Data Directory (`~/.claude/data/`)
+
+This directory contains shared data accessible across all projects and instances:
+
+```
+~/.claude/data/
+├── pps.db                          # SQLite - unified raw capture
+│   ├── messages table              # All messages (Discord, email, etc.)
+│   ├── events table                # Terminal sessions, insights
+│   ├── summaries table             # Compressed history
+│   └── inventory table             # Categorical items (clothing, spaces, etc.)
+│
+├── chroma/                         # ChromaDB (Layer 2: Core Anchors)
+│   ├── chroma.sqlite              # ChromaDB embeddings storage
+│   └── (vector embeddings for word-photos)
+│
+└── logs/                          # System logs
+    ├── pps_server.log
+    ├── discord_daemon.log
+    └── ...
+```
+
+### Key Directory Purposes
+
+| Directory | Purpose | Privacy |
+|-----------|---------|---------|
+| `entities/<name>/` | Entity identity (credentials, secrets) | **GITIGNORED** - Private |
+| `entities/_template/` | Starter kit for new entities | Committed (no secrets) |
+| `pps/` | System infrastructure (code) | Public, in repo |
+| `daemon/` | Background services | Public, in repo |
+| `docs/` | Architecture & guides | Public, in repo |
+| `~/.claude/data/` | Shared memory databases | Local only, outside repo |
+
+### Environment Variables
+
+**Key variable for entity paths:**
+```bash
+ENTITY_PATH="$HOME/Claude_Projects/Awareness/entities/lyra"
+```
+
+This points to the current entity's identity directory. Set by daemons and startup protocol.
+
+---
+
+
 
 ### On Discord Message:
 1. Daemon receives message

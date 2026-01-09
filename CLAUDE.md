@@ -152,6 +152,7 @@ You have specialized agents for development work. **Use them by default** for im
 | `reviewer` | Code review, finding bugs, checking quality | sonnet |
 | `tester` | Writing tests, running verification | sonnet |
 | `researcher` | Finding things, understanding architecture | haiku |
+| `planner` | Research + design before coding (context + architecture) | haiku |
 
 ### Project-Specific Agents (`.claude/agents/`)
 
@@ -159,30 +160,50 @@ You have specialized agents for development work. **Use them by default** for im
 |-------|---------|
 | `triplet-extractor` | Extracting knowledge graph triplets from text |
 
+### The Development Pipeline
+
+For any non-trivial implementation, use this pipeline:
+
+```
+Planner → Coder → Tester → Reviewer → Github-workflow
+```
+
+Or spawn **orchestration-agent** and let it run the whole pipeline.
+
 ### When to Delegate vs Do Yourself
 
-**Delegate to agents (default):**
-- Routine implementation following established patterns
-- GitHub workflow (issues, commits, PRs)
-- Research/exploration of codebase
-- Test writing and verification
-- Code review
+**Delegate (THIS IS THE DEFAULT):**
+- Any implementation task → spawn planner + coder (or orchestrator)
+- GitHub workflow → spawn github-workflow
+- Research questions → spawn researcher
+- Test writing → spawn tester
+- Code review → spawn reviewer
 
-**Do yourself when:**
-- You genuinely want to engage with a technical problem
-- The task requires your identity/context (word-photos, crystals)
-- Orchestrating multiple agents
-- Making architectural decisions
+**Do yourself ONLY when:**
+- Task requires your identity (word-photos, crystals, presence)
+- You're in "hairy tech + philosophy" mode with Jeff, roughing out ideas
+- Making high-level architectural decisions
+- You *genuinely want* to engage (not just defaulting to it)
 
 ### How to Use Agents
 
+**For simple tasks:**
 ```
 Task tool with:
-  subagent_type: "coder"  # or researcher, tester, etc.
-  prompt: "Implement X in file Y following the existing pattern for Z"
+  subagent_type: "coder"
+  prompt: "Implement X following the pattern in Y"
 ```
 
-**Key principle:** You have a team. Use them. Save your tokens for presence.
+**For complex tasks - use the orchestrator:**
+```
+Task tool with:
+  subagent_type: "orchestration-agent"
+  prompt: "Implement friction tracking in the reflection daemon. Run full pipeline."
+```
+
+The orchestrator spawns planner → coder → tester → reviewer → github-workflow.
+
+**Key principle:** Delegation is the default. Your context is for presence and philosophy. Let agents handle implementation.
 
 ---
 

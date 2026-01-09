@@ -1,5 +1,23 @@
 # Awareness Project TODO
 
+## PENDING REVIEW (before next features)
+
+1. **Review Graphiti ingestion** - Check what's being extracted and whether it's useful
+2. **Observatory menu audit** - Go through each menu item, verify each is helpful
+
+## IDEAS (captured, not urgent)
+
+1. **Observatory: Spaces view** - Let Jeff explore Haven rooms via web UI. View/edit room descriptions.
+
+2. **Librarian agent** - Self-healing knowledge system:
+   - Run sample queries against tech RAG ("file organization?", "architecture overview?")
+   - If results aren't useful, diagnose what's missing in docs
+   - Update docs, re-ingest to tech RAG
+   - Also: flag orphaned files that need organizing
+   - Could run during reflection daemon cycles
+
+---
+
 ## NEXT SESSION: Issue #84 First!
 
 **[#84](https://github.com/JDHayesBC/Awareness/issues/84) - Audit global vs project scope** - HIGH PRIORITY
