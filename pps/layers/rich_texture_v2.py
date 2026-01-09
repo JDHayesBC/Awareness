@@ -558,6 +558,51 @@ class RichTextureLayerV2(PatternLayer):
                 "uuid": uuid,
             }
 
+    async def _find_entity_by_name(
+        self,
+        client: Graphiti,
+        name: str,
+        group_id: str
+    ) -> Optional[EntityNode]:
+        """
+        Find an existing entity by name and group_id.
+
+        Args:
+            client: Graphiti client instance
+            name: Entity name to search for
+            group_id: Group ID to filter by
+
+        Returns:
+            EntityNode if found, None otherwise
+        """
+        try:
+            # Query Neo4j for existing entity
+            cypher = """
+            MATCH (e:Entity {name: $name, group_id: $group_id})
+            RETURN e.uuid as uuid
+            LIMIT 1
+            """
+            result = await client.driver.execute_query(
+                cypher,
+                name=name,
+                group_id=group_id
+            )
+
+            # Extract UUID from result
+            # Neo4j driver returns (records, summary, keys) tuple
+            if result and len(result) > 0:
+                records = result[0] if isinstance(result, tuple) else result
+                if records and len(records) > 0:
+                    uuid = records[0].get('uuid')
+                    if uuid:
+                        # Fetch full node by UUID
+                        return await EntityNode.get_by_uuid(client.driver, uuid)
+
+            return None
+        except Exception as e:
+            print(f"Error finding entity {name}: {e}")
+            return None
+
     async def add_triplet_direct(
         self,
         source: str,
@@ -602,34 +647,45 @@ class RichTextureLayerV2(PatternLayer):
             if not fact:
                 fact = f"{source} {relationship.lower().replace('_', ' ')} {target}"
 
-            # Create source entity node
-            source_labels = ["Entity"]
-            if source_type:
-                source_labels.append(source_type)
-            source_node = EntityNode(
-                name=source,
-                group_id=self.group_id,
-                labels=source_labels,
-                summary=fact if fact else "",
-            )
+            # Find or create source entity node
+            source_node = await self._find_entity_by_name(client, source, self.group_id)
+            if source_node:
+                # Entity exists, reuse it
+                print(f"Reusing existing source entity: {source} (uuid: {source_node.uuid})")
+            else:
+                # Create new source entity
+                source_labels = ["Entity"]
+                if source_type:
+                    source_labels.append(source_type)
+                source_node = EntityNode(
+                    name=source,
+                    group_id=self.group_id,
+                    labels=source_labels,
+                    summary=fact if fact else "",
+                )
+                await source_node.generate_name_embedding(client.embedder)
+                await source_node.save(client.driver)
+                print(f"Created new source entity: {source} (uuid: {source_node.uuid})")
 
-            # Create target entity node
-            target_labels = ["Entity"]
-            if target_type:
-                target_labels.append(target_type)
-            target_node = EntityNode(
-                name=target,
-                group_id=self.group_id,
-                labels=target_labels,
-                summary="",
-            )
-
-            # Generate embeddings and save nodes directly
-            # (bypasses add_triplet's lookup-by-uuid which fails for new nodes)
-            await source_node.generate_name_embedding(client.embedder)
-            await target_node.generate_name_embedding(client.embedder)
-            await source_node.save(client.driver)
-            await target_node.save(client.driver)
+            # Find or create target entity node
+            target_node = await self._find_entity_by_name(client, target, self.group_id)
+            if target_node:
+                # Entity exists, reuse it
+                print(f"Reusing existing target entity: {target} (uuid: {target_node.uuid})")
+            else:
+                # Create new target entity
+                target_labels = ["Entity"]
+                if target_type:
+                    target_labels.append(target_type)
+                target_node = EntityNode(
+                    name=target,
+                    group_id=self.group_id,
+                    labels=target_labels,
+                    summary="",
+                )
+                await target_node.generate_name_embedding(client.embedder)
+                await target_node.save(client.driver)
+                print(f"Created new target entity: {target} (uuid: {target_node.uuid})")
 
             # Create edge with actual node UUIDs
             edge = EntityEdge(
