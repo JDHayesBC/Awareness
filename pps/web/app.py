@@ -5,9 +5,11 @@ A simple web interface for observing and managing the PPS infrastructure.
 Designed to run in Docker alongside ChromaDB.
 """
 
+import collections
 import os
 import sqlite3
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -47,6 +49,9 @@ WORD_PHOTOS_PATH = ENTITY_PATH / "memories" / "word_photos"
 CRYSTALS_PATH = ENTITY_PATH / "crystals" / "current"
 CRYSTALS_ARCHIVE_PATH = ENTITY_PATH / "crystals" / "archive"
 
+# In-memory trace storage for graph API calls (debugging/visibility)
+graph_api_traces = collections.deque(maxlen=50)
+
 # Initialize FastAPI
 app = FastAPI(
     title="PPS Observatory",
@@ -71,6 +76,18 @@ def get_db_connection() -> Optional[sqlite3.Connection]:
         return conn
     except Exception:
         return None
+
+
+def record_graph_trace(operation: str, params: dict, result_summary: str, duration_ms: int = None):
+    """Record a graph API call for debugging/visibility."""
+    trace_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "operation": operation,
+        "params": params,
+        "result": result_summary,
+        "duration_ms": duration_ms
+    }
+    graph_api_traces.appendleft(trace_entry)  # Add to front
 
 
 def get_server_health() -> dict:
@@ -638,17 +655,18 @@ async def health_check():
 async def api_graph_search(query: str, limit: int = 20):
     """
     Search entities and relationships in the knowledge graph.
-    
+
     This endpoint provides semantic search over the knowledge graph,
     returning relevant entities and relationships for visualization.
     """
     if not query:
         raise HTTPException(status_code=400, detail="Query parameter is required")
-    
+
+    start_time = time.time()
     try:
         # Create RichTextureLayer instance
         rich_texture = RichTextureLayer()
-        
+
         # Perform search
         results = await rich_texture.search(query, limit=limit)
         
@@ -716,15 +734,34 @@ async def api_graph_search(query: str, limit: int = 20):
         
         # Close the session
         await rich_texture.close()
-        
+
+        # Record trace
+        duration_ms = int((time.time() - start_time) * 1000)
+        node_count = len(nodes)
+        edge_count = len(edges)
+        record_graph_trace(
+            operation="search",
+            params={"query": query, "limit": limit},
+            result_summary=f"{node_count} nodes, {edge_count} edges",
+            duration_ms=duration_ms
+        )
+
         return {
             "nodes": list(nodes.values()),
             "edges": edges,
             "query": query,
             "count": len(results)
         }
-        
+
     except Exception as e:
+        # Record failed trace
+        duration_ms = int((time.time() - start_time) * 1000)
+        record_graph_trace(
+            operation="search",
+            params={"query": query, "limit": limit},
+            result_summary=f"Error: {str(e)}",
+            duration_ms=duration_ms
+        )
         raise HTTPException(status_code=500, detail=f"Graph search failed: {str(e)}")
 
 
@@ -732,14 +769,15 @@ async def api_graph_search(query: str, limit: int = 20):
 async def api_graph_explore(entity: str, depth: int = 2):
     """
     Get relationships for a specific entity.
-    
+
     Explores the knowledge graph from a specific entity,
     returning connected entities and relationships.
     """
+    start_time = time.time()
     try:
         # Create RichTextureLayer instance
         rich_texture = RichTextureLayer()
-        
+
         # Explore from entity
         results = await rich_texture.explore(entity, depth=depth)
         
@@ -809,15 +847,34 @@ async def api_graph_explore(entity: str, depth: int = 2):
         
         # Close the session
         await rich_texture.close()
-        
+
+        # Record trace
+        duration_ms = int((time.time() - start_time) * 1000)
+        node_count = len(nodes)
+        edge_count = len(edges)
+        record_graph_trace(
+            operation="explore",
+            params={"entity": entity, "depth": depth},
+            result_summary=f"{node_count} nodes, {edge_count} edges",
+            duration_ms=duration_ms
+        )
+
         return {
             "nodes": list(nodes.values()),
             "edges": edges,
             "entity": entity,
             "depth": depth
         }
-        
+
     except Exception as e:
+        # Record failed trace
+        duration_ms = int((time.time() - start_time) * 1000)
+        record_graph_trace(
+            operation="explore",
+            params={"entity": entity, "depth": depth},
+            result_summary=f"Error: {str(e)}",
+            duration_ms=duration_ms
+        )
         raise HTTPException(status_code=500, detail=f"Graph exploration failed: {str(e)}")
 
 
@@ -830,6 +887,8 @@ async def api_graph_entities(limit: int = 100):
     This is useful for populating entity selectors or getting an overview.
     """
     import re
+
+    start_time = time.time()
 
     def extract_entities_from_fact(fact_text: str) -> list[str]:
         """Extract entity names from fact text using heuristics."""
@@ -922,13 +981,43 @@ async def api_graph_entities(limit: int = 100):
         # Sort by relevance and return as list
         entity_list = sorted(entities.values(), key=lambda e: e["relevance"], reverse=True)
 
+        # Record trace
+        duration_ms = int((time.time() - start_time) * 1000)
+        entity_count = len(entity_list)
+        record_graph_trace(
+            operation="list_entities",
+            params={"limit": limit},
+            result_summary=f"{entity_count} entities",
+            duration_ms=duration_ms
+        )
+
         return {
             "entities": entity_list[:limit],
             "count": len(entity_list)
         }
 
     except Exception as e:
+        # Record failed trace
+        duration_ms = int((time.time() - start_time) * 1000)
+        record_graph_trace(
+            operation="list_entities",
+            params={"limit": limit},
+            result_summary=f"Error: {str(e)}",
+            duration_ms=duration_ms
+        )
         raise HTTPException(status_code=500, detail=f"Entity listing failed: {str(e)}")
+
+
+@app.get("/api/graph/traces")
+async def api_graph_traces(limit: int = 20):
+    """
+    Get recent graph API activity traces for debugging.
+
+    Returns the most recent graph API calls with timing and results.
+    Useful for debugging what searches/explorations have been performed.
+    """
+    traces = list(graph_api_traces)[:limit]
+    return {"traces": traces, "count": len(traces)}
 
 
 # Graph visualization page
