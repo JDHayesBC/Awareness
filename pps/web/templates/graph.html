@@ -91,6 +91,33 @@ let currentLayout = null;
 let traceEntries = [];
 let traceVisible = false;
 
+// Entity type color mapping
+function getEntityTypeColor(labels, relevance) {
+    // Color palette for entity types
+    const typeColors = {
+        'Person': '#3b82f6',           // blue
+        'Place': '#10b981',             // green
+        'Symbol': '#a855f7',            // purple
+        'Concept': '#f97316',           // orange
+        'TechnicalArtifact': '#6b7280'  // gray
+    };
+
+    if (!labels || labels.length === 0) {
+        // Fall back to relevance-based coloring for unknown types
+        const intensity = Math.floor(100 + relevance * 155);
+        return `rgb(${intensity}, ${intensity}, ${intensity})`;
+    }
+
+    // Find the first label that matches a known type (skip "Entity" base label)
+    const primaryType = labels.find(l => typeColors[l]) || labels[0];
+
+    // Return mapped color or fall back to relevance-based coloring
+    return typeColors[primaryType] || (() => {
+        const intensity = Math.floor(100 + relevance * 155);
+        return `rgb(${intensity}, ${intensity}, ${intensity})`;
+    })();
+}
+
 // Activity Trace functions
 function toggleTrace() {
     traceVisible = !traceVisible;
@@ -204,10 +231,13 @@ function initializeCytoscape() {
                 selector: 'node',
                 style: {
                     'background-color': function(ele) {
+                        // Source nodes stay blue for emphasis
                         if (ele.data('isSource')) return '#3b82f6';
+
+                        // Use entity type color mapping
+                        const labels = ele.data('labels') || [];
                         const relevance = ele.data('relevance') || 0.5;
-                        const intensity = Math.floor(100 + relevance * 155);
-                        return `rgb(${intensity}, ${intensity}, ${intensity})`;
+                        return getEntityTypeColor(labels, relevance);
                     },
                     'label': 'data(label)',
                     'text-valign': 'center',
