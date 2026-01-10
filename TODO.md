@@ -44,6 +44,12 @@ Use `gh issue list` to see current issues from the command line.
 - [#54](https://github.com/JDHayesBC/Awareness/issues/54) - Gmail Integration Testing & Email Management - **IN PROGRESS** (2026-01-04) - OAuth working, 50 emails processed; MCP tools built but blocked by reflection env path restrictions
 
 ### Recently Resolved
+- [#88](https://github.com/JDHayesBC/Awareness/issues/88) - ✅ Terminal to Graphiti batch ingestion - **COMPLETED** (2026-01-09)
+  - Added graphiti_batches table and tracking methods
+  - New MCP tools: graphiti_ingestion_stats, ingest_batch_to_graphiti
+  - ambient_recall now shows Graphiti ingestion stats
+  - Fixed broken SessionEnd hook
+  - 8 comprehensive tests added (all pass)
 - [#77](https://github.com/JDHayesBC/Awareness/issues/77) - ✅ Daemon directory access + Entity consolidation - **COMPLETED** (2026-01-06)
   - CC-native solution: `--add-dir` flag grants tool access
   - **Entity architecture**: Identity files now in `entities/lyra/` (gitignored)
