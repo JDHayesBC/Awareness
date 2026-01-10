@@ -63,11 +63,14 @@
             <h3 class="text-lg font-semibold text-blue-400">API Activity Trace</h3>
             <span id="traceCount" class="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded-full">0 calls</span>
         </div>
-        <button onclick="event.stopPropagation(); clearTrace()" class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1">Clear</button>
+        <div class="flex gap-2">
+            <button onclick="event.stopPropagation(); loadServerTraces()" class="text-xs text-blue-400 hover:text-blue-300 px-2 py-1">Refresh</button>
+            <button onclick="event.stopPropagation(); clearTrace()" class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1">Clear</button>
+        </div>
     </div>
     <div id="tracePanel" class="hidden max-h-64 overflow-y-auto">
         <div id="traceEntries" class="divide-y divide-gray-700 font-mono text-xs">
-            <div class="p-3 text-gray-500 text-center">No API calls yet. Try searching for something.</div>
+            <div class="p-3 text-gray-500 text-center">Loading trace history...</div>
         </div>
     </div>
 </div>
@@ -172,6 +175,48 @@ function updateTraceDisplay() {
     }).join('');
 }
 
+// Load server-side trace history
+async function loadServerTraces() {
+    try {
+        const response = await fetch('/api/graph/traces');
+        if (!response.ok) {
+            console.error('Failed to fetch server traces:', response.status);
+            return;
+        }
+
+        const data = await response.json();
+
+        // Clear current entries and load from server
+        traceEntries = [];
+
+        // Convert server trace format to client format
+        data.traces.forEach(serverEntry => {
+            const timestamp = new Date(serverEntry.timestamp).toLocaleTimeString();
+            const params = JSON.stringify(serverEntry.params);
+
+            traceEntries.push({
+                timestamp: timestamp,
+                operation: serverEntry.operation.toUpperCase(),
+                params: params,
+                status: 'success', // Server only stores successful traces
+                result: serverEntry.result,
+                durationMs: serverEntry.duration_ms
+            });
+        });
+
+        // Keep only last 50
+        if (traceEntries.length > 50) {
+            traceEntries = traceEntries.slice(0, 50);
+        }
+
+        updateTraceDisplay();
+
+    } catch (error) {
+        console.error('Error loading server traces:', error);
+        // Don't clear existing traces on error
+    }
+}
+
 // Wrapper for traced fetch calls
 async function tracedFetch(operation, params, url) {
     const startTime = performance.now();
@@ -212,7 +257,8 @@ async function tracedFetch(operation, params, url) {
 document.addEventListener('DOMContentLoaded', function() {
     initializeCytoscape();
     loadEntities();
-    
+    loadServerTraces();
+
     // Perform initial search if there's a query parameter
     const urlParams = new URLSearchParams(window.location.search);
     const initialQuery = urlParams.get('q');
