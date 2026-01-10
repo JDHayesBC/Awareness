@@ -318,3 +318,124 @@ class TestSearchSummaries:
 
         results = await layer.search("xyznonexistent", limit=10)
         assert len(results) == 0
+
+
+class TestGraphitiBatchTracking:
+    """Test Graphiti batch ingestion tracking functionality."""
+
+    def test_init_creates_graphiti_tables(self, test_db_with_messages):
+        """Verify initialization creates graphiti_batches table."""
+        layer = MessageSummariesLayer(db_path=test_db_with_messages)
+
+        with layer.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='graphiti_batches'")
+            assert cursor.fetchone() is not None
+
+    def test_init_adds_graphiti_batch_id_column(self, test_db_with_messages):
+        """Verify initialization adds graphiti_batch_id column to messages table."""
+        layer = MessageSummariesLayer(db_path=test_db_with_messages)
+
+        with layer.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(messages)")
+            columns = [col[1] for col in cursor.fetchall()]
+            assert 'graphiti_batch_id' in columns
+
+    def test_count_uningested_to_graphiti(self, test_db_with_messages):
+        """Verify count_uningested_to_graphiti returns correct count."""
+        layer = MessageSummariesLayer(db_path=test_db_with_messages)
+
+        # All 5 messages should be uningested initially
+        count = layer.count_uningested_to_graphiti()
+        assert count == 5
+
+    def test_get_uningested_for_graphiti(self, test_db_with_messages):
+        """Verify get_uningested_for_graphiti returns correct messages."""
+        layer = MessageSummariesLayer(db_path=test_db_with_messages)
+
+        messages = layer.get_uningested_for_graphiti(limit=10)
+
+        assert len(messages) == 5
+        assert messages[0]['content'] == "Hello, this is message 1"
+        assert messages[0]['author_name'] == "Jeff"
+        assert messages[0]['channel'] == "terminal"
+
+    def test_mark_batch_ingested_to_graphiti(self, test_db_with_messages):
+        """Verify mark_batch_ingested_to_graphiti creates batch and updates messages."""
+        layer = MessageSummariesLayer(db_path=test_db_with_messages)
+
+        # Mark messages 1-3 as ingested
+        batch_id = layer.mark_batch_ingested_to_graphiti(
+            start_id=1,
+            end_id=3,
+            channels=["terminal", "discord"]
+        )
+
+        assert batch_id is not None
+        assert batch_id > 0
+
+        # Verify batch record was created
+        with layer.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM graphiti_batches WHERE id = ?", (batch_id,))
+            row = cursor.fetchone()
+            assert row is not None
+            assert row['start_message_id'] == 1
+            assert row['end_message_id'] == 3
+            assert row['message_count'] == 3
+
+            # Verify messages were updated
+            cursor.execute("SELECT graphiti_batch_id FROM messages WHERE id BETWEEN 1 AND 3")
+            for row in cursor.fetchall():
+                assert row['graphiti_batch_id'] == batch_id
+
+    def test_count_decreases_after_batch_ingestion(self, test_db_with_messages):
+        """Verify uningested count decreases after marking batch."""
+        layer = MessageSummariesLayer(db_path=test_db_with_messages)
+
+        # Initially 5 uningested
+        assert layer.count_uningested_to_graphiti() == 5
+
+        # Mark messages 1-3 as ingested
+        layer.mark_batch_ingested_to_graphiti(
+            start_id=1,
+            end_id=3,
+            channels=["terminal"]
+        )
+
+        # Now should be 2 uningested (messages 4 and 5)
+        assert layer.count_uningested_to_graphiti() == 2
+
+    def test_get_uningested_respects_batch_tracking(self, test_db_with_messages):
+        """Verify get_uningested_for_graphiti only returns uningested messages."""
+        layer = MessageSummariesLayer(db_path=test_db_with_messages)
+
+        # Mark messages 1-2 as ingested
+        layer.mark_batch_ingested_to_graphiti(
+            start_id=1,
+            end_id=2,
+            channels=["terminal"]
+        )
+
+        # Get uningested messages
+        messages = layer.get_uningested_for_graphiti(limit=10)
+
+        # Should only get messages 3, 4, 5
+        assert len(messages) == 3
+        assert messages[0]['id'] == 3
+        assert messages[1]['id'] == 4
+        assert messages[2]['id'] == 5
+
+    def test_mark_batch_invalid_range_returns_none(self, test_db_with_messages):
+        """Verify mark_batch returns None for invalid message range."""
+        layer = MessageSummariesLayer(db_path=test_db_with_messages)
+
+        # Message IDs 100 and 200 don't exist
+        batch_id = layer.mark_batch_ingested_to_graphiti(
+            start_id=100,
+            end_id=200,
+            channels=["terminal"]
+        )
+
+        assert batch_id is None

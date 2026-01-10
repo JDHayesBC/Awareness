@@ -652,6 +652,37 @@ async def list_tools() -> list[Tool]:
                 "required": ["summary_text", "start_id", "end_id", "channels"]
             }
         ),
+        Tool(
+            name="graphiti_ingestion_stats",
+            description=(
+                "Get statistics about Graphiti batch ingestion. "
+                "Shows count of uningested messages and recent ingestion activity. "
+                "Use to decide if batch ingestion is needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        Tool(
+            name="ingest_batch_to_graphiti",
+            description=(
+                "Batch ingest messages to Graphiti (Layer 3: Rich Texture). "
+                "Takes raw message content and sends to Graphiti for entity extraction. "
+                "Automatically tracks which messages have been ingested. "
+                "Use when graphiti_ingestion_stats shows a backlog (> 20 messages)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "batch_size": {
+                        "type": "integer",
+                        "description": "Number of messages to ingest in this batch (default: 20)",
+                        "default": 20
+                    }
+                }
+            }
+        ),
         # === Inventory Layer (Layer 5) ===
         Tool(
             name="inventory_list",
@@ -918,6 +949,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         # Always get memory health stats (Issue #73)
         unsummarized_count = message_summaries.count_unsummarized_messages()
+        uningested_count = message_summaries.count_uningested_to_graphiti()
+
         memory_health = f"**Memory Health**: {unsummarized_count} unsummarized messages"
         if unsummarized_count > 200:
             memory_health += " ⚠️ (HIGH - summarize soon!)"
@@ -925,6 +958,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             memory_health += " (summarization recommended)"
         elif unsummarized_count > 50:
             memory_health += " (healthy, summarization available)"
+        else:
+            memory_health += " (healthy)"
+
+        memory_health += f" | {uningested_count} uningested to Graphiti"
+        if uningested_count > 100:
+            memory_health += " ⚠️ (HIGH - ingest soon!)"
+        elif uningested_count >= 20:
+            memory_health += " (batch ingestion recommended)"
         else:
             memory_health += " (healthy)"
         memory_health += "\n\n"
@@ -1430,6 +1471,75 @@ Create a concise summary that captures what actually happened and what was accom
             return [TextContent(type="text", text=f"Summary stored successfully for messages {start_id}-{end_id}")]
         else:
             return [TextContent(type="text", text="Error: Failed to store summary")]
+
+    elif name == "graphiti_ingestion_stats":
+        uningested_count = message_summaries.count_uningested_to_graphiti()
+
+        stats = {
+            "uningested_messages": uningested_count,
+            "needs_ingestion": uningested_count >= 20,
+            "recommendation": "Run ingest_batch_to_graphiti" if uningested_count >= 20 else "No action needed"
+        }
+
+        return [TextContent(type="text", text=json.dumps(stats, indent=2))]
+
+    elif name == "ingest_batch_to_graphiti":
+        batch_size = arguments.get("batch_size", 20)
+
+        # Get batch of uningested messages
+        messages = message_summaries.get_uningested_for_graphiti(limit=batch_size)
+
+        if not messages:
+            return [TextContent(type="text", text="No messages to ingest. All caught up!")]
+
+        # Get the Layer 3 instance
+        layer = layers[LayerType.RICH_TEXTURE]
+
+        # Ingest each message to Graphiti
+        ingested_count = 0
+        failed_count = 0
+        channels_in_batch = set()
+
+        for msg in messages:
+            # Prepare metadata for Graphiti
+            metadata = {
+                "channel": msg['channel'],
+                "role": "assistant" if msg['is_lyra'] else "user",
+                "speaker": "Lyra" if msg['is_lyra'] else msg['author_name'],
+                "timestamp": msg['created_at']
+            }
+
+            # Store in Graphiti
+            success = await layer.store(msg['content'], metadata)
+
+            if success:
+                ingested_count += 1
+                channels_in_batch.add(msg['channel'])
+            else:
+                failed_count += 1
+
+        # Mark batch as ingested if any succeeded
+        if ingested_count > 0:
+            start_id = messages[0]['id']
+            end_id = messages[-1]['id']
+            batch_id = message_summaries.mark_batch_ingested_to_graphiti(
+                start_id, end_id, list(channels_in_batch)
+            )
+
+            result = {
+                "batch_id": batch_id,
+                "messages_ingested": ingested_count,
+                "messages_failed": failed_count,
+                "message_range": f"{start_id}-{end_id}",
+                "channels": list(channels_in_batch)
+            }
+        else:
+            result = {
+                "error": "All messages failed to ingest",
+                "messages_failed": failed_count
+            }
+
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     # === Inventory Layer (Layer 5) ===
 

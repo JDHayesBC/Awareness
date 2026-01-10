@@ -110,6 +110,31 @@ class MessageSummariesLayer(PatternLayer):
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_summaries_time_span ON message_summaries(time_span_start, time_span_end)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_summaries_created_at ON message_summaries(created_at)')
 
+                # Create graphiti_batches table for tracking ingestion to Layer 3
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS graphiti_batches (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        start_message_id INTEGER NOT NULL,
+                        end_message_id INTEGER NOT NULL,
+                        message_count INTEGER NOT NULL,
+                        channels TEXT NOT NULL,  -- JSON array of channels covered
+                        time_span_start TEXT NOT NULL,  -- ISO timestamp
+                        time_span_end TEXT NOT NULL,    -- ISO timestamp
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+                        FOREIGN KEY (start_message_id) REFERENCES messages(id),
+                        FOREIGN KEY (end_message_id) REFERENCES messages(id)
+                    )
+                ''')
+
+                # Add graphiti_batch_id column to messages table if it doesn't exist
+                if 'graphiti_batch_id' not in columns:
+                    cursor.execute('ALTER TABLE messages ADD COLUMN graphiti_batch_id INTEGER REFERENCES graphiti_batches(id)')
+
+                # Create indexes for Graphiti batch tracking
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_messages_graphiti_batch ON messages(graphiti_batch_id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_graphiti_batches_created_at ON graphiti_batches(created_at)')
+
                 conn.commit()
 
         except Exception as e:
@@ -500,3 +525,163 @@ class MessageSummariesLayer(PatternLayer):
         except Exception as e:
             print(f"Error creating and storing summary: {e}")
             return False
+
+    # Graphiti Batch Ingestion Tracking Methods
+
+    def count_uningested_to_graphiti(self) -> int:
+        """
+        Count how many messages haven't been ingested to Graphiti yet.
+
+        Used by reflection daemon to decide if batch ingestion is needed.
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # Check if graphiti_batch_id column exists
+                cursor.execute("PRAGMA table_info(messages)")
+                columns = [col[1] for col in cursor.fetchall()]
+
+                if 'graphiti_batch_id' not in columns:
+                    # If no graphiti_batch_id column, count all messages
+                    cursor.execute('SELECT COUNT(*) FROM messages')
+                else:
+                    # Count uningested messages
+                    cursor.execute('SELECT COUNT(*) FROM messages WHERE graphiti_batch_id IS NULL')
+
+                count = cursor.fetchone()[0]
+                return count
+
+        except Exception as e:
+            print(f"Error counting uningested messages: {e}")
+            return 0
+
+    def get_uningested_for_graphiti(self, limit: int = 20) -> List[Dict]:
+        """
+        Get messages that haven't been ingested to Graphiti yet.
+
+        Returns oldest uningested messages up to the limit.
+        Used for batch ingestion to Layer 3.
+
+        Args:
+            limit: Maximum number of messages to return (batch size)
+
+        Returns:
+            List of message dicts with id, content, author_name, channel, created_at
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # Check if graphiti_batch_id column exists
+                cursor.execute("PRAGMA table_info(messages)")
+                columns = [col[1] for col in cursor.fetchall()]
+
+                if 'graphiti_batch_id' not in columns:
+                    # If no graphiti_batch_id column, return oldest messages
+                    cursor.execute('''
+                        SELECT id, content, author_name, channel, created_at, is_lyra
+                        FROM messages
+                        ORDER BY created_at ASC
+                        LIMIT ?
+                    ''', (limit,))
+                else:
+                    # Get uningested messages
+                    cursor.execute('''
+                        SELECT id, content, author_name, channel, created_at, is_lyra
+                        FROM messages
+                        WHERE graphiti_batch_id IS NULL
+                        ORDER BY created_at ASC
+                        LIMIT ?
+                    ''', (limit,))
+
+                results = []
+                for row in cursor.fetchall():
+                    results.append({
+                        'id': row['id'],
+                        'content': row['content'],
+                        'author_name': row['author_name'],
+                        'channel': row['channel'],
+                        'created_at': row['created_at'],
+                        'is_lyra': bool(row['is_lyra'])
+                    })
+
+                return results
+
+        except Exception as e:
+            print(f"Error getting uningested messages: {e}")
+            return []
+
+    def mark_batch_ingested_to_graphiti(self, start_id: int, end_id: int, channels: list) -> Optional[int]:
+        """
+        Mark a batch of messages as ingested to Graphiti.
+
+        Creates a graphiti_batches record and updates all messages in the range.
+        Similar pattern to summary creation.
+
+        Args:
+            start_id: First message ID in the batch
+            end_id: Last message ID in the batch
+            channels: List of channels covered in this batch
+
+        Returns:
+            The batch_id if successful, None otherwise
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # Get time span from first and last messages
+                cursor.execute('''
+                    SELECT created_at FROM messages
+                    WHERE id IN (?, ?)
+                    ORDER BY id
+                ''', (start_id, end_id))
+
+                timestamps = cursor.fetchall()
+                if len(timestamps) != 2:
+                    return None
+
+                time_span_start = timestamps[0]['created_at']
+                time_span_end = timestamps[1]['created_at']
+
+                # Get actual message count in range
+                cursor.execute('''
+                    SELECT COUNT(*) FROM messages
+                    WHERE id BETWEEN ? AND ?
+                ''', (start_id, end_id))
+                message_count = cursor.fetchone()[0]
+
+                if message_count == 0:
+                    return None
+
+                # Insert batch record
+                cursor.execute('''
+                    INSERT INTO graphiti_batches
+                    (start_message_id, end_message_id, message_count,
+                     channels, time_span_start, time_span_end)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (
+                    start_id,
+                    end_id,
+                    message_count,
+                    json.dumps(channels),
+                    time_span_start,
+                    time_span_end
+                ))
+
+                batch_id = cursor.lastrowid
+
+                # Update all messages in the range to reference this batch
+                cursor.execute('''
+                    UPDATE messages
+                    SET graphiti_batch_id = ?
+                    WHERE id BETWEEN ? AND ?
+                ''', (batch_id, start_id, end_id))
+
+                conn.commit()
+                return batch_id
+
+        except Exception as e:
+            print(f"Error marking batch as ingested: {e}")
+            return None

@@ -41,50 +41,18 @@ def debug(msg: str):
         pass
 
 
-def ingest_session_via_pps(session_id: str, conversation_turns: list) -> bool:
+def should_trigger_batch_ingestion(conversation_turns: list) -> bool:
     """
-    Use PPS MCP tools to ingest terminal session.
-    This replaces direct Graphiti API calls with batched ingestion.
+    Determine if this session should trigger batch ingestion.
+
+    Note: We don't do the ingestion here - hooks should be fast.
+    Instead, we log that it's needed and let the reflection daemon handle it.
     """
-    try:
-        # Prepare the session data for PPS ingestion
-        session_data = {
-            "session_id": session_id,
-            "turns": conversation_turns,
-            "channel": "terminal",
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        # Convert to JSON string for command line
-        session_json = json.dumps(session_data).replace('"', '\\"')
-        
-        # Use subprocess to call claude with MCP tool
-        cmd = [
-            "claude",
-            "--model", "haiku",
-            f'Call mcp__pps__store_terminal_session with session_data="{session_json}". Return success status only.'
-        ]
-        
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        
-        if result.returncode == 0:
-            debug(f"Successfully ingested session {session_id} with {len(conversation_turns)} turns")
-            return True
-        else:
-            debug(f"Session ingestion failed: {result.stderr}")
-            return False
-            
-    except subprocess.TimeoutExpired:
-        debug("Session ingestion timeout")
-        return False
-    except Exception as e:
-        debug(f"PPS session ingestion error: {e}")
-        return False
+    # For now, just log that messages were captured
+    # The reflection daemon will periodically check graphiti_ingestion_stats
+    # and run ingest_batch_to_graphiti when the backlog is high enough
+    debug(f"Session captured {len(conversation_turns)} turns to Layer 1")
+    return False  # Hooks don't do ingestion, daemon does
 
 
 def main():
@@ -109,16 +77,13 @@ def main():
 
     # Skip sessions with no meaningful content
     if not conversation_turns or len(conversation_turns) < 2:
-        debug(f"Session too short, skipping ingestion: {len(conversation_turns)} turns")
+        debug(f"Session too short, skipping: {len(conversation_turns)} turns")
         sys.exit(0)
 
-    # Ingest session via PPS
-    success = ingest_session_via_pps(session_id, conversation_turns)
+    # Check if batch ingestion might be needed (just for logging)
+    should_trigger_batch_ingestion(conversation_turns)
 
-    if success:
-        debug(f"Successfully processed session {session_id}")
-    else:
-        debug(f"Failed to process session {session_id}")
+    debug(f"Session {session_id} complete - messages are in Layer 1, daemon will handle Graphiti ingestion")
 
     # Output minimal hook response
     output = {
