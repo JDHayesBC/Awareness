@@ -692,7 +692,7 @@ async def api_graph_search(query: str, limit: int = 20):
                         "id": subject,
                         "label": subject,
                         "type": "entity",
-                        "labels": [],
+                        "labels": metadata.get("source_labels", []),
                         "relevance": 0.5
                     }
 
@@ -701,7 +701,7 @@ async def api_graph_search(query: str, limit: int = 20):
                         "id": obj,
                         "label": obj,
                         "type": "entity",
-                        "labels": [],
+                        "labels": metadata.get("target_labels", []),
                         "relevance": 0.5
                     }
 
@@ -786,16 +786,16 @@ async def api_graph_explore(entity: str, depth: int = 2):
                             "id": subject,
                             "label": subject,
                             "type": "entity",
-                            "labels": [],
+                            "labels": metadata.get("source_labels", []),
                             "relevance": 0.5
                         }
-                    
+
                     if obj not in nodes:
                         nodes[obj] = {
                             "id": obj,
                             "label": obj,
                             "type": "entity",
-                            "labels": [],
+                            "labels": metadata.get("target_labels", []),
                             "relevance": 0.5
                         }
                     

@@ -287,8 +287,9 @@ class RichTextureLayerV2(PatternLayer):
                 node_uuids.add(edge.source_node_uuid)
                 node_uuids.add(edge.target_node_uuid)
 
-            # Fetch nodes by UUID to get actual names
+            # Fetch nodes by UUID to get actual names and labels
             node_names: dict[str, str] = {}
+            node_labels: dict[str, list[str]] = {}
             if node_uuids:
                 nodes = await EntityNode.get_by_uuids(
                     client.driver,
@@ -296,6 +297,7 @@ class RichTextureLayerV2(PatternLayer):
                 )
                 for node in nodes:
                     node_names[node.uuid] = node.name
+                    node_labels[node.uuid] = node.labels
 
             results = []
             for i, edge in enumerate(edges):
@@ -321,6 +323,8 @@ class RichTextureLayerV2(PatternLayer):
                         "predicate": edge.name,
                         "object": target_name,
                         "valid_at": str(edge.valid_at) if edge.valid_at else None,
+                        "source_labels": node_labels.get(edge.source_node_uuid, []),
+                        "target_labels": node_labels.get(edge.target_node_uuid, []),
                     },
                 ))
 
