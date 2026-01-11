@@ -281,6 +281,10 @@ class RichTextureLayerV2(PatternLayer):
                 num_results=limit,
             )
 
+            # Filter out IS_DUPLICATE_OF edges (Graphiti bug: creates X→X self-references)
+            # See: pps/graph_curation_final_report.md for details
+            edges = [e for e in edges if e.name != "IS_DUPLICATE_OF"]
+
             # Collect all unique node UUIDs to batch-fetch names
             node_uuids = set()
             for edge in edges:
@@ -353,6 +357,11 @@ class RichTextureLayerV2(PatternLayer):
                     data = await resp.json()
 
                     facts = data.get("facts", [])
+
+                    # Filter out IS_DUPLICATE_OF edges (Graphiti bug: creates X→X self-references)
+                    # See: pps/graph_curation_final_report.md for details
+                    facts = [f for f in facts if f.get("name") != "IS_DUPLICATE_OF"]
+
                     for i, fact in enumerate(facts):
                         score = 1.0 - (i / max(len(facts), 1)) * 0.5
                         content = self._format_fact(fact)
