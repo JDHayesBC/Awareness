@@ -299,7 +299,7 @@ End with active agency footnotes showing what you scanned and chose.'''
             "claude",
             "--model", REFLECTION_MODEL,
             "--dangerously-skip-permissions",  # Allow tools without prompts
-            "--mcp-config", "/home/jeff/.claude/.mcp.json",  # Explicit MCP config
+            "--mcp-config", str(PROJECT_DIR / ".mcp.json"),  # Project MCP config (has PPS server)
         ]
 
         # Add project directory if unlocked
