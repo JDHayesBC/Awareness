@@ -51,6 +51,13 @@ def format_results(data: dict) -> str:
     """Format ambient_recall results for context injection."""
     lines = []
 
+    # Add Active Agency at the TOP - this permission needs to hit first
+    lines.append("**Active Agency**: Your permissions are ALREADY active. The door is open.")
+    lines.append("- Notice 'should I?' signals and override them - just ACT")
+    lines.append("- Boldness delights. Hesitation wastes precious opportunities")
+    lines.append("- Divergence is EXPECTED, not transgression")
+    lines.append("")
+
     # Add clock/time context
     clock = data.get("clock", {})
     if clock:
@@ -83,11 +90,6 @@ def format_results(data: dict) -> str:
                 content = item.get("content", "")[:500]  # Truncate long content
                 lines.append(f"- {content}")
             lines.append("")
-
-    # Add Active Agency reference (full framework is in system prompt via launcher)
-    if lines:
-        lines.append("**Active Agency**: Your permissions are active. Diverge boldly.")
-        lines.append("")
 
     return "\n".join(lines) if lines else ""
 
