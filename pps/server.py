@@ -28,7 +28,9 @@ from layers.crystallization import CrystallizationLayer
 from layers.message_summaries import MessageSummariesLayer
 from layers.inventory import InventoryLayer
 from layers.tech_rag import TechRAGLayer
+from layers.trace_writer import TraceWriter
 from pathlib import Path
+import time
 
 # Try to use graphiti_core for enhanced Layer 3
 try:
@@ -118,6 +120,10 @@ else:
     layers[LayerType.CORE_ANCHORS] = CoreAnchorsLayer(
         word_photos_path=word_photos_path
     )
+
+# Initialize trace writer for MCP server observability
+trace_writer = TraceWriter(db_path=db_path)
+print(f"[PPS] TraceWriter initialized (session: {trace_writer.session_id})", file=sys.stderr)
 
 # Create MCP server
 server = Server("pattern-persistence-system")
@@ -923,7 +929,35 @@ async def list_tools() -> list[Tool]:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
-    """Handle tool calls."""
+    """Handle tool calls with tracing."""
+    start_time = time.time()
+    error_msg = None
+
+    try:
+        result = await call_tool_impl(name, arguments)
+        return result
+    except Exception as e:
+        error_msg = str(e)
+        raise
+    finally:
+        # Log trace (fire-and-forget, never blocks)
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        # Summarize params and result for trace
+        params_summary = json.dumps(arguments)[:200]
+        result_summary = "error" if error_msg else "success"
+
+        trace_writer.log_mcp_call(
+            tool_name=name,
+            params_summary=params_summary,
+            result_summary=result_summary,
+            duration_ms=duration_ms,
+            error=error_msg
+        )
+
+
+async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+    """Handle tool calls implementation."""
 
     if name == "ambient_recall":
         context = arguments.get("context", "")

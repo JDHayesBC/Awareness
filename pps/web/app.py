@@ -1011,13 +1011,53 @@ async def api_graph_entities(limit: int = 100):
 @app.get("/api/graph/traces")
 async def api_graph_traces(limit: int = 20):
     """
-    Get recent graph API activity traces for debugging.
+    Get recent MCP server activity traces for debugging.
 
-    Returns the most recent graph API calls with timing and results.
-    Useful for debugging what searches/explorations have been performed.
+    Returns the most recent MCP tool calls with timing and results from daemon_traces table.
+    Useful for debugging what MCP operations have been performed.
     """
-    traces = list(graph_api_traces)[:limit]
-    return {"traces": traces, "count": len(traces)}
+    conn = get_db_connection()
+    if not conn:
+        # Fallback to legacy in-memory traces if DB not available
+        traces = list(graph_api_traces)[:limit]
+        return {"traces": traces, "count": len(traces)}
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                timestamp,
+                daemon_type,
+                event_type as activity,
+                event_data as details,
+                duration_ms
+            FROM daemon_traces
+            WHERE daemon_type = 'mcp_server'
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (limit,))
+
+        rows = cursor.fetchall()
+        traces = []
+        for row in rows:
+            trace = {
+                "timestamp": row["timestamp"],
+                "daemon_type": row["daemon_type"],
+                "activity": row["activity"],
+                "details": row["details"],
+                "duration_ms": row["duration_ms"]
+            }
+            traces.append(trace)
+
+        conn.close()
+        return {"traces": traces, "count": len(traces)}
+
+    except Exception as e:
+        if conn:
+            conn.close()
+        # Fallback to legacy traces on error
+        traces = list(graph_api_traces)[:limit]
+        return {"traces": traces, "count": len(traces)}
 
 
 # Graph visualization page
