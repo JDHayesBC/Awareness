@@ -28,7 +28,7 @@ from layers.crystallization import CrystallizationLayer
 from layers.message_summaries import MessageSummariesLayer
 from layers.inventory import InventoryLayer
 from layers.tech_rag import TechRAGLayer
-from layers.trace_writer import TraceWriter
+from layers.unified_tracer import UnifiedTracer
 from pathlib import Path
 import time
 
@@ -121,9 +121,9 @@ else:
         word_photos_path=word_photos_path
     )
 
-# Initialize trace writer for MCP server observability
-trace_writer = TraceWriter(db_path=db_path)
-print(f"[PPS] TraceWriter initialized (session: {trace_writer.session_id})", file=sys.stderr)
+# Initialize unified tracer for MCP server observability
+tracer = UnifiedTracer(db_path=db_path, daemon_type="mcp_server")
+print(f"[PPS] UnifiedTracer initialized (session: {tracer.session_id})", file=sys.stderr)
 
 # Create MCP server
 server = Server("pattern-persistence-system")
@@ -947,8 +947,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         params_summary = json.dumps(arguments)[:200]
         result_summary = "error" if error_msg else "success"
 
-        trace_writer.log_mcp_call(
-            tool_name=name,
+        tracer.log_call(
+            operation_name=name,
             params_summary=params_summary,
             result_summary=result_summary,
             duration_ms=duration_ms,

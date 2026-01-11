@@ -18,10 +18,11 @@ from datetime import datetime
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
+import time
 
 
 # Request models
@@ -65,6 +66,7 @@ from layers.raw_capture import RawCaptureLayer
 from layers.core_anchors import CoreAnchorsLayer
 from layers.crystallization import CrystallizationLayer
 from layers.message_summaries import MessageSummariesLayer
+from layers.unified_tracer import UnifiedTracer
 
 # Import V2 rich texture layer with add_triplet_direct support
 try:
@@ -130,6 +132,9 @@ layers = get_layers()
 data_path = CLAUDE_HOME / "data" / "lyra_conversations.db"
 message_summaries = MessageSummariesLayer(db_path=data_path)
 
+# Initialize unified tracer for HTTP server observability
+tracer = UnifiedTracer(db_path=data_path, daemon_type="http_hook")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -139,6 +144,7 @@ async def lifespan(app: FastAPI):
     print(f"  ChromaDB: {CHROMA_HOST}:{CHROMA_PORT}")
     print(f"  USE_CHROMA: {USE_CHROMA}")
     print(f"  USE_RICH_TEXTURE_V2: {USE_RICH_TEXTURE_V2}")
+    print(f"  UnifiedTracer initialized (session: {tracer.session_id})")
 
     for layer_type, layer in layers.items():
         health = await layer.health()
@@ -157,6 +163,43 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan
 )
+
+
+@app.middleware("http")
+async def trace_requests(request: Request, call_next):
+    """Middleware to trace all HTTP requests with unified tracer."""
+    start_time = time.time()
+    error_msg = None
+    status_code = 200
+
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    except Exception as e:
+        error_msg = str(e)
+        status_code = 500
+        raise
+    finally:
+        # Log trace (fire-and-forget, never blocks)
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        # Extract endpoint info
+        endpoint = f"{request.method} {request.url.path}"
+
+        # Summarize query params if present
+        params_summary = str(dict(request.query_params))[:200] if request.query_params else ""
+
+        # Result summary based on status code
+        result_summary = f"status_{status_code}"
+
+        tracer.log_call(
+            operation_name=endpoint,
+            params_summary=params_summary,
+            result_summary=result_summary,
+            duration_ms=duration_ms,
+            error=error_msg
+        )
 
 
 @app.get("/health")
