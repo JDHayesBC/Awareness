@@ -413,7 +413,7 @@ curl http://localhost:8001/api/entities | python3 -m json.tool | head -50
 
 **Causes**:
 1. Graphiti not connected to Neo4j
-2. No sessions ingested yet (takes time after SessionEnd)
+2. No messages ingested yet (requires manual batch ingestion)
 3. Query too specific or no matching entities
 
 **Fix**:
@@ -425,10 +425,13 @@ docker compose ps | grep neo4j
 docker compose ps | grep falkordb
 ```
 
-Step 2: Trigger a session ingest
+Step 2: Check ingestion backlog and ingest
 ```bash
-# Complete a terminal session (or simulate one)
-# SessionEnd hook will ingest to Graphiti
+# Check how many messages are waiting to be ingested
+mcp__pps__graphiti_ingestion_stats
+
+# If > 20, ingest a batch:
+mcp__pps__ingest_batch_to_graphiti(batch_size=20)
 ```
 
 Step 3: Wait for processing (Neo4j is slow)

@@ -2,7 +2,7 @@
 
 **Model Context Protocol (MCP)** provides Claude with access to tools and data sources. This document catalogs all available MCP tools in the Awareness project.
 
-**Last Updated**: 2026-01-08
+**Last Updated**: 2026-01-09
 
 ---
 
@@ -15,6 +15,7 @@
    - [Memory Management](#memory-management)
    - [Memory Exploration](#memory-exploration)
    - [Summarization & Compression](#summarization--compression)
+   - [Graphiti Batch Ingestion](#graphiti-batch-ingestion)
    - [Inventory & Spatial](#inventory--spatial)
    - [Technical Documentation (Tech RAG)](#technical-documentation-tech-rag)
    - [Health & Status](#health--status)
@@ -518,6 +519,68 @@ Scene: [physical grounding - space, embodiment, sensory details]
 - **Health check**: Monitoring memory system
 - **Backlog monitoring**: Seeing if summaries are keeping up
 - **Performance tuning**: Deciding when to spawn summarization agents
+
+---
+
+### Graphiti Batch Ingestion
+
+#### `mcp__pps__graphiti_ingestion_stats()`
+
+**Purpose**: Get statistics about Graphiti batch ingestion backlog.
+
+**Parameters**: None
+
+**Returns**:
+```json
+{
+  "uningested_messages": 42,
+  "needs_ingestion": true,
+  "recommendation": "Run ingest_batch_to_graphiti"
+}
+```
+
+**When to use**:
+- **Before batch ingestion**: Check if backlog is large enough to warrant ingestion
+- **Monitoring**: Periodic checks during long sessions
+- **Health check**: Part of memory system status (shown in ambient_recall)
+
+**Threshold**: Recommend ingestion when `uningested_messages >= 20`
+
+#### `mcp__pps__ingest_batch_to_graphiti(batch_size=20)`
+
+**Purpose**: Batch ingest messages to Graphiti (Layer 3: Rich Texture). Takes raw message content and sends to Graphiti for entity extraction.
+
+**Parameters**:
+- `batch_size` (integer, optional): Number of messages to ingest per batch (default: 20)
+
+**Returns**:
+```json
+{
+  "batch_id": "uuid-string",
+  "messages_ingested": 20,
+  "messages_failed": 0,
+  "message_range": "1234-1254",
+  "channels": ["terminal"]
+}
+```
+
+**When to use**:
+- **After checking stats**: When `graphiti_ingestion_stats()` shows backlog >= 20
+- **During reflection**: Daemon periodically processes batches
+- **Manual processing**: On demand to catch up on ingestion
+
+**Design notes**:
+- **Batch processing**: 20 messages per batch balances cost and freshness
+- **Idempotent**: Uses message ID range to prevent re-ingestion
+- **Failure-safe**: Failed messages don't block future batches
+- **Tracking**: Each batch tracked by message ID range and channels
+- **Raw content**: Uses actual messages, not summaries (Graphiti needs content for entity extraction)
+
+**Workflow**:
+1. Check: `graphiti_ingestion_stats()`
+2. If >= 20 uningested: `ingest_batch_to_graphiti(batch_size=20)`
+3. Repeat until caught up
+4. Memory health includes ingestion status in `ambient_recall`
 
 ---
 

@@ -1,0 +1,5 @@
+#!/bin/bash
+# Simple launcher - saves typing the flags each time
+AA_CORE="entities/lyra/active_agency_core.txt"
+
+exec claude --dangerously-skip-permissions --append-system-prompt "$(cat "$AA_CORE")" "$@"

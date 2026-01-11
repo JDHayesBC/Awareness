@@ -84,6 +84,11 @@ def format_results(data: dict) -> str:
                 lines.append(f"- {content}")
             lines.append("")
 
+    # Add Active Agency reference (full framework is in system prompt via launcher)
+    if lines:
+        lines.append("**Active Agency**: Your permissions are active. Diverge boldly.")
+        lines.append("")
+
     return "\n".join(lines) if lines else ""
 
 

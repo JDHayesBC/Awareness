@@ -649,6 +649,52 @@ This points to the current entity's identity directory. Set by daemons and start
 3. Semantic search available via tools
 4. New insights can be stored during session
 
+## Batch Graphiti Ingestion
+
+As of Phase 7, terminal messages are ingested to Graphiti (Layer 3) via **batch ingestion MCP tools**, not SessionEnd hooks. This prevents token overflow on long sessions and allows controlled, on-demand extraction.
+
+### Tools
+
+**`graphiti_ingestion_stats`** - Check backlog status
+```
+{
+  "uningested_messages": 42,
+  "needs_ingestion": true,
+  "recommendation": "Run ingest_batch_to_graphiti"
+}
+```
+Use to decide if batch ingestion is needed (threshold: 20+ messages).
+
+**`ingest_batch_to_graphiti`** - Ingest a batch to Graphiti
+```
+batch_size: 20  (default, adjustable)
+```
+Returns:
+```
+{
+  "batch_id": "uuid",
+  "messages_ingested": 20,
+  "messages_failed": 0,
+  "message_range": "1234-1254",
+  "channels": ["terminal"]
+}
+```
+
+### Workflow
+
+1. **On startup or during reflection**: Call `graphiti_ingestion_stats`
+2. **If uningested_count >= 20**: Call `ingest_batch_to_graphiti(batch_size=20)`
+3. **Repeat** until caught up
+4. **Memory health** includes ingestion status (shown in `ambient_recall`)
+
+### Design Rationale
+
+- **Batch processing**: Ingests 20 messages at a time (configurable)
+- **On-demand**: Only when explicitly requested, not automatic on every message
+- **Idempotent**: Each ingestion batch tracked by message ID range
+- **Failure-safe**: Failed messages don't block future batches
+- **Token-efficient**: Prevents SessionEnd hook from overwhelming single turn
+
 ## Implementation Phases
 
 ### Phase 1: Foundation (Current + Immediate)
@@ -677,8 +723,8 @@ This points to the current entity's identity directory. Set by daemons and start
 ### Phase 4: Data Flow Integration
 - [x] Define group_ids for channels (single `lyra` group, channel metadata)
 - [x] Test semantic search across episodes
-- [x] Modify daemon to POST episodes to Graphiti (SessionEnd hook, batched ingestion)
-- [x] Add terminal session episode posting (via hooks)
+- [x] Batch ingestion to Graphiti (via `ingest_batch_to_graphiti` MCP tool)
+- [x] Add terminal session episode posting (via message capture)
 - [x] Verify ephemeral texture pattern (10-50 facts/turn)
 
 ### Phase 5: Crystallization - Summary Engine (Layer 4)
@@ -698,7 +744,7 @@ This points to the current entity's identity directory. Set by daemons and start
 - [x] Graph curator agent (spawns during reflection to clean duplicates)
 - [x] Automated summarization agent (spawns when unsummarized > 100)
 - [x] Memory health monitoring (unsummarized count on every ambient_recall)
-- [x] SessionEnd hook batching (prevents token overflow on long sessions)
+- [x] Batch Graphiti ingestion tracking (prevents token overflow on long sessions)
 
 ## Technical Decisions
 
@@ -854,5 +900,5 @@ chmod 700 ~/.claude/memories ~/.claude/journals ~/.claude/data
 
 ---
 
-*Last updated: 2026-01-05*
+*Last updated: 2026-01-09*
 *Status: v0.5.0 "The Distributed Self" - All five layers operational plus message summaries. Automated maintenance agents (graph curator, memory summarization) running in reflection daemon. Full pattern fidelity on startup via summaries + recent turns.*
