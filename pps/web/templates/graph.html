@@ -28,13 +28,24 @@
         
         <div class="lg:w-64">
             <label for="layoutSelect" class="block text-sm font-medium text-gray-300 mb-2">Graph Layout</label>
-            <select id="layoutSelect" 
+            <select id="layoutSelect"
                     class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-400"
                     onchange="changeLayout(this.value)">
                 <option value="cose">Force-Directed</option>
                 <option value="breadthfirst">Hierarchical</option>
                 <option value="circle">Circular</option>
                 <option value="concentric">Concentric</option>
+            </select>
+        </div>
+
+        <div class="lg:w-64">
+            <label for="depthSelect" class="block text-sm font-medium text-gray-300 mb-2">Search Depth (hops)</label>
+            <select id="depthSelect"
+                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-400">
+                <option value="2" selected>2 hops (fast)</option>
+                <option value="3">3 hops</option>
+                <option value="4">4 hops</option>
+                <option value="5">5 hops (slow)</option>
             </select>
         </div>
     </div>
@@ -415,15 +426,16 @@ async function performSearch() {
 async function exploreEntity(entityName) {
     if (!entityName) return;
 
-    showStatus(`Exploring connections for "${entityName}"...`, 'info');
+    const depth = document.getElementById('depthSelect').value;
+    showStatus(`Exploring connections for "${entityName}" (${depth} hops)...`, 'info');
     document.getElementById('searchQuery').value = entityName;
 
     try {
-        const url = `/api/graph/explore/${encodeURIComponent(entityName)}?depth=2`;
-        const data = await tracedFetch('EXPLORE', `entity="${entityName}" depth=2`, url);
+        const url = `/api/graph/explore/${encodeURIComponent(entityName)}?depth=${depth}`;
+        const data = await tracedFetch('EXPLORE', `entity="${entityName}" depth=${depth}`, url);
 
         updateGraph(data.nodes, data.edges);
-        showStatus(`Found ${data.nodes.length} connected entities`, 'success');
+        showStatus(`Found ${data.nodes.length} connected entities (${depth} hops)`, 'success');
 
     } catch (error) {
         showStatus('Exploration failed: ' + error.message, 'error');
