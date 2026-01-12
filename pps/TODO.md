@@ -27,18 +27,20 @@
   - Added PPS server health indicator to dashboard
   - Shows connection status and last check time
 
+- [x] **Daemon Trace Logging** (2026-01-03)
+  - Added `daemon_traces` SQLite table for structured event logging
+  - TraceLogger class with standard event types
+  - Discord and reflection daemon instrumentation
+  - Web API endpoints (/api/traces, /api/traces/sessions)
+  - Traces page UI with expandable sessions
+
 ## In Progress
 
-- [ ] **Daemon Trace Logging** (Phase 3)
-  - Need `daemon_traces` SQLite table
-  - TraceLogger class for Discord and reflection daemons
-  - Would enable Reflections and Discord debug pages
+(empty - all active work tracked in GitHub issues)
 
 ## Backlog
 
-- [ ] **Reflections Page** - View autonomous reflection sessions
-- [ ] **Discord Debug Page** - Trace Discord message processing
-- [ ] **Split Heartbeat Navigation** - Separate Reflections + Discord nav items
+(See GitHub issues for active backlog - Issue #95, #91, #86, etc.)
 - [ ] **Real-time Updates** - WebSocket support for live dashboard updates
 - [ ] **Graph Enhancements**:
   - [ ] Time-based filtering for temporal exploration
