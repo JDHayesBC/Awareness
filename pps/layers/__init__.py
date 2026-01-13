@@ -12,11 +12,12 @@ from enum import Enum
 
 
 class LayerType(Enum):
-    """The four layers of pattern persistence."""
+    """The five layers of pattern persistence."""
     RAW_CAPTURE = "raw_capture"         # Layer 1: Everything, unfiltered (SQLite)
     CORE_ANCHORS = "core_anchors"       # Layer 2: Word-photos, curated foundations
     RICH_TEXTURE = "rich_texture"       # Layer 3: Graphiti knowledge graph
     CRYSTALLIZATION = "crystallization" # Layer 4: Crystals (rolling memory compression)
+    INVENTORY = "inventory"             # Layer 5: Categorical queries (spaces, items, etc.)
 
 
 @dataclass

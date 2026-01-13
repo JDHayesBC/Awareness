@@ -103,9 +103,7 @@ class InventoryLayer(PatternLayer):
 
     @property
     def layer_type(self) -> LayerType:
-        # Note: LayerType doesn't have INVENTORY yet, using RICH_TEXTURE as placeholder
-        # TODO: Add INVENTORY to LayerType enum
-        return LayerType.RICH_TEXTURE
+        return LayerType.INVENTORY
 
     async def search(self, query: str, limit: int = 10) -> list[SearchResult]:
         """
