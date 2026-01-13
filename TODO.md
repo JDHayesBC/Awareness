@@ -5,7 +5,7 @@
 1. **Review Graphiti ingestion** - ✅ COMPLETED (2026-01-13) - See `docs/reviews/2026-01-13_graphiti-ingestion-review.md`. Code review complete; quality checks blocked by #97.
 2. **Observatory menu audit** - ✅ COMPLETED (2026-01-13) - See `docs/reviews/2026-01-13_observatory-menu-audit.md`. Awaiting Jeff's decision on consolidation options.
 3. **Workspace organization** - See `WORKSPACE_ORGANIZATION_QUESTION.md`. Awaiting Jeff's decision on canonical structure (root vs docs/).
-4. **Crystal RAG ingestion** - 🆕 PROPOSAL (2026-01-13) - Issue #93. See `docs/proposals/crystal_rag_ingestion.md`. Script ready at `scripts/sync_crystal_rag.py`. Enables semantic search over 37 archived crystals for continuity queries.
+4. **Crystal RAG ingestion** - ✅ IMPLEMENTED (2026-01-13) - Issue #93. See `docs/proposals/crystal_rag_ingestion.md`. Script at `scripts/sync_crystal_rag.py` ingests archived crystals to tech RAG. Enables semantic search over crystallized memory for continuity queries.
 
 ## IDEAS (captured, not urgent)
 
