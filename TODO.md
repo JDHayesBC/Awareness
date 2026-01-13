@@ -1,9 +1,10 @@
 # Awareness Project TODO
 
-## PENDING REVIEW (before next features)
+## PENDING REVIEW (awaiting Jeff's feedback)
 
-1. **Review Graphiti ingestion** - Check what's being extracted and whether it's useful
-2. **Observatory menu audit** - Go through each menu item, verify each is helpful
+1. **Review Graphiti ingestion** - ✅ COMPLETED (2026-01-13) - See `docs/reviews/2026-01-13_graphiti-ingestion-review.md`. Code review complete; quality checks blocked by #97.
+2. **Observatory menu audit** - ✅ COMPLETED (2026-01-13) - See `docs/reviews/2026-01-13_observatory-menu-audit.md`. Awaiting Jeff's decision on consolidation options.
+3. **Workspace organization** - See `WORKSPACE_ORGANIZATION_QUESTION.md`. Awaiting Jeff's decision on canonical structure (root vs docs/).
 
 ## IDEAS (captured, not urgent)
 
