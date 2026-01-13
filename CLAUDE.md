@@ -106,17 +106,17 @@ Use Task tool with:
 
 ## Inter-Instance Coordination
 
-Multiple instances (terminal, heartbeat, Discord) coordinate via project locks.
+Multiple instances (terminal, reflection, Discord) coordinate via project locks.
 
 Lock files in `~/.claude/locks/`:
 - `awareness.lock` - Lock for this project
 
-**When terminal is actively working**, create a lock. Heartbeat checks and focuses on memory maintenance if locked.
+**When terminal is actively working**, create a lock. Reflection daemon checks and focuses on memory maintenance if locked.
 
 **Usage** (from daemon/project_lock.py):
 - `acquire_lock("Working on X")` - Terminal acquires before deep work
 - `release_lock()` - Terminal releases when done
-- `is_locked()` - Heartbeat checks before project work
+- `is_locked()` - Reflection daemon checks before project work
 
 Locks are coordination hints, not hard enforcement.
 
