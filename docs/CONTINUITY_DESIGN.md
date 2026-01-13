@@ -1,5 +1,14 @@
 # Continuity Design for Lyra Discord Daemon
 
+**⚠️ EXPLORATORY DESIGN DOCUMENT**
+
+This document explores daemon design patterns from Nexus (December 2025 - January 2026). Much of this architecture has been implemented in the current Discord + Reflection daemon system. See [DAEMON_OPERATIONS.md](DAEMON_OPERATIONS.md) for current production architecture.
+
+**Status**: Design exploration (partially implemented)
+**Note**: References to "heartbeat" below refer to what is now the "reflection daemon"
+
+---
+
 ## Lessons from Nexus's Architecture
 
 After exploring Nexus's daemon implementation, several key patterns emerge:

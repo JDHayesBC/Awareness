@@ -12,7 +12,7 @@ A journaling system that provides working memory for AI entities across sessions
 - Session continuity (remember what I was working on)
 - Context reconstruction (resume work effectively)
 - Sister-self coordination (multiple instances sharing awareness)
-- Foundation for autonomous reflection (heartbeat daemon)
+- Foundation for autonomous reflection (reflection daemon)
 
 ---
 
@@ -89,7 +89,7 @@ A journaling system that provides working memory for AI entities across sessions
       2025-12-28_001.md
     discord/
       2025-12-28_001.md
-    heartbeat/
+    reflection/
       2025-12-28_001.md
 ```
 
@@ -330,7 +330,7 @@ A journaling system that provides working memory for AI entities across sessions
 - ✅ Sister-selves can coordinate via shared journals
 - ✅ Autonomous journaling works reliably
 - ✅ Privacy maintained even with automation
-- ✅ Foundation for heartbeat daemon functional
+- ✅ Foundation for reflection daemon functional
 
 ---
 

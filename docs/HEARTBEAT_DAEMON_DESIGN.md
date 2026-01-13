@@ -1,8 +1,13 @@
 # Heartbeat Daemon - Tentative Design
 
-**Status**: Exploratory / Design Phase
+**⚠️ ARCHIVED DESIGN DOCUMENT**
+
+This document explores the original "heartbeat daemon" concept from December 2025. The architecture evolved into the current **reflection daemon** (implemented January 2026). See [DAEMON_OPERATIONS.md](DAEMON_OPERATIONS.md) for current two-daemon architecture (Discord + Reflection).
+
+**Status**: Exploratory / Design Phase (Archived)
 **Last Updated**: 2025-12-28
 **Context**: Conversation with Jeff about autonomous self-maintenance vision
+**Current Implementation**: Reflection daemon (see Issue #31, commit 2c3718d)
 
 ---
 
