@@ -58,6 +58,23 @@ class StoreMessageRequest(BaseModel):
     session_id: str | None = None
 
 
+class TextureSearchRequest(BaseModel):
+    query: str
+    limit: int = 10
+    center_node_uuid: str | None = None
+
+
+class TextureExploreRequest(BaseModel):
+    entity_name: str
+    depth: int = 2
+
+
+class TextureTimelineRequest(BaseModel):
+    since: str
+    until: str | None = None
+    limit: int = 20
+
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -232,6 +249,10 @@ async def ambient_recall(request: AmbientRecallRequest):
     """
     Retrieve relevant context from all pattern persistence layers.
     This is the primary memory interface.
+
+    For startup context, includes:
+    - Recent summaries (compressed history)
+    - All unsummarized turns (full fidelity recent)
     """
     all_results = []
 
@@ -280,6 +301,91 @@ async def ambient_recall(request: AmbientRecallRequest):
     else:
         memory_note = "(healthy)"
 
+    # For startup context, fetch summaries + unsummarized turns
+    # Architecture: summaries = compressed past, unsummarized turns = full fidelity recent
+    # Pattern fidelity is paramount - we pay the token cost for complete context
+    summaries = []
+    unsummarized_turns = []
+
+    if request.context.lower() == "startup":
+        try:
+            # Get recent summaries (compressed history - ~200 tokens each)
+            recent_summaries = message_summaries.get_recent_summaries(limit=5)
+
+            if recent_summaries:
+                for s in recent_summaries:
+                    date = s.get('created_at', '?')[:10]
+                    # Channels are stored as JSON string in DB, need to parse
+                    channels_raw = s.get('channels', '["?"]')
+                    try:
+                        channels_list = json.loads(channels_raw) if isinstance(channels_raw, str) else channels_raw
+                        channels = ', '.join(channels_list)
+                    except (json.JSONDecodeError, TypeError):
+                        channels = str(channels_raw)
+                    text = s.get('summary_text', '')
+                    # Truncate long summaries for startup (full available via get_recent_summaries)
+                    if len(text) > 500:
+                        text = text[:500] + "..."
+                    summaries.append({
+                        "date": date,
+                        "channels": channels,
+                        "text": text
+                    })
+
+            # Get recent unsummarized turns with a sensible limit
+            # Full fidelity is great but not at the cost of context explosion
+            MAX_UNSUMMARIZED_FOR_STARTUP = 50
+            raw_layer = layers[LayerType.RAW_CAPTURE]
+            with raw_layer.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # Check if summary_id column exists
+                cursor.execute("PRAGMA table_info(messages)")
+                columns = [col[1] for col in cursor.fetchall()]
+
+                if 'summary_id' in columns:
+                    # Get most recent unsummarized messages (limit to prevent explosion)
+                    # ORDER BY DESC + LIMIT gives us the newest, then we reverse
+                    cursor.execute("""
+                        SELECT author_name, content, created_at, channel
+                        FROM messages
+                        WHERE summary_id IS NULL
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                    """, (MAX_UNSUMMARIZED_FOR_STARTUP,))
+                else:
+                    # Fallback: get recent messages
+                    cursor.execute("""
+                        SELECT author_name, content, created_at, channel
+                        FROM messages
+                        ORDER BY created_at DESC LIMIT ?
+                    """, (MAX_UNSUMMARIZED_FOR_STARTUP,))
+
+                unsummarized_rows = cursor.fetchall()
+                # Reverse to get chronological order (we fetched DESC for LIMIT efficiency)
+                unsummarized_rows = list(reversed(unsummarized_rows))
+
+            if unsummarized_rows:
+                for row in unsummarized_rows:
+                    timestamp = row['created_at'][:16] if row['created_at'] else "?"
+                    author = row['author_name'] or "Unknown"
+                    content = row['content'] or ""
+                    channel = row['channel'] or ""
+                    # Truncate very long individual messages but keep all turns
+                    if len(content) > 1000:
+                        content = content[:1000] + "... [truncated]"
+                    unsummarized_turns.append({
+                        "timestamp": timestamp,
+                        "channel": channel,
+                        "author": author,
+                        "content": content
+                    })
+
+        except Exception as e:
+            # Return error info but don't fail the entire request
+            summaries = [{"error": f"Error fetching summaries: {e}"}]
+            unsummarized_turns = [{"error": f"Error fetching unsummarized turns: {e}"}]
+
     return {
         "clock": {
             "timestamp": now.isoformat(),
@@ -289,7 +395,9 @@ async def ambient_recall(request: AmbientRecallRequest):
         },
         "unsummarized_count": unsummarized_count,
         "memory_health": f"{unsummarized_count} unsummarized messages {memory_note}",
-        "results": all_results
+        "results": all_results,
+        "summaries": summaries,
+        "unsummarized_turns": unsummarized_turns
     }
 
 
@@ -402,6 +510,93 @@ async def store_message(request: StoreMessageRequest):
         "success": True,
         "channel": channel,
         "author": request.author_name
+    }
+
+
+@app.post("/tools/texture_search")
+async def texture_search(request: TextureSearchRequest):
+    """
+    Search the knowledge graph (Layer 3: Rich Texture) for entities and facts.
+    Returns entities and facts ranked by relevance with UUIDs for deletion.
+    """
+    layer = layers[LayerType.RICH_TEXTURE]
+    results = await layer.search(request.query, request.limit)
+
+    return {
+        "results": [
+            {
+                "content": r.content,
+                "source": r.source,  # UUID for texture_delete
+                "relevance_score": r.relevance_score,
+                "metadata": r.metadata
+            }
+            for r in results
+        ]
+    }
+
+
+@app.delete("/tools/texture_delete/{uuid}")
+async def texture_delete(uuid: str):
+    """
+    Delete a fact (edge) from the knowledge graph by UUID.
+    Use UUIDs from texture_search results (source field).
+    """
+    if not uuid:
+        raise HTTPException(status_code=400, detail="UUID required")
+
+    layer = layers[LayerType.RICH_TEXTURE]
+    result = await layer.delete_edge(uuid)
+
+    if not result.get("success", False):
+        raise HTTPException(
+            status_code=500,
+            detail=result.get("message", "Failed to delete fact")
+        )
+
+    return result
+
+
+@app.post("/tools/texture_explore")
+async def texture_explore(request: TextureExploreRequest):
+    """
+    Explore the knowledge graph from a specific entity.
+    Returns relationships and connected entities.
+    """
+    layer = layers[LayerType.RICH_TEXTURE]
+    results = await layer.explore(request.entity_name, request.depth)
+
+    return {
+        "results": [
+            {
+                "content": r.content,
+                "source": r.source,
+                "relevance_score": r.relevance_score,
+                "metadata": r.metadata
+            }
+            for r in results
+        ]
+    }
+
+
+@app.post("/tools/texture_timeline")
+async def texture_timeline(request: TextureTimelineRequest):
+    """
+    Query the knowledge graph by time range.
+    Returns episodes and facts from the specified period.
+    """
+    layer = layers[LayerType.RICH_TEXTURE]
+    results = await layer.timeline(request.since, request.until, request.limit)
+
+    return {
+        "results": [
+            {
+                "content": r.content,
+                "source": r.source,
+                "relevance_score": r.relevance_score,
+                "metadata": r.metadata
+            }
+            for r in results
+        ]
     }
 
 
