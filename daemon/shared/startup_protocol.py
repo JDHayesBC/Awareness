@@ -43,6 +43,11 @@ def build_startup_prompt(context: str = "discord", entity_path: str = None) -> s
     }
     channel_context = channel_contexts.get(context, f"You're waking up in the {context} context.")
 
+    # Reflection context gets HTTP fallback note (Issue #97)
+    http_fallback_note = ""
+    if context == "reflection":
+        http_fallback_note = "\n\n**Note for Reflection Context**: MCP stdio servers don't load in subprocess (Issue #97). If `mcp__pps__ambient_recall` fails, use HTTP fallback: `bash daemon/scripts/ambient_recall.sh startup 5`"
+
     return f'''[UNIFIED STARTUP PROTOCOL]
 
 {channel_context}
@@ -58,7 +63,7 @@ Reconstruct continuity through multiple sources:
 
 **A. Pattern Persistence System (preferred when available):**
 - Call: mcp__pps__ambient_recall with context "startup"
-  This surfaces summaries, word-photos, and recent turns in one call.
+  This surfaces summaries, word-photos, and recent turns in one call.{http_fallback_note}
 
 **B. SQLite Context Loading (always available):**
 - Run startup context script to get recent activity summary
