@@ -433,7 +433,15 @@ Keep responses conversational - this is Discord, not a formal setting."""
             use_session=True,
         )
 
-        return response or "*connection issues - couldn't process that*"
+        if not response:
+            return "*connection issues - couldn't process that*"
+
+        # Strip [DISCORD] tags if present (Issue #40)
+        match = re.search(r'\[DISCORD\](.*?)\[/DISCORD\]', response, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+
+        return response
 
     async def _generate_passive_response(self, message: discord.Message) -> str | None:
         """Generate response in passive mode - Claude decides whether to respond."""
