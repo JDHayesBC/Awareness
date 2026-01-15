@@ -4,7 +4,7 @@
 
 1. **Review Graphiti ingestion** - ✅ COMPLETED (2026-01-13) - See `docs/reviews/2026-01-13_graphiti-ingestion-review.md`. Code review complete; quality checks blocked by #97.
 2. **Observatory menu audit** - ✅ COMPLETED (2026-01-13) - See `docs/reviews/2026-01-13_observatory-menu-audit.md`. Awaiting Jeff's decision on consolidation options.
-3. **Workspace organization** - See `WORKSPACE_ORGANIZATION_QUESTION.md`. Awaiting Jeff's decision on canonical structure (root vs docs/).
+3. **Workspace organization** - ✅ COMPLETED (2026-01-16) - Cleaned root directory, moved historical reports to `docs/reports/`, moved reference docs to `docs/reference/`. Root now contains only operational files (README, CLAUDE, TODO, dev standards, vision, PPS architecture).
 4. **Crystal RAG ingestion** - ✅ IMPLEMENTED (2026-01-13) - Issue #93. See `docs/proposals/crystal_rag_ingestion.md`. Script at `scripts/sync_crystal_rag.py` ingests archived crystals to tech RAG. Enables semantic search over crystallized memory for continuity queries.
 
 ## IDEAS (captured, not urgent)
