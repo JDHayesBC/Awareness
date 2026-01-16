@@ -31,6 +31,56 @@
   - Rich texture (knowledge graph facts)
   - Crystallization (compressed memories)
 
+### summarize_messages.sh
+
+**Get unsummarized messages for agent summarization** (Issue #101).
+
+```bash
+./scripts/summarize_messages.sh [limit] [summary_type]
+
+# Examples:
+./scripts/summarize_messages.sh 50 work       # Get 50 unsummarized messages
+./scripts/summarize_messages.sh 100          # Default: work type
+```
+
+**Returns:**
+- Action type (summarization_needed, no_messages, insufficient_messages)
+- Message count and channels
+- Start/end message IDs
+- Formatted prompt with conversation text for agent to summarize
+- Next step instructions
+
+### store_summary.sh
+
+**Store a message summary** created by agent (Issue #101).
+
+```bash
+./scripts/store_summary.sh <summary_text> <start_id> <end_id> [channels_json] [summary_type]
+
+# Example:
+./scripts/store_summary.sh "Implemented memory summarization HTTP endpoints..." 1234 1250 '["terminal"]' work
+```
+
+**Returns:**
+- Success/failure status
+- Confirmation message with ID range
+
+### texture_search.sh
+
+**Search knowledge graph** for entities and facts.
+
+```bash
+./scripts/texture_search.sh <query> [limit]
+```
+
+### texture_delete.sh
+
+**Delete a fact from knowledge graph** by UUID.
+
+```bash
+./scripts/texture_delete.sh <uuid>
+```
+
 ---
 
 ## When to Use

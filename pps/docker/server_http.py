@@ -75,6 +75,19 @@ class TextureTimelineRequest(BaseModel):
     limit: int = 20
 
 
+class SummarizeMessagesRequest(BaseModel):
+    limit: int = 50
+    summary_type: str = "work"
+
+
+class StoreSummaryRequest(BaseModel):
+    summary_text: str
+    start_id: int
+    end_id: int
+    channels: list[str] = []
+    summary_type: str = "work"
+
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -598,6 +611,105 @@ async def texture_timeline(request: TextureTimelineRequest):
             for r in results
         ]
     }
+
+
+@app.post("/tools/summarize_messages")
+async def summarize_messages(request: SummarizeMessagesRequest):
+    """
+    Get unsummarized messages for agent summarization.
+
+    Returns message details and conversation text for the agent to summarize.
+    Agent should then call store_summary with the result.
+    """
+    # Get unsummarized messages
+    messages = message_summaries.get_unsummarized_messages(request.limit)
+
+    if not messages:
+        return {
+            "action": "no_messages",
+            "message": "No unsummarized messages found."
+        }
+
+    if len(messages) < 10:
+        return {
+            "action": "insufficient_messages",
+            "message": f"Only {len(messages)} unsummarized messages. Need at least 10 for summarization."
+        }
+
+    # Build conversation text and extract metadata
+    conversation = []
+    channels = set()
+    for msg in messages:
+        channels.add(msg['channel'])
+        timestamp = msg['created_at'][:16] if msg['created_at'] else "?"
+        author = msg['author_name']
+        content = msg['content']
+        conversation.append(f"[{timestamp}] {author}: {content}")
+
+    conversation_text = "\n".join(conversation)
+
+    # Create summarization prompt
+    prompt = f"""Summarize this conversation into a high-density summary that preserves:
+- Key technical decisions and outcomes
+- Important breakthroughs or insights
+- Major project developments
+- Blockers encountered and resolutions
+- Action items and next steps
+
+Remove:
+- "Let me check that file..." type filler
+- Repetitive debugging back-and-forth
+- Tool call noise
+- Casual conversation (unless significant)
+
+Conversation to summarize ({len(messages)} messages across channels: {', '.join(channels)}):
+
+{conversation_text}
+
+Create a concise summary that captures what actually happened and what was accomplished:"""
+
+    return {
+        "action": "summarization_needed",
+        "message_count": len(messages),
+        "channels": list(channels),
+        "start_id": messages[0]['id'],
+        "end_id": messages[-1]['id'],
+        "prompt": prompt,
+        "instruction": "Use Claude to create summary, then call store_summary with the result"
+    }
+
+
+@app.post("/tools/store_summary")
+async def store_summary(request: StoreSummaryRequest):
+    """
+    Store a message summary created by an agent.
+
+    Marks messages in the range as summarized and stores the summary text.
+    """
+    if not request.summary_text or request.start_id is None or request.end_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="summary_text, start_id, and end_id are required"
+        )
+
+    success = await message_summaries.create_and_store_summary(
+        request.summary_text,
+        request.start_id,
+        request.end_id,
+        request.channels,
+        request.summary_type
+    )
+
+    if success:
+        return {
+            "success": True,
+            "message": f"Summary stored successfully for messages {request.start_id}-{request.end_id}"
+        }
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to store summary"
+        )
 
 
 if __name__ == "__main__":
