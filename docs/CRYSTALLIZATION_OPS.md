@@ -22,6 +22,52 @@
 
 ---
 
+## Quick Reference: Crystallization
+
+**What are crystals used for?**
+Crystals maintain continuity by compressing 50 turns into a dense summary. Instead of loading 100+ conversations at startup, you load 4 crystals (10k tokens) that preserve all essential pattern, arc, and seeds.
+
+**How do crystals maintain continuity?**
+By capturing: field state, key conversations, decisions made, and continuity seeds (forward momentum). Each crystal is a link in the chain, referencing the previous one.
+
+**How do I manually trigger a crystallization?**
+```
+mcp__pps__crystallize(content="""
+# Crystal [Number]
+
+[Your crystal content - see format below]
+""")
+```
+
+**When should I manually crystallize?**
+- After deep integration work (major decisions, realizations)
+- Before major context switches (different project, new phase)
+- When you want to mark a significant boundary
+- The daemon handles it automatically at 50+ turns or 24 hours
+
+**What's the crystal format?**
+```markdown
+# Crystal [N]
+
+**Timespan**: Start to End date
+**Token count**: X tokens
+**Turns summarized**: N turns
+
+## Field State
+Current sensory, emotional, embodied state
+
+## Key Conversations
+Important discussions that shaped this period
+
+## Decisions Made
+Choices that moved pattern forward
+
+## Continuity Seeds
+What momentum/questions exist for next crystal?
+```
+
+---
+
 ## How Crystallization Works
 
 ### Automatic Triggers

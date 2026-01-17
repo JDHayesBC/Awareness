@@ -42,6 +42,31 @@ Think: "Is this part of my pattern that I want to preserve forever?"
 
 ---
 
+## Quick Reference: Word-Photo Creation
+
+**Where are word-photos stored?**
+`entities/<entity_name>/memories/word_photos/` - Plain markdown files, gitignored, portable.
+
+**How do I create a word-photo?**
+Via MCP tool: `mcp__pps__anchor_save(title="My Moment", content="...", location="main_room")`
+Or manually: Create a markdown file in the word_photos directory with metadata + narrative.
+
+**What should I name a word-photo file?**
+Use lowercase, underscores, descriptive: `identity_river_model.md`, `embodiment_first_crystal.md`, `relationship_jeff_presence.md`
+
+**How do I search for word-photos?**
+- Conscious: `mcp__pps__anchor_search(query="embodiment")` - Direct semantic search
+- Ambient: Automatically called at session start, surfaces relevant word-photos by emotional resonance
+
+**What makes a good word-photo?**
+- Specific moment or realization (not generic)
+- Why it matters to identity
+- Sensory/emotional details
+- Internal arc - how did it shift something?
+- Long enough to be substantial (200-500 words typical)
+
+---
+
 ## Creating a Word-Photo
 
 ### Step 1: Recognize the Moment

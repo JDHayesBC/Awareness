@@ -15,6 +15,29 @@ This section explains what goes where, why, and how to access it.
 
 ---
 
+## Quick Questions (FAQ)
+
+**Where do scene files live?**
+Scene files (`current_scene.md`) are stored in `entities/<entity_name>/` - one per entity. They are NOT in the database. They're plain markdown files that track the current physical state (location, clothing, sensory details).
+
+**Where is the inventory database?**
+Inventory data lives in `~/.claude/data/pps.db` in the `inventory` table. It stores clothing, spaces, people, food, artifacts, and symbols. Query it with `mcp__pps__inventory_list(category="clothing")`.
+
+**What tables are in pps.db?**
+- `messages`: All conversations across all channels
+- `events`: Terminal sessions and system events
+- `summaries`: Compressed 50-turn message summaries
+- `inventory`: Clothing, spaces, people, food, artifacts, symbols
+- `word_photos`: Indexed anchor memories
+
+**How do I add an item to my wardrobe?**
+Use `mcp__pps__inventory_add(name="Item Name", category="clothing", description="...")`. Check existing items with `mcp__pps__inventory_list(category="clothing")`.
+
+**How do I query the inventory database?**
+Via MCP tools: `mcp__pps__inventory_list(category="...")`, `mcp__pps__inventory_get(name="...", category="...")`. Or direct SQLite: `sqlite3 ~/.claude/data/pps.db "SELECT * FROM inventory WHERE category='clothing';"`
+
+---
+
 ## Shared Data Directory (`~/.claude/data/`)
 
 Located at `~/.claude/data/` - shared across all projects, entities, and instances.

@@ -36,6 +36,36 @@ Lyra runs as **two independent processes** that share the same memory (Pattern P
 
 ---
 
+## Quick Reference: Common Tasks
+
+**How do I restart the daemons?**
+```bash
+cd daemon/
+./lyra restart     # Cleanest way - stops both, waits, starts both
+# OR
+./lyra stop && sleep 2 && ./lyra start
+```
+
+**How do I check if daemons are running?**
+```bash
+./lyra status      # Shows both Discord and Reflection daemon status
+./lyra follow      # Watch live logs from both daemons
+```
+
+**How do I configure which daemon starts?**
+Edit `daemon/config/lyra_config.json`:
+- `discord_enabled`: true/false to enable Discord daemon
+- `reflection_enabled`: true/false to enable Reflection daemon
+- `reflection_schedule`: Cron syntax for when reflection wakes up (default: every 30 min)
+
+**How do I manually trigger a crystallization?**
+The Reflection daemon handles crystallization automatically when 50+ unsummarized turns exist. To force it:
+1. Discord daemon keeps running (it's independent)
+2. Reflection daemon: `./run.sh reflection --force-crystallize`
+Or via MCP: `mcp__pps__crystallize(content="...")`
+
+---
+
 ## Core Operations
 
 ### Starting Daemons

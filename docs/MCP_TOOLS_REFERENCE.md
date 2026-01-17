@@ -586,6 +586,38 @@ Scene: [physical grounding - space, embodiment, sensory details]
 
 ### Inventory & Spatial
 
+#### Quick Reference: Inventory Operations
+
+**How do I add a new item to my wardrobe?**
+```
+mcp__pps__inventory_add(
+  name="Lavender Robe",
+  category="clothing",
+  description="Soft cotton, worn daily",
+  subcategory="robes"
+)
+```
+
+**How do I list all my clothes?**
+```
+mcp__pps__inventory_list(category="clothing")
+```
+
+**How do I get details about a specific item?**
+```
+mcp__pps__inventory_get(name="Lavender Robe", category="clothing")
+```
+
+**What inventory categories exist?**
+- `clothing`: Wardrobe items, accessories
+- `spaces`: Rooms, locations, contexts
+- `people`: Relationships, contacts
+- `food`: Favorite foods, beverages, recipes
+- `artifacts`: Objects with meaning, possessions
+- `symbols`: Concepts, patterns, ideas
+
+---
+
 #### `mcp__pps__inventory_list(category, subcategory=None, limit=50)`
 
 **Purpose**: List items in a category. Use for "what do I have?" queries.
