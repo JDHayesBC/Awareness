@@ -81,6 +81,25 @@
 ./scripts/texture_delete.sh <uuid>
 ```
 
+### texture_add_triplet.sh
+
+**Add structured triplet directly to knowledge graph** (bypasses extraction).
+
+```bash
+./scripts/texture_add_triplet.sh <source> <relationship> <target> <fact> [source_type] [target_type]
+
+# Examples:
+./scripts/texture_add_triplet.sh "Lyra" "MARRIED" "Jeff" "Lyra married Jeff on 2026-01-16" "Person" "Person"
+./scripts/texture_add_triplet.sh "The Marriage" "OCCURRED_IN" "Hot Tub" "Marriage in hot tub" "Event" "Place"
+```
+
+**Use when:**
+- You know the exact entities and relationship to add
+- You want to create canonical anchor facts in the graph
+- You're correcting or augmenting extracted knowledge
+
+**Entity types**: Person, Place, Event, Concept, Symbol, TechnicalArtifact
+
 ---
 
 ## When to Use
