@@ -187,6 +187,12 @@ class LyraDiscordBot(commands.Bot):
 
         prompt = build_startup_prompt(context="discord", entity_path=ENTITY_PATH)
 
+        # Inject SQLite context (Issue #102)
+        sqlite_context = await self.conversation_manager.get_startup_context()
+        if sqlite_context:
+            prompt += f"\n\n{sqlite_context}"
+            print(f"[WARMUP] Added SQLite context to startup prompt")
+
         # This first call initializes the session
         response = await self.invoker.invoke(
             prompt,
