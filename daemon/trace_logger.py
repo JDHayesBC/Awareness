@@ -62,6 +62,8 @@ class EventTypes:
 
     # Reflection-specific
     REFLECTION_DECISION = "reflection_decision"
+    REFLECTION_SUCCESS = "reflection_success"
+    REFLECTION_TIMEOUT = "reflection_timeout"
     CRYSTALLIZATION = "crystallization"
 
     # Errors and warnings

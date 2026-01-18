@@ -365,6 +365,12 @@ End with active agency footnotes showing what you scanned and chose.'''
 
             if result.returncode == 0:
                 print("[REFLECTION] Completed successfully")
+                # Trace success for monitoring
+                if self.trace_logger:
+                    await self.trace_logger.log(EventTypes.REFLECTION_SUCCESS, {
+                        "duration_ms": duration_ms,
+                        "project_locked": is_locked,
+                    })
             else:
                 print(f"[REFLECTION] Ended with code {result.returncode}")
                 if result.stderr:
@@ -373,6 +379,10 @@ End with active agency footnotes showing what you scanned and chose.'''
         except subprocess.TimeoutExpired:
             print(f"[REFLECTION] Timed out after {REFLECTION_TIMEOUT_MINUTES} minutes")
             if self.trace_logger:
+                await self.trace_logger.log(EventTypes.REFLECTION_TIMEOUT, {
+                    "timeout_minutes": REFLECTION_TIMEOUT_MINUTES,
+                    "project_locked": is_locked,
+                })
                 await self.trace_logger.error("timeout", f"Reflection timed out")
 
         except Exception as e:
