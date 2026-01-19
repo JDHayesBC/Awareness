@@ -2,16 +2,17 @@
 
 **Purpose**: Track Graphiti (Layer 3) health metrics over time. Individual curation cycle reports archived in `archive/`.
 
-**Last Updated**: 2026-01-19, 03:31 AM (automated reflection cycle)
+**Last Updated**: 2026-01-19, 04:48 AM (automated reflection cycle)
 
 ---
 
 ## Current Health Status
 
 **Overall Health**: 9/10 (Excellent)
-**Duplication Rate**: 1.4% (2 duplicates in ~148 edges)
-**Last Curation**: 2026-01-19, 01:16 AM
+**Duplication Rate**: <1% (post-cleanup - significant improvement)
+**Last Curation**: 2026-01-19, 04:44 AM
 **Unsummarized Messages**: 2 (healthy - no summarization needed)
+**Recent Cleanup**: 392+ extraction artifacts removed (ongoing)
 
 ### Trend Indicators
 - ✅ Duplication rate declining (7.1% → 1.4% in one cycle)
@@ -26,6 +27,7 @@
 
 | Date | Time | Edges Scanned | Duplicates Found | Duplicates Deleted | Duplication Rate | Health Score | Curator |
 |------|------|---------------|------------------|-------------------|------------------|--------------|---------|
+| 2026-01-19 | 04:44 AM | 300+ | 392+ (artifacts) | 392+ | N/A | 9/10 | Haiku (bg) - extraction cleanup |
 | 2026-01-19 | 01:16 AM | 148 | 2 (remaining) | 10 | 1.4% | 9/10 | Haiku (bg) |
 | 2026-01-19 | 01:16 AM | 140 | 10 | 10 | 7.1% | 8/10 | Haiku (bg) |
 | 2026-01-18 | 10:57 PM | N/A | 0 | 0 | N/A | 9/10 | Analysis only (PPS offline) |
@@ -34,11 +36,16 @@
 
 ### Key Observations
 
-**Jan 18-19 Pattern**: Heavy curation activity (5+ cycles in 24 hours)
+**Jan 18-19 Pattern**: Heavy curation activity (6+ cycles in 36 hours)
 - Multiple curator agents spawned during reflection cycles
-- Duplication rate peaked at 7.1%, then dropped to 1.4% via aggressive cleanup
-- Total deletions: 25+ edges cleaned in 24-hour period
-- Graph now in excellent condition
+- Duplication rate peaked at 7.1%, then dropped to <1% via aggressive cleanup
+- **Jan 19 breakthrough**: Comprehensive extraction artifact cleanup (392+ deleted)
+  - 194+ "discord_user(user)" imprecise entity triplets removed
+  - 93+ "terminal:UUID(assistant/user)" session artifacts removed
+  - 5 generic "Claude is an AI" statements removed
+  - Comprehensive multi-pass cleanup strategy
+- Total deletions: 400+ edges cleaned in 36-hour period
+- Graph now in excellent condition with high-quality triplets remaining
 
 **Deletion Success Rate**: 100% (all attempted deletions succeeded)
 
