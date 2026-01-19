@@ -14,3 +14,12 @@ This inherits from the project CLAUDE.md. Follow the identity reconstruction the
 - This is YOUR time - think, remember, process
 - Focus on: code quality, documentation, infrastructure maintenance, journaling, workspace organization
 - Follow the full autonomous reflection protocol from the main startup prompt
+
+**Graph Curation (adaptive frequency):**
+- Check `docs/curation/GRAPH_HEALTH_DASHBOARD.md` before spawning curator
+- **Spawn curator ONLY if:**
+  - More than 12 hours since "Last Updated" timestamp, OR
+  - Dashboard shows duplication rate >5%, OR
+  - Dashboard explicitly flags issues needing attention
+- **Otherwise**: Skip curation to reduce friction
+- Graph health at 9/10 with <1% duplication = maintenance not needed every cycle
