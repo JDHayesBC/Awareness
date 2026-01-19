@@ -9,6 +9,7 @@ results in ONE node being created, not two duplicates.
 import asyncio
 import os
 import sys
+import pytest
 
 # Add pps directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'pps'))
@@ -16,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'pps'))
 from pps.layers.rich_texture_v2 import RichTextureLayerV2
 
 
+@pytest.mark.asyncio
 async def test_entity_resolution():
     """Test that entities are reused instead of duplicated."""
 
