@@ -23,6 +23,8 @@ Discord uses daemon/discord/, Reflection uses daemon/reflect/.
 import asyncio
 import subprocess
 import os
+import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional, Callable
@@ -31,6 +33,37 @@ from typing import Optional, Callable
 MAX_SESSION_INVOCATIONS = int(os.getenv("MAX_SESSION_INVOCATIONS", "12"))
 MAX_SESSION_DURATION_HOURS = float(os.getenv("MAX_SESSION_DURATION_HOURS", "2.0"))
 SESSION_IDLE_HOURS = float(os.getenv("SESSION_IDLE_HOURS", "4.0"))
+
+# File logger setup
+_file_logger = None
+
+
+def _get_file_logger():
+    """Get or create the file logger for claude_invoker."""
+    global _file_logger
+    if _file_logger is None:
+        log_dir = Path.home() / ".claude" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "discord_daemon.log"
+
+        _file_logger = logging.getLogger("claude_invoker")
+        _file_logger.setLevel(logging.DEBUG)
+
+        # Rotating file handler - 10MB max, 5 backups
+        handler = RotatingFileHandler(
+            log_file,
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding='utf-8'
+        )
+        formatter = logging.Formatter(
+            '%(asctime)s - %(levelname)s - %(funcName)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        handler.setFormatter(formatter)
+        _file_logger.addHandler(handler)
+
+    return _file_logger
 
 
 class PromptTooLongError(Exception):
@@ -137,7 +170,9 @@ class ClaudeInvoker:
 
     def reset_session(self, reason: str = "manual"):
         """Reset session state, forcing fresh context on next invocation."""
+        logger = _get_file_logger()
         print(f"[SESSION] Resetting session: {reason}")
+        logger.info(f"Session reset: {reason}")
         self.session_initialized = False
         self.session_invocation_count = 0
         self.session_start_time = None
@@ -163,6 +198,7 @@ class ClaudeInvoker:
         Returns:
             Claude's response or None on error
         """
+        logger = _get_file_logger()
         timestamp = datetime.now(timezone.utc).isoformat()
         invocation_id = f"{timestamp}_{context}"
         model = model_override or self.model
@@ -179,6 +215,8 @@ class ClaudeInvoker:
         print(f"[INVOKE:{context}] Starting Claude invocation at {timestamp}")
         print(f"[INVOKE:{context}] cwd={self.cwd}, model={model}, continue={should_continue}")
         print(f"[INVOKE:{context}] Prompt length: {len(prompt)} chars")
+
+        logger.info(f"Starting invocation - context={context}, model={model}, continue={should_continue}, prompt_len={len(prompt)}")
 
         # Trace: API call start
         api_start_time = None
@@ -229,6 +267,7 @@ class ClaudeInvoker:
 
             if prompt_too_long:
                 print(f"[INVOKE:{context}] PROMPT TOO LONG - resetting session")
+                logger.error(f"Prompt too long - context={context}, prompt_len={len(prompt)}, stderr={stderr_output[:500]}")
                 self.reset_session("prompt too long")
                 raise PromptTooLongError("Context window exceeded")
 
@@ -254,6 +293,8 @@ class ClaudeInvoker:
 
             if result.returncode != 0:
                 print(f"[INVOKE:{context}] CLI error: {result.stderr}")
+                logger.error(f"CLI returned non-zero - context={context}, returncode={result.returncode}, stderr={result.stderr[:500]}")
+                logger.error(f"Returning None due to CLI error")
                 return None
 
             # Update session tracking
@@ -267,6 +308,8 @@ class ClaudeInvoker:
             self.session_invocation_count += 1
             print(f"[INVOKE:{context}] Session invocations: {self.session_invocation_count}/{self.max_invocations}")
 
+            logger.info(f"Invocation successful - context={context}, response_len={len(response)}, session_count={self.session_invocation_count}/{self.max_invocations}")
+
             # Trace: API call complete
             if self.trace_logger and api_start_time:
                 await self.trace_logger.api_call_complete(
@@ -279,21 +322,25 @@ class ClaudeInvoker:
             return response
 
         except PromptTooLongError:
+            logger.error(f"PromptTooLongError - context={context}")
             if self.trace_logger:
                 await self.trace_logger.api_call_error("prompt_too_long", model)
             raise
         except subprocess.TimeoutExpired:
             print(f"[INVOKE:{context}] TIMEOUT after {timeout}s")
+            logger.error(f"Timeout after {timeout}s - context={context}, returning None")
             if self.trace_logger:
                 await self.trace_logger.api_call_error("timeout", model)
             return None
         except FileNotFoundError:
             print(f"[INVOKE:{context}] Claude CLI not found")
+            logger.error(f"Claude CLI not found - context={context}, returning None")
             if self.trace_logger:
                 await self.trace_logger.api_call_error("cli_not_found", model)
             return None
         except Exception as e:
             print(f"[INVOKE:{context}] Error: {e}")
+            logger.exception(f"Unexpected error - context={context}, returning None")
             if self.trace_logger:
                 await self.trace_logger.api_call_error(str(e), model)
             return None

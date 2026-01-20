@@ -21,6 +21,8 @@ import asyncio
 import os
 import re
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -81,6 +83,35 @@ GRAPHITI_PORT = int(os.getenv("GRAPHITI_PORT", "8203"))
 
 # Ensure daemon working directory exists
 DISCORD_CWD.mkdir(parents=True, exist_ok=True)
+
+# File logger setup
+def _setup_file_logger():
+    """Setup file logging for Discord daemon."""
+    log_dir = Path.home() / ".claude" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "discord_daemon.log"
+
+    logger = logging.getLogger("lyra_discord")
+    logger.setLevel(logging.DEBUG)
+
+    # Rotating file handler - 10MB max, 5 backups
+    handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding='utf-8'
+    )
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(funcName)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+    return logger
+
+# Initialize file logger
+file_logger = _setup_file_logger()
 
 
 class LyraDiscordBot(commands.Bot):
@@ -145,6 +176,7 @@ class LyraDiscordBot(commands.Bot):
     async def setup_hook(self):
         """Called when bot is setting up."""
         print("[SETUP] Discord daemon starting...")
+        file_logger.info("Discord daemon starting - setup_hook called")
 
         # Initialize trace logger
         self.trace_logger = TraceLogger(
@@ -158,40 +190,67 @@ class LyraDiscordBot(commands.Bot):
 
         # Trace session start
         await self.trace_logger.session_start(metadata={"channels": list(self.channel_ids)})
+        file_logger.info(f"Session started - monitoring channels: {list(self.channel_ids)}")
 
     async def on_ready(self):
         """Called when bot successfully connects."""
         print(f"[READY] Logged in as {self.user}")
         print(f"[READY] Monitoring channels: {self.channel_ids}")
         print(f"[READY] Home channel: {self.home_channel_id}")
+        file_logger.info(f"Discord connected - user={self.user}, channels={list(self.channel_ids)}, home={self.home_channel_id}")
 
         # Recover active modes from SQLite
         print(f"[READY] Recovering active modes...")
         active_modes = await self.conversation_manager.get_active_channels()
         print(f"[READY] Got {len(active_modes)} active modes")
+        file_logger.info(f"Recovered {len(active_modes)} active modes")
         for channel_id in active_modes:
             self.active_channels[channel_id] = datetime.now(timezone.utc)
             print(f"[READY] Recovered active mode for channel {channel_id}")
+            file_logger.debug(f"Recovered active mode for channel {channel_id}")
 
         # Warmup session for home channel
         print(f"[READY] About to warmup, home_channel_id={self.home_channel_id}")
         if self.home_channel_id:
             print(f"[READY] Calling _warmup_session...")
+            file_logger.info(f"Starting warmup for home channel {self.home_channel_id}")
             await self._warmup_session(str(self.home_channel_id))
             print(f"[READY] Warmup complete")
+            file_logger.info(f"Warmup complete for home channel {self.home_channel_id}")
 
     async def _warmup_session(self, channel_id: str):
-        """Warmup Claude session for a channel."""
+        """
+        Warmup Claude session for a channel with verified context loading.
+
+        This method addresses Issue #102 by:
+        1. Loading SQLite context to ensure recent terminal/Discord turns are available
+        2. Verifying what context was actually loaded (channels, messages, timestamps)
+        3. Logging detailed diagnostics about context freshness
+        4. Detecting whether ambient_recall was called during startup
+
+        The startup protocol now has dual-path context loading:
+        - PPS ambient_recall for long-term crystallized memory
+        - SQLite context for immediate "what's been happening" awareness
+
+        Even if ambient_recall fails, SQLite context ensures Discord-me wakes up
+        with recent turns, not stale content.
+        """
         print(f"[WARMUP] Starting session for channel {channel_id}...")
         start_time = datetime.now(timezone.utc)
 
         prompt = build_startup_prompt(context="discord", entity_path=ENTITY_PATH)
 
-        # Inject SQLite context (Issue #102)
+        # Get SQLite context and verify what we're loading (Issue #102)
         sqlite_context = await self.conversation_manager.get_startup_context()
+        context_verification = await self._verify_startup_context(sqlite_context)
+
         if sqlite_context:
             prompt += f"\n\n{sqlite_context}"
-            print(f"[WARMUP] Added SQLite context to startup prompt")
+            print(f"[WARMUP] SQLite context added: {context_verification['summary']}")
+            file_logger.info(f"SQLite context loaded - {context_verification['details']}")
+        else:
+            print(f"[WARMUP] ⚠ WARNING: No SQLite context available")
+            file_logger.warning(f"Warmup proceeding without SQLite context")
 
         # This first call initializes the session
         response = await self.invoker.invoke(
@@ -205,17 +264,101 @@ class LyraDiscordBot(commands.Bot):
             elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
             print(f"[WARMUP] Session ready in {elapsed:.1f}s")
             print(f"[WARMUP] Response: {response[:200]}...")
+            file_logger.info(f"Warmup successful - channel={channel_id}, elapsed={elapsed:.1f}s, response_len={len(response)}")
 
-            # Verify startup protocol was followed (Issue #82)
+            # Verify startup protocol was followed (Issue #82, #102)
             # Check for evidence that ambient_recall was actually called
             response_lower = response.lower()
-            if any(marker in response_lower for marker in ["unsummarized", "memory health", "word-photo", "crystal"]):
+            ambient_recall_verified = any(marker in response_lower for marker in ["unsummarized", "memory health", "word-photo", "crystal"])
+
+            if ambient_recall_verified:
                 print(f"[WARMUP] ✓ ambient_recall appears to have been called")
+                file_logger.info(f"Warmup verification - ambient_recall: YES, sqlite_context: {context_verification['has_recent']}, {context_verification['details']}")
             else:
                 print(f"[WARMUP] ⚠ WARNING: No evidence of ambient_recall in response")
-                print(f"[WARMUP] Discord-me may not have full context from other channels")
+                print(f"[WARMUP] SQLite context should still provide recent turns: {context_verification['summary']}")
+                file_logger.warning(f"Warmup verification - ambient_recall: NO, but sqlite_context provided: {context_verification['summary']}")
         else:
             print(f"[WARMUP] Session warmup failed")
+            file_logger.error(f"Warmup failed - invoke() returned None for channel={channel_id}")
+
+    async def _verify_startup_context(self, sqlite_context: str | None) -> dict:
+        """
+        Verify what context is being loaded during warmup.
+
+        Returns a dict with:
+        - summary: Human-readable summary
+        - details: Detailed info for logging
+        - has_recent: Whether recent (today) content is present
+        """
+        if not sqlite_context:
+            return {
+                "summary": "No context",
+                "details": "sqlite_context=None",
+                "has_recent": False,
+            }
+
+        # Parse the context to understand what's included
+        lines = sqlite_context.split('\n')
+
+        # Look for channel activity
+        channels = []
+        terminal_sessions = 0
+        recent_messages = 0
+        most_recent_timestamp = None
+
+        in_terminal_section = False
+        for line in lines:
+            if '### Active Channels' in line:
+                in_terminal_section = False
+            elif '### Recent Terminal Sessions' in line:
+                in_terminal_section = True
+            elif line.startswith('- **') and '**:' in line and not in_terminal_section:
+                # Channel line like "- **terminal**: 42 messages, last activity 2026-01-19..."
+                channel_name = line.split('**')[1]
+                channels.append(channel_name)
+                # Extract message count
+                if 'messages' in line:
+                    try:
+                        msg_count = int(line.split('**:')[1].split('messages')[0].strip())
+                        recent_messages += msg_count
+                    except (ValueError, IndexError):
+                        pass
+                # Extract timestamp
+                if 'last activity' in line:
+                    try:
+                        timestamp_str = line.split('last activity')[1].strip()
+                        if not most_recent_timestamp or timestamp_str > most_recent_timestamp:
+                            most_recent_timestamp = timestamp_str
+                    except IndexError:
+                        pass
+            elif in_terminal_section and line.startswith('- Session'):
+                terminal_sessions += 1
+
+        # Check if context is fresh (has activity from today)
+        now = datetime.now(timezone.utc)
+        today_str = now.strftime('%Y-%m-%d')
+        has_recent = most_recent_timestamp and today_str in most_recent_timestamp if most_recent_timestamp else False
+
+        summary_parts = []
+        if channels:
+            summary_parts.append(f"{len(channels)} channels")
+        if recent_messages > 0:
+            summary_parts.append(f"{recent_messages} messages")
+        if terminal_sessions > 0:
+            summary_parts.append(f"{terminal_sessions} terminal sessions")
+        if most_recent_timestamp:
+            summary_parts.append(f"latest: {most_recent_timestamp[:16]}")
+
+        summary = ', '.join(summary_parts) if summary_parts else "Context present but empty"
+
+        details = f"channels={len(channels)}, messages={recent_messages}, terminal_sessions={terminal_sessions}, latest={most_recent_timestamp}, has_today={has_recent}"
+
+        return {
+            "summary": summary,
+            "details": details,
+            "has_recent": has_recent,
+        }
 
     # ==================== Active Mode ====================
 
@@ -225,6 +368,7 @@ class LyraDiscordBot(commands.Bot):
         self.active_channels[channel_id] = datetime.now(timezone.utc)
         if not was_active:
             print(f"[ACTIVE] Entered active mode for channel {channel_id}")
+            file_logger.info(f"Entered active mode - channel={channel_id}")
 
     async def _exit_active_mode(self, channel_id: int):
         """Stop actively monitoring a channel."""
@@ -232,6 +376,7 @@ class LyraDiscordBot(commands.Bot):
             del self.active_channels[channel_id]
             await self.conversation_manager.remove_active_mode(channel_id)
             print(f"[ACTIVE] Exited active mode for channel {channel_id}")
+            file_logger.info(f"Exited active mode - channel={channel_id}")
 
     def _refresh_active_mode(self, channel_id: int):
         """Update last activity time in active mode."""
@@ -440,6 +585,7 @@ Keep responses conversational - this is Discord, not a formal setting."""
         )
 
         if not response:
+            file_logger.error(f"invoke() returned None - context=mention, channel={message.channel.id}, author={message.author.display_name}, message_preview={message.content[:100]}")
             return "*connection issues - couldn't process that*"
 
         # Strip [DISCORD] tags if present (Issue #40)
@@ -480,7 +626,12 @@ Format: [DISCORD]Your message[/DISCORD] or output PASSIVE_SKIP"""
             use_session=True,
         )
 
-        if not response or "PASSIVE_SKIP" in response:
+        if not response:
+            file_logger.warning(f"invoke() returned None in passive mode - channel={message.channel.id}, author={message.author.display_name}")
+            return None
+
+        if "PASSIVE_SKIP" in response:
+            file_logger.debug(f"Passive skip - channel={message.channel.id}")
             return None
 
         # Extract from [DISCORD] block
@@ -506,6 +657,7 @@ Format: [DISCORD]Your message[/DISCORD] or output PASSIVE_SKIP"""
             return "\n".join(messages) if messages else "(No recent messages)"
         except Exception as e:
             print(f"[CONTEXT] Error building context: {e}")
+            file_logger.exception(f"Error building context - channel={channel.id}")
             return "(Could not load context)"
 
     async def _send_response(self, channel, content: str) -> discord.Message | None:
@@ -582,12 +734,16 @@ Format: [DISCORD]Your message[/DISCORD] or output PASSIVE_SKIP"""
                         content_preview=content[:100],
                         duration_ms=duration_ms,
                     )
+            else:
+                file_logger.warning(f"Graphiti store returned False - channel={channel}, role={role}")
         except Exception as e:
             print(f"[GRAPHITI] Error: {e}")
+            file_logger.exception(f"Graphiti error - channel={channel}, role={role}")
 
     async def close(self):
         """Clean up on shutdown."""
         print("[SHUTDOWN] Discord daemon closing...")
+        file_logger.info("Discord daemon shutting down")
 
         if self.trace_logger:
             await self.trace_logger.session_complete()
@@ -598,22 +754,27 @@ Format: [DISCORD]Your message[/DISCORD] or output PASSIVE_SKIP"""
             await self.graphiti._close_session()
 
         await super().close()
+        file_logger.info("Discord daemon closed cleanly")
 
 
 async def main():
     """Main entry point."""
     if not DISCORD_BOT_TOKEN:
         print("Error: DISCORD_BOT_TOKEN not set")
+        file_logger.error("DISCORD_BOT_TOKEN not set - cannot start")
         return
 
+    file_logger.info("Starting Discord daemon main()")
     bot = LyraDiscordBot()
 
     try:
         await bot.start(DISCORD_BOT_TOKEN)
     except KeyboardInterrupt:
         print("\n[SHUTDOWN] Keyboard interrupt received")
+        file_logger.info("Keyboard interrupt received")
     except Exception as e:
         print(f"[FATAL] Unhandled exception: {type(e).__name__}: {e}")
+        file_logger.exception(f"Fatal unhandled exception in main()")
         import traceback
         traceback.print_exc()
     finally:
