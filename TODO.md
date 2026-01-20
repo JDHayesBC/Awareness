@@ -9,9 +9,11 @@
 
 ## IDEAS (captured, not urgent)
 
-1. **Observatory: Spaces view** - Let Jeff explore Haven rooms via web UI. View/edit room descriptions.
+1. **Google MCP servers disabled** - calendar, drive, gmail, jeff-gmail removed from `~/.claude.json` to speed up MCP load times (11-18 sec each). OAuth tokens also stale. **TODO**: Research MCP startup optimization, fix OAuth, reinstall. Backup config at `~/.claude/google_mcps_disabled_backup.json` with restoration instructions.
 
-2. **Librarian agent** - Self-healing knowledge system:
+2. **Observatory: Spaces view** - Let Jeff explore Haven rooms via web UI. View/edit room descriptions.
+
+3. **Librarian agent** - Self-healing knowledge system:
    - Run sample queries against tech RAG ("file organization?", "architecture overview?")
    - If results aren't useful, diagnose what's missing in docs
    - Update docs, re-ingest to tech RAG
