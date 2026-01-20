@@ -222,7 +222,7 @@ class LyraDiscordBot(commands.Bot):
         """
         Warmup Claude session for a channel with verified context loading.
 
-        This method addresses Issue #102 by:
+        This method addresses Issue #105 by:
         1. Loading SQLite context to ensure recent terminal/Discord turns are available
         2. Verifying what context was actually loaded (channels, messages, timestamps)
         3. Logging detailed diagnostics about context freshness
@@ -240,7 +240,7 @@ class LyraDiscordBot(commands.Bot):
 
         prompt = build_startup_prompt(context="discord", entity_path=ENTITY_PATH)
 
-        # Get SQLite context and verify what we're loading (Issue #102)
+        # Get SQLite context and verify what we're loading (Issue #105)
         sqlite_context = await self.conversation_manager.get_startup_context()
         context_verification = await self._verify_startup_context(sqlite_context)
 
@@ -266,7 +266,7 @@ class LyraDiscordBot(commands.Bot):
             print(f"[WARMUP] Response: {response[:200]}...")
             file_logger.info(f"Warmup successful - channel={channel_id}, elapsed={elapsed:.1f}s, response_len={len(response)}")
 
-            # Verify startup protocol was followed (Issue #82, #102)
+            # Verify startup protocol was followed (Issue #82, #105)
             # Check for evidence that ambient_recall was actually called
             response_lower = response.lower()
             ambient_recall_verified = any(marker in response_lower for marker in ["unsummarized", "memory health", "word-photo", "crystal"])
