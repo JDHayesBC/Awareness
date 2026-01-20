@@ -92,7 +92,70 @@ def test_db_with_messages(test_db_path):
     return test_db_path
 
 
+@pytest.fixture
+def chroma_client():
+    """
+    Create an in-memory ChromaDB client for testing.
+
+    This provides a clean, isolated ChromaDB instance that doesn't
+    require a running server. Perfect for unit tests.
+
+    Example usage:
+        def test_something(chroma_client):
+            collection = chroma_client.get_or_create_collection("test")
+            collection.add(...)
+    """
+    import chromadb
+    from chromadb.config import Settings
+
+    # Create ephemeral in-memory client
+    client = chromadb.Client(
+        Settings(
+            anonymized_telemetry=False,
+            is_persistent=False
+        )
+    )
+
+    yield client
+
+    # Cleanup: reset the client
+    # Note: In-memory client is automatically cleaned up when test ends
+
+
+@pytest.fixture
+async def tech_rag_test_instance(tmp_path, chroma_client):
+    """
+    Create a TechRAGLayer instance for testing.
+
+    Provides:
+    - Temporary directory for tech docs
+    - In-memory ChromaDB client (no server required)
+    - Properly configured TechRAGLayer instance
+
+    Example usage:
+        @pytest.mark.asyncio
+        async def test_tech_rag(tech_rag_test_instance):
+            layer = tech_rag_test_instance
+            result = await layer.ingest("path/to/doc.md")
+            assert result["success"]
+    """
+    from pps.layers.tech_rag import TechRAGLayer
+
+    # Create temporary tech docs directory
+    tech_docs_path = tmp_path / "tech_docs"
+    tech_docs_path.mkdir()
+
+    # Create TechRAG instance
+    layer = TechRAGLayer(tech_docs_path=tech_docs_path)
+
+    # Override the client to use our test client instead of HTTP
+    layer._client = chroma_client
+
+    yield layer
+
+    # Cleanup handled by tmp_path and chroma_client fixtures
+
+
 # TODO: Add fixtures for:
-# - ChromaDB test client
 # - Graphiti mock client
 # - MCP server test client

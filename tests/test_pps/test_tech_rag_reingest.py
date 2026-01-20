@@ -10,30 +10,10 @@ Issue #89: https://github.com/JDHayesBC/Awareness/issues/89
 import pytest
 import tempfile
 from pathlib import Path
-from pps.layers.tech_rag import TechRAGLayer
-
-
-@pytest.fixture
-async def tech_rag():
-    """Create a TechRAG instance pointed at test ChromaDB."""
-    # Use test ChromaDB instance (assumes conftest.py sets this up)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tech_rag = TechRAGLayer(
-            tech_docs_path=Path(tmpdir) / "tech_docs",
-            chroma_host="localhost",
-            chroma_port=8000
-        )
-        yield tech_rag
-
-        # Cleanup: delete any test documents
-        try:
-            await tech_rag.delete_doc("test_doc_reingest")
-        except:
-            pass
 
 
 @pytest.mark.asyncio
-async def test_reingest_deletes_old_chunks(tech_rag):
+async def test_reingest_deletes_old_chunks(tech_rag_test_instance):
     """
     Test that re-ingesting a modified document deletes old chunks.
 
@@ -44,6 +24,8 @@ async def test_reingest_deletes_old_chunks(tech_rag):
     4. Re-ingest modified document
     5. Verify old chunks are gone and new chunks exist
     """
+    tech_rag = tech_rag_test_instance
+
     # Create initial document
     with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
         f.write("""# Test Document
@@ -132,12 +114,14 @@ More new text here.
 
 
 @pytest.mark.asyncio
-async def test_reingest_unchanged_skips(tech_rag):
+async def test_reingest_unchanged_skips(tech_rag_test_instance):
     """
     Test that re-ingesting an unchanged document skips re-indexing.
 
     Should detect same content hash and return "unchanged" action.
     """
+    tech_rag = tech_rag_test_instance
+
     # Create document
     with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
         f.write("""# Test Document
