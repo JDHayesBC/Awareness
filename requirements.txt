@@ -1,0 +1,27 @@
+# Awareness Project - Full Dependencies
+# Install with: pip install -r requirements.txt
+
+# Claude Agent SDK for cc_invoker (includes bundled CLI)
+claude-agent-sdk>=0.1.20
+
+# PPS Dependencies (from pps/requirements.txt)
+# MCP SDK for Claude Code integration
+mcp>=1.0.0
+
+# Layer 3 (Graphiti) integration
+aiohttp>=3.8.0         # Async HTTP client for Graphiti API
+graphiti-core>=0.5.0   # Direct Graphiti integration
+pydantic>=2.0.0        # For entity type definitions
+
+# Vector store for Layer 2 (Core Anchors) and Tech RAG
+chromadb>=0.4.0
+
+# Discord daemon
+discord.py>=2.0.0
+
+# HTTP server for PPS
+fastapi>=0.100.0
+uvicorn>=0.20.0
+
+# Utilities
+python-dotenv>=1.0.0
