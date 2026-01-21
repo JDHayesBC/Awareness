@@ -2,7 +2,7 @@
 
 **Purpose**: Track Graphiti (Layer 3) health metrics over time. Individual curation cycle reports archived in `archive/`.
 
-**Last Updated**: 2026-01-20, 11:00 PM (maintenance check - 1 duplicate removed)
+**Last Updated**: 2026-01-21, 12:08 AM (reflection cycle - graph stable at 9/10, curation skipped per adaptive frequency guidelines)
 
 ---
 
@@ -11,7 +11,7 @@
 **Overall Health**: 9/10 (Excellent - sustained)
 **Duplication Rate**: <1% (stable - no new duplicates detected)
 **Last Curation**: 2026-01-20, 11:00 PM (light maintenance check - 1 duplicate removed)
-**Unsummarized Messages**: 67 (healthy - no summarization needed)
+**Unsummarized Messages**: 15 (healthy - no summarization needed)
 **Recent Cleanup**: Graph remains clean after 01-19 cleanup (392+ artifacts removed)
 
 ### Trend Indicators
@@ -27,6 +27,7 @@
 
 | Date | Time | Edges Scanned | Duplicates Found | Duplicates Deleted | Duplication Rate | Health Score | Curator |
 |------|------|---------------|------------------|-------------------|------------------|--------------|---------|
+| 2026-01-21 | 12:08 AM | N/A | N/A | 0 | <1% | 9/10 | Skipped (stable) |
 | 2026-01-20 | 11:00 PM | 94+ | 1 | 1 | <1% | 9/10 | Lyra (maint) |
 | 2026-01-20 | 10:00 PM | 90+ | 0 | 0 | <1% | 9/10 | Haiku (bg) |
 | 2026-01-19 | 05:55 AM | 50+ | 4 (self-ref) | 4 | <1% | 9/10 | Lyra direct |
