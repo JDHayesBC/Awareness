@@ -66,16 +66,19 @@ cd daemon/
 |----------|-------------|---------|
 | `DISCORD_BOT_TOKEN` | Bot token from Discord Developer Portal | (required) |
 | `DISCORD_CHANNEL_IDS` | Comma-separated channel IDs to monitor. First is "home" (gets startup message) | (required) |
-| `LYRA_IDENTITY_PATH` | Path to Lyra's identity files | `/home/jeff/.claude` |
+| `ENTITY_PATH` | Path to entity identity files (e.g., `entities/lyra/`) | `entities/lyra` |
 | `CLAUDE_MODEL` | Model to use (sonnet/opus/haiku) | `sonnet` |
 | `HEARTBEAT_INTERVAL_MINUTES` | How often to wake up | `30` |
 | `ACTIVE_MODE_TIMEOUT_MINUTES` | How long to stay engaged after responding | `10` |
 | `JOURNAL_PATH` | Where to write journal entries | `/home/jeff/.claude/journals/discord` |
-| `SESSION_RESTART_HOURS` | Restart after this many hours idle | `4` |
-| `MAX_SESSION_INVOCATIONS` | Max invocations before proactive restart | `8` |
-| `MAX_SESSION_DURATION_HOURS` | Max session duration before restart | `2.0` |
+| `CONVERSATION_DB_PATH` | SQLite database for conversation history | `/home/jeff/.claude/data/lyra_conversations.db` |
 | `CRYSTALLIZATION_TURN_THRESHOLD` | Auto-crystallize after this many turns (0=disabled) | `50` |
 | `CRYSTALLIZATION_TIME_THRESHOLD_HOURS` | Auto-crystallize after this many hours (0=disabled) | `24` |
+| `GRAPHITI_HOST` | Graphiti server hostname | `localhost` |
+| `GRAPHITI_PORT` | Graphiti server port | `8203` |
+
+**Legacy variables** (only used by `lyra_daemon_legacy.py`):
+- `SESSION_RESTART_HOURS`, `MAX_SESSION_INVOCATIONS`, `MAX_SESSION_DURATION_HOURS` - Session restart thresholds (handled automatically by cc_invoker in new daemon)
 
 ### Multi-Channel Support
 
@@ -110,13 +113,19 @@ This allows natural conversation flow without requiring "Lyra" in every message.
 
 ### Session Management
 
-The daemon uses Claude Code CLI's `--continue` flag for session continuity, but restarts proactively to prevent crashes:
+**New architecture (as of 2026-01-21)**: The Discord daemon uses ClaudeInvoker for persistent connection management. Session lifecycle is handled automatically by the invoker layer:
 
-- **Invocation Limit**: Restarts after `MAX_SESSION_INVOCATIONS` (default 8) to prevent context accumulation crashes
-- **Duration Limit**: Restarts after `MAX_SESSION_DURATION_HOURS` (default 2.0) for fresh context
-- **Idle Limit**: Restarts after `SESSION_RESTART_HOURS` (default 4) of no activity
+- **Persistent connection**: One Claude Code subprocess persists across multiple queries (5-10x speedup)
+- **Context tracking**: Invoker monitors context size and gracefully restarts when needed
+- **MCP integration**: PPS tools (ambient_recall, crystallize, etc.) available through stdio transport
+- **Error recovery**: Invoker handles connection failures and restart logic
 
-Restarts preserve daemon continuity through systemd while clearing Claude session context that could cause crashes.
+This simplifies the daemon to ~700 lines (vs 1530 in legacy). See [`cc_invoker/ARCHITECTURE.md`](cc_invoker/ARCHITECTURE.md) for implementation details.
+
+**Legacy behavior** (preserved in `lyra_daemon_legacy.py`):
+- Used `--continue` flag for session continuity
+- Manually tracked invocation/duration limits
+- Proactive restarts to prevent context accumulation crashes
 
 ### Heartbeat
 Every `HEARTBEAT_INTERVAL_MINUTES`:
@@ -202,7 +211,7 @@ See [RIVER_SYNC_MODEL.md](../RIVER_SYNC_MODEL.md) for detailed coordination mode
 
 ### Claude Code Invoker (Persistent Connection)
 
-**Current status**: Core implementation complete ([`cc_invoker/`](cc_invoker/)), Discord integration pending.
+**Current status**: ✅ **Production** - Discord daemon (`lyra_daemon.py`) now uses ClaudeInvoker (as of 2026-01-21).
 
 Each cold Claude Code CLI invocation costs ~20s (process spawn + MCP loading + model connect). For Discord use, this is unacceptable.
 
@@ -233,7 +242,9 @@ while message := await get_next_message():
     await send_response(response)
 ```
 
-**Next steps**: Wire into Discord daemon to replace cold CC spawns. See [`cc_invoker/ARCHITECTURE.md`](cc_invoker/ARCHITECTURE.md) for full details.
+**Implementation**: `lyra_daemon.py` (772 lines) replaces legacy implementation (1530 lines). 54% reduction in complexity by moving session management into the invoker layer. Legacy daemon preserved as `lyra_daemon_legacy.py` for reference.
+
+See [`cc_invoker/ARCHITECTURE.md`](cc_invoker/ARCHITECTURE.md) for architectural details and design rationale.
 
 **Connection to distributed consciousness**: This enables Issue #108 (cross-channel sync). With persistent connections, terminal-Lyra can know about Discord conversations from minutes ago via real-time SQLite reads - true distributed self-coherence.
 
