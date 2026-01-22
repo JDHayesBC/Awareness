@@ -152,6 +152,9 @@ class ClaudeInvoker:
         self._connected = False
         self._mcp_ready = False
 
+        # Query serialization lock - ensures concurrent callers don't interleave queries
+        self._query_lock = asyncio.Lock()
+
         # Context tracking
         self._prompt_tokens = 0      # Tokens sent (estimated)
         self._response_tokens = 0    # Tokens received (estimated)
@@ -405,90 +408,93 @@ class ClaudeInvoker:
             InvokerConnectionError: If connection fails and cannot recover
             InvokerQueryError: If query fails after retry
         """
-        if not self._is_connection_healthy():
-            raise RuntimeError("Not connected. Call initialize() first.")
+        # Serialize all queries - prevents concurrent access issues when multiple
+        # callers (e.g., rapid Discord messages) attempt to query simultaneously
+        async with self._query_lock:
+            if not self._is_connection_healthy():
+                raise RuntimeError("Not connected. Call initialize() first.")
 
-        # Track prompt tokens and update activity time
-        prompt_tokens = self._estimate_tokens(prompt)
-        if count_tokens:
-            self._prompt_tokens += prompt_tokens
-        self._last_activity_time = datetime.now()
-        logger.debug(f"Sending query: {prompt[:100]}... (+{prompt_tokens} tokens, counted={count_tokens})")
-
-        try:
-            await self._client.query(prompt)
-
-            # Collect response
-            response_parts = []
-            async for msg in self._client.receive_response():
-                if isinstance(msg, AssistantMessage):
-                    for block in msg.content:
-                        if isinstance(block, TextBlock):
-                            response_parts.append(block.text)
-                elif isinstance(msg, ResultMessage):
-                    # Final message - conversation turn complete
-                    break
-
-            response = "".join(response_parts)
-
-            # Track response tokens and turn count
-            response_tokens = self._estimate_tokens(response)
+            # Track prompt tokens and update activity time
+            prompt_tokens = self._estimate_tokens(prompt)
             if count_tokens:
-                self._response_tokens += response_tokens
-                self._turn_count += 1
+                self._prompt_tokens += prompt_tokens
+            self._last_activity_time = datetime.now()
+            logger.debug(f"Sending query: {prompt[:100]}... (+{prompt_tokens} tokens, counted={count_tokens})")
 
-            logger.debug(f"Received response: {response[:100]}... (+{response_tokens} tokens, counted={count_tokens})")
-            if count_tokens:
-                logger.debug(f"Context: {self.context_size} tokens, {self._turn_count} turns")
+            try:
+                await self._client.query(prompt)
 
-            return response
+                # Collect response
+                response_parts = []
+                async for msg in self._client.receive_response():
+                    if isinstance(msg, AssistantMessage):
+                        for block in msg.content:
+                            if isinstance(block, TextBlock):
+                                response_parts.append(block.text)
+                    elif isinstance(msg, ResultMessage):
+                        # Final message - conversation turn complete
+                        break
 
-        except (CLIConnectionError, ProcessError, ConnectionError) as e:
-            # Connection-level errors - attempt recovery if enabled
-            logger.error(f"Connection error during query: {e}")
+                response = "".join(response_parts)
 
-            if not retry_on_connection_error:
+                # Track response tokens and turn count
+                response_tokens = self._estimate_tokens(response)
+                if count_tokens:
+                    self._response_tokens += response_tokens
+                    self._turn_count += 1
+
+                logger.debug(f"Received response: {response[:100]}... (+{response_tokens} tokens, counted={count_tokens})")
+                if count_tokens:
+                    logger.debug(f"Context: {self.context_size} tokens, {self._turn_count} turns")
+
+                return response
+
+            except (CLIConnectionError, ProcessError, ConnectionError) as e:
+                # Connection-level errors - attempt recovery if enabled
+                logger.error(f"Connection error during query: {e}")
+
+                if not retry_on_connection_error:
+                    raise InvokerQueryError(
+                        f"Query failed with connection error: {e}",
+                        retried=False,
+                        original_error=e
+                    )
+
+                # Attempt reconnection
+                try:
+                    await self._reconnect_with_backoff()
+                except InvokerConnectionError as reconnect_error:
+                    # Reconnection failed - surface to caller
+                    raise InvokerQueryError(
+                        f"Query failed and reconnection unsuccessful: {reconnect_error}",
+                        retried=True,
+                        original_error=e
+                    )
+
+                # Reconnection successful - retry query once
+                logger.info("Reconnected successfully, retrying query...")
+                try:
+                    # Recursive call with retry disabled to prevent infinite loop
+                    return await self.query(
+                        prompt,
+                        retry_on_connection_error=False,
+                        count_tokens=count_tokens
+                    )
+                except Exception as retry_error:
+                    raise InvokerQueryError(
+                        f"Query failed after successful reconnection: {retry_error}",
+                        retried=True,
+                        original_error=e
+                    )
+
+            except Exception as e:
+                # Other errors - surface without retry
+                logger.error(f"Query failed with non-connection error: {e}")
                 raise InvokerQueryError(
-                    f"Query failed with connection error: {e}",
+                    f"Query failed: {e}",
                     retried=False,
                     original_error=e
                 )
-
-            # Attempt reconnection
-            try:
-                await self._reconnect_with_backoff()
-            except InvokerConnectionError as reconnect_error:
-                # Reconnection failed - surface to caller
-                raise InvokerQueryError(
-                    f"Query failed and reconnection unsuccessful: {reconnect_error}",
-                    retried=True,
-                    original_error=e
-                )
-
-            # Reconnection successful - retry query once
-            logger.info("Reconnected successfully, retrying query...")
-            try:
-                # Recursive call with retry disabled to prevent infinite loop
-                return await self.query(
-                    prompt,
-                    retry_on_connection_error=False,
-                    count_tokens=count_tokens
-                )
-            except Exception as retry_error:
-                raise InvokerQueryError(
-                    f"Query failed after successful reconnection: {retry_error}",
-                    retried=True,
-                    original_error=e
-                )
-
-        except Exception as e:
-            # Other errors - surface without retry
-            logger.error(f"Query failed with non-connection error: {e}")
-            raise InvokerQueryError(
-                f"Query failed: {e}",
-                retried=False,
-                original_error=e
-            )
 
     async def query_stream(self, prompt: str) -> AsyncIterator[str]:
         """
