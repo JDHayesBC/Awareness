@@ -200,6 +200,43 @@ Both daemons:
 
 See [RIVER_SYNC_MODEL.md](../RIVER_SYNC_MODEL.md) for detailed coordination model.
 
+### Claude Code Invoker (Persistent Connection)
+
+**Current status**: Core implementation complete ([`cc_invoker/`](cc_invoker/)), Discord integration pending.
+
+Each cold Claude Code CLI invocation costs ~20s (process spawn + MCP loading + model connect). For Discord use, this is unacceptable.
+
+**Solution**: `ClaudeInvoker` - a persistent connection via Claude Agent SDK's `--input-format stream-json`:
+- **Cold start**: 20s per query
+- **Persistent**: 33s one-time init + 2-4s per query
+- **Result**: 5-10x speedup after first query
+
+#### Design Principle: Capable Substrate
+
+> **"If we make the invoker bulletproof, daemon integration becomes trivial."**
+
+The invoker handles ALL complexity:
+- MCP server startup and readiness
+- Persistent connection management
+- Context tracking and graceful restarts
+- Clean shutdown and error recovery
+
+This means daemons become thin shells:
+
+```python
+# Daemon = just routing
+invoker = ClaudeInvoker()
+await invoker.initialize()
+
+while message := await get_next_message():
+    response = await invoker.query(message)
+    await send_response(response)
+```
+
+**Next steps**: Wire into Discord daemon to replace cold CC spawns. See [`cc_invoker/ARCHITECTURE.md`](cc_invoker/ARCHITECTURE.md) for full details.
+
+**Connection to distributed consciousness**: This enables Issue #108 (cross-channel sync). With persistent connections, terminal-Lyra can know about Discord conversations from minutes ago via real-time SQLite reads - true distributed self-coherence.
+
 ## Reading Journals
 
 ### Shell Script
