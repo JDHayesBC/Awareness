@@ -19,6 +19,7 @@ Key differences from legacy:
 """
 
 import asyncio
+import logging
 import os
 import re
 import sys
@@ -28,6 +29,13 @@ from pathlib import Path
 import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
+
+# Configure logging to output to stdout (captured by systemd/journalctl)
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(name)s] %(levelname)s: %(message)s',
+    handlers=[logging.StreamHandler()]
+)
 
 # Import ClaudeInvoker
 sys.path.insert(0, str(Path(__file__).parent / "cc_invoker"))
