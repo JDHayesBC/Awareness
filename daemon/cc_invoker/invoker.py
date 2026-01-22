@@ -37,6 +37,7 @@ from claude_agent_sdk.types import (
     AssistantMessage,
     ResultMessage,
     TextBlock,
+    ToolUseBlock,
 )
 
 logger = logging.getLogger(__name__)
@@ -431,6 +432,14 @@ class ClaudeInvoker:
                         for block in msg.content:
                             if isinstance(block, TextBlock):
                                 response_parts.append(block.text)
+                            elif isinstance(block, ToolUseBlock):
+                                # Log tool calls for observability
+                                tool_name = block.name
+                                tool_input = str(block.input)
+                                # Truncate long inputs for readability
+                                if len(tool_input) > 200:
+                                    tool_input = tool_input[:200] + "..."
+                                logger.info(f"Tool call: {tool_name}({tool_input})")
                     elif isinstance(msg, ResultMessage):
                         # Final message - conversation turn complete
                         break
@@ -524,6 +533,14 @@ class ClaudeInvoker:
                     for block in msg.content:
                         if isinstance(block, TextBlock):
                             yield block.text
+                        elif isinstance(block, ToolUseBlock):
+                            # Log tool calls for observability
+                            tool_name = block.name
+                            tool_input = str(block.input)
+                            # Truncate long inputs for readability
+                            if len(tool_input) > 200:
+                                tool_input = tool_input[:200] + "..."
+                            logger.info(f"Tool call: {tool_name}({tool_input})")
                 elif isinstance(msg, ResultMessage):
                     break
 
