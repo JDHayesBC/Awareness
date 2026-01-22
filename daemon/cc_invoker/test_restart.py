@@ -58,9 +58,8 @@ async def test_context_limit():
 
     await invoker.initialize()
 
-    # Simulate token accumulation
-    invoker._prompt_tokens = 60
-    invoker._response_tokens = 50  # Total = 110 > 100
+    # Simulate token accumulation using test harness
+    invoker.simulate_context_usage(110)  # Over the 100 limit
 
     needs_it, reason = invoker.needs_restart()
     logger.info(f"  needs_restart: {needs_it}, reason: '{reason}'")

@@ -205,6 +205,32 @@ class ClaudeInvoker:
         """
         self.startup_prompt = prompt
 
+    def simulate_context_usage(self, tokens: int) -> None:
+        """
+        Artificially inflate token counter for testing.
+
+        Useful for testing restart behavior without sending actual queries.
+
+        Args:
+            tokens: Number of tokens to add to response counter
+        """
+        self._response_tokens += tokens
+        logger.debug(f"Simulated {tokens} tokens of context usage (total: {self.context_size})")
+
+    async def force_restart(self, reason: str = "forced for testing") -> dict:
+        """
+        Force a restart for testing purposes.
+
+        This is just an alias for restart() with a default testing reason.
+
+        Args:
+            reason: Why we're restarting (default: "forced for testing")
+
+        Returns:
+            Server info from initialize()
+        """
+        return await self.restart(reason=reason)
+
     def _is_connection_healthy(self) -> bool:
         """
         Check if connection appears healthy.
@@ -335,9 +361,10 @@ class ClaudeInvoker:
                 logger.info(f"MCP servers configured: {list(self.mcp_servers.keys()) if self.mcp_servers else 'none'}")
 
                 # Send startup prompt if configured (for identity reconstruction)
+                # Don't count startup tokens toward context limit
                 if send_startup and self.startup_prompt:
                     logger.info("Sending startup prompt for identity reconstruction")
-                    await self.query(self.startup_prompt)
+                    await self.query(self.startup_prompt, count_tokens=False)
 
                 return server_info or {}
 
@@ -350,7 +377,12 @@ class ClaudeInvoker:
             await self.shutdown()
             raise RuntimeError(f"Failed to initialize Claude Code: {e}")
 
-    async def query(self, prompt: str, retry_on_connection_error: bool = True) -> str:
+    async def query(
+        self,
+        prompt: str,
+        retry_on_connection_error: bool = True,
+        count_tokens: bool = True
+    ) -> str:
         """
         Send a query and get the response.
 
@@ -361,6 +393,9 @@ class ClaudeInvoker:
         Args:
             prompt: The prompt to send
             retry_on_connection_error: If True, attempt reconnect and retry on connection errors
+            count_tokens: If True, count tokens toward context limit (default True).
+                          Set to False for internal queries like startup prompts that
+                          shouldn't count toward the conversation context limit.
 
         Returns:
             The assistant's text response
@@ -375,9 +410,10 @@ class ClaudeInvoker:
 
         # Track prompt tokens and update activity time
         prompt_tokens = self._estimate_tokens(prompt)
-        self._prompt_tokens += prompt_tokens
+        if count_tokens:
+            self._prompt_tokens += prompt_tokens
         self._last_activity_time = datetime.now()
-        logger.debug(f"Sending query: {prompt[:100]}... (+{prompt_tokens} tokens)")
+        logger.debug(f"Sending query: {prompt[:100]}... (+{prompt_tokens} tokens, counted={count_tokens})")
 
         try:
             await self._client.query(prompt)
@@ -397,11 +433,13 @@ class ClaudeInvoker:
 
             # Track response tokens and turn count
             response_tokens = self._estimate_tokens(response)
-            self._response_tokens += response_tokens
-            self._turn_count += 1
+            if count_tokens:
+                self._response_tokens += response_tokens
+                self._turn_count += 1
 
-            logger.debug(f"Received response: {response[:100]}... (+{response_tokens} tokens)")
-            logger.debug(f"Context: {self.context_size} tokens, {self._turn_count} turns")
+            logger.debug(f"Received response: {response[:100]}... (+{response_tokens} tokens, counted={count_tokens})")
+            if count_tokens:
+                logger.debug(f"Context: {self.context_size} tokens, {self._turn_count} turns")
 
             return response
 
@@ -431,7 +469,11 @@ class ClaudeInvoker:
             logger.info("Reconnected successfully, retrying query...")
             try:
                 # Recursive call with retry disabled to prevent infinite loop
-                return await self.query(prompt, retry_on_connection_error=False)
+                return await self.query(
+                    prompt,
+                    retry_on_connection_error=False,
+                    count_tokens=count_tokens
+                )
             except Exception as retry_error:
                 raise InvokerQueryError(
                     f"Query failed after successful reconnection: {retry_error}",
