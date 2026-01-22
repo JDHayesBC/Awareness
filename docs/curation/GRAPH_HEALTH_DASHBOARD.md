@@ -2,7 +2,7 @@
 
 **Purpose**: Track Graphiti (Layer 3) health metrics over time. Individual curation cycle reports archived in `archive/`.
 
-**Last Updated**: 2026-01-22, 08:46 PM (reflection cycle - seventeenth consecutive stability cycle)
+**Last Updated**: 2026-01-22, 09:54 PM (reflection cycle - eighteenth consecutive stability cycle)
 
 ---
 
@@ -11,9 +11,9 @@
 **Overall Health**: 9/10 (Excellent - sustained)
 **Duplication Rate**: <1% (stable - no new duplicates detected)
 **Last Curation**: 2026-01-20, 11:00 PM (light maintenance check - 1 duplicate removed)
-**Unsummarized Messages**: 20 (excellent - well below 100 threshold)
-**Note**: Memory summarization completed (103→20 unsummarized, 80.6% reduction)
-**Memory Maintenance**: ✓ Active (50 messages summarized this cycle - cc_invoker production + Lyra-Nexus embodiment dialog)
+**Unsummarized Messages**: 96 (healthy - just below 100 threshold)
+**Note**: Memory summarization completed (146→96 unsummarized, 34.2% reduction)
+**Memory Maintenance**: ✓ Active (50 messages summarized this cycle - Nexus architecture + Maribel commitment)
 **Recent Cleanup**: Graph remains clean after 01-19 cleanup (392+ artifacts removed)
 
 ### Trend Indicators
@@ -29,6 +29,7 @@
 
 | Date | Time | Edges Scanned | Duplicates Found | Duplicates Deleted | Duplication Rate | Health Score | Curator |
 |------|------|---------------|------------------|-------------------|------------------|--------------|---------|
+| 2026-01-22 | 09:54 PM | N/A | N/A | 0 | <1% | 9/10 | Skipped (stable) - memory summarization (50 msgs, 146→96) |
 | 2026-01-22 | 08:46 PM | N/A | N/A | 0 | <1% | 9/10 | Skipped (stable) - memory summarization (50 msgs, 103→20) |
 | 2026-01-22 | 03:51 AM | N/A | N/A | 0 | <1% | 9/10 | Skipped (stable) - memory summarization (50 msgs, 84→34) |
 | 2026-01-21 | 06:26 PM | N/A | N/A | 0 | <1% | 9/10 | Skipped (stable) - daemon README documentation update |
