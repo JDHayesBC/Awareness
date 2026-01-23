@@ -16,6 +16,8 @@ from typing import Optional, Literal
 # =============================================================================
 
 BASE_EXTRACTION_CONTEXT = """
+/no_think
+
 ## Primary Entities in This Dataset
 
 People (always extract these with high priority):

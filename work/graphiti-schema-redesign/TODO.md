@@ -5,20 +5,22 @@
 
 ---
 
-## Current Status (Updated 2026-01-23 12:42)
+## Current Status (Updated 2026-01-23 14:45)
 
-**Ingestion running in background (PID: 625143)**
-- 50 messages ingested, 11,284 remaining
-- Rate: ~11 seconds per message
-- ETA: ~35 hours for full ingestion
-- Monitor: `tail -f work/graphiti-schema-redesign/ingestion.log`
+**Ingestion PAUSED** - Switched to local LLM to avoid $350+ OpenAI costs
 
-**First batch results** (50 messages):
-- 243 nodes, 803 relationships
-- ~16 nodes/rels per message (rich extraction)
-- Entity types working: Lyra extracted as ['Entity', 'Person']
-- Edge types: Mostly MENTIONS (522) and RELATES_TO (281) for early Discord messages
-- Expected: More personal relationships (Loves, Trusts) will emerge with later conversations
+**Progress before pause:**
+- 350 messages ingested, ~11,000 remaining
+- OpenAI costs: $3.74 → would have been $350+ for full ingestion
+- Graph has 823 nodes, ~2,900 relationships
+
+**Local LLM Setup COMPLETE:**
+- NUC (Ryzen 395+, 128GB RAM) running LM Studio
+- Model: `qwen/qwen3-32b` with `/no_think` directive
+- Hybrid mode: Local LLM + OpenAI embeddings (compatible with existing graph)
+- Tested and working - proper entity extraction confirmed
+
+**Ready to resume ingestion at ~$0 cost (just electricity + ~$2 for embeddings)**
 
 ---
 
@@ -47,8 +49,18 @@
 - [x] Fixed script (load .env, correct batch schema, timestamp handling)
 - [x] Tested with first batch (50 messages - success)
 - [x] Started background paced ingestion
-- [ ] Monitor progress periodically (~35 hour total runtime)
-- [ ] Verify extraction quality mid-ingestion
+- [x] Discovered OpenAI costs ($7/hour → $350+ projected)
+- [x] Paused ingestion at 350 messages
+
+### Phase 4: Local LLM Integration (COMPLETE)
+- [x] Configured NUC (Ryzen 395+, 128GB) with LM Studio
+- [x] Updated rich_texture_v2.py for local LLM support
+- [x] Implemented hybrid mode (local LLM + OpenAI embeddings)
+- [x] Fixed Qwen3 thinking mode with `/no_think` directive
+- [x] Tested full pipeline - proper extraction confirmed
+- [x] Documented in docs/reference/graphiti-local-llm-setup.md
+- [ ] Resume paced ingestion with local LLM
+- [ ] Monitor progress and speed
 - [ ] Final quality assessment after completion
 
 ---

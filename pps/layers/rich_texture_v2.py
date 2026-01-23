@@ -24,6 +24,10 @@ try:
     from graphiti_core import Graphiti
     from graphiti_core.nodes import EpisodeType, EntityNode
     from graphiti_core.edges import EntityEdge
+    from graphiti_core.llm_client.config import LLMConfig
+    from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
+    from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
+    from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
     GRAPHITI_CORE_AVAILABLE = True
 except ImportError:
     GRAPHITI_CORE_AVAILABLE = False
@@ -31,6 +35,11 @@ except ImportError:
     EpisodeType = None
     EntityNode = None
     EntityEdge = None
+    LLMConfig = None
+    OpenAIGenericClient = None
+    OpenAIEmbedder = None
+    OpenAIEmbedderConfig = None
+    OpenAIRerankerClient = None
 
 # Also keep aiohttp for fallback HTTP mode
 import aiohttp
@@ -83,6 +92,20 @@ class RichTextureLayerV2(PatternLayer):
 
         self.group_id = group_id or os.environ.get("GRAPHITI_GROUP_ID", "lyra")
 
+        # Local LLM configuration (for using Ollama, LM Studio, etc.)
+        # When GRAPHITI_LLM_BASE_URL is set, uses local LLM for entity extraction
+        # Can use hybrid mode: local LLM (expensive) + OpenAI embeddings (cheap, compatible)
+        self.llm_base_url = os.environ.get("GRAPHITI_LLM_BASE_URL")  # e.g., http://192.168.0.120:1234/v1
+        self.llm_model = os.environ.get("GRAPHITI_LLM_MODEL", "qwen/qwen3-32b")
+        self.llm_small_model = os.environ.get("GRAPHITI_LLM_SMALL_MODEL")  # defaults to same as main model
+
+        # Embedding configuration - can be local or OpenAI
+        # GRAPHITI_EMBEDDING_PROVIDER: "local" (uses LLM_BASE_URL) or "openai" (default, uses OPENAI_API_KEY)
+        # OpenAI embeddings recommended for compatibility with existing graph data
+        self.embedding_provider = os.environ.get("GRAPHITI_EMBEDDING_PROVIDER", "openai")
+        self.embedding_model = os.environ.get("GRAPHITI_EMBEDDING_MODEL", "text-embedding-3-small")
+        self.embedding_dim = int(os.environ.get("GRAPHITI_EMBEDDING_DIM", "1536"))  # OpenAI default
+
         # Clients (lazy initialized)
         self._graphiti_client: Optional[Graphiti] = None
         self._http_session: Optional[aiohttp.ClientSession] = None
@@ -93,17 +116,84 @@ class RichTextureLayerV2(PatternLayer):
         self._crystal_context: Optional[str] = None
 
     async def _get_graphiti_client(self) -> Optional[Graphiti]:
-        """Get or create graphiti_core client."""
+        """
+        Get or create graphiti_core client.
+
+        Supports three modes:
+        1. Default (no env vars): Uses OpenAI for both LLM and embeddings
+        2. Full local (GRAPHITI_LLM_BASE_URL + GRAPHITI_EMBEDDING_PROVIDER=local):
+           Uses local LLM and local embeddings (requires fresh graph)
+        3. Hybrid (GRAPHITI_LLM_BASE_URL + GRAPHITI_EMBEDDING_PROVIDER=openai):
+           Uses local LLM for extraction + OpenAI embeddings (compatible with existing graph)
+
+        Hybrid mode is recommended for cost savings while maintaining compatibility.
+        """
         if not GRAPHITI_CORE_AVAILABLE:
             return None
 
         if self._graphiti_client is None:
             try:
-                self._graphiti_client = Graphiti(
-                    uri=self.neo4j_uri,
-                    user=self.neo4j_user,
-                    password=self.neo4j_password,
-                )
+                llm_client = None
+                embedder = None
+                cross_encoder = None
+
+                # Configure LLM client (local or OpenAI)
+                if self.llm_base_url:
+                    print(f"Using local LLM at {self.llm_base_url}")
+                    print(f"  Model: {self.llm_model}")
+
+                    small_model = self.llm_small_model or self.llm_model
+                    llm_config = LLMConfig(
+                        api_key="local",
+                        model=self.llm_model,
+                        small_model=small_model,
+                        base_url=self.llm_base_url,
+                    )
+                    llm_client = OpenAIGenericClient(config=llm_config)
+
+                # Configure embedder (local or OpenAI)
+                if self.embedding_provider == "local" and self.llm_base_url:
+                    print(f"  Embedding: {self.embedding_model} (local)")
+                    embedder_config = OpenAIEmbedderConfig(
+                        api_key="local",
+                        embedding_model=self.embedding_model,
+                        embedding_dim=self.embedding_dim,
+                        base_url=self.llm_base_url,
+                    )
+                    embedder = OpenAIEmbedder(config=embedder_config)
+                elif self.llm_base_url:
+                    # Hybrid mode: local LLM + OpenAI embeddings
+                    print(f"  Embedding: {self.embedding_model} (OpenAI - hybrid mode)")
+                    embedder_config = OpenAIEmbedderConfig(
+                        embedding_model=self.embedding_model,
+                    )
+                    embedder = OpenAIEmbedder(config=embedder_config)
+
+                # Configure cross-encoder (uses LLM client if local, else default)
+                if llm_client:
+                    cross_encoder = OpenAIRerankerClient(
+                        client=llm_client,
+                        config=llm_config,
+                    )
+
+                # Build Graphiti client with configured components
+                if llm_client or embedder:
+                    self._graphiti_client = Graphiti(
+                        uri=self.neo4j_uri,
+                        user=self.neo4j_user,
+                        password=self.neo4j_password,
+                        llm_client=llm_client,
+                        embedder=embedder,
+                        cross_encoder=cross_encoder,
+                    )
+                else:
+                    # Full default: OpenAI for everything
+                    self._graphiti_client = Graphiti(
+                        uri=self.neo4j_uri,
+                        user=self.neo4j_user,
+                        password=self.neo4j_password,
+                    )
+
                 # Build indices on first use
                 await self._graphiti_client.build_indices_and_constraints()
             except Exception as e:
