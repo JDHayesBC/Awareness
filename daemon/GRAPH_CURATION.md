@@ -8,10 +8,13 @@ The Graph Curator is a lightweight agent subprocess that maintains the knowledge
 
 ### Integration with Reflection
 
-The curator is spawned as a background task during autonomous reflection (in `lyra_reflection.py`):
+**Note**: Due to Issue #97 (MCP tools don't load in subprocess), spawning a general-purpose agent for graph curation doesn't work. Agents can't access MCP tools in subprocess context.
 
+**Current approach**: Reflection cycles call `python3 daemon/graph_curator.py` directly. This script uses `PPSHttpClient` to bypass MCP and call PPS via HTTP directly.
+
+**Original plan** (doesn't work yet):
 ```python
-# From _build_full_prompt() in lyra_reflection.py
+# This approach fails due to Issue #97
 Use Task tool with:
   subagent_type: "general-purpose"
   model: "haiku"
@@ -22,7 +25,7 @@ Use Task tool with:
     [Full curator instructions]
 ```
 
-This allows the main reflection to proceed while curation happens in parallel.
+Once Issue #97 is resolved (or we migrate to HTTP-based MCP per Issue #112), the agent-based approach will work.
 
 ### Direct Execution
 
