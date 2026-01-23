@@ -16,7 +16,6 @@ context accumulation and allows full identity reconstruction each time.
 """
 
 import asyncio
-import subprocess
 import os
 import sys
 from datetime import datetime, timezone, timedelta
@@ -28,7 +27,11 @@ from dotenv import load_dotenv
 from conversation import ConversationManager
 from trace_logger import TraceLogger, EventTypes
 from project_lock import is_locked, get_lock_status, release_lock
-from shared import build_startup_prompt, build_reflection_prompt
+from shared.startup_protocol import build_startup_prompt, build_reflection_prompt
+
+# Import ClaudeInvoker
+sys.path.insert(0, str(Path(__file__).parent / "cc_invoker"))
+from invoker import ClaudeInvoker
 
 # Load environment variables
 load_dotenv()
@@ -73,6 +76,19 @@ class LyraReflectionDaemon:
         self.conversation_manager = ConversationManager(CONVERSATION_DB_PATH)
         self.trace_logger: TraceLogger | None = None
 
+        # ClaudeInvoker - configured but not initialized yet
+        # Reflection builds fresh prompts each time, so no startup_prompt here
+        self.invoker = ClaudeInvoker(
+            working_dir=PROJECT_DIR,
+            bypass_permissions=True,
+            model=REFLECTION_MODEL,
+            max_context_tokens=100_000,  # Lower for reflection
+            max_turns=50,
+            max_idle_seconds=15 * 60,  # 15 min idle ok
+            # No startup_prompt - reflection builds its own each time
+        )
+        self.invoker_ready = False
+
         # Ensure directories exist
         Path(JOURNAL_PATH).mkdir(parents=True, exist_ok=True)
         Path(REFLECTION_CWD).mkdir(parents=True, exist_ok=True)
@@ -98,6 +114,16 @@ class LyraReflectionDaemon:
         print(f"[START] Waiting 2 minutes before first reflection...")
         await asyncio.sleep(120)
 
+        # Initialize invoker before first reflection
+        print("[START] Initializing ClaudeInvoker...")
+        try:
+            await self.invoker.initialize(send_startup=False)
+            self.invoker_ready = True
+            print(f"[START] ClaudeInvoker ready - context: {self.invoker.context_size} tokens")
+        except Exception as e:
+            print(f"[START] Failed to initialize invoker: {e}")
+            # Continue - will retry on first reflection
+
         # Main loop
         while self.running:
             try:
@@ -118,6 +144,10 @@ class LyraReflectionDaemon:
 
         if self.trace_logger:
             await self.trace_logger.session_complete()
+
+        # Shutdown invoker
+        if self.invoker_ready:
+            await self.invoker.shutdown()
 
         await self.conversation_manager.close()
 
@@ -291,22 +321,20 @@ End with active agency footnotes showing what you scanned and chose.'''
         return startup + full_section
 
     async def _invoke_reflection(self, prompt: str, is_locked: bool):
-        """Invoke Claude for reflection with full tool access."""
+        """Invoke Claude for reflection using ClaudeInvoker."""
         import time
 
-        # Build command
-        cmd = [
-            "claude",
-            "--model", REFLECTION_MODEL,
-            "--dangerously-skip-permissions",  # Allow tools without prompts
-            "--mcp-config", str(PROJECT_DIR / ".mcp.json"),  # Project MCP config (has PPS server)
-        ]
-
-        # Add project directory if unlocked
-        if not is_locked:
-            cmd.extend(["--add-dir", str(PROJECT_DIR)])
-
-        cmd.extend(["-p", prompt])
+        # Ensure invoker is ready
+        if not self.invoker_ready:
+            print("[REFLECTION] Invoker not ready, attempting initialization...")
+            try:
+                await self.invoker.initialize(send_startup=False)
+                self.invoker_ready = True
+            except Exception as e:
+                print(f"[REFLECTION] Failed to initialize invoker: {e}")
+                if self.trace_logger:
+                    await self.trace_logger.error("invoker_init_failed", str(e))
+                return
 
         # Trace start
         start_time = time.monotonic()
@@ -319,16 +347,8 @@ End with active agency footnotes showing what you scanned and chose.'''
             })
 
         try:
-            result = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=REFLECTION_TIMEOUT_MINUTES * 60,
-                    cwd=REFLECTION_CWD,
-                )
-            )
+            # Query via invoker
+            response = await self.invoker.query(prompt)
 
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -337,8 +357,8 @@ End with active agency footnotes showing what you scanned and chose.'''
                 await self.trace_logger.log(EventTypes.API_CALL_COMPLETE, {
                     "model": REFLECTION_MODEL,
                     "context": "reflection",
-                    "tokens_out": len(result.stdout or "") // 4,
-                    "return_code": result.returncode,
+                    "tokens_out": len(response) // 4,
+                    "return_code": 0,  # Invoker success
                 }, duration_ms=duration_ms)
 
             # Save output to journal
@@ -346,13 +366,10 @@ End with active agency footnotes showing what you scanned and chose.'''
             reflection_log = Path(JOURNAL_PATH) / f"reflection_{timestamp}.txt"
             with open(reflection_log, "w") as f:
                 f.write(f"# Autonomous Reflection - {timestamp}\n")
-                f.write(f"# Return code: {result.returncode}\n")
-                f.write(f"# Project locked: {is_locked}\n\n")
-                f.write("## Output:\n")
-                f.write(result.stdout or "(no output)")
-                if result.stderr:
-                    f.write("\n\n## Stderr:\n")
-                    f.write(result.stderr)
+                f.write(f"# Project locked: {is_locked}\n")
+                f.write(f"# Context: {self.invoker.context_size} tokens, {self.invoker.turn_count} turns\n\n")
+                f.write("## Response:\n")
+                f.write(response or "(no output)")
 
             print(f"[REFLECTION] Output saved to {reflection_log}")
 
@@ -363,20 +380,19 @@ End with active agency footnotes showing what you scanned and chose.'''
                     path=str(reflection_log),
                 )
 
-            if result.returncode == 0:
-                print("[REFLECTION] Completed successfully")
-                # Trace success for monitoring
-                if self.trace_logger:
-                    await self.trace_logger.log(EventTypes.REFLECTION_SUCCESS, {
-                        "duration_ms": duration_ms,
-                        "project_locked": is_locked,
-                    })
-            else:
-                print(f"[REFLECTION] Ended with code {result.returncode}")
-                if result.stderr:
-                    print(f"[REFLECTION] stderr: {result.stderr[:500]}")
+            print("[REFLECTION] Completed successfully")
+            # Trace success for monitoring
+            if self.trace_logger:
+                await self.trace_logger.log(EventTypes.REFLECTION_SUCCESS, {
+                    "duration_ms": duration_ms,
+                    "project_locked": is_locked,
+                })
 
-        except subprocess.TimeoutExpired:
+            # Restart invoker for next reflection (fresh context each time)
+            print("[REFLECTION] Restarting invoker for next reflection...")
+            await self.invoker.restart(reason="reflection cycle complete")
+
+        except asyncio.TimeoutError:
             print(f"[REFLECTION] Timed out after {REFLECTION_TIMEOUT_MINUTES} minutes")
             if self.trace_logger:
                 await self.trace_logger.log(EventTypes.REFLECTION_TIMEOUT, {
@@ -389,6 +405,14 @@ End with active agency footnotes showing what you scanned and chose.'''
             print(f"[REFLECTION] Error: {e}")
             if self.trace_logger:
                 await self.trace_logger.error("reflection_error", str(e))
+
+            # Try to restart invoker on error for next reflection
+            try:
+                print("[REFLECTION] Attempting to restart invoker after error...")
+                await self.invoker.restart(reason="error recovery")
+            except Exception as restart_error:
+                print(f"[REFLECTION] Failed to restart invoker: {restart_error}")
+                self.invoker_ready = False
 
     async def _check_stale_lock(self):
         """Check for and release stale project locks."""
