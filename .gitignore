@@ -3,6 +3,9 @@
 entities/*/
 !entities/_template/
 
+# Docker entity runtime data (journals, state)
+pps/docker/entities/
+
 # Credentials and secrets
 discord_bot_token.txt
 .env
