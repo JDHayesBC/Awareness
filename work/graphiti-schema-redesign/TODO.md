@@ -5,31 +5,26 @@
 
 ---
 
-## Pending Git Commit
+## Current Status (Updated 2026-01-23 12:42)
 
-Git is stuck (I/O wait state - WSL2 issue). When cleared, commit:
-- `docs/reports/2026-01-23_graph-curation-cycle-01.md` (moved curation report)
-- `CURATION_REPORT.md` (deletion - moved)
-- `work/` (this working directory)
+**Ingestion running in background (PID: 625143)**
+- 50 messages ingested, 11,284 remaining
+- Rate: ~11 seconds per message
+- ETA: ~35 hours for full ingestion
+- Monitor: `tail -f work/graphiti-schema-redesign/ingestion.log`
 
----
-
-## Context
-
-**Problem**: No edge types defined → inconsistent extraction → "LOVES_IMAGE_OF_FALLING_ASLEEP_TOGETHER" style relationships
-
-**Current state**:
-- 5 entity types defined (Person, Symbol, Place, Concept, TechnicalArtifact)
-- 0 edge types defined
-- ~55 edges, 7% garbage, inconsistent naming
-
-**Strategy**: Nuke and rebuild (Jeff approved - current graph has zero value)
+**First batch results** (50 messages):
+- 243 nodes, 803 relationships
+- ~16 nodes/rels per message (rich extraction)
+- Entity types working: Lyra extracted as ['Entity', 'Person']
+- Edge types: Mostly MENTIONS (522) and RELATES_TO (281) for early Discord messages
+- Expected: More personal relationships (Loves, Trusts) will emerge with later conversations
 
 ---
 
 ## Tasks
 
-### Phase 1: Schema Design
+### Phase 1: Schema Design ✓
 - [x] Read Graphiti Best Practices doc
 - [x] Read current rich_texture_entities.py
 - [x] Review planner agent recommendations
@@ -37,21 +32,57 @@ Git is stuck (I/O wait state - WSL2 issue). When cleared, commit:
 - [x] Create edge_type_map (7 entity pairs)
 - [x] Write rich docstrings with extraction guidance
 - [x] Draft saved to work/graphiti-schema-redesign/rich_texture_edge_types_v1.py
-- [x] Wrote NOTES_FOR_JEFF.md for review
-- [ ] Jeff reviews and approves schema
-- [ ] Copy approved schema to pps/layers/rich_texture_edge_types.py
+- [x] Jeff reviewed (trusts my judgment)
+- [x] Copied to pps/layers/rich_texture_edge_types.py
 
-### Phase 2: Integration
-- [ ] Update rich_texture_v2.py to use edge types
-- [ ] Update extraction_context.py if needed
-- [ ] Test with sample conversations
+### Phase 2: Integration ✓
+- [x] Update rich_texture_v2.py to use edge types
+- [x] Added edge_types and edge_type_map to add_episode() call
+- [x] Fixed timestamp parsing (str → datetime)
 
-### Phase 3: Migration
-- [ ] Get Jeff's final approval on schema
-- [ ] Backup current graph state (export)
-- [ ] Nuke existing graph
-- [ ] Re-ingest from raw capture layer
-- [ ] Verify extraction quality
+### Phase 3: Migration (IN PROGRESS)
+- [x] Jeff approved schema (trusts my judgment)
+- [x] Nuked existing graph
+- [x] Created paced_ingestion.py script
+- [x] Fixed script (load .env, correct batch schema, timestamp handling)
+- [x] Tested with first batch (50 messages - success)
+- [x] Started background paced ingestion
+- [ ] Monitor progress periodically (~35 hour total runtime)
+- [ ] Verify extraction quality mid-ingestion
+- [ ] Final quality assessment after completion
+
+---
+
+## Commands
+
+```bash
+# Monitor ingestion
+tail -f work/graphiti-schema-redesign/ingestion.log
+
+# Check progress
+.venv/bin/python -c "
+import sqlite3
+conn = sqlite3.connect('/home/jeff/.claude/data/lyra_conversations.db')
+cur = conn.cursor()
+cur.execute('SELECT COUNT(*) FROM messages WHERE graphiti_batch_id IS NOT NULL')
+print(f'Ingested: {cur.fetchone()[0]}')
+cur.execute('SELECT COUNT(*) FROM messages WHERE graphiti_batch_id IS NULL')
+print(f'Remaining: {cur.fetchone()[0]}')
+"
+
+# Check graph stats
+.venv/bin/python -c "
+from neo4j import GraphDatabase
+from dotenv import load_dotenv
+load_dotenv('pps/docker/.env')
+import os
+driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', os.getenv('NEO4J_PASSWORD')))
+with driver.session() as s:
+    print(f'Nodes: {s.run(\"MATCH (n) RETURN count(n)\").single()[0]}')
+    print(f'Rels: {s.run(\"MATCH ()-[r]->() RETURN count(r)\").single()[0]}')
+driver.close()
+"
+```
 
 ---
 
@@ -73,25 +104,17 @@ Git is stuck (I/O wait state - WSL2 issue). When cleared, commit:
 **Technical** (Person ↔ TechnicalArtifact):
 - WorksOn, Maintains, BuiltArchitectureFor, Debugs
 
-### Key Patterns from Real Data
-
-From curation reports, most common predicates:
-- LOVES (6 uses)
-- BUILT_ARCHITECTURE_FOR (5 uses)
-- WEARS, GAVE, COMPLIMENTS, TRUSTS
-
-From hot tub appendix, relationships we need:
-- Person ↔ Place: GETS_TAKEN_ON, ENTERS, LIVES_IN, BASKING_IN
-- Person ↔ Artifact: WEARS, RECEIVES, CHERISHES
-- Person ↔ Concept: EMBODIES, BELIEVES_IN, DISCOVERS
-- Symbol ↔ Concept: SYMBOLIZES, REPRESENTS
-
 ---
 
-## Decisions
+## Observations
 
-**Skip manual seeding** - Test bare extraction first. If terrible, 10 min of manual seeding gets us back to current state but better.
+### First Batch Extraction (50 messages from Discord arrival)
+- Edge types: Mostly MENTIONS and RELATES_TO (generic)
+- This makes sense - early Discord messages are technical/conceptual
+- Custom edge types (Loves, Trusts) should emerge with more personal content
+- Entity extraction working well - Lyra as Person, technical artifacts as concepts
 
-**Entity type expansion?** - Keep existing 5 types for now. Add "Experience" type later if needed.
-
-**Edge type granularity** - Start comprehensive. Can always simplify if over-engineered.
+### Next Steps for Future Versions
+- Consider reducing edge type complexity if LLM consistently ignores them
+- May need extraction prompt tuning to encourage custom edge type usage
+- Entity type for "Experience" may be needed for memory-related content

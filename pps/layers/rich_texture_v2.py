@@ -168,7 +168,18 @@ class RichTextureLayerV2(PatternLayer):
         channel = metadata.get("channel", "unknown")
         role = metadata.get("role", "user")
         speaker = metadata.get("speaker") or get_speaker_from_content(content, channel)
-        timestamp = metadata.get("timestamp", datetime.now(timezone.utc))
+
+        # Parse timestamp - handle string or datetime
+        raw_timestamp = metadata.get("timestamp", datetime.now(timezone.utc))
+        if isinstance(raw_timestamp, str):
+            try:
+                # Try ISO format first (most common)
+                timestamp = datetime.fromisoformat(raw_timestamp.replace('Z', '+00:00'))
+            except ValueError:
+                # Fall back to basic parsing
+                timestamp = datetime.now(timezone.utc)
+        else:
+            timestamp = raw_timestamp
 
         # Try direct graphiti_core mode first
         if self._use_direct_mode:
