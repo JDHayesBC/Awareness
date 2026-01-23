@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 from . import PatternLayer, LayerType, SearchResult, LayerHealth
 from .rich_texture_entities import ENTITY_TYPES, EXCLUDED_ENTITY_TYPES
+from .rich_texture_edge_types import EDGE_TYPES, EDGE_TYPE_MAP
 from .extraction_context import build_extraction_instructions, get_speaker_from_content
 
 # Conditional import - fall back to HTTP if graphiti_core not available
@@ -206,7 +207,7 @@ class RichTextureLayerV2(PatternLayer):
             # Create episode name from speaker and timestamp
             episode_name = f"{speaker}_{timestamp.strftime('%Y%m%d_%H%M%S')}"
 
-            # Add episode with our entity types and instructions
+            # Add episode with our entity types, edge types, and instructions
             result = await client.add_episode(
                 name=episode_name,
                 episode_body=content,
@@ -216,6 +217,8 @@ class RichTextureLayerV2(PatternLayer):
                 group_id=self.group_id,
                 entity_types=ENTITY_TYPES,
                 excluded_entity_types=EXCLUDED_ENTITY_TYPES,
+                edge_types=EDGE_TYPES,
+                edge_type_map=EDGE_TYPE_MAP,
                 custom_extraction_instructions=extraction_instructions,
             )
 
