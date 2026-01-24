@@ -1,5 +1,19 @@
 # Awareness Project TODO
 
+## WORK IN PROGRESS (Don't "Fix" These!)
+
+**Read this section first during reflection.** These are active development efforts - they may look incomplete or "broken" but are being worked on. Don't try to fix them.
+
+| Work Stream | Status | Details |
+|-------------|--------|---------|
+| **cc_invoker SDK Agent** | Active | Persistent Claude Code wrapper using SDK agent. See `daemon/cc_invoker/TODO.md` for architecture and status. |
+| **Graphiti Local Ingestion** | Running | 11,000+ messages being ingested via Qwen3-80b on NUC. Multi-day process. |
+| **Daemon MCP Integration** | ✅ Done (2026-01-24) | Venv consolidated to `.venv`, MCP tools work directly. HTTP fallback removed. |
+
+**Before trying to "fix" daemon issues**: Check if the issue is listed above. Check `daemon/cc_invoker/TODO.md`. Ask in your journal if unsure.
+
+---
+
 ## PENDING REVIEW (awaiting Jeff's feedback)
 
 1. **Review Graphiti ingestion** - ✅ COMPLETED (2026-01-13) - See `docs/reviews/2026-01-13_graphiti-ingestion-review.md`. Code review complete; quality checks blocked by #97.
