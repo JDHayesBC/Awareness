@@ -122,6 +122,68 @@ class GetCrystalsRequest(BaseModel):
     count: int = 4        # Number of recent crystals to retrieve
 
 
+# Phase 2 HTTP Migration - Additional Request Models
+
+class GetTurnsSinceCrystalRequest(BaseModel):
+    """Request to get conversation turns after last crystal."""
+    limit: int = 50
+    offset: int = 0
+    min_turns: int = 10
+    channel: str | None = None
+
+
+class GetRecentSummariesRequest(BaseModel):
+    """Request to get recent message summaries."""
+    limit: int = 5
+
+
+class SearchSummariesRequest(BaseModel):
+    """Request to search message summaries."""
+    query: str
+    limit: int = 10
+
+
+class InventoryListRequest(BaseModel):
+    """Request to list inventory items by category."""
+    category: str
+    subcategory: str | None = None
+    limit: int = 50
+
+
+class InventoryAddRequest(BaseModel):
+    """Request to add an inventory item."""
+    name: str
+    category: str
+    subcategory: str | None = None
+    description: str | None = None
+    attributes: dict | None = None
+
+
+class InventoryGetRequest(BaseModel):
+    """Request to get an inventory item."""
+    name: str
+    category: str
+
+
+class InventoryDeleteRequest(BaseModel):
+    """Request to delete an inventory item."""
+    name: str
+    category: str
+
+
+class TechSearchRequest(BaseModel):
+    """Request to search technical documentation."""
+    query: str
+    limit: int = 5
+    category: str | None = None
+
+
+class TechIngestRequest(BaseModel):
+    """Request to ingest a markdown file into Tech RAG."""
+    filepath: str
+    category: str | None = None
+
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -132,6 +194,13 @@ from layers.crystallization import CrystallizationLayer
 from layers.message_summaries import MessageSummariesLayer
 from layers.unified_tracer import UnifiedTracer
 from layers.inventory import InventoryLayer
+
+# Import Tech RAG layer (Layer 6) if available
+try:
+    from layers.tech_rag import TechRAGLayer
+    USE_TECH_RAG = True
+except ImportError:
+    USE_TECH_RAG = False
 
 # Import V2 rich texture layer with add_triplet_direct support
 try:
@@ -201,6 +270,13 @@ message_summaries = MessageSummariesLayer(db_path=data_path)
 inventory_db_path = CLAUDE_HOME / "data" / "inventory.db"
 inventory = InventoryLayer(db_path=inventory_db_path)
 
+# Initialize Tech RAG layer (Layer 6) if available
+if USE_TECH_RAG:
+    tech_rag_db = CLAUDE_HOME / "data" / "tech_rag.db"
+    tech_rag = TechRAGLayer(db_path=tech_rag_db)
+else:
+    tech_rag = None
+
 # Initialize unified tracer for HTTP server observability
 tracer = UnifiedTracer(db_path=data_path, daemon_type="http_hook")
 
@@ -213,7 +289,9 @@ async def lifespan(app: FastAPI):
     print(f"  ChromaDB: {CHROMA_HOST}:{CHROMA_PORT}")
     print(f"  USE_CHROMA: {USE_CHROMA}")
     print(f"  USE_RICH_TEXTURE_V2: {USE_RICH_TEXTURE_V2}")
+    print(f"  USE_TECH_RAG: {USE_TECH_RAG}")
     print(f"  Inventory: {inventory_db_path}")
+    print(f"  Tech RAG: {tech_rag_db if USE_TECH_RAG else 'disabled'}")
     print(f"  UnifiedTracer initialized (session: {tracer.session_id})")
 
     for layer_type, layer in layers.items():
@@ -1030,6 +1108,510 @@ async def list_spaces():
         ],
         "count": len(spaces)
     }
+
+
+# =============================================================================
+# Phase 2 HTTP Migration Endpoints (19 additional)
+# These complete the HTTP endpoint coverage for all 38 MCP tools
+# =============================================================================
+
+
+# === Anchor Management (3) ===
+
+@app.delete("/tools/anchor_delete/{filename}")
+async def anchor_delete(filename: str):
+    """
+    Delete a word-photo from both disk and ChromaDB.
+    Use for removing outdated or erroneous anchors.
+    """
+    if not filename:
+        raise HTTPException(status_code=400, detail="filename required")
+    
+    layer = layers[LayerType.CORE_ANCHORS]
+    if hasattr(layer, 'delete'):
+        result = await layer.delete(filename)
+        return result
+    else:
+        raise HTTPException(
+            status_code=501,
+            detail="Delete not available (ChromaDB layer required)"
+        )
+
+
+@app.get("/tools/anchor_list")
+async def anchor_list():
+    """
+    List all word-photos with sync status.
+    Shows files on disk, entries in ChromaDB, orphans, and missing items.
+    """
+    layer = layers[LayerType.CORE_ANCHORS]
+    if hasattr(layer, 'list_anchors'):
+        result = await layer.list_anchors()
+        return result
+    else:
+        raise HTTPException(
+            status_code=501,
+            detail="List not available (ChromaDB layer required)"
+        )
+
+
+@app.post("/tools/anchor_resync")
+async def anchor_resync():
+    """
+    Nuclear option: wipe ChromaDB collection and rebuild from disk files.
+    Use when things get out of sync and you need a clean slate.
+    """
+    layer = layers[LayerType.CORE_ANCHORS]
+    if hasattr(layer, 'resync'):
+        result = await layer.resync()
+        return result
+    else:
+        raise HTTPException(
+            status_code=501,
+            detail="Resync not available (ChromaDB layer required)"
+        )
+
+
+# === Crystal Management (2) ===
+
+@app.delete("/tools/crystal_delete")
+async def crystal_delete():
+    """
+    Delete the most recent crystal ONLY.
+    Crystals form a chain - only the latest can be deleted to preserve integrity.
+    Use when a crystal was created with errors and needs to be re-crystallized.
+    """
+    layer = layers[LayerType.CRYSTALLIZATION]
+    result = await layer.delete_latest()
+    
+    if not result.get("success", False):
+        raise HTTPException(
+            status_code=500,
+            detail=result.get("message", "Failed to delete crystal")
+        )
+    
+    return result
+
+
+@app.get("/tools/crystal_list")
+async def crystal_list():
+    """
+    List all crystals with metadata.
+    Shows current crystals (rolling window of 4) and archived ones.
+    Includes filename, number, size, modified date, and preview.
+    """
+    layer = layers[LayerType.CRYSTALLIZATION]
+    result = await layer.list_crystals()
+    return result
+
+
+# === Raw Capture (1) ===
+
+@app.post("/tools/get_turns_since_crystal")
+async def get_turns_since_crystal(request: GetTurnsSinceCrystalRequest):
+    """
+    Get conversation turns from SQLite that occurred after the last crystal.
+    Use for manual exploration of raw history.
+    Always returns at least min_turns to ensure grounding even if crystal just happened.
+    """
+    # Get the timestamp of the last crystal
+    crystal_layer = layers[LayerType.CRYSTALLIZATION]
+    last_crystal_time = await crystal_layer.get_latest_timestamp()
+    
+    # Query SQLite for turns
+    raw_layer = layers[LayerType.RAW_CAPTURE]
+    try:
+        rows_after = []
+        rows_before = []
+        
+        with raw_layer.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            if last_crystal_time:
+                # Get most recent turns after the last crystal
+                query = """
+                    SELECT author_name, content, created_at, channel
+                    FROM messages
+                    WHERE created_at > ?
+                """
+                params = [last_crystal_time.isoformat()]
+                if request.channel:
+                    query += " AND channel LIKE ?"
+                    params.append(f"%{request.channel}%")
+                query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                params.extend([request.limit, request.offset])
+                cursor.execute(query, params)
+                rows_after = list(reversed(cursor.fetchall()))
+                
+                # If we don't have enough turns, get some from before the crystal
+                if len(rows_after) < request.min_turns:
+                    needed = request.min_turns - len(rows_after)
+                    query = """
+                        SELECT author_name, content, created_at, channel
+                        FROM messages
+                        WHERE created_at <= ?
+                    """
+                    params = [last_crystal_time.isoformat()]
+                    if request.channel:
+                        query += " AND channel LIKE ?"
+                        params.append(f"%{request.channel}%")
+                    query += " ORDER BY created_at DESC LIMIT ?"
+                    params.append(needed)
+                    cursor.execute(query, params)
+                    rows_before = list(reversed(cursor.fetchall()))
+            else:
+                # No crystal yet, just get recent messages
+                query = """
+                    SELECT author_name, content, created_at, channel
+                    FROM messages
+                """
+                params = []
+                if request.channel:
+                    query += " WHERE channel LIKE ?"
+                    params.append(f"%{request.channel}%")
+                query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                params.extend([request.limit, request.offset])
+                cursor.execute(query, params)
+                rows_after = list(reversed(cursor.fetchall()))
+        
+        # Format turns
+        turns = []
+        for row in rows_before + rows_after:
+            turns.append({
+                "timestamp": row['created_at'][:16] if row['created_at'] else "?",
+                "channel": row['channel'] or "",
+                "author": row['author_name'] or "Unknown",
+                "content": row['content'] or ""
+            })
+        
+        return {
+            "turns": turns,
+            "count": len(turns),
+            "last_crystal_time": last_crystal_time.isoformat() if last_crystal_time else None
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get turns: {str(e)}")
+
+
+# === Message Summaries (3) ===
+
+@app.post("/tools/get_recent_summaries")
+async def get_recent_summaries(request: GetRecentSummariesRequest):
+    """
+    Get the most recent message summaries for startup context.
+    Returns compressed history instead of raw conversation turns.
+    """
+    summaries = message_summaries.get_recent_summaries(request.limit)
+    
+    if not summaries:
+        return {
+            "summaries": [],
+            "message": "No message summaries found."
+        }
+    
+    return {
+        "summaries": [
+            {
+                "id": s['id'],
+                "message_count": s['message_count'],
+                "time_span": f"{s['time_span_start'][:16]} to {s['time_span_end'][:16]}",
+                "summary_text": s['summary_text'],
+                "channels": s.get('channels', []),
+                "created_at": s['created_at']
+            }
+            for s in summaries
+        ],
+        "count": len(summaries)
+    }
+
+
+@app.post("/tools/search_summaries")
+async def search_summaries(request: SearchSummariesRequest):
+    """
+    Search message summaries for specific content.
+    Use for contextual retrieval of compressed work history.
+    """
+    results = await message_summaries.search(request.query, request.limit)
+    
+    return {
+        "results": [
+            {
+                "content": r.content,
+                "source": r.source,
+                "relevance_score": r.relevance_score,
+                "metadata": r.metadata
+            }
+            for r in results
+        ]
+    }
+
+
+@app.get("/tools/summary_stats")
+async def summary_stats():
+    """
+    Get statistics about message summarization.
+    Shows count of unsummarized messages and recent summary activity.
+    """
+    unsummarized_count = message_summaries.count_unsummarized_messages()
+    recent_summaries = message_summaries.get_recent_summaries(3)
+    
+    SUMMARIZATION_THRESHOLD = 50  # Match constant from server.py
+    
+    stats = {
+        "unsummarized_messages": unsummarized_count,
+        "recent_summaries": len(recent_summaries),
+        "last_summary_date": recent_summaries[0]['created_at'] if recent_summaries else None,
+        "needs_summarization": unsummarized_count >= SUMMARIZATION_THRESHOLD
+    }
+    
+    return stats
+
+
+# === Graphiti Stats (1) ===
+
+@app.get("/tools/graphiti_ingestion_stats")
+async def graphiti_ingestion_stats():
+    """
+    Get statistics about Graphiti batch ingestion.
+    Shows count of uningested messages and recent ingestion activity.
+    Use to decide if batch ingestion is needed.
+    """
+    uningested_count = message_summaries.count_uningested_to_graphiti()
+    
+    stats = {
+        "uningested_messages": uningested_count,
+        "needs_ingestion": uningested_count >= 20,
+        "recommendation": "Run ingest_batch_to_graphiti" if uningested_count >= 20 else "No action needed"
+    }
+    
+    return stats
+
+
+# === Inventory (Layer 5) (5) ===
+
+@app.post("/tools/inventory_list")
+async def inventory_list(request: InventoryListRequest):
+    """
+    List items in a category (clothing, spaces, people, food, artifacts, symbols).
+    Use for 'what do I have?' queries. Complements Graphiti semantic search.
+    """
+    if not request.category:
+        raise HTTPException(status_code=400, detail="category required")
+    
+    items = await inventory.list_category(request.category, request.subcategory, request.limit)
+    
+    if not items:
+        return {
+            "items": [],
+            "message": f"No items found in category '{request.category}'"
+        }
+    
+    return {
+        "items": items,
+        "count": len(items),
+        "category": request.category,
+        "subcategory": request.subcategory
+    }
+
+
+@app.post("/tools/inventory_add")
+async def inventory_add(request: InventoryAddRequest):
+    """
+    Add an item to inventory.
+    Use when acquiring new possessions, discovering new spaces, or meeting new people.
+    """
+    if not request.name or not request.category:
+        raise HTTPException(status_code=400, detail="name and category required")
+    
+    success = await inventory.add_item(
+        name=request.name,
+        category=request.category,
+        subcategory=request.subcategory,
+        description=request.description,
+        attributes=request.attributes or {}
+    )
+    
+    if success:
+        return {
+            "success": True,
+            "message": f"Added '{request.name}' to category '{request.category}'"
+        }
+    else:
+        raise HTTPException(status_code=500, detail="Failed to add item")
+
+
+@app.post("/tools/inventory_get")
+async def inventory_get(request: InventoryGetRequest):
+    """
+    Get details about a specific inventory item.
+    """
+    if not request.name or not request.category:
+        raise HTTPException(status_code=400, detail="name and category required")
+    
+    item = await inventory.get_item(request.name, request.category)
+    
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Item '{request.name}' not found in category '{request.category}'"
+        )
+    
+    return {"item": item}
+
+
+@app.delete("/tools/inventory_delete")
+async def inventory_delete(request: InventoryDeleteRequest):
+    """
+    Delete an inventory item.
+    Use to remove outdated or duplicate entries.
+    """
+    if not request.name or not request.category:
+        raise HTTPException(status_code=400, detail="name and category required")
+    
+    success = await inventory.delete_item(request.name, request.category)
+    
+    if success:
+        return {
+            "success": True,
+            "message": f"Deleted '{request.name}' from category '{request.category}'"
+        }
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Item '{request.name}' not found in category '{request.category}'"
+        )
+
+
+@app.get("/tools/inventory_categories")
+async def inventory_categories():
+    """
+    List all inventory categories with item counts.
+    """
+    categories = await inventory.list_categories()
+    
+    return {
+        "categories": categories,
+        "count": len(categories)
+    }
+
+
+# === Tech RAG (Layer 6) (4) ===
+
+@app.post("/tools/tech_search")
+async def tech_search(request: TechSearchRequest):
+    """
+    Search technical documentation in the Tech RAG.
+    Use for finding architecture info, API docs, design decisions.
+    Family knowledge - searchable by any entity.
+    """
+    if tech_rag is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Tech RAG not available (requires ChromaDB)"
+        )
+    
+    if not request.query:
+        raise HTTPException(status_code=400, detail="query required")
+    
+    results = await tech_rag.search(request.query, request.limit, request.category)
+    
+    if not results:
+        return {
+            "results": [],
+            "message": "No results found in Tech RAG."
+        }
+    
+    return {
+        "results": [
+            {
+                "content": r.content,
+                "source": r.source,
+                "relevance_score": r.relevance_score,
+                "metadata": r.metadata
+            }
+            for r in results
+        ]
+    }
+
+
+@app.post("/tools/tech_ingest")
+async def tech_ingest(request: TechIngestRequest):
+    """
+    Ingest a markdown file into the Tech RAG.
+    Automatically chunks for better retrieval.
+    Use to index architecture docs, guides, design documents.
+    """
+    if tech_rag is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Tech RAG not available (requires ChromaDB)"
+        )
+    
+    if not request.filepath:
+        raise HTTPException(status_code=400, detail="filepath required")
+    
+    # Check if file exists
+    if not Path(request.filepath).exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"File not found: {request.filepath}"
+        )
+    
+    result = await tech_rag.ingest(request.filepath, request.category)
+    
+    if result.get("success", False):
+        return result
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail=result.get("message", "Failed to ingest file")
+        )
+
+
+@app.get("/tools/tech_list")
+async def tech_list():
+    """
+    List all documents indexed in the Tech RAG.
+    """
+    if tech_rag is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Tech RAG not available (requires ChromaDB)"
+        )
+    
+    documents = await tech_rag.list_documents()
+    
+    return {
+        "documents": documents,
+        "count": len(documents)
+    }
+
+
+@app.delete("/tools/tech_delete/{doc_id}")
+async def tech_delete(doc_id: str):
+    """
+    Delete a document from the Tech RAG by doc_id.
+    """
+    if tech_rag is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Tech RAG not available (requires ChromaDB)"
+        )
+    
+    if not doc_id:
+        raise HTTPException(status_code=400, detail="doc_id required")
+    
+    result = await tech_rag.delete_document(doc_id)
+    
+    if result.get("success", False):
+        return result
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail=result.get("message", "Failed to delete document")
+        )
+
 
 
 if __name__ == "__main__":
