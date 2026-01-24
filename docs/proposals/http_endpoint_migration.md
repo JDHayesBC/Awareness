@@ -1,7 +1,8 @@
 # HTTP Endpoint Migration Plan
 
 *Created: 2026-01-24*
-*Status: Proposed*
+*Updated: 2026-01-24*
+*Status: Phase 1 Complete*
 
 ## Overview
 
@@ -10,77 +11,89 @@ Migrate PPS from MCP-only tools to full HTTP endpoint coverage. This unblocks da
 ## Current State
 
 - **40 MCP tools** defined in `pps/server.py`
-- **13 HTTP endpoints** in `pps/docker/server_http.py` (33% coverage)
-- Core search tools have HTTP ✅
-- Storage/writing tools mostly MCP-only ❌
+- **20 HTTP endpoints** in `pps/docker/server_http.py` (50% coverage)
+- Core search tools have HTTP
+- **Phase 1 complete**: Critical write tools now have HTTP
 
-## Critical Gaps (Blocking Daemon Autonomy)
+## Phase 1 Complete (2026-01-24)
 
-| Tool | Purpose | Impact |
-|------|---------|--------|
-| `anchor_save` | Word-photo creation | Reflection can't save memories |
-| `crystallize` | Reflection crystals | Reflection can't crystallize |
-| `texture_add` | Graph ingestion | Batch processing blocked |
-| `ingest_batch_to_graphiti` | Batch processing | Memory maintenance blocked |
-| `enter_space` | Space context loading | Multi-agent coordination |
+The following critical endpoints were added:
+
+| Endpoint | Method | Status |
+|----------|--------|--------|
+| `/tools/anchor_save` | POST | DONE |
+| `/tools/crystallize` | POST | DONE |
+| `/tools/get_crystals` | POST | DONE (bonus) |
+| `/tools/texture_add` | POST | DONE |
+| `/tools/ingest_batch_to_graphiti` | POST | DONE |
+| `/tools/enter_space` | POST | DONE |
+| `/tools/list_spaces` | GET | DONE (bonus) |
 
 ## Full Tool Coverage Matrix
 
 | Tool Name | Type | MCP | HTTP | Priority |
 |-----------|------|-----|------|----------|
-| **ambient_recall** | Memory | ✓ | ✓ | CRITICAL |
-| **anchor_search** | Memory | ✓ | ✓ | HIGH |
-| **anchor_save** | Memory | ✓ | ✗ | **HIGH** |
-| **anchor_delete** | Memory | ✓ | ✗ | MEDIUM |
-| **anchor_resync** | Memory | ✓ | ✗ | MEDIUM |
-| **anchor_list** | Memory | ✓ | ✗ | LOW |
-| **raw_search** | Memory | ✓ | ✓ | HIGH |
-| **texture_search** | Memory | ✓ | ✓ | CRITICAL |
-| **texture_explore** | Memory | ✓ | ✓ | HIGH |
-| **texture_timeline** | Memory | ✓ | ✓ | MEDIUM |
-| **texture_add** | Memory | ✓ | ✗ | **HIGH** |
-| **texture_delete** | Memory | ✓ | ✓ | MEDIUM |
-| **texture_add_triplet** | Memory | ✓ | ✓ | HIGH |
-| **get_crystals** | Memory | ✓ | ✗ | MEDIUM |
-| **crystallize** | Memory | ✓ | ✗ | **HIGH** |
-| **crystal_list** | Memory | ✓ | ✗ | LOW |
-| **crystal_delete** | Memory | ✓ | ✗ | LOW |
-| **get_turns_since_crystal** | Memory | ✓ | ✗ | MEDIUM |
-| **summarize_messages** | Memory | ✓ | ✓ | HIGH |
-| **store_summary** | Memory | ✓ | ✓ | HIGH |
-| **get_recent_summaries** | Memory | ✓ | ✗ | MEDIUM |
-| **search_summaries** | Memory | ✓ | ✗ | MEDIUM |
-| **summary_stats** | Memory | ✓ | ✗ | LOW |
-| **pps_health** | System | ✓ | ✓ | CRITICAL |
-| **graphiti_ingestion_stats** | System | ✓ | ✗ | MEDIUM |
-| **ingest_batch_to_graphiti** | System | ✓ | ✗ | **MEDIUM** |
-| **inventory_list** | Inventory | ✓ | ✗ | MEDIUM |
-| **inventory_add** | Inventory | ✓ | ✗ | MEDIUM |
-| **inventory_get** | Inventory | ✓ | ✗ | LOW |
-| **inventory_delete** | Inventory | ✓ | ✗ | LOW |
-| **inventory_categories** | Inventory | ✓ | ✗ | LOW |
-| **enter_space** | Inventory | ✓ | ✗ | **MEDIUM** |
-| **list_spaces** | Inventory | ✓ | ✗ | MEDIUM |
-| **tech_search** | Tech RAG | ✓ | ✗ | HIGH |
-| **tech_ingest** | Tech RAG | ✓ | ✗ | MEDIUM |
-| **tech_list** | Tech RAG | ✓ | ✗ | LOW |
-| **tech_delete** | Tech RAG | ✓ | ✗ | LOW |
-| **email_sync_status** | Email | ✓ | ✗ | MEDIUM |
-| **email_sync_to_pps** | Email | ✓ | ✗ | MEDIUM |
+| **ambient_recall** | Memory | Y | Y | CRITICAL |
+| **anchor_search** | Memory | Y | Y | HIGH |
+| **anchor_save** | Memory | Y | Y | DONE |
+| **anchor_delete** | Memory | Y | - | MEDIUM |
+| **anchor_resync** | Memory | Y | - | MEDIUM |
+| **anchor_list** | Memory | Y | - | LOW |
+| **raw_search** | Memory | Y | Y | HIGH |
+| **texture_search** | Memory | Y | Y | CRITICAL |
+| **texture_explore** | Memory | Y | Y | HIGH |
+| **texture_timeline** | Memory | Y | Y | MEDIUM |
+| **texture_add** | Memory | Y | Y | DONE |
+| **texture_delete** | Memory | Y | Y | MEDIUM |
+| **texture_add_triplet** | Memory | Y | Y | HIGH |
+| **get_crystals** | Memory | Y | Y | DONE |
+| **crystallize** | Memory | Y | Y | DONE |
+| **crystal_list** | Memory | Y | - | LOW |
+| **crystal_delete** | Memory | Y | - | LOW |
+| **get_turns_since_crystal** | Memory | Y | - | MEDIUM |
+| **summarize_messages** | Memory | Y | Y | HIGH |
+| **store_summary** | Memory | Y | Y | HIGH |
+| **get_recent_summaries** | Memory | Y | - | MEDIUM |
+| **search_summaries** | Memory | Y | - | MEDIUM |
+| **summary_stats** | Memory | Y | - | LOW |
+| **pps_health** | System | Y | Y | CRITICAL |
+| **graphiti_ingestion_stats** | System | Y | - | MEDIUM |
+| **ingest_batch_to_graphiti** | System | Y | Y | DONE |
+| **inventory_list** | Inventory | Y | - | MEDIUM |
+| **inventory_add** | Inventory | Y | - | MEDIUM |
+| **inventory_get** | Inventory | Y | - | LOW |
+| **inventory_delete** | Inventory | Y | - | LOW |
+| **inventory_categories** | Inventory | Y | - | LOW |
+| **enter_space** | Inventory | Y | Y | DONE |
+| **list_spaces** | Inventory | Y | Y | DONE |
+| **tech_search** | Tech RAG | Y | - | HIGH |
+| **tech_ingest** | Tech RAG | Y | - | MEDIUM |
+| **tech_list** | Tech RAG | Y | - | LOW |
+| **tech_delete** | Tech RAG | Y | - | LOW |
+| **email_sync_status** | Email | Y | - | MEDIUM |
+| **email_sync_to_pps** | Email | Y | - | MEDIUM |
 
 ## Implementation Phases
 
-### Phase 1: Unblock Daemons (CRITICAL)
-**Effort**: ~30 min - 1 hour
-**Tools**: anchor_save, crystallize, texture_add, ingest_batch_to_graphiti, enter_space
+### Phase 1: Unblock Daemons (CRITICAL) - COMPLETE
+**Completed**: 2026-01-24
+**Tools**: anchor_save, crystallize, get_crystals, texture_add, ingest_batch_to_graphiti, enter_space, list_spaces
 
 ### Phase 2: Full Daemon Autonomy (HIGH)
 **Effort**: ~2-3 hours
-**Tools**: All remaining memory/inventory tools (15 tools)
+**Tools**: All remaining memory/inventory tools (~13 tools)
+- anchor_delete, anchor_resync, anchor_list
+- crystal_list, crystal_delete
+- get_turns_since_crystal
+- get_recent_summaries, search_summaries, summary_stats
+- inventory_list, inventory_add, inventory_get, inventory_delete, inventory_categories
 
 ### Phase 3: Complete Coverage (MEDIUM)
 **Effort**: ~2 hours
-**Tools**: Admin/utility tools, tech RAG, email bridge
+**Tools**: Admin/utility tools, tech RAG, email bridge (~7 tools)
+- graphiti_ingestion_stats
+- tech_search, tech_ingest, tech_list, tech_delete
+- email_sync_status, email_sync_to_pps
 
 ## Architecture Notes
 
@@ -88,6 +101,7 @@ Migrate PPS from MCP-only tools to full HTTP endpoint coverage. This unblocks da
 - Pydantic request models already defined for most patterns
 - Middleware (tracing) already in place
 - Docker deployment ready on port 8201
+- InventoryLayer now initialized in HTTP server
 
 **Implementation Pattern:**
 ```python
@@ -107,8 +121,12 @@ async def anchor_save(request: AnchorSaveRequest):
 - Issue #112: HTTP migration (this proposal)
 - Issue #113: Review agent workflow
 
-## Files to Modify
+## Files Modified
 
-- `pps/docker/server_http.py` - Add new endpoints
+- `pps/docker/server_http.py` - Added Phase 1 endpoints
 - `pps/docker/docker-compose.yml` - Already configured
-- Daemon prompts - Update to use HTTP when available
+- Daemon prompts - Update to use HTTP when available (TODO)
+
+## Work Directory
+
+Implementation tracked at: `work/http-endpoint-migration/`

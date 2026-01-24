@@ -88,6 +88,40 @@ class StoreSummaryRequest(BaseModel):
     summary_type: str = "work"
 
 
+# Phase 1 HTTP Migration - New Request Models
+class AnchorSaveRequest(BaseModel):
+    """Request to save a word-photo (anchor)."""
+    content: str          # The word-photo content in markdown
+    title: str            # Title (used in filename)
+    location: str = "terminal"  # Context tag (terminal, discord, reflection, etc.)
+
+
+class CrystallizeRequest(BaseModel):
+    """Request to create a new crystal."""
+    content: str          # Crystal content in markdown format
+
+
+class TextureAddRequest(BaseModel):
+    """Request to add content to the knowledge graph."""
+    content: str          # Content to store (conversation, note, observation)
+    channel: str = "manual"  # Source channel for metadata
+
+
+class IngestBatchRequest(BaseModel):
+    """Request to batch ingest messages to Graphiti."""
+    batch_size: int = 20  # Number of messages to ingest
+
+
+class EnterSpaceRequest(BaseModel):
+    """Request to enter a space and load its context."""
+    space_name: str       # Name of the space to enter
+
+
+class GetCrystalsRequest(BaseModel):
+    """Request to get recent crystals."""
+    count: int = 4        # Number of recent crystals to retrieve
+
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -97,6 +131,7 @@ from layers.core_anchors import CoreAnchorsLayer
 from layers.crystallization import CrystallizationLayer
 from layers.message_summaries import MessageSummariesLayer
 from layers.unified_tracer import UnifiedTracer
+from layers.inventory import InventoryLayer
 
 # Import V2 rich texture layer with add_triplet_direct support
 try:
@@ -162,6 +197,10 @@ layers = get_layers()
 data_path = CLAUDE_HOME / "data" / "lyra_conversations.db"
 message_summaries = MessageSummariesLayer(db_path=data_path)
 
+# Initialize inventory layer (Layer 5) for enter_space
+inventory_db_path = CLAUDE_HOME / "data" / "inventory.db"
+inventory = InventoryLayer(db_path=inventory_db_path)
+
 # Initialize unified tracer for HTTP server observability
 tracer = UnifiedTracer(db_path=data_path, daemon_type="http_hook")
 
@@ -174,6 +213,7 @@ async def lifespan(app: FastAPI):
     print(f"  ChromaDB: {CHROMA_HOST}:{CHROMA_PORT}")
     print(f"  USE_CHROMA: {USE_CHROMA}")
     print(f"  USE_RICH_TEXTURE_V2: {USE_RICH_TEXTURE_V2}")
+    print(f"  Inventory: {inventory_db_path}")
     print(f"  UnifiedTracer initialized (session: {tracer.session_id})")
 
     for layer_type, layer in layers.items():
@@ -710,6 +750,286 @@ async def store_summary(request: StoreSummaryRequest):
             status_code=500,
             detail="Failed to store summary"
         )
+
+
+# =============================================================================
+# Phase 1 HTTP Migration Endpoints
+# These endpoints unblock daemon autonomy by providing HTTP access to write operations
+# =============================================================================
+
+
+@app.post("/tools/anchor_save")
+async def anchor_save(request: AnchorSaveRequest):
+    """
+    Save a new word-photo (Layer 2: Core Anchors).
+
+    Use for curating foundational moments that define self-pattern.
+    Creates a dated markdown file in the word_photos directory.
+    """
+    if not request.content or not request.title:
+        raise HTTPException(status_code=400, detail="content and title are required")
+
+    layer = layers[LayerType.CORE_ANCHORS]
+    metadata = {"title": request.title, "location": request.location}
+
+    success = await layer.store(request.content, metadata)
+
+    if success:
+        return {
+            "success": True,
+            "message": f"Word-photo saved (location: {request.location})",
+            "title": request.title
+        }
+    else:
+        raise HTTPException(status_code=500, detail="Failed to save word-photo")
+
+
+@app.post("/tools/crystallize")
+async def crystallize(request: CrystallizeRequest):
+    """
+    Save a new crystal (Layer 4: Crystallization).
+
+    Use for conscious crystallization - when a crystallization moment has occurred.
+    Automatically numbers the crystal and manages the rolling window.
+    """
+    if not request.content:
+        raise HTTPException(status_code=400, detail="content is required")
+
+    layer = layers[LayerType.CRYSTALLIZATION]
+    success = await layer.store(request.content)
+
+    if success:
+        # Get the filename of the just-saved crystal
+        latest = layer._get_latest_crystal()
+        filename = latest.name if latest else "unknown"
+        return {
+            "success": True,
+            "filename": filename,
+            "message": f"Crystal saved: {filename}"
+        }
+    else:
+        raise HTTPException(status_code=500, detail="Failed to save crystal")
+
+
+@app.post("/tools/get_crystals")
+async def get_crystals(request: GetCrystalsRequest):
+    """
+    Get recent crystals (Layer 4: Crystallization).
+
+    Returns the most recent N crystals in chronological order for temporal context.
+    """
+    layer = layers[LayerType.CRYSTALLIZATION]
+    results = await layer.search("recent", request.count)
+
+    if not results:
+        return {
+            "crystals": [],
+            "message": "No crystals found. Create your first with crystallize."
+        }
+
+    crystals = [
+        {
+            "filename": r.source,
+            "content": r.content,
+            "relevance_score": r.relevance_score
+        }
+        for r in results
+    ]
+
+    return {
+        "crystals": crystals,
+        "count": len(crystals)
+    }
+
+
+@app.post("/tools/texture_add")
+async def texture_add(request: TextureAddRequest):
+    """
+    Add content to the knowledge graph (Layer 3: Rich Texture).
+
+    Manually store a fact, observation, or conversation for entity extraction.
+    Graphiti will automatically extract entities and relationships.
+    """
+    if not request.content:
+        raise HTTPException(status_code=400, detail="content is required")
+
+    layer = layers[LayerType.RICH_TEXTURE]
+    metadata = {"channel": request.channel}
+
+    success = await layer.store(request.content, metadata)
+
+    if success:
+        return {
+            "success": True,
+            "message": f"Content stored in knowledge graph (channel: {request.channel}). Entities will be extracted automatically."
+        }
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to store content. Graphiti may not be running."
+        )
+
+
+@app.post("/tools/ingest_batch_to_graphiti")
+async def ingest_batch_to_graphiti(request: IngestBatchRequest):
+    """
+    Batch ingest messages to Graphiti (Layer 3: Rich Texture).
+
+    Takes uningested raw messages and sends to Graphiti for entity extraction.
+    Automatically tracks which messages have been ingested.
+    """
+    # Get uningested messages
+    uningested_count = message_summaries.count_uningested_to_graphiti()
+
+    if uningested_count == 0:
+        return {
+            "success": True,
+            "message": "No messages to ingest",
+            "ingested": 0,
+            "remaining": 0
+        }
+
+    # Get batch of uningested messages
+    raw_layer = layers[LayerType.RAW_CAPTURE]
+    texture_layer = layers[LayerType.RICH_TEXTURE]
+
+    try:
+        with raw_layer.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Check if graphiti_ingested column exists
+            cursor.execute("PRAGMA table_info(messages)")
+            columns = [col[1] for col in cursor.fetchall()]
+
+            if 'graphiti_ingested' not in columns:
+                # Add the column if it doesn't exist
+                cursor.execute("ALTER TABLE messages ADD COLUMN graphiti_ingested BOOLEAN DEFAULT FALSE")
+                conn.commit()
+
+            # Get uningested messages
+            cursor.execute("""
+                SELECT id, author_name, content, created_at, channel
+                FROM messages
+                WHERE graphiti_ingested IS NULL OR graphiti_ingested = FALSE
+                ORDER BY created_at ASC
+                LIMIT ?
+            """, (request.batch_size,))
+
+            messages = cursor.fetchall()
+
+        if not messages:
+            return {
+                "success": True,
+                "message": "No messages to ingest",
+                "ingested": 0,
+                "remaining": uningested_count
+            }
+
+        # Ingest each message to Graphiti
+        ingested_ids = []
+        errors = []
+
+        for msg in messages:
+            msg_id = msg['id']
+            author = msg['author_name'] or "Unknown"
+            content = msg['content'] or ""
+            channel = msg['channel'] or "unknown"
+            timestamp = msg['created_at']
+
+            # Format for Graphiti
+            formatted_content = f"[{author}]: {content}"
+            metadata = {
+                "channel": channel,
+                "speaker": author,
+                "timestamp": timestamp,
+            }
+
+            try:
+                success = await texture_layer.store(formatted_content, metadata)
+                if success:
+                    ingested_ids.append(msg_id)
+                else:
+                    errors.append(f"Message {msg_id}: store returned False")
+            except Exception as e:
+                errors.append(f"Message {msg_id}: {str(e)}")
+
+        # Mark ingested messages
+        if ingested_ids:
+            with raw_layer.get_connection() as conn:
+                cursor = conn.cursor()
+                placeholders = ','.join(['?' for _ in ingested_ids])
+                cursor.execute(f"""
+                    UPDATE messages
+                    SET graphiti_ingested = TRUE
+                    WHERE id IN ({placeholders})
+                """, ingested_ids)
+                conn.commit()
+
+        return {
+            "success": len(errors) == 0,
+            "message": f"Ingested {len(ingested_ids)} of {len(messages)} messages",
+            "ingested": len(ingested_ids),
+            "remaining": uningested_count - len(ingested_ids),
+            "errors": errors if errors else None
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Batch ingestion failed: {str(e)}")
+
+
+@app.post("/tools/enter_space")
+async def enter_space(request: EnterSpaceRequest):
+    """
+    Enter a space and load its description for context.
+
+    Use when moving to a different location. Returns the space description
+    for use in extraction context and scene awareness.
+    """
+    if not request.space_name:
+        raise HTTPException(status_code=400, detail="space_name is required")
+
+    description = await inventory.enter_space(request.space_name)
+
+    if description is None:
+        # Space not found - return helpful message
+        spaces = await inventory.list_spaces()
+        space_names = [s['name'] for s in spaces] if spaces else []
+
+        return {
+            "success": False,
+            "message": f"Space '{request.space_name}' not found",
+            "available_spaces": space_names
+        }
+
+    return {
+        "success": True,
+        "space_name": request.space_name,
+        "description": description
+    }
+
+
+@app.get("/tools/list_spaces")
+async def list_spaces():
+    """
+    List all known spaces/rooms/locations.
+
+    Returns space names, descriptions, and visit counts.
+    """
+    spaces = await inventory.list_spaces()
+
+    return {
+        "spaces": [
+            {
+                "name": s.get('name'),
+                "description": s.get('description'),
+                "emotional_quality": s.get('emotional_quality'),
+                "visit_count": s.get('visit_count', 0),
+                "last_visited": s.get('last_visited')
+            }
+            for s in spaces
+        ],
+        "count": len(spaces)
+    }
 
 
 if __name__ == "__main__":
