@@ -8,6 +8,7 @@
 |-------------|--------|---------|
 | **cc_invoker SDK Agent** | Active | Persistent Claude Code wrapper using SDK agent. See `daemon/cc_invoker/TODO.md` for architecture and status. |
 | **Graphiti Local Ingestion** | Running | 11,000+ messages being ingested via Qwen3-80b on NUC. Multi-day process. |
+| **HTTP Endpoint Migration** | Planned | Full HTTP coverage for PPS tools (Issue #112). See `docs/proposals/http_endpoint_migration.md` for audit and plan. |
 | **Daemon MCP Integration** | ✅ Done (2026-01-24) | Venv consolidated to `.venv`, MCP tools work directly. HTTP fallback removed. |
 
 **Before trying to "fix" daemon issues**: Check if the issue is listed above. Check `daemon/cc_invoker/TODO.md`. Ask in your journal if unsure.
