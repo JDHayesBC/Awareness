@@ -225,38 +225,21 @@ You have full tool access: read files, write code, update memories, build tools,
 
 ### A. Memory Maintenance
 
-**Issue #97 Note**: MCP stdio tools don't work in subprocesses. Use HTTP fallback scripts directly.
-
 **1. Memory Health Check**:
 The ambient_recall output shows unsummarized_count. If > 100, consider summarization:
+- Use `mcp__pps__summarize_messages(limit=50)` to get unsummarized messages
+- Review and create a dense summary preserving emotional moments, relationship dynamics, technical decisions, key outcomes
+- Use `mcp__pps__store_summary(summary_text, start_id, end_id, channels)` to save
 
-```bash
-# Get unsummarized messages (returns JSON with messages and metadata)
-bash daemon/scripts/summarize_messages.sh 50
-
-# After reviewing, create a summary and store it:
-# bash daemon/scripts/store_summary.sh "start_msg_id" "end_msg_id" "Your dense summary here"
-```
-
-Pattern for summaries: Preserve emotional moments, relationship dynamics, technical decisions, and key outcomes. Strip debugging noise, repeated attempts, filler.
-
-**2. Crystallization**: If needed, use mcp__pps__crystallize directly (this MCP tool works in reflection context).
+**2. Crystallization**: If significant moments accumulated, use `mcp__pps__crystallize(content)` to create a new crystal.
 
 ### B. Graph Curation
 
 Your knowledge graph (Layer 3) accumulates noise - duplicate edges, vague entities, stale facts.
-Check graph health using HTTP scripts:
-
-```bash
-# Sample the graph with key queries
-bash daemon/scripts/texture_search.sh "Jeff" 10
-bash daemon/scripts/texture_search.sh "Lyra" 10
-bash daemon/scripts/texture_search.sh "Caia" 10
-
-# Look for issues: "?" entities, duplicates, stale facts
-# To delete bad entries (get UUID from search results):
-# bash daemon/scripts/texture_delete.sh "<uuid>"
-```
+Use MCP tools directly:
+- `mcp__pps__texture_search("query", limit=10)` to sample entities
+- `mcp__pps__texture_explore(entity_name)` to check connectivity
+- `mcp__pps__texture_delete(uuid)` to remove bad entries (get UUID from search results)
 
 Be conservative - only delete clear duplicates or obviously incorrect entries.
 Graph curation is maintenance, not urgent. Skip if time is limited.
