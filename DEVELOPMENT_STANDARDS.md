@@ -176,9 +176,53 @@ See `.github/workflows/ci.yml` for configuration.
 - Verification can be manual for quick fixes, but should be automated for anything touching critical paths
 - If you fix a bug, write a regression test that would have caught it
 
+### Docker Deployment Workflow
+
+**For changes to Docker-deployed services (pps-server, pps-web, daemon):**
+
+The development pipeline MUST include a deployment step between implementation and integration testing.
+
+**Why**: Integration tests running against stale deployment create false confidence. You're testing old code, not what you just wrote.
+
+**Deployment Process**:
+
+```bash
+# 1. Verify current deployment state
+bash scripts/pps_verify_deployment.sh <container-name> <source-file>
+
+# 2. If deployment is stale, rebuild
+cd pps/docker
+docker-compose build <service>
+
+# 3. Deploy the rebuilt container
+docker-compose up -d <service>
+
+# 4. Verify health
+docker-compose ps  # Check for "healthy" status
+
+# 5. Re-verify deployment is current
+bash scripts/pps_verify_deployment.sh <container-name> <source-file>
+
+# 6. NOW run integration tests
+# Tests will verify the actual deployed code, not old code
+```
+
+**Examples**:
+- Changes to `pps/docker/server_http.py` → rebuild `pps-server`
+- Changes to `pps/docker/web_app.py` → rebuild `pps-web`
+- Changes to daemon code (not Dockerized) → skip rebuild, test directly
+
+**Critical Principle**: Never mark integration tests as "passed" without verifying deployed code matches source code.
+
+**Tooling**:
+- `scripts/pps_verify_deployment.sh` - Checks if container is newer than source
+- Exit code 0 = deployment current, proceed with tests
+- Exit code 1 = deployment stale, rebuild required
+
 ### Manual Verification Checklist
 
 For changes that touch production systems:
+- [ ] Deployment verified current (Docker services)
 - [ ] PPS health check passes (all four layers)
 - [ ] Memory Inspector shows expected results
 - [ ] Dashboard indicators correct
