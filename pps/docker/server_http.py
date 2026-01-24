@@ -271,9 +271,13 @@ inventory_db_path = CLAUDE_HOME / "data" / "inventory.db"
 inventory = InventoryLayer(db_path=inventory_db_path)
 
 # Initialize Tech RAG layer (Layer 6) if available
+tech_docs_path = CLAUDE_HOME / "tech_docs"
 if USE_TECH_RAG:
-    tech_rag_db = CLAUDE_HOME / "data" / "tech_rag.db"
-    tech_rag = TechRAGLayer(db_path=tech_rag_db)
+    tech_rag = TechRAGLayer(
+        tech_docs_path=tech_docs_path,
+        chroma_host=CHROMA_HOST,
+        chroma_port=CHROMA_PORT
+    )
 else:
     tech_rag = None
 
@@ -291,7 +295,7 @@ async def lifespan(app: FastAPI):
     print(f"  USE_RICH_TEXTURE_V2: {USE_RICH_TEXTURE_V2}")
     print(f"  USE_TECH_RAG: {USE_TECH_RAG}")
     print(f"  Inventory: {inventory_db_path}")
-    print(f"  Tech RAG: {tech_rag_db if USE_TECH_RAG else 'disabled'}")
+    print(f"  Tech RAG: {tech_docs_path if USE_TECH_RAG else 'disabled'}")
     print(f"  UnifiedTracer initialized (session: {tracer.session_id})")
 
     for layer_type, layer in layers.items():
@@ -1579,8 +1583,8 @@ async def tech_list():
             status_code=503,
             detail="Tech RAG not available (requires ChromaDB)"
         )
-    
-    documents = await tech_rag.list_documents()
+
+    documents = await tech_rag.list_docs()
     
     return {
         "documents": documents,
