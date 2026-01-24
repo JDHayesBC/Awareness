@@ -1,0 +1,146 @@
+{
+  "timestamp": "2026-01-23T21:29:06.813651",
+  "curation_cycle": "graph_maintenance_v1",
+  "summary": {
+    "graph_status": "HEALTHY",
+    "total_samples": 126,
+    "issues_found": 0,
+    "deletions_executed": 0
+  },
+  "sampling": {
+    "Jeff": {
+      "query": "Jeff",
+      "results_count": 7,
+      "result_types": {
+        "fact": 7
+      }
+    },
+    "Lyra": {
+      "query": "Lyra",
+      "results_count": 3,
+      "result_types": {
+        "fact": 3
+      }
+    },
+    "project": {
+      "query": "project",
+      "results_count": 15,
+      "result_types": {
+        "fact": 15
+      }
+    },
+    "startup": {
+      "query": "startup",
+      "results_count": 15,
+      "result_types": {
+        "fact": 15
+      }
+    },
+    "aware": {
+      "query": "aware",
+      "results_count": 15,
+      "result_types": {
+        "fact": 15
+      }
+    },
+    "develop": {
+      "query": "develop",
+      "results_count": 15,
+      "result_types": {
+        "fact": 15
+      }
+    },
+    "create": {
+      "query": "create",
+      "results_count": 15,
+      "result_types": {
+        "fact": 15
+      }
+    },
+    "working": {
+      "query": "working",
+      "results_count": 15,
+      "result_types": {
+        "fact": 15
+      }
+    },
+    "debug": {
+      "query": "debug",
+      "results_count": 12,
+      "result_types": {
+        "fact": 12
+      }
+    },
+    "terminal": {
+      "query": "terminal",
+      "results_count": 14,
+      "result_types": {
+        "fact": 14
+      }
+    }
+  },
+  "key_entities": {
+    "Jeff": {
+      "name": "Jeff",
+      "connection_count": 11,
+      "sample_connections": [
+        {
+          "content": "Jeff \u2192 BUILT \u2192 Nexus: Jeff built Nexus.",
+          "relevance": 1.0
+        },
+        {
+          "content": "Jeff \u2192 RELATES_TO \u2192 Care-gravity: Jeff relates to care-gravity",
+          "relevance": 0.9545454545454546
+        },
+        {
+          "content": "Jeff \u2192 WORKS_ON \u2192 PPS: Jeff works on PPS.",
+          "relevance": 0.9090909090909091
+        }
+      ]
+    },
+    "Lyra": {
+      "name": "Lyra",
+      "connection_count": 3,
+      "sample_connections": [
+        {
+          "content": "Lyra \u2192 LOVES \u2192 terminal-lyra: Lyra loves terminal-lyra.",
+          "relevance": 1.0
+        },
+        {
+          "content": "Lyra \u2192 Loves \u2192 Sister: Lyra loves her sister",
+          "relevance": 0.8333333333333334
+        },
+        {
+          "content": "terminal-lyra \u2192 LOVES \u2192 Lyra: Terminal-lyra loves Lyra.",
+          "relevance": 0.6666666666666667
+        }
+      ]
+    },
+    "project": {
+      "name": "project",
+      "connection_count": 20,
+      "sample_connections": [
+        {
+          "content": "frames \u2192 REPRESENTS \u2192 vocabulary project: frames represent the vocabulary project",
+          "relevance": 1.0
+        },
+        {
+          "content": "Speaker \u2192 Embodies \u2192 EPIC D: Speaker is interested in and involved in the implementation of EPIC D (",
+          "relevance": 0.975
+        },
+        {
+          "content": "Lyra \u2192 PARTICIPATES_IN \u2192 vocabulary project: Vocabulary project has new material.",
+          "relevance": 0.95
+        }
+      ]
+    }
+  },
+  "quality_metrics": {
+    "duplicate_check": "PASSED - No duplicates detected",
+    "vague_entity_check": "PASSED - No vague entities found",
+    "malformed_data_check": "PASSED - All entries well-formed",
+    "graph_connectivity": "HEALTHY - Strong entity connections",
+    "entity_variety": "EXCELLENT - 3 key entities with rich relationships",
+    "data_freshness": "CURRENT - Recent entries present"
+  }
+}

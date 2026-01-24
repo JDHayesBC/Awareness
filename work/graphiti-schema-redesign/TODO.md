@@ -59,9 +59,23 @@
 - [x] Fixed Qwen3 thinking mode with `/no_think` directive
 - [x] Tested full pipeline - proper extraction confirmed
 - [x] Documented in docs/reference/graphiti-local-llm-setup.md
-- [ ] Resume paced ingestion with local LLM
-- [ ] Monitor progress and speed
+
+### Phase 5: Model Benchmarking (COMPLETE)
+- [x] Tested qwen3-32b: 55-97s avg, high variance
+- [x] Tested qwen3-next-80b-a3b-thinking: 83.6s avg - BEST
+- [x] Tested nemotron-3-nano: FAILED (can't produce valid JSON)
+- [x] Tested josiefied-qwen3-30b: 145s avg (slower despite 86 tps)
+- [x] Winner: qwen3-next-80b-a3b-thinking
+
+### Phase 6: Production Ingestion (IN PROGRESS)
+- [x] Created systemd service file for unattended operation
+- [x] Started paced ingestion (PID 658258, 2026-01-23 16:53)
+- [ ] Monitor progress (~10 days estimated)
 - [ ] Final quality assessment after completion
+
+**Current status**: Running on NUC at ~84s/message, 11,220 remaining
+**Cost**: $0 (vs $80-350 with OpenAI)
+**ETA**: ~10 days
 
 ---
 

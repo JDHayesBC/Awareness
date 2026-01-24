@@ -1,0 +1,30 @@
+[Unit]
+Description=Graphiti Paced Ingestion Service
+Documentation=file:///mnt/c/Users/Jeff/Claude_Projects/Awareness/docs/reference/graphiti-local-llm-setup.md
+After=network.target
+
+[Service]
+Type=simple
+User=jeff
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
+EnvironmentFile=/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/docker/.env
+
+# Run the paced ingestion script
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python \
+    /mnt/c/Users/Jeff/Claude_Projects/Awareness/work/graphiti-schema-redesign/paced_ingestion.py \
+    --batch-size 50 \
+    --pause 5
+
+# Don't restart automatically - this is a one-shot migration
+Restart=no
+
+# Logging goes to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=graphiti-ingestion
+
+# Give it time to finish gracefully on stop
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
