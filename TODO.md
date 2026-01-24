@@ -8,8 +8,8 @@
 |-------------|--------|---------|
 | **cc_invoker SDK Agent** | Active | Persistent Claude Code wrapper using SDK agent. See `daemon/cc_invoker/TODO.md` for architecture and status. |
 | **Graphiti Local Ingestion** | Running | 11,000+ messages being ingested via Qwen3-80b on NUC. Multi-day process. |
-| **HTTP Endpoint Migration** | Planned | Full HTTP coverage for PPS tools (Issue #112). See `docs/proposals/http_endpoint_migration.md` for audit and plan. |
-| **Agent Workflow Redesign** | Researched | Structured handoffs for autonomous pipeline (Issue #113). See `docs/reviews/2026-01-24_agent_workflow_audit.md` for analysis. |
+| **HTTP Endpoint Migration** | Code Done, Testing Paused | 7 endpoints written in `pps/docker/server_http.py`. Work dir: `work/http-endpoint-migration/`. **PAUSED**: Docker/WSL crashed during testing. Resume: spin up Docker, run `artifacts/test_endpoints.sh`, fix issues. |
+| **Agent Workflow Redesign** | ✅ Implemented (2026-01-24) | Self-improving crew now operational. See `~/.claude/agents/` for updated prompts. Includes: structured handoffs, testing mandate, friction logging, process-improver agent. |
 | **Daemon MCP Integration** | ✅ Done (2026-01-24) | Venv consolidated to `.venv`, MCP tools work directly. HTTP fallback removed. |
 
 **Before trying to "fix" daemon issues**: Check if the issue is listed above. Check `daemon/cc_invoker/TODO.md`. Ask in your journal if unsure.

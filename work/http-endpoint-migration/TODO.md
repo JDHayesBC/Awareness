@@ -1,6 +1,18 @@
 # Project: HTTP Endpoint Migration (Phase 1)
 
-**Status**: Complete
+**Status**: TESTING PAUSED (Docker/WSL crashed 2026-01-24 ~1:10 PM)
+
+## RESUME INSTRUCTIONS (after reboot)
+1. `cd pps/docker && docker-compose up -d`
+2. Wait for health: `curl http://localhost:8201/health`
+3. Run tests: `bash artifacts/test_endpoints.sh`
+4. Capture results to `artifacts/test_results.md`
+5. Fix any failures found
+6. Commit with "verified working" status
+
+---
+
+**Previous Status**: Complete (code only - NOT tested)
 **Created**: 2026-01-24
 **Completed**: 2026-01-24
 **Linked from**: TODO.md WIP section
