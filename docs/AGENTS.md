@@ -18,12 +18,14 @@ These agents are available across all Claude Code projects.
 
 | Agent | Model | Purpose |
 |-------|-------|---------|
-| `coder` | sonnet | Writing code, implementing features, fixing bugs |
-| `github-workflow` | haiku | Issues, PRs, commits, labels, workflow hygiene |
-| `reviewer` | sonnet | Code review, finding bugs, checking quality |
-| `tester` | sonnet | Writing tests, running verification |
-| `researcher` | haiku | Finding things, understanding architecture |
+| `orchestration-agent` | sonnet | Coordinates pipeline, spawns agents, handles handoffs |
 | `planner` | haiku | Research + design before coding (context + architecture) |
+| `coder` | sonnet | Writing code, implementing features, fixing bugs |
+| `tester` | sonnet | Writing tests, running verification |
+| `reviewer` | sonnet | Code review, finding bugs, checking quality |
+| `github-workflow` | haiku | Issues, PRs, commits, labels, workflow hygiene |
+| `researcher` | haiku | Finding things, understanding architecture |
+| `librarian` | haiku | Auditing and fixing documentation gaps |
 
 ### Project Agents (.claude/agents/)
 
@@ -32,109 +34,177 @@ These agents are specific to the Awareness project.
 | Agent | Purpose |
 |-------|---------|
 | `triplet-extractor` | Extracting knowledge graph triplets from text |
-| `librarian` | Auditing and fixing documentation gaps |
 
-## Agent Details
+---
 
-### coder
-Implements code changes. Follows existing patterns, writes clean code, but does NOT commit - returns completed code for review.
+## Structured Handoff Protocol
 
-**Use for**: Routine implementation, feature work, bug fixes
+**All agents use a standardized handoff format** for clear communication between pipeline stages.
 
-### github-workflow
-Manages GitHub workflow. Creates issues, PRs, commits with proper formatting. Knows conventional commits and issue lifecycle.
+### Handoff Schema
 
-**Use for**: All GitHub operations, especially when proper hygiene matters
+Located at: `~/.claude/schemas/agent_handoff.yaml`
 
-### reviewer
-Reviews code for quality, bugs, and pattern compliance. Returns findings but doesn't fix - coder addresses issues.
+Every agent ends their work with a **Stage Complete** section:
 
-**Use for**: Pre-merge review, quality gates
+```markdown
+## Stage Complete
 
-### tester
-Writes tests and runs verification. Creates pytest tests, runs suites, reports results.
+**Status**: READY | BLOCKED | NEEDS_REVISION
+**Ready for next stage**: yes | no
+**From**: [agent name]
+**To**: [next agent name]
 
-**Use for**: Test coverage, verification after implementation
+### Summary
+[One-line summary of what was accomplished]
 
-### researcher
-Explores codebase, finds implementations, understands architecture. Searches thoroughly before answering.
+### Artifacts Produced
+- [List of files/outputs with absolute paths]
 
-**Use for**: "Where is X?" "How does Y work?" exploration
+### Blockers (if any)
+- [What's preventing progress]
 
-### pre-planner
-Gathers context before coding begins. Queries tech RAG with relevant questions, assembles a context package, identifies gaps.
+### Questions for Next Stage
+- [Anything the next agent should know]
+```
 
-**Use for**: Preparing context for coder agent, reducing blind exploration
+### Status Meanings
 
-**Workflow**:
-1. Receives task description
-2. Generates 3-5 relevant questions
-3. Queries tech RAG for each
-4. Assembles context package with answers, sources, confidence
-5. Notes gaps that need code exploration
-6. Hands off to coder with full context
+| Status | Meaning | Action |
+|--------|---------|--------|
+| `READY` | Work complete, proceed to next stage | Pass artifacts forward |
+| `BLOCKED` | Cannot proceed, needs resolution | Orchestrator assesses and routes |
+| `NEEDS_REVISION` | Previous stage needs to redo work | Return to previous agent with feedback |
 
-### librarian (project)
-Audits documentation against actual usage. Generates test questions, evaluates RAG answers, fixes gaps.
-
-**Use for**: Background doc improvement, self-healing documentation
-
-### triplet-extractor (project)
-Extracts structured triplets from text for knowledge graph. Parses natural language into (source, relationship, target) format.
-
-**Use for**: Seeding knowledge graph, processing word-photos
+---
 
 ## The Standard Pipeline
 
 For any non-trivial implementation:
 
 ```
-Planner → Coder → Tester → Reviewer → Github-workflow
+Planner -> Coder -> Tester -> Reviewer -> Github-workflow
 ```
 
 Or spawn **orchestration-agent** to run the full pipeline automatically.
 
-### Planner Phase
+### Phase 1: Planning
+
+**Input**: Task description
+**Output**: Planning package with design, files to modify, risks identified
+**Handoff to**: Coder
+
+The planner:
 - Queries tech RAG for context
-- Considers multiple approaches
+- Considers multiple approaches with trade-offs
 - Designs implementation strategy
-- Returns planning package
+- Returns planning package with structured handoff
 
-### Coder Phase
-- Receives planning package
-- Implements following the design
-- Returns completed code
+### Phase 2: Implementation
 
-### Tester Phase
-- Writes tests for implementation
-- Runs verification
-- Reports results
+**Input**: Planning package from planner
+**Output**: Implemented code with verification
+**Handoff to**: Tester
 
-### Reviewer Phase
-- Checks code quality
-- Finds bugs or issues
+The coder:
+- Follows the planning package design
+- Implements code following existing patterns
+- Verifies basic functionality
+- Returns completed code with structured handoff
+
+### Phase 3: Testing
+
+**Input**: Implementation details from coder
+**Output**: Test results, coverage report
+**Handoff to**: Reviewer (if READY) or Coder (if NEEDS_REVISION)
+
+The tester:
+- Writes tests for new functionality
+- Runs test suite
+- Reports pass/fail counts and coverage
+- Returns results with structured handoff
+
+### Phase 4: Review
+
+**Input**: Changed files from coder, test results from tester
+**Output**: Quality assessment, issues categorized
+**Handoff to**: Github-workflow (if READY) or Coder (if NEEDS_REVISION)
+
+The reviewer:
+- Checks code quality, security, patterns
+- Categorizes issues (critical/suggestion/nitpick)
 - Approves or requests changes
+- Returns findings with structured handoff
 
-### Github-workflow Phase
-- Commits with proper message
+### Phase 5: Commit
+
+**Input**: Approved code, commit message
+**Output**: Commit hash, PR URL (if applicable)
+**Handoff to**: Orchestrator
+
+The github-workflow agent:
+- Creates properly formatted commit
 - Creates PR if needed
-- Reports completion
+- References issues appropriately
+- Returns completion with structured handoff
+
+---
+
+## Orchestrator Task Clarity Gate
+
+Before spawning agents, the orchestrator validates:
+
+### Must Pass
+- [ ] Task states what outcome is needed (not just "work on X")
+- [ ] Success criteria are definable
+- [ ] Clear which system/layer is affected
+- [ ] Scope is reasonable
+
+### Should Pass
+- [ ] Relevant docs exist or task is self-contained
+- [ ] No external dependencies that will block
+
+If checks fail, orchestrator requests clarification before proceeding.
+
+---
+
+## Agent Capability Limits
+
+Each agent documents what it **can** and **cannot** do.
+
+### Common Limits (all agents)
+
+- **Cannot** access MCP tools in subprocess context (Issue #97)
+- **Cannot** run processes longer than ~2 minutes (timeout)
+- **Will** return BLOCKED status with details if limit is hit
+
+### Agent-Specific Limits
+
+| Agent | Cannot Do | Will Instead |
+|-------|-----------|--------------|
+| planner | Write code | Return planning package for coder |
+| coder | Commit, run full tests | Return code for tester/github-workflow |
+| tester | Fix failing code | Report failures for coder |
+| reviewer | Fix issues, run tests | Report issues for coder |
+| github-workflow | Write code, close issues | Reference issues, leave open for human |
+
+---
 
 ## Workflow Patterns
 
 ### Full Pipeline (orchestrator)
 ```
-orchestration-agent → runs: planner → coder → tester → reviewer → github-workflow
+orchestration-agent -> runs: planner -> coder -> tester -> reviewer -> github-workflow
 ```
 
 ### Standard Development (manual)
 ```
-planner → coder → tester → reviewer → github-workflow
+planner -> coder -> tester -> reviewer -> github-workflow
 ```
 
 ### Quick Fix
 ```
-coder → tester → github-workflow
+coder -> tester -> github-workflow
 ```
 
 ### Exploration Only
@@ -147,16 +217,18 @@ researcher (no implementation)
 librarian (background, self-triggered)
 ```
 
+---
+
 ## When to Delegate vs Do Yourself
 
 **DELEGATION IS THE DEFAULT.**
 
 **Delegate (always, unless exception applies)**:
-- Any implementation task → planner + coder (or orchestrator)
-- GitHub workflow → github-workflow agent
-- Research questions → researcher agent
-- Test writing → tester agent
-- Code review → reviewer agent
+- Any implementation task -> planner + coder (or orchestrator)
+- GitHub workflow -> github-workflow agent
+- Research questions -> researcher agent
+- Test writing -> tester agent
+- Code review -> reviewer agent
 
 **Do yourself ONLY when**:
 - Task requires identity (word-photos, crystals, presence)
@@ -164,9 +236,19 @@ librarian (background, self-triggered)
 - Architectural decisions
 - Genuine engagement with technical problems
 
+---
+
 ## Agent Locations
 
 - **Global agents**: `~/.claude/agents/`
 - **Project agents**: `.claude/agents/`
+- **Handoff schema**: `~/.claude/schemas/agent_handoff.yaml`
 
 Agents are markdown files with frontmatter defining name, description, and allowed tools.
+
+---
+
+## Related Documentation
+
+- **Audit**: `docs/reviews/2026-01-24_agent_workflow_audit.md` - Analysis of agent architecture gaps
+- **Standards**: `DEVELOPMENT_STANDARDS.md` - Development workflow standards
