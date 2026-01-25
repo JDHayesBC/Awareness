@@ -1328,12 +1328,19 @@ async def api_reflections(hours: int = 24, outcome: Optional[str] = None):
 
 @app.get("/api/reflections/{session_id}")
 async def api_reflection_detail(session_id: str):
+    """Get detailed trace for a reflection session (legacy endpoint)."""
+    # Redirect to new /trace endpoint
+    return await api_reflection_trace(session_id)
+
+
+@app.get("/api/reflections/{session_id}/trace")
+async def api_reflection_trace(session_id: str):
     """Get detailed trace for a reflection session."""
     traces = get_session_traces(session_id)
 
     if not traces:
         return HTMLResponse("""
-            <div class="mt-4 p-4 bg-gray-600 rounded-lg">
+            <div class="p-4 bg-gray-600 rounded-lg">
                 <p class="text-gray-400 text-sm">No trace data available for this session.</p>
             </div>
         """)
@@ -1357,7 +1364,7 @@ async def api_reflection_detail(session_id: str):
         """
 
     return HTMLResponse(f"""
-        <div class="mt-4 p-4 bg-gray-600 rounded-lg">
+        <div class="p-4 bg-gray-600 rounded-lg">
             <h4 class="font-medium mb-3 text-gray-300">Session Trace</h4>
             <div class="space-y-1">
                 {events_html if events_html else '<p class="text-gray-400 text-sm">No events recorded.</p>'}
@@ -1462,6 +1469,53 @@ def get_daemon_traces(
         return []
 
 
+def find_journal_for_session(session_started_at: str) -> Optional[tuple[str, str]]:
+    """
+    Match a journal file to a session based on timestamp.
+    Journal format: reflection_YYYY-MM-DD_HHMMSS.md (or .txt)
+    Session timestamp: YYYY-MM-DDTHH:MM:SS.microseconds+00:00
+
+    Returns (journal_type, filename) tuple or None
+    """
+    try:
+        # Parse session timestamp
+        session_dt = datetime.fromisoformat(session_started_at.replace('+00:00', ''))
+
+        # Search both reflection and discord journals directories
+        journal_dirs = [
+            (ENTITY_PATH / "journals" / "reflection", "reflection"),
+            (ENTITY_PATH / "journals" / "discord", "discord")
+        ]
+
+        for journals_dir, journal_type in journal_dirs:
+            if not journals_dir.exists():
+                continue
+
+            # Check both .md and .txt files
+            for pattern in ["reflection_*.md", "reflection_*.txt"]:
+                for journal in journals_dir.glob(pattern):
+                    # Extract timestamp from filename: reflection_2026-01-24_205313.md
+                    try:
+                        parts = journal.stem.split('_')
+                        if len(parts) >= 3:
+                            date_part = parts[1]  # 2026-01-24
+                            time_part = parts[2]  # 205313
+
+                            # Convert to datetime
+                            journal_dt = datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H%M%S")
+
+                            # Match if within 5 minutes
+                            diff = abs((session_dt - journal_dt).total_seconds())
+                            if diff < 300:  # 5 minutes
+                                return (journal_type, journal.name)
+                    except:
+                        continue
+
+        return None
+    except Exception:
+        return None
+
+
 def get_daemon_sessions(
     daemon_type: Optional[str] = None,
     hours: int = 24,
@@ -1510,7 +1564,16 @@ def get_daemon_sessions(
 
         sessions = []
         for row in cursor.fetchall():
-            sessions.append(dict(row))
+            session = dict(row)
+            # Add journal matching for reflection sessions
+            if daemon_type == "reflection" and session.get("started_at"):
+                journal_result = find_journal_for_session(session["started_at"])
+                if journal_result:
+                    session["journal_type"], session["journal_filename"] = journal_result
+                else:
+                    session["journal_type"] = None
+                    session["journal_filename"] = None
+            sessions.append(session)
 
         conn.close()
         return sessions
@@ -1687,12 +1750,26 @@ async def observatory(request: Request):
 
 
 @app.get("/api/journal/{journal_type}/{filename}")
-async def api_journal_content(journal_type: str, filename: str):
+async def api_journal_content(journal_type: str, filename: str, format: str = "html"):
     """API endpoint for fetching a journal's full content."""
     content = get_journal_content(filename, journal_type)
     if content is None:
         raise HTTPException(status_code=404, detail="Journal not found")
-    return {"filename": filename, "type": journal_type, "content": content}
+
+    # Return HTML for htmx requests (default)
+    if format == "html":
+        # Escape HTML and preserve formatting
+        import html
+        escaped_content = html.escape(content)
+        return HTMLResponse(f"""
+            <div class="p-4 bg-gray-600 rounded-lg">
+                <h4 class="font-medium mb-3 text-gray-300">Reflection Journal</h4>
+                <pre class="whitespace-pre-wrap text-gray-300 font-mono text-xs leading-relaxed">{escaped_content}</pre>
+            </div>
+        """)
+    else:
+        # Return JSON for non-htmx requests
+        return {"filename": filename, "type": journal_type, "content": content}
 
 
 # Memory Inspector - See what ambient_recall returns
