@@ -1,0 +1,6 @@
+# Pipeline artifacts go here
+# - handoffs.jsonl - Agent handoffs during pipeline
+# - pipeline_state.json - Current pipeline state
+# - errors.log - Error log (even resolved errors)
+# - test_output.txt - Test run results
+# - diffs/ - Code diffs from coder agent
