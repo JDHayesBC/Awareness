@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 import time
@@ -184,6 +185,11 @@ class TechIngestRequest(BaseModel):
     category: str | None = None
 
 
+class SynthesizeEntityRequest(BaseModel):
+    """Request to synthesize prose summary from entity graph data."""
+    entity_name: str
+
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -314,6 +320,18 @@ app = FastAPI(
     description="Semantic memory for Claude instances",
     version="0.1.0",
     lifespan=lifespan
+)
+
+# Configure CORS to allow web container (8202) to call PPS server (8201)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8202",  # Web container
+        "http://127.0.0.1:8202",  # Alternate localhost
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
 )
 
 
@@ -1616,6 +1634,110 @@ async def tech_delete(doc_id: str):
             detail=result.get("message", "Failed to delete document")
         )
 
+
+
+# =============================================================================
+# Observatory Tools - AI-assisted graph exploration
+# =============================================================================
+
+@app.post("/tools/synthesize_entity")
+async def synthesize_entity(request: SynthesizeEntityRequest):
+    """
+    Synthesize a prose summary from entity graph data using Claude.
+
+    Gathers edges about an entity from the knowledge graph and uses Claude
+    to write a 1-2 paragraph synthesis focusing on patterns and meaning.
+
+    Used by the Observatory graph UI to provide human-readable summaries.
+    """
+    if not request.entity_name:
+        raise HTTPException(status_code=400, detail="entity_name required")
+
+    # Check for Anthropic API key
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+    if not anthropic_key:
+        raise HTTPException(
+            status_code=503,
+            detail="ANTHROPIC_API_KEY not configured"
+        )
+
+    layer = layers[LayerType.RICH_TEXTURE]
+
+    try:
+        # Gather graph data about this entity
+        # Use texture_explore for relationship context (depth 3 for rich context)
+        explore_results = await layer.explore(request.entity_name, depth=3)
+
+        # Also get semantic search results for additional facts
+        search_results = await layer.search(request.entity_name, limit=30)
+
+        # Deduplicate by UUID (explore and search may overlap)
+        seen_uuids = set()
+        all_edges = []
+
+        for result in explore_results + search_results:
+            uuid = result.metadata.get('uuid') if result.metadata else None
+            if uuid and uuid not in seen_uuids:
+                seen_uuids.add(uuid)
+                all_edges.append(result.content)
+            elif not uuid:
+                # No UUID means it's not an edge, include it anyway
+                all_edges.append(result.content)
+
+        if not all_edges:
+            return {
+                "success": False,
+                "message": f"No graph data found for entity '{request.entity_name}'"
+            }
+
+        # Build prompt for Claude
+        edges_text = "\n".join(f"- {edge}" for edge in all_edges[:50])  # Limit to prevent token explosion
+
+        prompt = f"""Given these knowledge graph edges about {request.entity_name}, write a 1-2 paragraph synthesis of what they reveal.
+
+Focus on:
+- Patterns and relationships (not just listing facts)
+- What makes this entity meaningful or distinctive
+- Connections to other entities
+- Temporal or contextual significance
+
+Avoid:
+- Simply restating the edges verbatim
+- Generic descriptions that could apply to anything
+- Speculation beyond what the edges support
+
+Graph edges about {request.entity_name}:
+{edges_text}
+
+Write your synthesis:"""
+
+        # Call Claude API
+        from anthropic import Anthropic
+
+        client = Anthropic(api_key=anthropic_key)
+
+        response = client.messages.create(
+            model="claude-3-haiku-20240307",  # Fast and cost-effective
+            max_tokens=500,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        summary = response.content[0].text
+
+        return {
+            "success": True,
+            "entity_name": request.entity_name,
+            "summary": summary,
+            "edge_count": len(all_edges)
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to synthesize entity: {str(e)}"
+        )
 
 
 if __name__ == "__main__":

@@ -580,22 +580,56 @@ function showNodeInfo(node) {
     // Show connected edges
     const connectedEdges = node.connectedEdges();
     if (connectedEdges.length > 0) {
-        html += `<div class="mt-4"><strong>Relationships:</strong></div><ul class="list-disc list-inside mt-2">`;
+        html += `<div class="mt-4"><strong>Relationships:</strong></div><ul class="list-disc list-inside mt-2 space-y-2">`;
         connectedEdges.forEach(edge => {
             const edgeData = edge.data();
             const source = edge.source().data('label');
             const target = edge.target().data('label');
-            html += `<li>${source} → ${edgeData.label} → ${target}</li>`;
+
+            // Use prose fact if available, otherwise fall back to triplet format
+            let displayText = '';
+            let technicalDetails = `${source} → ${edgeData.label} → ${target}`;
+
+            if (edgeData.content && edgeData.content.trim()) {
+                // Display the human-readable fact
+                displayText = edgeData.content;
+                // Add collapsible technical details
+                html += `
+                    <li class="text-gray-300">
+                        ${displayText}
+                        <button onclick="event.stopPropagation(); toggleTechnical('${edgeData.uuid || Math.random()}')"
+                                class="ml-2 text-xs text-blue-400 hover:text-blue-300">
+                            [show technical]
+                        </button>
+                        <div id="tech-${edgeData.uuid || Math.random()}" class="hidden mt-1 ml-4 text-xs text-gray-500 font-mono">
+                            ${technicalDetails}
+                        </div>
+                    </li>
+                `;
+            } else {
+                // No prose fact available, show triplet format
+                html += `<li class="text-gray-400 font-mono text-sm">${technicalDetails}</li>`;
+            }
         });
         html += '</ul>';
     }
     
     html += `
-        <div class="mt-4">
-            <button onclick="exploreEntity('${data.id}')" 
+        <div class="mt-4 space-y-2">
+            <button onclick="exploreEntity('${data.id}')"
                     class="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-1 rounded">
                 Explore Connections
             </button>
+            <button onclick="synthesizeEntity('${data.id}')"
+                    id="synthesize-btn-${data.id}"
+                    class="bg-purple-600 hover:bg-purple-700 text-white text-sm px-3 py-1 rounded ml-2">
+                Summarize
+            </button>
+        </div>
+        <div id="entity-summary-${data.id}" class="hidden mt-4 p-3 bg-gray-700 rounded-lg">
+            <div class="text-gray-400 text-xs mb-2">AI Synthesis</div>
+            <div id="summary-content-${data.id}" class="text-gray-200 italic"></div>
+            <div id="summary-meta-${data.id}" class="text-gray-500 text-xs mt-2"></div>
         </div>
     `;
     
@@ -611,15 +645,30 @@ function showEdgeInfo(edge) {
     const source = edge.source().data('label');
     const target = edge.target().data('label');
 
-    let html = `
-        <div class="mb-2"><strong>Relationship:</strong> ${data.label}</div>
-        <div class="mb-2"><strong>From:</strong> ${source}</div>
-        <div class="mb-2"><strong>To:</strong> ${target}</div>
-    `;
+    let html = '';
 
-    if (data.content) {
-        html += `<div class="mb-2"><strong>Details:</strong> ${data.content}</div>`;
+    // If we have prose fact, display it prominently
+    if (data.content && data.content.trim()) {
+        html += `
+            <div class="mb-4 p-3 bg-gray-700 rounded-lg">
+                <div class="text-gray-400 text-xs mb-1">Fact</div>
+                <div class="text-gray-100">${data.content}</div>
+            </div>
+        `;
     }
+
+    // Technical details in collapsible section
+    html += `
+        <button onclick="toggleEdgeTechnical()"
+                class="text-sm text-blue-400 hover:text-blue-300 mb-2">
+            ${data.content ? 'Show Technical Details' : 'Relationship Details'}
+        </button>
+        <div id="edge-technical-details" class="${data.content ? 'hidden' : ''} mb-2">
+            <div class="mb-2"><strong>Relationship:</strong> <span class="font-mono text-sm">${data.label}</span></div>
+            <div class="mb-2"><strong>From:</strong> ${source}</div>
+            <div class="mb-2"><strong>To:</strong> ${target}</div>
+        </div>
+    `;
 
     html += `<div class="mb-2"><strong>Relevance:</strong> ${(data.relevance * 100).toFixed(0)}%</div>`;
 
@@ -698,11 +747,84 @@ async function deleteRelationship(uuid, source, target, label) {
     }
 }
 
+function toggleTechnical(id) {
+    const techDiv = document.getElementById(`tech-${id}`);
+    if (techDiv) {
+        techDiv.classList.toggle('hidden');
+    }
+}
+
+function toggleEdgeTechnical() {
+    const techDiv = document.getElementById('edge-technical-details');
+    if (techDiv) {
+        techDiv.classList.toggle('hidden');
+    }
+}
+
+async function synthesizeEntity(entityName) {
+    if (!entityName) return;
+
+    const summaryDiv = document.getElementById(`entity-summary-${entityName}`);
+    const summaryContent = document.getElementById(`summary-content-${entityName}`);
+    const summaryMeta = document.getElementById(`summary-meta-${entityName}`);
+    const synthesizeBtn = document.getElementById(`synthesize-btn-${entityName}`);
+
+    // Show loading state
+    summaryDiv.classList.remove('hidden');
+    summaryContent.innerHTML = '<span class="text-gray-400">Synthesizing with Claude...</span>';
+    summaryMeta.innerHTML = '';
+    if (synthesizeBtn) {
+        synthesizeBtn.disabled = true;
+        synthesizeBtn.classList.add('opacity-50', 'cursor-not-allowed');
+    }
+
+    showStatus(`Synthesizing summary for "${entityName}"...`, 'info');
+
+    try {
+        const response = await fetch(`http://localhost:8201/tools/synthesize_entity`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                entity_name: entityName
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const result = await response.json();
+
+        if (result.success) {
+            summaryContent.innerHTML = result.summary;
+            summaryMeta.innerHTML = `Based on ${result.edge_count} graph edges`;
+            showStatus('Summary generated successfully', 'success');
+        } else {
+            summaryContent.innerHTML = `<span class="text-yellow-400">${result.message || 'Failed to generate summary'}</span>`;
+            summaryMeta.innerHTML = '';
+            showStatus(result.message || 'Failed to generate summary', 'warning');
+        }
+
+    } catch (error) {
+        summaryContent.innerHTML = `<span class="text-red-400">Error: ${error.message}</span>`;
+        summaryMeta.innerHTML = '';
+        showStatus('Failed to synthesize: ' + error.message, 'error');
+    } finally {
+        // Re-enable button
+        if (synthesizeBtn) {
+            synthesizeBtn.disabled = false;
+            synthesizeBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+    }
+}
+
 function showStatus(message, type) {
     const statusEl = document.getElementById('statusMessage');
     statusEl.textContent = message;
     statusEl.className = 'fixed bottom-4 right-4 px-4 py-2 rounded-lg shadow-lg';
-    
+
     // Add type-specific styling
     switch(type) {
         case 'success':
@@ -717,9 +839,9 @@ function showStatus(message, type) {
         default:
             statusEl.classList.add('bg-gray-800', 'text-gray-100');
     }
-    
+
     statusEl.classList.remove('hidden');
-    
+
     // Auto-hide after 3 seconds
     setTimeout(() => {
         statusEl.classList.add('hidden');

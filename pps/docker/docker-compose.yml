@@ -109,6 +109,7 @@ services:
       - CLAUDE_HOME=/app/claude_home
       - JINA_API_KEY=${JINA_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
       # Mount entity directory (identity files, crystals, word-photos)
       - ${ENTITY_PATH}:/app/entity:rw

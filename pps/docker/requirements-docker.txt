@@ -16,3 +16,6 @@ httpx>=0.25.0                 # For JINA API calls
 aiohttp>=3.8.0                # Async HTTP client for Graphiti API (fallback mode)
 graphiti-core>=0.5.0          # Direct Graphiti integration with custom entity types
 pydantic>=2.0.0               # For custom entity type definitions
+
+# AI synthesis
+anthropic>=0.45.0             # For entity summarization from graph data
