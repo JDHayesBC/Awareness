@@ -723,13 +723,14 @@ async def api_graph_search(query: str, limit: int = 20):
                         "relevance": 0.5
                     }
 
-                # Add edge
+                # Add edge (include UUID from source field for deletion)
                 edges.append({
                     "source": subject,
                     "target": obj,
                     "label": predicate,
                     "relevance": result.relevance_score,
-                    "content": result.content
+                    "content": result.content,
+                    "uuid": result.source  # UUID for deletion
                 })
         
         # Close the session
@@ -842,7 +843,8 @@ async def api_graph_explore(entity: str, depth: int = 2):
                         "target": obj,
                         "label": predicate,
                         "relevance": result.relevance_score,
-                        "content": result.content
+                        "content": result.content,
+                        "uuid": result.source  # UUID for deletion
                     })
         
         # Close the session
