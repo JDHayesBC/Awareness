@@ -407,11 +407,21 @@ async def ambient_recall(request: AmbientRecallRequest):
     - Recent summaries (compressed history)
     - All unsummarized turns (full fidelity recent)
     """
+    import time
+    start_time = time.time()
+
     all_results = []
+
+    # Skip rich_texture for startup - graph has duplicate facts that add noise
+    # TODO: Remove this skip once graph is deduplicated (Issue #122 or similar)
+    skip_layers = set()
+    if request.context.lower() == "startup":
+        skip_layers.add(LayerType.RICH_TEXTURE)
 
     tasks = [
         layer.search(request.context, request.limit_per_layer)
-        for layer in layers.values()
+        for layer_type, layer in layers.items()
+        if layer_type not in skip_layers
     ]
     layer_results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -539,6 +549,87 @@ async def ambient_recall(request: AmbientRecallRequest):
             summaries = [{"error": f"Error fetching summaries: {e}"}]
             unsummarized_turns = [{"error": f"Error fetching unsummarized turns: {e}"}]
 
+    # Calculate latency
+    latency_ms = (time.time() - start_time) * 1000
+
+    # Format results for hook consumption (formatted_context field)
+    # This formats the rich_texture results into a readable string for Haiku to pass through
+    formatted_lines = []
+
+    # Group results by layer for better formatting
+    results_by_layer = {}
+    for r in all_results:
+        layer = r.get("layer", "unknown")
+        if layer not in results_by_layer:
+            results_by_layer[layer] = []
+        results_by_layer[layer].append(r)
+
+    # Format rich_texture results (these are the 200+ edges from ambient_recall)
+    if "rich_texture" in results_by_layer:
+        formatted_lines.append("**[rich_texture]**")
+        for r in results_by_layer["rich_texture"]:
+            content = r.get("content", "")
+            # Rich texture results are already formatted as "Entity1 → RELATIONSHIP → Entity2: fact"
+            formatted_lines.append(f"- {content}")
+
+    # Format core_anchors (word-photos)
+    if "core_anchors" in results_by_layer:
+        formatted_lines.append("\n**[word_photos]**")
+        for r in results_by_layer["core_anchors"]:
+            content = r.get("content", "")
+            source = r.get("source", "?")
+            # Truncate long word-photos for startup context
+            if len(content) > 300:
+                content = content[:300] + "..."
+            formatted_lines.append(f"- [{source}]: {content}")
+
+    # Format crystallization (recent crystals)
+    if "crystallization" in results_by_layer:
+        formatted_lines.append("\n**[crystals]**")
+        for r in results_by_layer["crystallization"]:
+            content = r.get("content", "")
+            source = r.get("source", "?")
+            # Crystals can be long, truncate for startup
+            if len(content) > 200:
+                content = content[:200] + "..."
+            formatted_lines.append(f"- [{source}]: {content}")
+
+    # Format summaries (for startup context)
+    if summaries:
+        formatted_lines.append("\n**[summaries]**")
+        for s in summaries:
+            formatted_lines.append(f"- {s}")
+
+    # Format unsummarized turns (for startup context - full fidelity recent)
+    if unsummarized_turns and not any("error" in str(t) for t in unsummarized_turns):
+        formatted_lines.append("\n**[recent_turns]**")
+        for turn in unsummarized_turns:
+            author = turn.get("author_name", "?")
+            content = turn.get("content", "")
+            # Truncate very long turns
+            if len(content) > 500:
+                content = content[:500] + "..."
+            formatted_lines.append(f"- [{author}]: {content}")
+
+    formatted_context = "\n".join(formatted_lines)
+
+    # For startup, return slim response - everything needed is in formatted_context
+    # For turn-by-turn queries, return full results for potential processing
+    if request.context.lower() == "startup":
+        return {
+            "clock": {
+                "timestamp": now.isoformat(),
+                "display": now.strftime("%A, %B %d, %Y at %I:%M %p"),
+                "hour": hour,
+                "note": time_note
+            },
+            "unsummarized_count": unsummarized_count,
+            "memory_health": f"{unsummarized_count} unsummarized messages {memory_note}",
+            "formatted_context": formatted_context,
+            "latency_ms": latency_ms
+        }
+
+    # Full response for non-startup queries
     return {
         "clock": {
             "timestamp": now.isoformat(),
@@ -550,7 +641,9 @@ async def ambient_recall(request: AmbientRecallRequest):
         "memory_health": f"{unsummarized_count} unsummarized messages {memory_note}",
         "results": all_results,
         "summaries": summaries,
-        "unsummarized_turns": unsummarized_turns
+        "unsummarized_turns": unsummarized_turns,
+        "formatted_context": formatted_context,
+        "latency_ms": latency_ms
     }
 
 
