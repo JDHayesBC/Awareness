@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-01-26T12:24:20.982231",
+  "status": "complete",
+  "statistics": {
+    "total_searched": 10,
+    "total_results": 899,
+    "duplicates_found": 0,
+    "vague_entities_found": 0,
+    "malformed_facts_found": 0,
+    "items_deleted": 0,
+    "items_reviewed": 0
+  },
+  "issues_found": [],
+  "deletions": []
+}
