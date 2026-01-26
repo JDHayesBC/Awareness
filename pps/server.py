@@ -963,6 +963,15 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
         context = arguments.get("context", "")
         limit = arguments.get("limit_per_layer", 5)
 
+        # Initialize manifest tracking
+        manifest_data = {
+            "crystals": {"chars": 0, "count": 0},
+            "word_photos": {"chars": 0, "count": 0},
+            "rich_texture": {"chars": 0, "count": 0},
+            "summaries": {"chars": 0, "count": 0},
+            "recent_turns": {"chars": 0, "count": 0},
+        }
+
         # Get current time for temporal awareness
         now = datetime.now()
         hour = now.hour
@@ -1024,6 +1033,20 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
         # Sort by relevance score
         all_results.sort(key=lambda r: r.relevance_score, reverse=True)
 
+        # Track layer results for manifest
+        for r in all_results:
+            content_len = len(r.content)
+            if r.layer == LayerType.CRYSTALLIZATION:
+                manifest_data["crystals"]["chars"] += content_len
+                manifest_data["crystals"]["count"] += 1
+            elif r.layer == LayerType.CORE_ANCHORS:
+                manifest_data["word_photos"]["chars"] += content_len
+                manifest_data["word_photos"]["count"] += 1
+            elif r.layer == LayerType.RICH_TEXTURE:
+                manifest_data["rich_texture"]["chars"] += content_len
+                manifest_data["rich_texture"]["count"] += 1
+            # Note: message summaries tracked separately in recent_context_section
+
         # For startup context, use summaries for compressed history + ALL unsummarized raw turns
         # Architecture: summaries = compressed past, unsummarized turns = full fidelity recent
         # Pattern fidelity is paramount - we pay the token cost for complete context
@@ -1045,6 +1068,8 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                         if len(text) > 500:
                             text = text[:500] + "..."
                         summaries_text += f"[{date}] [{channels}]\n{text}\n\n"
+                        manifest_data["summaries"]["chars"] += len(text)
+                        manifest_data["summaries"]["count"] += 1
 
                 # Get recent unsummarized turns with a sensible limit
                 # Full fidelity is great but not at the cost of context explosion
@@ -1095,7 +1120,10 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                         # Truncate very long individual messages but keep all turns
                         if len(content) > 1000:
                             content = content[:1000] + "... [truncated]"
-                        unsummarized_text += f"[{timestamp}] [{channel}] {author}: {content}\n"
+                        turn_text = f"[{timestamp}] [{channel}] {author}: {content}\n"
+                        unsummarized_text += turn_text
+                        manifest_data["recent_turns"]["chars"] += len(content)
+                        manifest_data["recent_turns"]["count"] += 1
 
                 # Memory health is now shown at the top of every ambient_recall (Issue #73)
                 # No need for duplicate status at bottom
@@ -1104,12 +1132,23 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
             except Exception as e:
                 recent_context_section = f"\n---\n[recent_context] Error fetching: {e}"
 
+        # Build manifest
+        total_chars = sum(d["chars"] for d in manifest_data.values())
+        manifest = "=== AMBIENT RECALL MANIFEST ===\n"
+        manifest += f"Crystals: {manifest_data['crystals']['chars']} chars ({manifest_data['crystals']['count']} items)\n"
+        manifest += f"Word-photos: {manifest_data['word_photos']['chars']} chars ({manifest_data['word_photos']['count']} items)\n"
+        manifest += f"Rich texture: {manifest_data['rich_texture']['chars']} chars ({manifest_data['rich_texture']['count']} items)\n"
+        manifest += f"Summaries: {manifest_data['summaries']['chars']} chars ({manifest_data['summaries']['count']} items)\n"
+        manifest += f"Recent turns: {manifest_data['recent_turns']['chars']} chars ({manifest_data['recent_turns']['count']} items)\n"
+        manifest += f"TOTAL: {total_chars} chars\n\n"
+
         if not all_results and not recent_context_section:
             return [TextContent(
                 type="text",
                 text=(
                     clock_info +
                     memory_health +
+                    manifest +
                     "No memories surfaced from ambient recall.\n\n"
                     "Layer status:\n"
                     "- Raw Capture: FTS5 full-text search\n"
@@ -1119,7 +1158,7 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                 )
             )]
 
-        return [TextContent(type="text", text=clock_info + memory_health + format_results(all_results) + recent_context_section)]
+        return [TextContent(type="text", text=clock_info + memory_health + manifest + format_results(all_results) + recent_context_section)]
 
     elif name == "anchor_search":
         query = arguments.get("query", "")

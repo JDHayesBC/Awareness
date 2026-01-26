@@ -410,6 +410,15 @@ async def ambient_recall(request: AmbientRecallRequest):
     import time
     start_time = time.time()
 
+    # Initialize manifest tracking
+    manifest_data = {
+        "crystals": {"chars": 0, "count": 0},
+        "word_photos": {"chars": 0, "count": 0},
+        "rich_texture": {"chars": 0, "count": 0},
+        "summaries": {"chars": 0, "count": 0},
+        "recent_turns": {"chars": 0, "count": 0},
+    }
+
     all_results = []
 
     # Skip rich_texture for startup - graph has duplicate facts that add noise
@@ -427,16 +436,27 @@ async def ambient_recall(request: AmbientRecallRequest):
 
     for results in layer_results:
         if isinstance(results, list):
-            all_results.extend([
-                {
+            for r in results:
+                result_dict = {
                     "content": r.content,
                     "source": r.source,
                     "layer": r.layer.value,
                     "relevance_score": r.relevance_score,
                     "metadata": r.metadata
                 }
-                for r in results
-            ])
+                all_results.append(result_dict)
+
+                # Track for manifest
+                content_len = len(r.content)
+                if r.layer.value == "crystallization":
+                    manifest_data["crystals"]["chars"] += content_len
+                    manifest_data["crystals"]["count"] += 1
+                elif r.layer.value == "core_anchors":
+                    manifest_data["word_photos"]["chars"] += content_len
+                    manifest_data["word_photos"]["count"] += 1
+                elif r.layer.value == "rich_texture":
+                    manifest_data["rich_texture"]["chars"] += content_len
+                    manifest_data["rich_texture"]["count"] += 1
 
     # Sort by relevance
     all_results.sort(key=lambda x: x["relevance_score"], reverse=True)
@@ -494,6 +514,8 @@ async def ambient_recall(request: AmbientRecallRequest):
                         "channels": channels,
                         "text": text
                     })
+                    manifest_data["summaries"]["chars"] += len(text)
+                    manifest_data["summaries"]["count"] += 1
 
             # Get recent unsummarized turns with a sensible limit
             # Full fidelity is great but not at the cost of context explosion
@@ -543,6 +565,8 @@ async def ambient_recall(request: AmbientRecallRequest):
                         "author": author,
                         "content": content
                     })
+                    manifest_data["recent_turns"]["chars"] += len(content)
+                    manifest_data["recent_turns"]["count"] += 1
 
         except Exception as e:
             # Return error info but don't fail the entire request
@@ -551,6 +575,17 @@ async def ambient_recall(request: AmbientRecallRequest):
 
     # Calculate latency
     latency_ms = (time.time() - start_time) * 1000
+
+    # Build manifest
+    total_chars = sum(d["chars"] for d in manifest_data.values())
+    manifest = {
+        "crystals": manifest_data["crystals"],
+        "word_photos": manifest_data["word_photos"],
+        "rich_texture": manifest_data["rich_texture"],
+        "summaries": manifest_data["summaries"],
+        "recent_turns": manifest_data["recent_turns"],
+        "total_chars": total_chars
+    }
 
     # Format results for hook consumption (formatted_context field)
     # This formats the rich_texture results into a readable string for Haiku to pass through
@@ -625,6 +660,7 @@ async def ambient_recall(request: AmbientRecallRequest):
             },
             "unsummarized_count": unsummarized_count,
             "memory_health": f"{unsummarized_count} unsummarized messages {memory_note}",
+            "manifest": manifest,
             "formatted_context": formatted_context,
             "latency_ms": latency_ms
         }
@@ -637,6 +673,7 @@ async def ambient_recall(request: AmbientRecallRequest):
             "hour": hour,
             "note": time_note
         },
+        "manifest": manifest,
         "unsummarized_count": unsummarized_count,
         "memory_health": f"{unsummarized_count} unsummarized messages {memory_note}",
         "results": all_results,
