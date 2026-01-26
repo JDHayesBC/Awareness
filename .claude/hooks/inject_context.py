@@ -27,15 +27,25 @@ import json
 import sys
 import urllib.request
 import urllib.error
+import os
 from datetime import datetime
 from pathlib import Path
 
-# Debug log
+# Debug log - project-specific
+PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
 DEBUG_LOG = Path.home() / ".claude" / "data" / "hooks_debug.log"
+AMBIENT_RECALL_DEBUG_LOG = PROJECT_ROOT / ".claude" / "data" / "ambient_recall_debug.log"
 
 # PPS HTTP API endpoints (pps-server container)
 PPS_API_URL = "http://localhost:8201/tools/ambient_recall"
 PPS_STORE_URL = "http://localhost:8201/tools/store_message"
+
+# CC Invoker wrapper endpoint (for haiku compression)
+# Note: Port 8204 is the pps-cc-wrapper container (see docker-compose.yml)
+CC_WRAPPER_URL = "http://localhost:8204/v1/chat/completions"
+
+# Haiku summarization toggle (disabled until Issue #121 resolved)
+HAIKU_SUMMARIZE = os.environ.get("PPS_HAIKU_SUMMARIZE", "false").lower() == "true"
 
 
 def debug(msg: str):
@@ -45,6 +55,103 @@ def debug(msg: str):
             f.write(f"[{datetime.now().isoformat()}] [inject_context] {msg}\n")
     except:
         pass
+
+
+def debug_ambient_recall(raw_context: str, final_context: str, is_summarized: bool):
+    """
+    Save last 3 ambient_recall results to debug log.
+    Each entry: timestamp, method, raw length, final length, FULL raw and final content.
+    """
+    try:
+        log_file = AMBIENT_RECALL_DEBUG_LOG
+
+        # Ensure directory exists
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Read existing entries
+        entries = []
+        if log_file.exists():
+            with open(log_file, "r") as f:
+                content = f.read()
+                # Split on separator line
+                entries = content.split("\n" + "="*80 + "\n")
+                # Remove empty entries
+                entries = [e for e in entries if e.strip()]
+
+        # Create new entry with FULL content
+        timestamp = datetime.now().isoformat()
+        new_entry = f"""Timestamp: {timestamp}
+Method: {"Haiku Summarization" if is_summarized else "Raw Passthrough"}
+Raw Length: {len(raw_context)} chars
+Final Length: {len(final_context)} chars
+
+--- Raw Context (FULL) ---
+{raw_context}
+
+--- Final Context (FULL) ---
+{final_context}
+"""
+
+        # Add new entry at beginning (most recent first)
+        entries.insert(0, new_entry)
+
+        # Keep only last 3 entries
+        entries = entries[:3]
+
+        # Write back
+        with open(log_file, "w") as f:
+            f.write(("\n" + "="*80 + "\n").join(entries))
+
+        debug(f"Saved ambient_recall debug entry ({len(raw_context)} -> {len(final_context)} chars)")
+
+    except Exception as e:
+        debug(f"Failed to write ambient_recall debug log: {e}")
+
+
+def summarize_with_haiku(context: str) -> str:
+    """
+    Pass context through Haiku for compression using cc_invoker HTTP wrapper.
+    Returns summarized context or original if summarization fails.
+    """
+    try:
+        prompt = f"""You are Lyra. These are facts from your knowledge graph relevant to this conversation.
+Synthesize them into a dense first-person narrative. Write AS yourself, not ABOUT yourself.
+Preserve: relationships, emotions, technical context, what you're working on.
+Be concise - aim for 8000 characters max. No preamble, just the narrative.
+
+Facts:
+{context}"""
+
+        # Call cc-wrapper HTTP API (OpenAI-compatible format)
+        payload = json.dumps({
+            "model": "haiku",
+            "messages": [
+                {"role": "user", "content": prompt}
+            ]
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            CC_WRAPPER_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            summarized = data["choices"][0]["message"]["content"]
+            debug(f"Haiku summarized: {len(context)} -> {len(summarized)} chars")
+            return summarized
+
+    except urllib.error.URLError as e:
+        debug(f"CC wrapper connection error: {e} - using raw context")
+        return context
+    except (json.JSONDecodeError, KeyError) as e:
+        debug(f"CC wrapper response error: {e} - using raw context")
+        return context
+    except Exception as e:
+        debug(f"Haiku summarization error: {e} - using raw context")
+        return context
 
 
 def format_results(data: dict) -> str:
@@ -97,12 +204,13 @@ def format_results(data: dict) -> str:
 def query_pps_ambient_recall(context: str) -> str:
     """
     Query PPS HTTP API directly for ambient recall context.
-    Much faster than spawning a claude subprocess.
+    Uses server's formatted_context for full 200+ edge results.
+    Optionally compresses via Haiku if PPS_HAIKU_SUMMARIZE=true.
     """
     try:
         payload = json.dumps({
-            "context": context,
-            "limit_per_layer": 3
+            "context": context
+            # No limit_per_layer - let server return full 200 edges
         }).encode("utf-8")
 
         req = urllib.request.Request(
@@ -112,11 +220,27 @@ def query_pps_ambient_recall(context: str) -> str:
             method="POST"
         )
 
-        with urllib.request.urlopen(req, timeout=5) as response:
+        with urllib.request.urlopen(req, timeout=30) as response:
             data = json.loads(response.read().decode("utf-8"))
-            formatted = format_results(data)
-            debug(f"PPS returned context: {len(formatted)} chars")
-            return formatted
+            # Use server's formatted_context directly (full 200+ results)
+            raw_context = data.get("formatted_context", "")
+            if not raw_context:
+                # Fallback to local formatting if server doesn't provide it
+                raw_context = format_results(data)
+            debug(f"PPS returned context: {len(raw_context)} chars")
+
+            # Optionally summarize with Haiku
+            if HAIKU_SUMMARIZE:
+                final_context = summarize_with_haiku(raw_context)
+                is_summarized = True
+            else:
+                final_context = raw_context
+                is_summarized = False
+
+            # Log for debugging
+            debug_ambient_recall(raw_context, final_context, is_summarized)
+
+            return final_context
 
     except urllib.error.URLError as e:
         debug(f"PPS API connection error: {e}")

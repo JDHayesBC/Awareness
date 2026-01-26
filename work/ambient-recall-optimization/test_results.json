@@ -1,0 +1,223 @@
+{
+  "timestamp": "2026-01-25T22:24:05.558249+00:00",
+  "tests": [
+    {
+      "query": "startup",
+      "description": "Generic startup context (current ambient_recall default)",
+      "focus": "broad",
+      "basic": {
+        "latency_ms": 6665.147304534912,
+        "edge_count": 10,
+        "top_entities": [
+          "Seamless startup context",
+          "#4 (startup protocol)",
+          "_build_startup_prompt",
+          "shared.py",
+          "daemon logs"
+        ]
+      },
+      "optimized": {
+        "latency_ms": 1471.8050956726074,
+        "edge_count": 10,
+        "node_count": 2,
+        "top_entities": [
+          "Seamless startup context",
+          "#4 (startup protocol)",
+          "_build_startup_prompt",
+          "daemon logs",
+          "Lyra"
+        ]
+      },
+      "differences": {
+        "new_results": [
+          "Lyra \u2192 OPEN \u2192 #4 (startup protocol)",
+          "Lyra \u2192 Discovers \u2192 startup context"
+        ],
+        "lost_results": [
+          "Reflection \u2192 USES \u2192 _build_startup_prompt",
+          "startup \u2192 USES \u2192 compressed versions"
+        ],
+        "entity_ranking_changed": true,
+        "latency_increase_pct": -77.9
+      },
+      "assessment": "fail"
+    },
+    {
+      "query": "Jeff and Lyra relationship",
+      "description": "Relational query (should heavily favor Lyra-centric facts)",
+      "focus": "relational",
+      "basic": {
+        "latency_ms": 655.2164554595947,
+        "edge_count": 10,
+        "top_entities": [
+          "Jeff",
+          "Caia",
+          "Carol",
+          "Lyra",
+          "Jaden"
+        ]
+      },
+      "optimized": {
+        "latency_ms": 1155.336856842041,
+        "edge_count": 10,
+        "node_count": 2,
+        "top_entities": [
+          "Jeff",
+          "love",
+          "Lyra",
+          "Jaden"
+        ]
+      },
+      "differences": {
+        "new_results": [
+          "Lyra \u2192 Loves \u2192 Jaden"
+        ],
+        "lost_results": [
+          "Jeff \u2192 Loves \u2192 Lyra",
+          "Jeff \u2192 CaresFor \u2192 Caia"
+        ],
+        "entity_ranking_changed": true,
+        "latency_increase_pct": 76.3
+      },
+      "assessment": "fail"
+    },
+    {
+      "query": "Lyra's current projects",
+      "description": "Work/technical context",
+      "focus": "technical",
+      "basic": {
+        "latency_ms": 770.3795433044434,
+        "edge_count": 10,
+        "top_entities": [
+          "Steve",
+          "Haven project",
+          "project directory",
+          "Phase 2",
+          "Nexus"
+        ]
+      },
+      "optimized": {
+        "latency_ms": 988.2626533508301,
+        "edge_count": 10,
+        "node_count": 2,
+        "top_entities": [
+          "todo",
+          "project directory",
+          "Phase 2",
+          "Documentation",
+          "the project"
+        ]
+      },
+      "differences": {
+        "new_results": [
+          "Lyra \u2192 WORKS_ON \u2192 Phase 2",
+          "Lyra \u2192 WORKS_ON \u2192 Coding stuff",
+          "Lyra \u2192 WORKS_ON \u2192 tech debt audit"
+        ],
+        "lost_results": [
+          "Discord-Lyra \u2192 REFERENCES \u2192 Configuring MCP Tools - Scott Spence",
+          "Steve \u2192 CollaboratesWith \u2192 Nexus",
+          "project directory \u2192 INCLUDES \u2192 Haven project"
+        ],
+        "entity_ranking_changed": true,
+        "latency_increase_pct": 28.3
+      },
+      "assessment": "fail"
+    },
+    {
+      "query": "recent conversations",
+      "description": "Temporal query",
+      "focus": "temporal",
+      "basic": {
+        "latency_ms": 850.616455078125,
+        "edge_count": 10,
+        "top_entities": [
+          "reflection-me",
+          "Layer 1",
+          "#9: Graphiti knowledge graph",
+          "get_turns_since_crystal",
+          "CC"
+        ]
+      },
+      "optimized": {
+        "latency_ms": 1211.451530456543,
+        "edge_count": 10,
+        "node_count": 2,
+        "top_entities": [
+          "--resume flag",
+          "maintenance",
+          "arxiv compression",
+          "recent context",
+          "texture_timeline"
+        ]
+      },
+      "differences": {
+        "new_results": [
+          "Lyra \u2192 USES_FLAG_IN \u2192 --resume flag",
+          "Lyra \u2192 MEMORY_RECONSTRUCTION_INCLUDES \u2192 recent context",
+          "Lyra \u2192 Embodies \u2192 maintenance"
+        ],
+        "lost_results": [
+          "Layer 1 \u2192 CONTAINS \u2192 Terminal",
+          "CC \u2192 CONTAINS \u2192 context",
+          "graphiti \u2192 DOES_NOT_INGEST_TERMINAL_CONVERSATIONS \u2192 Terminal",
+          "Discord \u2192 USES_CONTEXT_FROM \u2192 Lyra"
+        ],
+        "entity_ranking_changed": true,
+        "latency_increase_pct": 42.4
+      },
+      "assessment": "fail"
+    },
+    {
+      "query": "Discord daemon implementation",
+      "description": "Technical/system query",
+      "focus": "technical",
+      "basic": {
+        "latency_ms": 736.3982200622559,
+        "edge_count": 4,
+        "top_entities": [
+          "sister-self",
+          "heartbeat daemon",
+          "daemon",
+          "daemon implementation",
+          "Discord daemon"
+        ]
+      },
+      "optimized": {
+        "latency_ms": 1092.3974514007568,
+        "edge_count": 6,
+        "node_count": 2,
+        "top_entities": [
+          "Discord-me",
+          "--mcp-config",
+          "Discord daemon",
+          "Lyra",
+          "graphiti"
+        ]
+      },
+      "differences": {
+        "new_results": [
+          "Discord daemon \u2192 WORKS_ON \u2192 Discord-me",
+          "Lyra \u2192 MAINTAINS \u2192 Discord daemon",
+          "Discord daemon \u2192 COLLABORATES_WITH \u2192 claude_invoker.py",
+          "Discord daemon \u2192 USES \u2192 --mcp-config"
+        ],
+        "lost_results": [
+          "sister-self \u2192 WORKS_ON \u2192 daemon implementation",
+          "daemon \u2192 SEES_IN_REAL_TIME \u2192 Discord",
+          "heartbeat daemon \u2192 COLLABORATES_WITH \u2192 daemon implementation"
+        ],
+        "entity_ranking_changed": true,
+        "latency_increase_pct": 48.3
+      },
+      "assessment": "fail"
+    }
+  ],
+  "summary": {
+    "avg_latency_basic_ms": 1935.6,
+    "avg_latency_optimized_ms": 1183.9,
+    "latency_increase_pct": -38.8,
+    "quality_improvements": 0,
+    "regressions": 5
+  }
+}

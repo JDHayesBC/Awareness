@@ -1,0 +1,46 @@
+diff --git a/pps/docker/docker-compose.yml b/pps/docker/docker-compose.yml
+index 48bca10..6e50f56 100644
+--- a/pps/docker/docker-compose.yml
++++ b/pps/docker/docker-compose.yml
+@@ -165,6 +165,25 @@ services:
+       retries: 3
+       start_period: 10s
+ 
++  # OpenAI-compatible wrapper for ClaudeInvoker
++  # Provides /v1/chat/completions endpoint for Graphiti to eliminate OpenAI costs
++  pps-cc-wrapper:
++    build:
++      context: ..
++      dockerfile: docker/Dockerfile.cc-wrapper
++    container_name: pps-cc-wrapper
++    restart: unless-stopped
++    ports:
++      - "127.0.0.1:8204:8000"
++    environment:
++      - WRAPPER_MODEL=${WRAPPER_MODEL:-haiku}
++    healthcheck:
++      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
++      interval: 30s
++      timeout: 10s
++      retries: 3
++      start_period: 60s  # ClaudeInvoker init takes ~33s
++
+ volumes:
+   chromadb_data:
+     driver: local
+diff --git a/work/graphiti-schema-redesign/graph_curation_report.json b/work/graphiti-schema-redesign/graph_curation_report.json
+index 01bdb21..d2a2f37 100644
+--- a/work/graphiti-schema-redesign/graph_curation_report.json
++++ b/work/graphiti-schema-redesign/graph_curation_report.json
+@@ -1,9 +1,9 @@
+ {
+-  "timestamp": "2026-01-25T02:26:43.951180",
++  "timestamp": "2026-01-25T09:27:31.792812",
+   "status": "complete",
+   "statistics": {
+     "total_searched": 10,
+-    "total_results": 89,
++    "total_results": 90,
+     "duplicates_found": 0,
+     "vague_entities_found": 0,
+     "malformed_facts_found": 0,

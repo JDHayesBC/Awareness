@@ -15,27 +15,41 @@ Optimize the ambient_recall() memory interface to use Graphiti's advanced retrie
 ## Tasks
 
 ### Pending
-- [ ] Implementation (coder)
+- [ ] Implementation (coder) - awaiting test results
 - [ ] Testing (tester)
 - [ ] Code review (reviewer)
 - [ ] Deployment to Docker
 - [ ] Validation with real startup queries
 
 ### In Progress
-- [x] Research Graphiti best practices (2026-01-25)
-- [x] Design document (orchestration-agent)
+- [x] Test harness implementation (coder) - 2026-01-25
 
 ### Done
 - [x] Fetched Graphiti retrieval best practices (43KB research doc) (2026-01-25)
 - [x] Analyzed current implementation (rich_texture_v2.py) (2026-01-25)
 - [x] Evaluated 5 optimization options (2026-01-25)
-- [x] Wrote comprehensive design doc with implementation plan (2026-01-25)
+- [x] Research Graphiti best practices (2026-01-25)
+- [x] Design document (orchestration-agent) (2026-01-25)
+- [x] Test plan document (orchestration-agent) (2026-01-25)
+- [x] Test retrieval comparison script (coder) (2026-01-25)
 
 ---
 
 ## Blockers
 
-- None currently
+- **Haiku compression disabled** (Issue #121): Docker permissions issue prevents cc-wrapper from running Claude SDK. Hook falls back to raw context. Four options documented in issue.
+
+## Current State (2026-01-25 evening)
+
+- **DEPLOYED**: ambient_recall optimization with 75 edges, 3 nodes, explore depth 2
+- **WORKING**: Hook injects ~10KB graph context per turn (truncated)
+- **DISABLED**: Haiku compression (see Issue #121)
+- **Edge limit**: Reduced from 200 → 75 since hook truncates at 10K chars anyway
+
+### What's Next
+1. Consider using OpenAI wrapper (`cc_openai_wrapper.py`) for compression - partially tested
+2. Or add `/summarize` endpoint to pps-server using direct Anthropic API
+3. Or accept raw context as good enough and tune edge limits
 
 ---
 
@@ -81,3 +95,10 @@ Optimize the ambient_recall() memory interface to use Graphiti's advanced retrie
 - BFS expansion (contextual discovery)
 - Query-type detection (adaptive retrieval)
 - Cross-encoder reranking (if latency allows)
+
+**Test Harness** (2026-01-25):
+- Created `test_retrieval_comparison.py` - comprehensive test script
+- Runs 5 diverse queries against both basic and optimized implementations
+- Measures: latency, result quality, ranking differences, entity summaries
+- Exports machine-readable JSON results + human-readable terminal output
+- Next: Run test suite to validate optimization approach before implementation

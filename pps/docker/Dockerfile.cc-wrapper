@@ -1,0 +1,35 @@
+# Dockerfile for OpenAI-compatible ClaudeInvoker wrapper
+#
+# Provides /v1/chat/completions endpoint for Graphiti to use Claude instead of OpenAI.
+#
+# Build from project root:
+#   docker build -f pps/docker/Dockerfile.cc-wrapper -t pps-cc-wrapper .
+#
+# Run:
+#   docker run -p 8000:8000 pps-cc-wrapper
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY pps/docker/requirements-cc-wrapper.txt requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy daemon/cc_invoker module (needed for ClaudeInvoker)
+COPY daemon/cc_invoker /app/daemon/cc_invoker
+
+# Copy wrapper server
+COPY pps/docker/cc_openai_wrapper.py .
+
+# Expose port
+EXPOSE 8000
+
+# Run with uvicorn
+CMD ["uvicorn", "cc_openai_wrapper:app", "--host", "0.0.0.0", "--port", "8000"]

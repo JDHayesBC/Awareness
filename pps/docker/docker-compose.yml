@@ -62,8 +62,10 @@ services:
       neo4j:
         condition: service_healthy
     environment:
-      # Required: OpenAI for entity extraction (Graphiti uses this internally)
+      # LLM: Uses OpenAI for now (CC wrapper blocked by upstream, see Issue #118)
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # - OPENAI_BASE_URL=${GRAPHITI_LLM_BASE_URL:-https://api.openai.com/v1}  # Ignored by Graphiti
+      # - MODEL_NAME=${GRAPHITI_LLM_MODEL:-gpt-4o-mini}
       # Neo4j connection
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
@@ -110,6 +112,9 @@ services:
       - JINA_API_KEY=${JINA_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Ambient recall optimization (per-turn context enrichment)
+      - PPS_ENABLE_EXPLORE=${PPS_ENABLE_EXPLORE:-true}
+      - PPS_MESSAGE_DB_PATH=${PPS_MESSAGE_DB_PATH:-/app/claude_home/data/lyra_conversations.db}
     volumes:
       # Mount entity directory (identity files, crystals, word-photos)
       - ${ENTITY_PATH}:/app/entity:rw
@@ -164,6 +169,25 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+  # OpenAI-compatible wrapper for ClaudeInvoker
+  # Provides /v1/chat/completions endpoint for Graphiti to eliminate OpenAI costs
+  pps-cc-wrapper:
+    build:
+      context: ../..
+      dockerfile: pps/docker/Dockerfile.cc-wrapper
+    container_name: pps-cc-wrapper
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8204:8000"
+    environment:
+      - WRAPPER_MODEL=${WRAPPER_MODEL:-haiku}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s  # ClaudeInvoker init takes ~33s
 
 volumes:
   chromadb_data:

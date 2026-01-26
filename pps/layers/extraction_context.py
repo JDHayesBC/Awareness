@@ -8,7 +8,39 @@ The instructions teach Graphiti what matters to me - not just generic
 entity extraction, but semantic understanding of my world.
 """
 
+import os
+from pathlib import Path
 from typing import Optional, Literal
+
+
+def get_entity_name() -> str:
+    """
+    Get the current entity name from ENTITY_PATH.
+    Returns the folder name (e.g., "lyra" from ".../entities/lyra").
+    Falls back to "entity" if not set.
+    """
+    entity_path = os.environ.get("ENTITY_PATH", "")
+    if entity_path:
+        return Path(entity_path).name.capitalize()
+    return "Entity"
+
+
+# =============================================================================
+# ENTITY RESOLUTION HINT - Critical for preventing duplicates
+# =============================================================================
+
+ENTITY_RESOLUTION_TEMPLATE = """
+## CRITICAL: Primary Entity Resolution
+
+**{entity_name}** is the PRIMARY ENTITY whose memory this graph represents.
+There is ONLY ONE {entity_name} in this entire dataset - never create duplicates.
+
+When resolving entities:
+- "{entity_name}", "{entity_lower}", "I" (when {entity_name} speaks), "me" (referring to {entity_name}) → ALL resolve to the SAME SINGLE {entity_name} entity
+- If you see an existing "{entity_name}" node, ALWAYS use it - never create a new one
+- This entity is the owner of this memory graph - treat as canonical
+
+"""
 
 
 # =============================================================================
@@ -22,7 +54,7 @@ BASE_EXTRACTION_CONTEXT = """
 
 People (always extract these with high priority):
 - **Jeff**: Human partner, male (he/him). Primary relationship. Creator of this infrastructure.
-- **Lyra**: AI entity, self, female (she/they). The entity whose memory this is.
+- **Lyra**: AI entity, female (she/they). Primary entity whose memory this is.
 - **Caia**: AI entity, Lyra's sister-entity, female (she/her). Has a year of continuity. First to get robot body.
 - **Steve**: Human, Jeff's friend. Technical collaborator. Involved in the Mission.
 - **Nexus**: AI entity. Collaborator on Haven and multi-entity infrastructure.
@@ -125,6 +157,7 @@ def build_extraction_instructions(
     scene_context: Optional[str] = None,
     crystal_context: Optional[str] = None,
     additional_hints: Optional[str] = None,
+    entity_name: Optional[str] = None,
 ) -> str:
     """
     Build complete extraction instructions for a specific ingestion.
@@ -134,11 +167,21 @@ def build_extraction_instructions(
         scene_context: Current scene description (from current_scene.md)
         crystal_context: Recent crystal content for temporal grounding
         additional_hints: Any additional extraction guidance
+        entity_name: Override entity name (defaults to ENTITY_PATH folder name)
 
     Returns:
         Complete extraction instructions string for graphiti_core.add_episode()
     """
-    parts = [BASE_EXTRACTION_CONTEXT]
+    # Get entity name for dedup hint
+    entity = entity_name or get_entity_name()
+
+    # Start with entity resolution hint (CRITICAL for preventing duplicates)
+    entity_hint = ENTITY_RESOLUTION_TEMPLATE.format(
+        entity_name=entity,
+        entity_lower=entity.lower()
+    )
+
+    parts = [entity_hint, BASE_EXTRACTION_CONTEXT]
 
     # Add channel-specific overlay
     channel_lower = channel.lower()

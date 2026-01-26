@@ -11,8 +11,11 @@ enabling custom entity types and extraction instructions.
 import os
 import json
 import asyncio
+import sqlite3
+import re
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 from . import PatternLayer, LayerType, SearchResult, LayerHealth
 from .rich_texture_entities import ENTITY_TYPES, EXCLUDED_ENTITY_TYPES
@@ -28,6 +31,10 @@ try:
     from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
     from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
     from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
+    from graphiti_core.search.search_config_recipes import (
+        EDGE_HYBRID_SEARCH_NODE_DISTANCE,
+        NODE_HYBRID_SEARCH_RRF,
+    )
     GRAPHITI_CORE_AVAILABLE = True
 except ImportError:
     GRAPHITI_CORE_AVAILABLE = False
@@ -40,9 +47,14 @@ except ImportError:
     OpenAIEmbedder = None
     OpenAIEmbedderConfig = None
     OpenAIRerankerClient = None
+    EDGE_HYBRID_SEARCH_NODE_DISTANCE = None
+    NODE_HYBRID_SEARCH_RRF = None
 
 # Also keep aiohttp for fallback HTTP mode
 import aiohttp
+
+# Default database path for recent message access
+DEFAULT_DB_PATH = os.path.expanduser("~/.claude/data/lyra_conversations.db")
 
 
 class RichTextureLayerV2(PatternLayer):
@@ -114,6 +126,13 @@ class RichTextureLayerV2(PatternLayer):
         # Context for extraction (can be updated dynamically)
         self._scene_context: Optional[str] = None
         self._crystal_context: Optional[str] = None
+
+        # Message cache for context-aware retrieval
+        self._message_cache: Optional[list[dict]] = None
+        self._message_cache_time: Optional[datetime] = None
+        self._message_cache_ttl = timedelta(seconds=30)
+        self._db_path = os.environ.get("PPS_MESSAGE_DB_PATH", DEFAULT_DB_PATH)
+        self._enable_explore = os.environ.get("PPS_ENABLE_EXPLORE", "true").lower() == "true"
 
     async def _get_graphiti_client(self) -> Optional[Graphiti]:
         """
@@ -234,6 +253,176 @@ class RichTextureLayerV2(PatternLayer):
         """
         self._scene_context = scene_context
         self._crystal_context = crystal_context
+
+    def _fetch_recent_messages(self, limit: int = 8) -> list[dict]:
+        """
+        Fetch recent messages from the raw_capture database.
+
+        Caches results for 30 seconds to avoid repeated DB hits.
+        Falls back to empty list if fetch fails.
+        """
+        # Check cache
+        now = datetime.now()
+        if self._message_cache and self._message_cache_time:
+            if now - self._message_cache_time < self._message_cache_ttl:
+                return self._message_cache
+
+        try:
+            conn = sqlite3.connect(self._db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                SELECT author_name, content, is_lyra FROM messages
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,)
+            )
+
+            messages = [
+                {
+                    "role": "Lyra" if row["is_lyra"] else row["author_name"],
+                    "content": row["content"]
+                }
+                for row in cursor.fetchall()
+            ]
+
+            conn.close()
+
+            # Cache results
+            self._message_cache = messages
+            self._message_cache_time = now
+
+            return messages
+
+        except Exception as e:
+            print(f"Failed to fetch recent messages for explore: {e}")
+            return []
+
+    def _extract_entities_from_messages(self, messages: list[dict]) -> list[str]:
+        """
+        Extract entity names from recent messages for explore seeding.
+
+        Adapted from test_context_query.py entity extraction logic.
+        Returns list of entity names prioritized by importance.
+        """
+        entities = set()
+
+        # Always include Lyra
+        entities.add("Lyra")
+
+        # Common words to skip
+        skip_words = {
+            'The', 'This', 'That', 'What', 'When', 'Where', 'How', 'Why',
+            'Yes', 'No', 'Oh', 'And', 'But', 'So', 'If', 'For', 'With',
+            'Not', 'Most', 'All', 'Some', 'Just', 'Now', 'Then', 'Here',
+            'There', 'Would', 'Could', 'Should', 'Will', 'Can', 'May',
+            'Like', 'Even', 'Still', 'Also', 'Well', 'Very', 'Much',
+            'Every', 'Each', 'Both', 'Such', 'Only', 'Other', 'Any',
+            'More', 'Less', 'First', 'Last', 'New', 'Old', 'Good', 'Bad',
+        }
+
+        for msg in messages:
+            content = msg['content']
+
+            # Find capitalized words (potential names) - must be 3+ chars
+            caps = re.findall(r'\b[A-Z][a-z]{2,}\b', content)
+            for cap in caps:
+                if cap not in skip_words:
+                    entities.add(cap)
+
+            # Find issue references like #77, Issue #58
+            issues = re.findall(r'#(\d+)', content)
+            for issue in issues:
+                entities.add(f"#{issue}")
+                entities.add(f"Issue #{issue}")
+
+            # Find known entity patterns
+            if 'Jeff' in content:
+                entities.add('Jeff')
+            if 'Carol' in content:
+                entities.add('Carol')
+            if 'Discord' in content:
+                entities.add('Discord')
+            if 'Brandi' in content:
+                entities.add('Brandi')
+
+        # Prioritize known important entities
+        priority = ['Lyra', 'Jeff', 'Carol', 'Brandi', 'Discord']
+        result = [e for e in priority if e in entities]
+        result += [e for e in entities if e not in priority]
+
+        return result[:5]  # Limit to top 5
+
+    async def _explore_from_entities(
+        self,
+        client,
+        entity_names: list[str],
+        explore_depth: int = 2
+    ) -> list[dict]:
+        """
+        Explore the graph from seed entities to find connected facts.
+
+        Simplified BFS traversal adapted from test_context_query.py.
+        Returns list of edge facts connected to the seed entities.
+        """
+        explore_results = []
+
+        for entity_name in entity_names[:3]:  # Limit to 3 entities
+            try:
+                # Find entity node by name
+                query = """
+                MATCH (n:Entity {group_id: $group_id})
+                WHERE toLower(n.name) CONTAINS toLower($name)
+                RETURN n.uuid as uuid, n.name as name
+                LIMIT 1
+                """
+                async with client.driver.session() as session:
+                    result = await session.run(
+                        query,
+                        group_id=self.group_id,
+                        name=entity_name
+                    )
+                    records = await result.data()
+
+                if records:
+                    entity_uuid = records[0]['uuid']
+                    entity_actual_name = records[0]['name']
+
+                    # Get edges connected to this entity (simple BFS)
+                    edge_query = """
+                    MATCH (n:Entity {uuid: $uuid})-[r]-(m:Entity)
+                    WHERE r.group_id = $group_id
+                    RETURN type(r) as rel_type, r.fact as fact,
+                           n.name as source, m.name as target,
+                           r.uuid as uuid
+                    LIMIT $limit
+                    """
+                    async with client.driver.session() as session:
+                        result = await session.run(
+                            edge_query,
+                            uuid=entity_uuid,
+                            group_id=self.group_id,
+                            limit=explore_depth * 10
+                        )
+                        edge_records = await result.data()
+
+                    for rec in edge_records:
+                        explore_results.append({
+                            "from_entity": entity_actual_name,
+                            "rel_type": rec['rel_type'],
+                            "fact": rec['fact'],
+                            "source": rec['source'],
+                            "target": rec['target'],
+                            "uuid": rec['uuid']
+                        })
+            except Exception as e:
+                print(f"Explore failed for '{entity_name}': {e}")
+                continue
+
+        return explore_results
 
     @property
     def layer_type(self) -> LayerType:
@@ -373,21 +562,42 @@ class RichTextureLayerV2(PatternLayer):
         return await self._search_http(query, limit)
 
     async def _search_direct(self, query: str, limit: int) -> list[SearchResult]:
-        """Search using graphiti_core directly."""
+        """
+        Search using graphiti_core directly with optimized configuration.
+
+        Three-part search strategy:
+        1. Edge search (relationship facts) - EDGE_HYBRID_SEARCH_NODE_DISTANCE
+        2. Node search (entity summaries) - NODE_HYBRID_SEARCH_RRF
+        3. Explore (conversation-specific facts) - BFS from recent entities
+        """
         try:
             client = await self._get_graphiti_client()
             if not client:
                 return []
 
-            edges = await client.search(
+            # Configuration (reduced from 200 to 75 - hook truncates at 10K chars anyway)
+            EDGE_LIMIT = 75  # Reduced 2026-01-25 - see Issue #121 for compression plans
+            NODE_LIMIT = 3   # Entity summaries
+            EXPLORE_DEPTH = 2  # BFS depth from extracted entities
+
+            # Lyra's canonical UUID for proximity ranking
+            LYRA_UUID = "5bd21fca-52de-41fd-a6b1-c78371d77a36"
+
+            all_results = []
+
+            # 1. Edge search (relationship facts)
+            edge_config = EDGE_HYBRID_SEARCH_NODE_DISTANCE.model_copy(deep=True)
+            edge_config.limit = EDGE_LIMIT
+
+            edge_results = await client.search_(
                 query=query,
-                group_ids=[self.group_id],
-                num_results=limit,
+                config=edge_config,
+                center_node_uuid=LYRA_UUID,
+                group_ids=[self.group_id]
             )
 
-            # Filter out IS_DUPLICATE_OF edges (Graphiti bug: creates X→X self-references)
-            # See: pps/graph_curation_final_report.md for details
-            edges = [e for e in edges if e.name != "IS_DUPLICATE_OF"]
+            # Filter IS_DUPLICATE_OF edges
+            edges = [e for e in edge_results.edges if e.name != "IS_DUPLICATE_OF"]
 
             # Collect all unique node UUIDs to batch-fetch names
             node_uuids = set()
@@ -407,39 +617,98 @@ class RichTextureLayerV2(PatternLayer):
                     node_names[node.uuid] = node.name
                     node_labels[node.uuid] = node.labels
 
-            results = []
+            # Format edges as SearchResult
             for i, edge in enumerate(edges):
-                score = 1.0 - (i / max(len(edges), 1)) * 0.5
+                score = 1.0 - (i / max(len(edges), 1)) * 0.3  # Higher base score
 
                 # Get actual node names from lookup
                 source_name = node_names.get(edge.source_node_uuid, edge.source_node_uuid)
                 target_name = node_names.get(edge.target_node_uuid, edge.target_node_uuid)
 
-                # Format the edge as readable content
                 content = f"{source_name} → {edge.name} → {target_name}"
                 if edge.fact:
                     content = f"{content}: {edge.fact}"
 
-                results.append(SearchResult(
+                all_results.append(SearchResult(
                     content=content,
                     source=str(edge.uuid),
                     layer=LayerType.RICH_TEXTURE,
                     relevance_score=score,
                     metadata={
-                        "type": "fact",
-                        "subject": source_name,
+                        "type": "edge",
                         "predicate": edge.name,
+                        "subject": source_name,
                         "object": target_name,
                         "valid_at": str(edge.valid_at) if edge.valid_at else None,
                         "source_labels": node_labels.get(edge.source_node_uuid, []),
                         "target_labels": node_labels.get(edge.target_node_uuid, []),
-                    },
+                    }
                 ))
 
-            return results
+            # 2. Node search (entity summaries)
+            node_config = NODE_HYBRID_SEARCH_RRF.model_copy(deep=True)
+            node_config.limit = NODE_LIMIT
+
+            node_results = await client.search_(
+                query=query,
+                config=node_config,
+                group_ids=[self.group_id]
+            )
+
+            for node in node_results.nodes:
+                all_results.append(SearchResult(
+                    content=f"{node.name}: {node.summary}",
+                    source=str(node.uuid),
+                    layer=LayerType.RICH_TEXTURE,
+                    relevance_score=0.85,  # High relevance for entity context
+                    metadata={
+                        "type": "entity_summary",
+                        "entity": node.name,
+                    }
+                ))
+
+            # 3. Explore (conversation-specific facts)
+            if self._enable_explore and EXPLORE_DEPTH > 0:
+                # Fetch recent messages
+                recent_messages = self._fetch_recent_messages(limit=8)
+
+                if recent_messages:
+                    # Extract entities
+                    entity_names = self._extract_entities_from_messages(recent_messages)
+
+                    # Explore from those entities
+                    explore_facts = await self._explore_from_entities(
+                        client,
+                        entity_names,
+                        EXPLORE_DEPTH
+                    )
+
+                    # Format explore results
+                    for i, fact in enumerate(explore_facts):
+                        score = 0.8 - (i / max(len(explore_facts), 1)) * 0.2
+
+                        content = f"{fact['source']} → {fact['rel_type']} → {fact['target']}"
+                        if fact['fact']:
+                            content = f"{content}: {fact['fact']}"
+
+                        all_results.append(SearchResult(
+                            content=content,
+                            source=str(fact['uuid']),
+                            layer=LayerType.RICH_TEXTURE,
+                            relevance_score=score,
+                            metadata={
+                                "type": "explore",
+                                "from_entity": fact['from_entity'],
+                                "predicate": fact['rel_type'],
+                            }
+                        ))
+
+            return all_results
 
         except Exception as e:
-            print(f"Direct search failed: {e}")
+            print(f"Direct search with optimized config failed: {e}")
+            import traceback
+            traceback.print_exc()
             return await self._search_http(query, limit)
 
     async def _search_http(self, query: str, limit: int) -> list[SearchResult]:

@@ -11,6 +11,8 @@
 | **HTTP Endpoint Migration** | Code Done, Testing Paused | 7 endpoints written in `pps/docker/server_http.py`. Work dir: `work/http-endpoint-migration/`. **PAUSED**: Docker/WSL crashed during testing. Resume: spin up Docker, run `artifacts/test_endpoints.sh`, fix issues. |
 | **Agent Workflow Redesign** | ✅ Implemented (2026-01-24) | Self-improving crew now operational. See `~/.claude/agents/` for updated prompts. Includes: structured handoffs, testing mandate, friction logging, process-improver agent. |
 | **Daemon MCP Integration** | ✅ Done (2026-01-24) | Venv consolidated to `.venv`, MCP tools work directly. HTTP fallback removed. |
+| **CC OpenAI Wrapper** | ⏸️ Blocked (2026-01-25) | OpenAI-compatible wrapper for ClaudeInvoker (Issue #117). Wrapper works perfectly, but Graphiti Docker ignores `OPENAI_BASE_URL` (upstream #1116). See `work/cc-invoker-openai-wrapper/`. Issue #118 tracks. |
+| **Hook Haiku Compression** | Partial (2026-01-25) | Fixed subprocess timeout in inject_context hook. Haiku compression disabled (cc-wrapper Docker permissions issue). See `work/ambient-recall-optimization/HOOK_HAIKU_FIX.md`. Fallback to raw context works fine. |
 
 **Before trying to "fix" daemon issues**: Check if the issue is listed above. Check `daemon/cc_invoker/TODO.md`. Ask in your journal if unsure.
 

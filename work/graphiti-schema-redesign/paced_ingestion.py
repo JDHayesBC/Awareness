@@ -17,6 +17,7 @@ Options:
 import asyncio
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from datetime import datetime
@@ -26,6 +27,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 load_dotenv(PROJECT_ROOT / "pps" / "docker" / ".env")
+
+from neo4j import GraphDatabase
 
 # Log file for monitoring
 LOG_FILE = Path(__file__).parent / "ingestion.log"
@@ -37,6 +40,104 @@ def log(msg: str):
     print(line, flush=True)
     with open(LOG_FILE, "a") as f:
         f.write(line + "\n")
+
+
+# =============================================================================
+# Entity Deduplication (prevents duplicate primary entities)
+# =============================================================================
+
+def get_primary_entity_name() -> str:
+    """Get the primary entity name from ENTITY_PATH."""
+    entity_path = os.environ.get("ENTITY_PATH", "")
+    if entity_path:
+        return Path(entity_path).name.capitalize()
+    return "Lyra"  # Fallback for this specific instance
+
+
+def get_neo4j_driver():
+    """Get Neo4j driver from environment."""
+    uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+    user = os.environ.get("NEO4J_USER", "neo4j")
+    password = os.environ.get("NEO4J_PASSWORD", "password123")
+    return GraphDatabase.driver(uri, auth=(user, password))
+
+
+def check_and_merge_entity_duplicates(entity_name: str) -> int:
+    """
+    Check for duplicate entity nodes and merge them if found.
+
+    Returns the number of duplicates merged.
+    """
+    driver = get_neo4j_driver()
+    merged = 0
+
+    with driver.session() as s:
+        # Count entities with this name
+        r = s.run(
+            'MATCH (n:Entity {name: $name}) RETURN count(n) as c',
+            name=entity_name
+        )
+        count = r.single()['c']
+
+        if count <= 1:
+            driver.close()
+            return 0
+
+        log(f"  ⚠ Found {count} '{entity_name}' nodes - merging duplicates...")
+
+        # Find canonical (most connected)
+        r = s.run('''
+            MATCH (n:Entity {name: $name})
+            OPTIONAL MATCH (n)-[r]-()
+            RETURN n.uuid as uuid, count(r) as edges
+            ORDER BY edges DESC
+        ''', name=entity_name)
+
+        nodes = list(r)
+        canonical_uuid = nodes[0]['uuid']
+        duplicates = [n['uuid'] for n in nodes[1:]]
+
+        # Merge each duplicate into canonical
+        for dup_uuid in duplicates:
+            # Transfer outgoing edges
+            outgoing = s.run("""
+                MATCH (dup:Entity {uuid: $dup_uuid})-[r]->(other)
+                WHERE other.uuid <> $canonical_uuid
+                RETURN type(r) as rel_type, r.fact as fact, other.uuid as other_uuid
+            """, dup_uuid=dup_uuid, canonical_uuid=canonical_uuid).data()
+
+            for e in outgoing:
+                s.run(f"""
+                    MATCH (c:Entity {{uuid: $canonical_uuid}})
+                    MATCH (other:Entity {{uuid: $other_uuid}})
+                    MERGE (c)-[r:{e['rel_type']}]->(other)
+                    SET r.fact = $fact
+                """, canonical_uuid=canonical_uuid, other_uuid=e['other_uuid'], fact=e['fact'])
+
+            # Transfer incoming edges
+            incoming = s.run("""
+                MATCH (other)-[r]->(dup:Entity {uuid: $dup_uuid})
+                WHERE other.uuid <> $canonical_uuid
+                RETURN type(r) as rel_type, r.fact as fact, other.uuid as other_uuid
+            """, dup_uuid=dup_uuid, canonical_uuid=canonical_uuid).data()
+
+            for e in incoming:
+                s.run(f"""
+                    MATCH (other:Entity {{uuid: $other_uuid}})
+                    MATCH (c:Entity {{uuid: $canonical_uuid}})
+                    MERGE (other)-[r:{e['rel_type']}]->(c)
+                    SET r.fact = $fact
+                """, other_uuid=e['other_uuid'], canonical_uuid=canonical_uuid, fact=e['fact'])
+
+            # Delete duplicate
+            s.run("MATCH (dup:Entity {uuid: $dup_uuid}) DETACH DELETE dup", dup_uuid=dup_uuid)
+            merged += 1
+
+        log(f"  ✓ Merged {merged} duplicates into canonical {entity_name} node")
+
+    driver.close()
+    return merged
+
 
 # Add project root to path
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -189,6 +290,10 @@ async def run_ingestion(batch_size: int, pause_seconds: int, max_batches: int):
 
         log(f"  ✓ {success_count} ingested, {fail_count} failed in {elapsed:.1f}s")
         log(f"  Progress: {ingested_total} total ingested, {remaining} remaining")
+
+        # Check for and merge duplicate primary entity nodes
+        entity_name = get_primary_entity_name()
+        check_and_merge_entity_duplicates(entity_name)
 
         if remaining == 0:
             log("All messages ingested!")
