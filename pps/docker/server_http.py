@@ -2047,11 +2047,18 @@ async def get_turns_since(request: GetTurnsSinceRequest):
             except Exception as e:
                 print(f"Warning: Could not fetch summaries: {e}")
 
+        # If we have summaries, filter messages to only those AFTER the latest summary
+        # This is the "blending" - summaries cover older content, raw turns for recent
+        if summaries:
+            latest_summary_end = max(s['time_span_end'] for s in summaries)
+            messages = [m for m in messages if m['created_at'] > latest_summary_end]
+
         return {
             "success": True,
             "timestamp_start": request.timestamp,
             "messages_count": len(messages),
             "summaries_count": len(summaries),
+            "summarized_turns": sum(s['message_count'] for s in summaries) if summaries else 0,
             "limited": len(messages) == request.limit,
             "messages": messages,
             "summaries": summaries

@@ -982,7 +982,7 @@ async def list_tools() -> list[Tool]:
                 "Get conversation context centered on a specific moment in time. "
                 "Use to understand 'What were we discussing around 3pm?' "
                 "Returns messages before and after the timestamp, with configurable split ratio. "
-                "Useful for reconstructing context around a specific event or decision."
+                "Useful for reconstructinging context around a specific event or decision."
             ),
             inputSchema={
                 "type": "object",
@@ -1176,7 +1176,7 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
             # Note: message summaries tracked separately in recent_context_section
 
         # For startup context, use summaries for compressed history + ALL unsummarized raw turns
-        # Architecture: summaries = compressed past, unsummarized turns = full fidelity recent
+        # Architecture: summaries = compressed history, unsummarized turns = full fidelity recent
         # Pattern fidelity is paramount - we pay the token cost for complete context
         recent_context_section = ""
         if context.lower() == "startup":
@@ -2054,20 +2054,31 @@ Create a concise summary that captures what actually happened and what was accom
                 except Exception as e:
                     print(f"Warning: Could not fetch summaries: {e}", file=sys.stderr)
 
+            # If we have summaries, filter messages to only those AFTER the latest summary
+            # This is the "blending" - summaries cover older content, raw turns for recent
+            if summaries:
+                latest_summary_end = max(s['time_span_end'] for s in summaries)
+                messages = [m for m in messages if m['created_at'] > latest_summary_end]
+
             # Format the output
             output = f"**Turns Since {timestamp}**\n\n"
-            output += f"Found: {len(messages)} messages"
-            if len(messages) == limit:
-                output += f" (limited to {limit}, more may exist)"
-            output += "\n\n"
+            
+            if summaries:
+                total_summarized = sum(s['message_count'] for s in summaries)
+                output += f"Found: {len(summaries)} summaries ({total_summarized} compressed turns) + {len(messages)} raw turns\n\n"
+            else:
+                output += f"Found: {len(messages)} messages"
+                if len(messages) == limit:
+                    output += f" (limited to {limit}, more may exist)"
+                output += "\n\n"
 
             if summaries:
-                output += f"**Summaries** ({len(summaries)} overlapping):\n\n"
+                output += f"**Summaries** (compressed history):\n\n"
                 for s in summaries:
                     output += f"---\n[{s['time_span_start']} to {s['time_span_end']}] ({s['message_count']} turns)\n{s['summary_text']}\n\n"
 
             if messages:
-                output += f"**Messages**:\n\n"
+                output += f"**Recent Turns** (full fidelity):\n\n"
                 for msg in messages:
                     output += f"[{msg['created_at']}] {msg['author_name']}: {msg['content']}\n"
 
