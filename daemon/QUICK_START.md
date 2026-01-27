@@ -55,7 +55,7 @@ cd daemon/
 
 ```bash
 cd daemon/
-source venv/bin/activate
+source ../.venv/bin/activate  # Project-level venv
 
 # Terminal 1:
 python lyra_discord.py
@@ -106,9 +106,9 @@ bash lyra status
 
 ### "No module named discord"
 ```bash
-# Activate virtual environment first
+# Activate project-level virtual environment
 cd daemon/
-source venv/bin/activate
+source ../.venv/bin/activate
 pip install -r requirements.txt
 ```
 

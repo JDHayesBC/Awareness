@@ -17,9 +17,10 @@ fi
 
 DAEMON="${1:-discord}"
 
-# Activate venv if exists
-if [ -d "venv" ]; then
-    source venv/bin/activate
+# Activate project-level venv (consolidated in Issue #111)
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [ -d "$PROJECT_ROOT/.venv" ]; then
+    source "$PROJECT_ROOT/.venv/bin/activate"
 fi
 
 case "$DAEMON" in

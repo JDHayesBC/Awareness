@@ -20,11 +20,11 @@ This configuration runs the daemon as a **user-level service** (not system-wide)
 
 ## Prerequisites
 
-1. **Python Virtual Environment**: The daemon expects a venv at `daemon/venv/`
+1. **Python Virtual Environment**: The daemon uses the project-level venv at `Awareness/.venv/` (consolidated in Issue #111 - no longer uses daemon/venv)
    ```bash
-   cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon
-   python3 -m venv venv
-   source venv/bin/activate
+   cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness
+   python3 -m venv .venv
+   source .venv/bin/activate
    pip install -r requirements.txt
    ```
 
@@ -292,12 +292,12 @@ chmod 644 ~/.config/systemd/user/lyra-daemon.service
 
 ```bash
 # Verify Python path in venv
-ls -la /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/venv/bin/python3
+ls -la /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/.venv/bin/python3
 
 # Recreate venv if needed
-cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon
-python3 -m venv venv
-source venv/bin/activate
+cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -470,4 +470,4 @@ For issues with:
 - **Discord daemon logic** - See `/mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/README.md`
 - **Systemd configuration** - Review this file and service file comments
 - **WSL2 setup** - Check WSL2 documentation for your distribution
-- **Python environment** - Verify venv setup: `source venv/bin/activate && pip list`
+- **Python environment** - Verify venv setup: `source .venv/bin/activate && pip list`

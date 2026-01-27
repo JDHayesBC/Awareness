@@ -1,3 +1,8 @@
+# DEPRECATED - This is the old single-daemon service file.
+# Use lyra-discord.service and lyra-reflection.service instead.
+# This file is kept for reference only.
+# See Issue #111 for venv consolidation.
+
 [Unit]
 Description=Lyra Discord Daemon - Autonomous presence with heartbeat
 Documentation=file:///mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/README.md

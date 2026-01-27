@@ -321,7 +321,7 @@ Logs not appearing?
 ### Service Configuration
 - Service file: `~/.config/systemd/user/lyra-daemon.service`
 - Daemon directory: `/mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon`
-- Virtual environment: `daemon/venv/`
+- Virtual environment: `Awareness/.venv/` (project-level, consolidated in Issue #111)
 
 ### Configuration & Secrets
 - Environment file: `daemon/.env` (DO NOT COMMIT)

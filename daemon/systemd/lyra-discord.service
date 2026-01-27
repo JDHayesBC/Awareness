@@ -16,7 +16,8 @@ EnvironmentFile=/mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/.env
 Environment="PYTHONUNBUFFERED=1"
 Environment="PYTHONDONTWRITEBYTECODE=1"
 
-ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/venv/bin/python3 -u lyra_discord.py
+# Use project-level venv (consolidated in Issue #111)
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python3 -u lyra_daemon.py
 
 Restart=on-failure
 RestartSec=10
