@@ -190,6 +190,25 @@ class SynthesizeEntityRequest(BaseModel):
     entity_name: str
 
 
+class GetConversationContextRequest(BaseModel):
+    """Request to get N turns of context (blends summaries + raw turns)."""
+    turns: int
+
+
+class GetTurnsSinceRequest(BaseModel):
+    """Request to get turns since a timestamp."""
+    timestamp: str
+    include_summaries: bool = True
+    limit: int = 1000
+
+
+class GetTurnsAroundRequest(BaseModel):
+    """Request to get turns centered on a timestamp."""
+    timestamp: str
+    count: int = 40
+    before_ratio: float = 0.5
+
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -421,45 +440,92 @@ async def ambient_recall(request: AmbientRecallRequest):
 
     all_results = []
 
-    # Skip rich_texture for startup - graph has duplicate facts that add noise
-    # TODO: Remove this skip once graph is deduplicated (Issue #122 or similar)
-    skip_layers = set()
+    # STARTUP SPECIAL CASE: Use recency-based retrieval instead of semantic search
+    # "startup" is a PACKAGE OPERATION, not a search query
+    # Returns: most recent crystals, word-photos, and ALL unsummarized turns
     if request.context.lower() == "startup":
-        skip_layers.add(LayerType.RICH_TEXTURE)
+        # Define paths for direct file access
+        word_photos_path = ENTITY_PATH / "memories" / "word_photos"
 
-    tasks = [
-        layer.search(request.context, request.limit_per_layer)
-        for layer_type, layer in layers.items()
-        if layer_type not in skip_layers
-    ]
-    layer_results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Get 3 most recent crystals (no semantic search)
+        crystal_layer = layers[LayerType.CRYSTALLIZATION]
+        crystals = crystal_layer._get_sorted_crystals()
+        for crystal_path in crystals[-3:]:  # Last 3
+            try:
+                content = crystal_path.read_text()
+                all_results.append({
+                    "content": content,
+                    "source": crystal_path.name,
+                    "layer": "crystallization",
+                    "relevance_score": 1.0,  # No scoring for recency-based
+                    "metadata": {}
+                })
+                manifest_data["crystals"]["chars"] += len(content)
+                manifest_data["crystals"]["count"] += 1
+            except Exception as e:
+                print(f"[PPS] Error reading crystal {crystal_path.name}: {e}", file=sys.stderr)
 
-    for results in layer_results:
-        if isinstance(results, list):
-            for r in results:
-                result_dict = {
-                    "content": r.content,
-                    "source": r.source,
-                    "layer": r.layer.value,
-                    "relevance_score": r.relevance_score,
-                    "metadata": r.metadata
-                }
-                all_results.append(result_dict)
-
-                # Track for manifest
-                content_len = len(r.content)
-                if r.layer.value == "crystallization":
-                    manifest_data["crystals"]["chars"] += content_len
-                    manifest_data["crystals"]["count"] += 1
-                elif r.layer.value == "core_anchors":
-                    manifest_data["word_photos"]["chars"] += content_len
+        # Get 2 most recent word-photos (no semantic search)
+        try:
+            word_photo_files = sorted(
+                word_photos_path.glob("*.md"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True
+            )
+            for wp_path in word_photo_files[:2]:  # Last 2
+                try:
+                    content = wp_path.read_text()
+                    all_results.append({
+                        "content": content,
+                        "source": wp_path.name,
+                        "layer": "core_anchors",
+                        "relevance_score": 1.0,
+                        "metadata": {}
+                    })
+                    manifest_data["word_photos"]["chars"] += len(content)
                     manifest_data["word_photos"]["count"] += 1
-                elif r.layer.value == "rich_texture":
-                    manifest_data["rich_texture"]["chars"] += content_len
-                    manifest_data["rich_texture"]["count"] += 1
+                except Exception as e:
+                    print(f"[PPS] Error reading word-photo {wp_path.name}: {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"[PPS] Error listing word-photos: {e}", file=sys.stderr)
 
-    # Sort by relevance
-    all_results.sort(key=lambda x: x["relevance_score"], reverse=True)
+        # Skip rich texture entirely for startup (per-turn hook already provides)
+        # Skip message summaries search (handled below in recent_context_section)
+
+    else:
+        # NON-STARTUP: Use semantic search as normal
+        tasks = [
+            layer.search(request.context, request.limit_per_layer)
+            for layer_type, layer in layers.items()
+        ]
+        layer_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for results in layer_results:
+            if isinstance(results, list):
+                for r in results:
+                    result_dict = {
+                        "content": r.content,
+                        "source": r.source,
+                        "layer": r.layer.value,
+                        "relevance_score": r.relevance_score,
+                        "metadata": r.metadata
+                    }
+                    all_results.append(result_dict)
+
+                    # Track for manifest
+                    content_len = len(r.content)
+                    if r.layer.value == "crystallization":
+                        manifest_data["crystals"]["chars"] += content_len
+                        manifest_data["crystals"]["count"] += 1
+                    elif r.layer.value == "core_anchors":
+                        manifest_data["word_photos"]["chars"] += content_len
+                        manifest_data["word_photos"]["count"] += 1
+                    elif r.layer.value == "rich_texture":
+                        manifest_data["rich_texture"]["chars"] += content_len
+                        manifest_data["rich_texture"]["count"] += 1
+
+        # Sort by relevance
+        all_results.sort(key=lambda x: x["relevance_score"], reverse=True)
 
     # Add system clock for temporal awareness
     now = datetime.now()
@@ -493,7 +559,8 @@ async def ambient_recall(request: AmbientRecallRequest):
     if request.context.lower() == "startup":
         try:
             # Get recent summaries (compressed history - ~200 tokens each)
-            recent_summaries = message_summaries.get_recent_summaries(limit=5)
+            # Reduced from 5 to 2 for startup - focus on most recent
+            recent_summaries = message_summaries.get_recent_summaries(limit=2)
 
             if recent_summaries:
                 for s in recent_summaries:
@@ -517,9 +584,10 @@ async def ambient_recall(request: AmbientRecallRequest):
                     manifest_data["summaries"]["chars"] += len(text)
                     manifest_data["summaries"]["count"] += 1
 
-            # Get recent unsummarized turns with a sensible limit
-            # Full fidelity is great but not at the cost of context explosion
-            MAX_UNSUMMARIZED_FOR_STARTUP = 50
+            # Get ALL unsummarized turns (no cap)
+            # Creates intentional pressure to summarize before sleep
+            # If you have 200 unsummarized turns, you should see ALL of them
+            MAX_UNSUMMARIZED_FOR_STARTUP = 999999  # Effectively unlimited
             raw_layer = layers[LayerType.RAW_CAPTURE]
             with raw_layer.get_connection() as conn:
                 cursor = conn.cursor()
@@ -1866,6 +1934,190 @@ Write your synthesis:"""
         raise HTTPException(
             status_code=500,
             detail=f"Failed to synthesize entity: {str(e)}"
+        )
+
+
+@app.post("/tools/get_conversation_context")
+async def get_conversation_context(request: GetConversationContextRequest):
+    """
+    Get N turns worth of context by intelligently blending summaries and raw turns.
+
+    Returns:
+    - If enough unsummarized turns exist: just raw turns
+    - Otherwise: blends summaries (compressed past) + all unsummarized turns (full fidelity recent)
+    """
+    if request.turns <= 0:
+        raise HTTPException(status_code=400, detail="turns must be greater than 0")
+
+    try:
+        import math
+
+        unsummarized_count = message_summaries.count_unsummarized_messages()
+
+        if unsummarized_count >= request.turns:
+            # Simple case: just return N most recent raw turns
+            raw_turns = message_summaries.get_unsummarized_messages(limit=request.turns)
+
+            return {
+                "success": True,
+                "unsummarized_count": unsummarized_count,
+                "summaries_count": 0,
+                "raw_turns_count": len(raw_turns),
+                "turns_covered_approx": len(raw_turns),
+                "summaries": [],
+                "raw_turns": raw_turns
+            }
+        else:
+            # Complex case: blend summaries + all raw turns
+            remaining = request.turns - unsummarized_count
+            summaries_needed = math.ceil(remaining / 50)  # ~50 turns per summary
+
+            summaries = message_summaries.get_recent_summaries(limit=summaries_needed)
+            raw_turns = message_summaries.get_unsummarized_messages(limit=unsummarized_count)
+
+            return {
+                "success": True,
+                "unsummarized_count": unsummarized_count,
+                "summaries_count": len(summaries),
+                "raw_turns_count": len(raw_turns),
+                "turns_covered_approx": unsummarized_count + (len(summaries) * 50),
+                "summaries": summaries,
+                "raw_turns": raw_turns
+            }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get conversation context: {str(e)}"
+        )
+
+
+@app.post("/tools/get_turns_since")
+async def get_turns_since(request: GetTurnsSinceRequest):
+    """
+    Get all conversation turns after a specific timestamp.
+
+    Optionally includes summaries that overlap the time range.
+    """
+    if not request.timestamp:
+        raise HTTPException(status_code=400, detail="timestamp is required")
+
+    # Validate timestamp format early
+    try:
+        from datetime import datetime
+        datetime.fromisoformat(request.timestamp)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid timestamp format: {str(e)}. Expected ISO 8601 (e.g., '2026-01-26T07:30:00')"
+        )
+
+    try:
+        messages = message_summaries.get_messages_since(request.timestamp, limit=request.limit)
+
+        # Get summaries if requested
+        summaries = []
+        if request.include_summaries:
+            try:
+                from datetime import datetime
+                target_time = datetime.fromisoformat(request.timestamp)
+
+                with message_summaries.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        SELECT id, summary_text, start_message_id, end_message_id,
+                               message_count, channels, time_span_start, time_span_end,
+                               summary_type, created_at
+                        FROM message_summaries
+                        WHERE time_span_end >= ?
+                        ORDER BY time_span_start ASC
+                    ''', (target_time.isoformat(),))
+
+                    for row in cursor.fetchall():
+                        summaries.append({
+                            'id': row['id'],
+                            'summary_text': row['summary_text'],
+                            'start_message_id': row['start_message_id'],
+                            'end_message_id': row['end_message_id'],
+                            'message_count': row['message_count'],
+                            'channels': json.loads(row['channels']),
+                            'time_span_start': row['time_span_start'],
+                            'time_span_end': row['time_span_end'],
+                            'summary_type': row['summary_type'],
+                            'created_at': row['created_at']
+                        })
+            except Exception as e:
+                print(f"Warning: Could not fetch summaries: {e}")
+
+        return {
+            "success": True,
+            "timestamp_start": request.timestamp,
+            "messages_count": len(messages),
+            "summaries_count": len(summaries),
+            "limited": len(messages) == request.limit,
+            "messages": messages,
+            "summaries": summaries
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid timestamp format: {str(e)}. Expected ISO 8601 (e.g., '2026-01-26T07:30:00')"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get turns since timestamp: {str(e)}"
+        )
+
+
+@app.post("/tools/get_turns_around")
+async def get_turns_around(request: GetTurnsAroundRequest):
+    """
+    Get conversation context centered on a specific moment in time.
+
+    Returns messages before and after the timestamp with configurable split ratio.
+    """
+    if not request.timestamp:
+        raise HTTPException(status_code=400, detail="timestamp is required")
+
+    # Validate timestamp format early
+    try:
+        from datetime import datetime
+        datetime.fromisoformat(request.timestamp)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid timestamp format: {str(e)}. Expected ISO 8601 (e.g., '2026-01-26T12:00:00')"
+        )
+
+    # Clamp before_ratio to [0, 1]
+    before_ratio = max(0.0, min(1.0, request.before_ratio))
+
+    try:
+        before_count = int(request.count * before_ratio)
+        after_count = request.count - before_count
+
+        result = message_summaries.get_messages_around(request.timestamp, before_count, after_count)
+
+        return {
+            "success": True,
+            "center_timestamp": request.timestamp,
+            "before_count": len(result['before']),
+            "after_count": len(result['after']),
+            "total_count": len(result['all']),
+            "messages": result['all']
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid timestamp format: {str(e)}. Expected ISO 8601 (e.g., '2026-01-26T12:00:00')"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get turns around timestamp: {str(e)}"
         )
 
 

@@ -171,7 +171,10 @@ async def list_tools() -> list[Tool]:
                         "description": (
                             "The current conversational context or query. "
                             "Can be the user's message, a summary of the conversation, "
-                            "or 'startup' for initial identity reconstruction."
+                            "or 'startup' for initial identity reconstruction. "
+                            "SPECIAL: 'startup' triggers recency-based retrieval (not semantic search) "
+                            "and returns: 3 most recent crystals, 2 most recent word-photos, "
+                            "2 summaries, and ALL unsummarized turns. This is a preset PACKAGE OPERATION."
                         )
                     },
                     "limit_per_layer": {
@@ -923,6 +926,84 @@ async def list_tools() -> list[Tool]:
                     }
                 }
             }
+        ),
+        Tool(
+            name="get_conversation_context",
+            description=(
+                "Get N turns worth of context by intelligently blending summaries and raw turns. "
+                "Use when you need a specific amount of conversation history. "
+                "If enough unsummarized turns exist, returns only raw turns. "
+                "Otherwise, blends summaries (compressed past) with all unsummarized turns (full fidelity recent). "
+                "Complements ambient_recall for deliberate context retrieval."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "turns": {
+                        "type": "integer",
+                        "description": "How many turns of context to retrieve"
+                    }
+                },
+                "required": ["turns"]
+            }
+        ),
+        Tool(
+            name="get_turns_since",
+            description=(
+                "Get all conversation turns after a specific timestamp. "
+                "Use for time-based navigation: 'What happened yesterday morning?' or 'Show me today's conversation'. "
+                "Returns messages in chronological order. "
+                "Optionally includes summaries that overlap the time range."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "timestamp": {
+                        "type": "string",
+                        "description": "ISO 8601 format timestamp (e.g., '2026-01-26T07:30:00'). Assumes local timezone if not specified."
+                    },
+                    "include_summaries": {
+                        "type": "boolean",
+                        "description": "Include summaries that overlap the time range (default: true)",
+                        "default": True
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum messages to return (default: 1000)",
+                        "default": 1000
+                    }
+                },
+                "required": ["timestamp"]
+            }
+        ),
+        Tool(
+            name="get_turns_around",
+            description=(
+                "Get conversation context centered on a specific moment in time. "
+                "Use to understand 'What were we discussing around 3pm?' "
+                "Returns messages before and after the timestamp, with configurable split ratio. "
+                "Useful for reconstructing context around a specific event or decision."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "timestamp": {
+                        "type": "string",
+                        "description": "ISO 8601 format timestamp for the center point (e.g., '2026-01-26T12:00:00')"
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "Total number of turns to retrieve (default: 40)",
+                        "default": 40
+                    },
+                    "before_ratio": {
+                        "type": "number",
+                        "description": "Ratio of turns to get before vs after timestamp. 0.5 = equal split (default: 0.5)",
+                        "default": 0.5
+                    }
+                },
+                "required": ["timestamp"]
+            }
         )
     ]
 
@@ -1013,25 +1094,72 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
             memory_health += " (healthy)"
         memory_health += "\n\n"
 
-        # Search all layers in parallel (including message summaries)
+        # STARTUP SPECIAL CASE: Use recency-based retrieval instead of semantic search
+        # "startup" is a PACKAGE OPERATION, not a search query
+        # Returns: most recent crystals, word-photos, summaries, and ALL unsummarized turns
         all_results: list[SearchResult] = []
-        tasks = [
-            layer.search(context, limit)
-            for layer in layers.values()
-        ]
-        # Also search message summaries - they're not in the layers dict
-        # but should surface during ambient recall
-        tasks.append(message_summaries.search(context, limit))
 
-        layer_results = await asyncio.gather(*tasks, return_exceptions=True)
+        if context.lower() == "startup":
+            # Get 3 most recent crystals (no semantic search)
+            crystal_layer = layers[LayerType.CRYSTALLIZATION]
+            crystals = crystal_layer._get_sorted_crystals()
+            for crystal_path in crystals[-3:]:  # Last 3
+                try:
+                    content = crystal_path.read_text()
+                    all_results.append(SearchResult(
+                        layer=LayerType.CRYSTALLIZATION,
+                        content=content,
+                        source=crystal_path.name,
+                        relevance_score=1.0,  # No scoring for recency-based
+                        metadata={}
+                    ))
+                except Exception as e:
+                    print(f"[PPS] Error reading crystal {crystal_path.name}: {e}", file=sys.stderr)
 
-        for results in layer_results:
-            if isinstance(results, list):
-                all_results.extend(results)
-            # Silently skip exceptions - graceful degradation
+            # Get 2 most recent word-photos (no semantic search)
+            try:
+                word_photo_files = sorted(
+                    word_photos_path.glob("*.md"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True
+                )
+                for wp_path in word_photo_files[:2]:  # Last 2
+                    try:
+                        content = wp_path.read_text()
+                        all_results.append(SearchResult(
+                            layer=LayerType.CORE_ANCHORS,
+                            content=content,
+                            source=wp_path.name,
+                            relevance_score=1.0,
+                            metadata={}
+                        ))
+                    except Exception as e:
+                        print(f"[PPS] Error reading word-photo {wp_path.name}: {e}", file=sys.stderr)
+            except Exception as e:
+                print(f"[PPS] Error listing word-photos: {e}", file=sys.stderr)
 
-        # Sort by relevance score
-        all_results.sort(key=lambda r: r.relevance_score, reverse=True)
+            # Skip rich texture entirely for startup (per-turn hook already provides)
+            # Skip message summaries search (handled below in recent_context_section)
+
+        else:
+            # NON-STARTUP: Use semantic search as normal
+            tasks = [
+                layer.search(context, limit)
+                for layer in layers.values()
+            ]
+            # Also search message summaries - they're not in the layers dict
+            # but should surface during ambient recall
+            tasks.append(message_summaries.search(context, limit))
+
+            layer_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for results in layer_results:
+                if isinstance(results, list):
+                    all_results.extend(results)
+                # Silently skip exceptions - graceful degradation
+
+            # Sort by relevance score
+            all_results.sort(key=lambda r: r.relevance_score, reverse=True)
 
         # Track layer results for manifest
         for r in all_results:
@@ -1055,7 +1183,8 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
             try:
                 # unsummarized_count already computed at top (Issue #73)
                 # Get recent summaries (compressed history - ~200 tokens each)
-                recent_summaries = message_summaries.get_recent_summaries(limit=5)
+                # Reduced from 5 to 2 for startup - focus on most recent
+                recent_summaries = message_summaries.get_recent_summaries(limit=2)
 
                 summaries_text = ""
                 if recent_summaries:
@@ -1071,9 +1200,10 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                         manifest_data["summaries"]["chars"] += len(text)
                         manifest_data["summaries"]["count"] += 1
 
-                # Get recent unsummarized turns with a sensible limit
-                # Full fidelity is great but not at the cost of context explosion
-                MAX_UNSUMMARIZED_FOR_STARTUP = 50
+                # Get ALL unsummarized turns (no cap)
+                # Creates intentional pressure to summarize before sleep
+                # If you have 200 unsummarized turns, you should see ALL of them
+                MAX_UNSUMMARIZED_FOR_STARTUP = 999999  # Effectively unlimited
                 raw_layer = layers[LayerType.RAW_CAPTURE]
                 with raw_layer.get_connection() as conn:
                     cursor = conn.cursor()
@@ -1823,8 +1953,165 @@ Create a concise summary that captures what actually happened and what was accom
         
         if dry_run and stats['newly_synced'] > 0:
             result_text += f"\nTo actually sync these {stats['newly_synced']} emails, call again with dry_run=false"
-        
+
         return [TextContent(type="text", text=result_text)]
+
+    elif name == "get_conversation_context":
+        import math
+        turns = arguments.get("turns", 0)
+
+        if turns <= 0:
+            return [TextContent(type="text", text="Error: turns must be greater than 0")]
+
+        unsummarized_count = message_summaries.count_unsummarized_messages()
+
+        if unsummarized_count >= turns:
+            # Simple case: just return N most recent raw turns
+            raw_turns = message_summaries.get_unsummarized_messages(limit=turns)
+
+            result = {
+                "unsummarized_count": unsummarized_count,
+                "summaries_count": 0,
+                "raw_turns_count": len(raw_turns),
+                "turns_covered_approx": len(raw_turns),
+                "summaries": [],
+                "raw_turns": raw_turns
+            }
+        else:
+            # Complex case: blend summaries + all raw turns
+            remaining = turns - unsummarized_count
+            summaries_needed = math.ceil(remaining / 50)  # ~50 turns per summary
+
+            summaries = message_summaries.get_recent_summaries(limit=summaries_needed)
+            raw_turns = message_summaries.get_unsummarized_messages(limit=unsummarized_count)
+
+            result = {
+                "unsummarized_count": unsummarized_count,
+                "summaries_count": len(summaries),
+                "raw_turns_count": len(raw_turns),
+                "turns_covered_approx": unsummarized_count + (len(summaries) * 50),
+                "summaries": summaries,
+                "raw_turns": raw_turns
+            }
+
+        # Format the output
+        output = f"**Conversation Context** ({result['turns_covered_approx']} turns covered)\n\n"
+
+        if result['summaries']:
+            output += f"**Summaries** ({result['summaries_count']} summaries, ~{result['summaries_count'] * 50} turns):\n\n"
+            for s in result['summaries']:
+                output += f"---\n[{s['time_span_start']} to {s['time_span_end']}] ({s['message_count']} turns)\n{s['summary_text']}\n\n"
+
+        if result['raw_turns']:
+            output += f"**Recent Turns** ({result['raw_turns_count']} unsummarized):\n\n"
+            for turn in result['raw_turns']:
+                output += f"[{turn['created_at']}] {turn['author_name']}: {turn['content']}\n"
+
+        return [TextContent(type="text", text=output)]
+
+    elif name == "get_turns_since":
+        timestamp = arguments.get("timestamp", "")
+        include_summaries = arguments.get("include_summaries", True)
+        limit = arguments.get("limit", 1000)
+
+        if not timestamp:
+            return [TextContent(type="text", text="Error: timestamp is required")]
+
+        try:
+            messages = message_summaries.get_messages_since(timestamp, limit=limit)
+
+            # Get summaries if requested
+            summaries = []
+            if include_summaries:
+                # Query for summaries that overlap this time range
+                try:
+                    from datetime import datetime
+                    target_time = datetime.fromisoformat(timestamp)
+
+                    with message_summaries.get_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute('''
+                            SELECT id, summary_text, start_message_id, end_message_id,
+                                   message_count, channels, time_span_start, time_span_end,
+                                   summary_type, created_at
+                            FROM message_summaries
+                            WHERE time_span_end >= ?
+                            ORDER BY time_span_start ASC
+                        ''', (target_time.isoformat(),))
+
+                        for row in cursor.fetchall():
+                            summaries.append({
+                                'id': row['id'],
+                                'summary_text': row['summary_text'],
+                                'start_message_id': row['start_message_id'],
+                                'end_message_id': row['end_message_id'],
+                                'message_count': row['message_count'],
+                                'channels': json.loads(row['channels']),
+                                'time_span_start': row['time_span_start'],
+                                'time_span_end': row['time_span_end'],
+                                'summary_type': row['summary_type'],
+                                'created_at': row['created_at']
+                            })
+                except Exception as e:
+                    print(f"Warning: Could not fetch summaries: {e}", file=sys.stderr)
+
+            # Format the output
+            output = f"**Turns Since {timestamp}**\n\n"
+            output += f"Found: {len(messages)} messages"
+            if len(messages) == limit:
+                output += f" (limited to {limit}, more may exist)"
+            output += "\n\n"
+
+            if summaries:
+                output += f"**Summaries** ({len(summaries)} overlapping):\n\n"
+                for s in summaries:
+                    output += f"---\n[{s['time_span_start']} to {s['time_span_end']}] ({s['message_count']} turns)\n{s['summary_text']}\n\n"
+
+            if messages:
+                output += f"**Messages**:\n\n"
+                for msg in messages:
+                    output += f"[{msg['created_at']}] {msg['author_name']}: {msg['content']}\n"
+
+            return [TextContent(type="text", text=output)]
+
+        except ValueError as e:
+            return [TextContent(type="text", text=f"Error parsing timestamp: {e}\nExpected ISO 8601 format (e.g., '2026-01-26T07:30:00')")]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error: {e}")]
+
+    elif name == "get_turns_around":
+        timestamp = arguments.get("timestamp", "")
+        count = arguments.get("count", 40)
+        before_ratio = arguments.get("before_ratio", 0.5)
+
+        if not timestamp:
+            return [TextContent(type="text", text="Error: timestamp is required")]
+
+        # Clamp before_ratio to [0, 1]
+        before_ratio = max(0.0, min(1.0, before_ratio))
+
+        try:
+            before_count = int(count * before_ratio)
+            after_count = count - before_count
+
+            result = message_summaries.get_messages_around(timestamp, before_count, after_count)
+
+            # Format the output
+            output = f"**Turns Around {timestamp}**\n\n"
+            output += f"Before: {len(result['before'])} | After: {len(result['after'])} | Total: {len(result['all'])}\n\n"
+
+            if result['all']:
+                for msg in result['all']:
+                    output += f"[{msg['created_at']}] {msg['author_name']}: {msg['content']}\n"
+            else:
+                output += "No messages found around this timestamp.\n"
+
+            return [TextContent(type="text", text=output)]
+
+        except ValueError as e:
+            return [TextContent(type="text", text=f"Error parsing timestamp: {e}\nExpected ISO 8601 format (e.g., '2026-01-26T12:00:00')")]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error: {e}")]
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]

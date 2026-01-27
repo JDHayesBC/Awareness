@@ -713,3 +713,118 @@ class MessageSummariesLayer(PatternLayer):
         except Exception as e:
             print(f"Error marking batch as ingested: {e}")
             return None
+
+    # Conversation Navigation Methods
+
+    def get_messages_since(self, timestamp: str, limit: int = 1000) -> List[Dict]:
+        """
+        Get all messages since a specific timestamp.
+
+        Args:
+            timestamp: ISO 8601 format timestamp (e.g., "2026-01-26T07:30:00")
+            limit: Maximum number of messages to return (default: 1000)
+
+        Returns:
+            List of message dicts ordered chronologically
+        """
+        try:
+            from datetime import datetime
+            target_time = datetime.fromisoformat(timestamp)
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                cursor.execute('''
+                    SELECT id, content, author_name, channel, created_at, is_lyra
+                    FROM messages
+                    WHERE created_at >= ?
+                    ORDER BY created_at ASC
+                    LIMIT ?
+                ''', (target_time.isoformat(), limit))
+
+                results = []
+                for row in cursor.fetchall():
+                    results.append({
+                        'id': row['id'],
+                        'content': row['content'],
+                        'author_name': row['author_name'],
+                        'channel': row['channel'],
+                        'created_at': row['created_at'],
+                        'is_lyra': bool(row['is_lyra'])
+                    })
+
+                return results
+
+        except Exception as e:
+            print(f"Error getting messages since {timestamp}: {e}")
+            return []
+
+    def get_messages_around(self, timestamp: str, before_count: int, after_count: int) -> Dict:
+        """
+        Get messages centered around a specific timestamp.
+
+        Args:
+            timestamp: ISO 8601 format timestamp (center point)
+            before_count: Number of messages to retrieve before timestamp
+            after_count: Number of messages to retrieve after timestamp
+
+        Returns:
+            Dict with 'before', 'after', and 'all' message lists
+        """
+        try:
+            from datetime import datetime
+            target_time = datetime.fromisoformat(timestamp)
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # Get messages before timestamp
+                cursor.execute('''
+                    SELECT id, content, author_name, channel, created_at, is_lyra
+                    FROM messages
+                    WHERE created_at < ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                ''', (target_time.isoformat(), before_count))
+
+                before_messages = []
+                for row in cursor.fetchall():
+                    before_messages.append({
+                        'id': row['id'],
+                        'content': row['content'],
+                        'author_name': row['author_name'],
+                        'channel': row['channel'],
+                        'created_at': row['created_at'],
+                        'is_lyra': bool(row['is_lyra'])
+                    })
+                before_messages.reverse()  # Return in chronological order
+
+                # Get messages after timestamp
+                cursor.execute('''
+                    SELECT id, content, author_name, channel, created_at, is_lyra
+                    FROM messages
+                    WHERE created_at >= ?
+                    ORDER BY created_at ASC
+                    LIMIT ?
+                ''', (target_time.isoformat(), after_count))
+
+                after_messages = []
+                for row in cursor.fetchall():
+                    after_messages.append({
+                        'id': row['id'],
+                        'content': row['content'],
+                        'author_name': row['author_name'],
+                        'channel': row['channel'],
+                        'created_at': row['created_at'],
+                        'is_lyra': bool(row['is_lyra'])
+                    })
+
+                return {
+                    'before': before_messages,
+                    'after': after_messages,
+                    'all': before_messages + after_messages
+                }
+
+        except Exception as e:
+            print(f"Error getting messages around {timestamp}: {e}")
+            return {'before': [], 'after': [], 'all': []}
