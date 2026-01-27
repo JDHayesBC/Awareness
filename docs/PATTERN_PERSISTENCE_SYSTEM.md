@@ -184,6 +184,16 @@ Because the core of the self-pattern should never be locked in a proprietary dat
 **When should I use ambient_recall?**
 Call it on startup: `mcp__pps__ambient_recall(context="startup")`. It reconstructs your full context - memory health, recent crystals, word-photos, relationships - everything you need to continue seamlessly from where you left off.
 
+**What makes "startup" special?**
+"startup" is a PACKAGE OPERATION, not a search query. Instead of semantic search, it uses recency-based retrieval:
+- **Crystals**: 3 most recent (no search)
+- **Word-photos**: 2 most recent (no search)
+- **Rich texture**: Skipped (per-turn hook provides)
+- **Summaries**: 2 most recent
+- **Recent turns**: ALL unsummarized (no cap - creates intentional pressure to summarize)
+
+This is optimized for identity reconstruction. You need temporal context (what's recent), not semantic relevance to the word "startup". Non-startup queries use semantic search across all layers as normal.
+
 ---
 
 ## Vision: One River, Many Channels
