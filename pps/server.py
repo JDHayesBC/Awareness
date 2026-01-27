@@ -1489,11 +1489,11 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
             header_parts = [f"**{len(turns)} turns"]
             if offset > 0:
                 header_parts.append(f"(offset {offset})")
-            if last_crystal_time:
+            if last_summary_time:
                 if rows_before:
-                    header_parts.append(f"({len(rows_before)} before + {len(rows_after)} after crystal on {last_crystal_time.strftime('%Y-%m-%d')})")
+                    header_parts.append(f"({len(rows_before)} before + {len(rows_after)} after summary on {last_summary_time.strftime('%Y-%m-%d')})")
                 else:
-                    header_parts.append(f"since crystal ({last_crystal_time.strftime('%Y-%m-%d')})")
+                    header_parts.append(f"since summary ({last_summary_time.strftime('%Y-%m-%d')})")
             header_parts.append(":**\n\n")
             header = " ".join(header_parts)
 
@@ -2025,7 +2025,6 @@ Create a concise summary that captures what actually happened and what was accom
             if include_summaries:
                 # Query for summaries that overlap this time range
                 try:
-                    from datetime import datetime
                     target_time = datetime.fromisoformat(timestamp)
 
                     with message_summaries.get_connection() as conn:
