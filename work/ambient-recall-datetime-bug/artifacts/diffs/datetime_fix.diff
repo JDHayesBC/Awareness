@@ -1,0 +1,28 @@
+diff --git a/pps/docker/server_http.py b/pps/docker/server_http.py
+index c458491..0e5d687 100644
+--- a/pps/docker/server_http.py
++++ b/pps/docker/server_http.py
+@@ -2004,7 +2004,6 @@ async def get_turns_since(request: GetTurnsSinceRequest):
+ 
+     # Validate timestamp format early
+     try:
+-        from datetime import datetime
+         datetime.fromisoformat(request.timestamp)
+     except ValueError as e:
+         raise HTTPException(
+@@ -2019,7 +2018,6 @@ async def get_turns_since(request: GetTurnsSinceRequest):
+         summaries = []
+         if request.include_summaries:
+             try:
+-                from datetime import datetime
+                 target_time = datetime.fromisoformat(request.timestamp)
+ 
+                 with message_summaries.get_connection() as conn:
+@@ -2083,7 +2081,6 @@ async def get_turns_around(request: GetTurnsAroundRequest):
+ 
+     # Validate timestamp format early
+     try:
+-        from datetime import datetime
+         datetime.fromisoformat(request.timestamp)
+     except ValueError as e:
+         raise HTTPException(

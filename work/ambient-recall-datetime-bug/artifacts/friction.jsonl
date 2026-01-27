@@ -17,5 +17,3 @@
 #
 # Example:
 # {"timestamp":"2026-01-24T14:30:00Z","agent":"planner","type":"TOOL_FAILURE","description":"tech_search returned no results","time_lost":"2 min","resolution":"Used grep instead","preventable":true,"suggestion":"Add tech RAG docs for this area"}
-{"timestamp":"2026-01-26T19:00:09-08:00","agent":"orchestration-agent","type":"TOOL_FAILURE","description":"claude-task command not found - using Task tool instead","time_lost":"1min","resolution":"Switch to Task tool with subagent_type","preventable":true,"suggestion":"Document correct agent spawning mechanism"}
-{"timestamp":"2026-01-26T19:01:31-08:00","agent":"orchestration-agent","type":"MISSING_CONTEXT","description":"Task tool not available for spawning agents - proceeding with direct implementation","time_lost":"2min","resolution":"Implement directly as orchestrator","preventable":true,"suggestion":"Clarify agent spawning mechanism or provide Task tool"}
