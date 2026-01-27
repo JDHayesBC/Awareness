@@ -467,6 +467,34 @@ class MessageSummariesLayer(PatternLayer):
             print(f"Error getting recent summaries: {e}")
             return []
 
+    def get_latest_summary_timestamp(self) -> Optional[datetime]:
+        """
+        Get the timestamp of the most recent summary.
+
+        Returns the time_span_end of the latest summary, which represents
+        when the last summarized message was created. This is used by
+        get_turns_since_summary to determine which messages are unsummarized.
+
+        Returns:
+            datetime of the latest summary's end time, or None if no summaries exist
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT time_span_end
+                    FROM message_summaries
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                ''')
+                row = cursor.fetchone()
+                if row:
+                    return datetime.fromisoformat(row[0])
+                return None
+        except Exception as e:
+            print(f"Warning: Could not get latest summary timestamp: {e}")
+            return None
+
     def count_unsummarized_messages(self) -> int:
         """
         Count how many messages haven't been summarized yet.

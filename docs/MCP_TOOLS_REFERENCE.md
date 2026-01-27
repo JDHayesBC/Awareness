@@ -411,14 +411,14 @@ Scene: [physical grounding - space, embodiment, sensory details]
 - **Session review**: Understanding recent identity snapshots
 - **Continuity chain**: Following the beads of identity through time
 
-#### `mcp__pps__get_turns_since_crystal(channel=None, limit=50, min_turns=10, offset=0)`
+#### `mcp__pps__get_turns_since_summary(channel=None, limit=50, min_turns=10, offset=0)`
 
-**Purpose**: Get conversation turns from SQLite after the last crystal. For manual exploration of raw history.
+**Purpose**: Get conversation turns from SQLite after the last summary. Returns raw unsummarized turns for manual exploration.
 
 **Parameters**:
 - `channel` (string, optional): Filter by channel (partial match, e.g., "terminal", "awareness")
 - `limit` (integer, optional): Max turns to retrieve (default: 50)
-- `min_turns` (integer, optional): Minimum turns to return even if pulling before crystal (default: 10)
+- `min_turns` (integer, optional): Minimum turns to return even if pulling before summary (default: 10)
 - `offset` (integer, optional): Skip this many turns for pagination (default: 0)
 
 **Returns**:
@@ -426,9 +426,9 @@ Scene: [physical grounding - space, embodiment, sensory details]
 - Can be paginated using offset
 
 **When to use**:
-- **Raw history exploration**: Reading actual conversations since last summary
-- **Detailed review**: When you want uncompressed history
-- **Debugging**: Checking what actually happened
+- **Raw history exploration**: Reading actual unsummarized conversations
+- **Detailed review**: When you want uncompressed recent history
+- **Debugging**: Checking what actually happened since last summary
 
 **Note**: `ambient_recall` combines summaries + recent turns automatically.
 
@@ -1000,9 +1000,9 @@ Texture (texture_add)
   └─ Searchable: Yes (semantic query)
 
 Crystals (crystallize)
-  └─ When: Session summaries, identity checkpoints
+  └─ When: Identity checkpoints (rare)
   └─ Where: Compressed continuity chain
-  └─ Searchable: Via get_crystals + get_turns_since_crystal
+  └─ Searchable: Via get_crystals + get_turns_since_summary
 ```
 
 ### Memory Retrieval Pattern

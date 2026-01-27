@@ -444,12 +444,12 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="get_turns_since_crystal",
+            name="get_turns_since_summary",
             description=(
-                "Get conversation turns from SQLite that occurred after the last crystal. "
+                "Get conversation turns from SQLite that occurred after the last summary. "
                 "Use for manual exploration of raw history. "
                 "Note: For startup, use ambient_recall which combines summaries + recent turns. "
-                "Always returns at least min_turns to ensure grounding even if crystal just happened."
+                "Always returns at least min_turns to ensure grounding even if summary just happened."
             ),
             inputSchema={
                 "type": "object",
@@ -1109,7 +1109,7 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                     # Show how many we're displaying vs total unsummarized
                     showing = len(unsummarized_rows)
                     if unsummarized_count > showing:
-                        unsummarized_text = f"\n---\n[unsummarized_turns] (showing {showing} of {unsummarized_count} - use get_turns_since_crystal with offset={showing} for older, or run summarizer)\n"
+                        unsummarized_text = f"\n---\n[unsummarized_turns] (showing {showing} of {unsummarized_count} - use get_turns_since_summary with offset={showing} for older, or run summarizer)\n"
                     else:
                         unsummarized_text = f"\n---\n[unsummarized_turns] ({showing} messages since last summary)\n"
                     for row in unsummarized_rows:
@@ -1273,15 +1273,14 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
             return [TextContent(type="text", text=f"Crystal saved: {filename}")]
         return [TextContent(type="text", text="Error: Failed to save crystal")]
 
-    elif name == "get_turns_since_crystal":
+    elif name == "get_turns_since_summary":
         limit = arguments.get("limit", 50)
         offset = arguments.get("offset", 0)
         min_turns = arguments.get("min_turns", 10)
         channel_filter = arguments.get("channel")
 
-        # Get the timestamp of the last crystal
-        crystal_layer = layers[LayerType.CRYSTALLIZATION]
-        last_crystal_time = await crystal_layer.get_latest_timestamp()
+        # Get the timestamp of the last summary
+        last_summary_time = message_summaries.get_latest_summary_timestamp()
 
         # Query SQLite for turns using WAL-enabled connection
         raw_layer = layers[LayerType.RAW_CAPTURE]
@@ -1292,8 +1291,8 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
             with raw_layer.get_connection() as conn:
                 cursor = conn.cursor()
 
-                if last_crystal_time:
-                    # First, get the MOST RECENT turns after the last crystal
+                if last_summary_time:
+                    # First, get the MOST RECENT turns after the last summary
                     # (order DESC to get newest, then reverse for chronological display)
                     # offset allows pagination: offset=0 gets newest, offset=50 gets next batch
                     query = """
@@ -1301,7 +1300,7 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                         FROM messages
                         WHERE created_at > ?
                     """
-                    params = [last_crystal_time.isoformat()]
+                    params = [last_summary_time.isoformat()]
                     if channel_filter:
                         query += " AND channel LIKE ?"
                         params.append(f"%{channel_filter}%")
@@ -1310,7 +1309,7 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                     cursor.execute(query, params)
                     rows_after = list(reversed(cursor.fetchall()))  # Reverse for chronological order
 
-                    # If we don't have enough turns, also get some from BEFORE the crystal
+                    # If we don't have enough turns, also get some from BEFORE the summary
                     if len(rows_after) < min_turns:
                         needed = min_turns - len(rows_after)
                         query = """
@@ -1318,7 +1317,7 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                             FROM messages
                             WHERE created_at <= ?
                         """
-                        params = [last_crystal_time.isoformat()]
+                        params = [last_summary_time.isoformat()]
                         if channel_filter:
                             query += " AND channel LIKE ?"
                             params.append(f"%{channel_filter}%")
@@ -1327,7 +1326,7 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                         cursor.execute(query, params)
                         rows_before = list(reversed(cursor.fetchall()))  # Reverse to get chronological order
                 else:
-                    # No crystal yet - get most recent turns
+                    # No summary yet - get most recent turns
                     query = """
                         SELECT author_name, content, created_at, channel
                         FROM messages

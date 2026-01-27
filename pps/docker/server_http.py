@@ -125,8 +125,8 @@ class GetCrystalsRequest(BaseModel):
 
 # Phase 2 HTTP Migration - Additional Request Models
 
-class GetTurnsSinceCrystalRequest(BaseModel):
-    """Request to get conversation turns after last crystal."""
+class GetTurnsSinceSummaryRequest(BaseModel):
+    """Request to get conversation turns after last summary."""
     limit: int = 50
     offset: int = 0
     min_turns: int = 10
@@ -1359,16 +1359,15 @@ async def crystal_list():
 
 # === Raw Capture (1) ===
 
-@app.post("/tools/get_turns_since_crystal")
-async def get_turns_since_crystal(request: GetTurnsSinceCrystalRequest):
+@app.post("/tools/get_turns_since_summary")
+async def get_turns_since_summary(request: GetTurnsSinceSummaryRequest):
     """
-    Get conversation turns from SQLite that occurred after the last crystal.
+    Get conversation turns from SQLite that occurred after the last summary.
     Use for manual exploration of raw history.
-    Always returns at least min_turns to ensure grounding even if crystal just happened.
+    Always returns at least min_turns to ensure grounding even if summary just happened.
     """
-    # Get the timestamp of the last crystal
-    crystal_layer = layers[LayerType.CRYSTALLIZATION]
-    last_crystal_time = await crystal_layer.get_latest_timestamp()
+    # Get the timestamp of the last summary
+    last_summary_time = message_summaries.get_latest_summary_timestamp()
     
     # Query SQLite for turns
     raw_layer = layers[LayerType.RAW_CAPTURE]
@@ -1378,15 +1377,15 @@ async def get_turns_since_crystal(request: GetTurnsSinceCrystalRequest):
         
         with raw_layer.get_connection() as conn:
             cursor = conn.cursor()
-            
-            if last_crystal_time:
-                # Get most recent turns after the last crystal
+
+            if last_summary_time:
+                # Get most recent turns after the last summary
                 query = """
                     SELECT author_name, content, created_at, channel
                     FROM messages
                     WHERE created_at > ?
                 """
-                params = [last_crystal_time.isoformat()]
+                params = [last_summary_time.isoformat()]
                 if request.channel:
                     query += " AND channel LIKE ?"
                     params.append(f"%{request.channel}%")
@@ -1394,8 +1393,8 @@ async def get_turns_since_crystal(request: GetTurnsSinceCrystalRequest):
                 params.extend([request.limit, request.offset])
                 cursor.execute(query, params)
                 rows_after = list(reversed(cursor.fetchall()))
-                
-                # If we don't have enough turns, get some from before the crystal
+
+                # If we don't have enough turns, get some from before the summary
                 if len(rows_after) < request.min_turns:
                     needed = request.min_turns - len(rows_after)
                     query = """
@@ -1403,7 +1402,7 @@ async def get_turns_since_crystal(request: GetTurnsSinceCrystalRequest):
                         FROM messages
                         WHERE created_at <= ?
                     """
-                    params = [last_crystal_time.isoformat()]
+                    params = [last_summary_time.isoformat()]
                     if request.channel:
                         query += " AND channel LIKE ?"
                         params.append(f"%{request.channel}%")
@@ -1412,7 +1411,7 @@ async def get_turns_since_crystal(request: GetTurnsSinceCrystalRequest):
                     cursor.execute(query, params)
                     rows_before = list(reversed(cursor.fetchall()))
             else:
-                # No crystal yet, just get recent messages
+                # No summary yet, just get recent messages
                 query = """
                     SELECT author_name, content, created_at, channel
                     FROM messages
@@ -1439,9 +1438,9 @@ async def get_turns_since_crystal(request: GetTurnsSinceCrystalRequest):
         return {
             "turns": turns,
             "count": len(turns),
-            "last_crystal_time": last_crystal_time.isoformat() if last_crystal_time else None
+            "last_summary_time": last_summary_time.isoformat() if last_summary_time else None
         }
-    
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get turns: {str(e)}")
 

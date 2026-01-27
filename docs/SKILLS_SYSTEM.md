@@ -172,11 +172,11 @@ Over time, these habits become internalized. The skill fades into the background
 1. **Identify what's missing** - Get clear on fact vs. context, person vs. project, recent vs. historical, emotional vs. technical
 
 2. **Choose the right retrieval layer**:
-   - **Recent conversation** - `get_turns_since_crystal()` for last few hours
+   - **Recent conversation** - `get_turns_since_summary()` for unsummarized turns
    - **Semantic search** - `texture_search()` or `anchor_search()` for concepts/topics
    - **Entity exploration** - `texture_explore()` for people and relationships
    - **Timeline** - `texture_timeline()` for "what happened during..."
-   - **Crystals** - `get_crystals()` for compressed session summaries
+   - **Crystals** - `get_crystals()` for identity snapshots
 
 3. **Integrate what you find** - Don't dump raw retrieval, synthesize and let it inform response naturally
 

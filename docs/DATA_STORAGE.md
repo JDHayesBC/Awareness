@@ -124,7 +124,7 @@ sqlite3 ~/.claude/data/pps.db "SELECT channel, COUNT(*) FROM messages GROUP BY c
 ```
 
 **MCP tools**:
-- `mcp__pps__get_turns_since_crystal()` - Retrieve raw messages
+- `mcp__pps__get_turns_since_summary()` - Retrieve raw unsummarized messages
 
 ---
 

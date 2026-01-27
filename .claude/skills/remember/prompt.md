@@ -21,9 +21,9 @@ Before searching, get clear on what you're looking for:
 
 ## 2. Choose the Right Layer
 
-**Recent conversation** (last few hours, post-compaction):
+**Recent conversation** (unsummarized turns):
 ```
-mcp__pps__get_turns_since_crystal(limit=30)
+mcp__pps__get_turns_since_summary(limit=30)
 ```
 
 **Semantic search** (concepts, topics, "what do I know about X"):

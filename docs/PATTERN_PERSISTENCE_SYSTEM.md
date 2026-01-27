@@ -367,7 +367,7 @@ If backlog grows too large, create summaries on demand rather than truncate.
 **Correct tool names**: Always use `mcp__pps__*` prefix:
 - `mcp__pps__ambient_recall` - unified retrieval from all layers
 - `mcp__pps__get_recent_summaries` - compressed conversation history
-- `mcp__pps__get_turns_since_crystal` - raw history (for manual exploration)
+- `mcp__pps__get_turns_since_summary` - raw unsummarized turns (for manual exploration)
 - `mcp__pps__anchor_search` - Layer 2 word-photos
 - `mcp__pps__crystallize` - create identity snapshot
 
