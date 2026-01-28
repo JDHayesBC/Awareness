@@ -211,7 +211,10 @@ def get_stats(db_path: str) -> tuple[int, int]:
     return ingested, remaining
 
 
-async def run_ingestion(batch_size: int, pause_seconds: int, max_batches: int):
+async def run_ingestion(
+    batch_size: int, pause_seconds: int, max_batches: int,
+    max_errors: int = 10, error_rate_halt: float = 0.5,
+):
     """Run paced ingestion."""
     db_path = "/home/jeff/.claude/data/lyra_conversations.db"
 
@@ -223,6 +226,8 @@ async def run_ingestion(batch_size: int, pause_seconds: int, max_batches: int):
     log(f"Batch size: {batch_size}")
     log(f"Pause between batches: {pause_seconds}s")
     log(f"Max batches: {'unlimited' if max_batches == 0 else max_batches}")
+    log(f"Error halt: after {max_errors} errors" if max_errors > 0 else "Error halt: disabled")
+    log(f"Error rate halt: {error_rate_halt:.0%} of batch")
     log("")
 
     # Initialize Graphiti layer
@@ -235,6 +240,8 @@ async def run_ingestion(batch_size: int, pause_seconds: int, max_batches: int):
     log("")
 
     batch_num = 0
+    total_errors = 0
+    halted = False
 
     while True:
         batch_num += 1
@@ -256,6 +263,7 @@ async def run_ingestion(batch_size: int, pause_seconds: int, max_batches: int):
         # Ingest each message
         success_count = 0
         fail_count = 0
+        failed_ids = []
         channels = set()
 
         for msg in messages:
@@ -273,11 +281,16 @@ async def run_ingestion(batch_size: int, pause_seconds: int, max_batches: int):
                     channels.add(msg['channel'])
                 else:
                     fail_count += 1
+                    failed_ids.append(msg['id'])
+                    log(f"  ✗ store() returned False for msg {msg['id']}")
             except Exception as e:
                 fail_count += 1
-                log(f"  Error on msg {msg['id']}: {e}")
+                failed_ids.append(msg['id'])
+                log(f"  ✗ Exception on msg {msg['id']}: {e}")
 
-        # Mark batch
+        total_errors += fail_count
+
+        # Mark batch (only successful messages tracked)
         if success_count > 0:
             batch_id = mark_batch_ingested(
                 db_path,
@@ -289,7 +302,30 @@ async def run_ingestion(batch_size: int, pause_seconds: int, max_batches: int):
         ingested_total, remaining = get_stats(db_path)
 
         log(f"  ✓ {success_count} ingested, {fail_count} failed in {elapsed:.1f}s")
+        if failed_ids:
+            log(f"  Failed message IDs: {failed_ids}")
         log(f"  Progress: {ingested_total} total ingested, {remaining} remaining")
+        log(f"  Cumulative errors: {total_errors}")
+
+        # --- Error halt checks ---
+        # Check error rate for this batch
+        if fail_count > 0 and len(messages) > 0:
+            batch_error_rate = fail_count / len(messages)
+            if batch_error_rate >= error_rate_halt:
+                log(f"")
+                log(f"*** HALTING: Batch error rate {batch_error_rate:.0%} >= threshold {error_rate_halt:.0%} ***")
+                log(f"*** {fail_count}/{len(messages)} messages failed in this batch ***")
+                log(f"*** Diagnose before continuing. Failed IDs: {failed_ids} ***")
+                halted = True
+                break
+
+        # Check total error count
+        if max_errors > 0 and total_errors >= max_errors:
+            log(f"")
+            log(f"*** HALTING: Reached {total_errors} total errors (limit: {max_errors}) ***")
+            log(f"*** Diagnose before continuing ***")
+            halted = True
+            break
 
         # Check for and merge duplicate primary entity nodes
         entity_name = get_primary_entity_name()
@@ -309,6 +345,13 @@ async def run_ingestion(batch_size: int, pause_seconds: int, max_batches: int):
     ingested_total, remaining = get_stats(db_path)
     log(f"Total ingested: {ingested_total}")
     log(f"Remaining: {remaining}")
+    log(f"Total errors: {total_errors}")
+    if halted:
+        log(f"Status: HALTED (errors exceeded threshold)")
+    elif remaining == 0:
+        log(f"Status: COMPLETE")
+    else:
+        log(f"Status: STOPPED (batch limit reached)")
 
     # Close layer
     await layer.close()
@@ -319,10 +362,17 @@ def main():
     parser.add_argument("--batch-size", type=int, default=50, help="Messages per batch")
     parser.add_argument("--pause", type=int, default=30, help="Seconds between batches")
     parser.add_argument("--max-batches", type=int, default=0, help="Max batches (0=unlimited)")
+    parser.add_argument("--max-errors", type=int, default=10,
+                        help="Halt after N total errors (default: 10, 0=no limit)")
+    parser.add_argument("--error-rate-halt", type=float, default=0.5,
+                        help="Halt if error rate exceeds this fraction (default: 0.5)")
 
     args = parser.parse_args()
 
-    asyncio.run(run_ingestion(args.batch_size, args.pause, args.max_batches))
+    asyncio.run(run_ingestion(
+        args.batch_size, args.pause, args.max_batches,
+        args.max_errors, args.error_rate_halt,
+    ))
 
 
 if __name__ == "__main__":

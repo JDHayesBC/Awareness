@@ -464,12 +464,16 @@ class RichTextureLayerV2(PatternLayer):
         if self._use_direct_mode:
             client = await self._get_graphiti_client()
             if client:
-                return await self._store_direct(
+                result = await self._store_direct(
                     content=content,
                     channel=channel,
                     speaker=speaker,
                     timestamp=timestamp,
                 )
+                if result:
+                    return True
+                # Direct mode failed - fall back to HTTP only if available
+                print(f"Direct store returned False, falling back to HTTP")
 
         # Fall back to HTTP API
         return await self._store_http(content, channel, role)
@@ -516,8 +520,7 @@ class RichTextureLayerV2(PatternLayer):
 
         except Exception as e:
             print(f"Direct store failed: {e}")
-            # Fall back to HTTP
-            return await self._store_http(content, channel, "user")
+            return False
 
     async def _store_http(self, content: str, channel: str, role: str) -> bool:
         """Store using HTTP API (fallback mode)."""
