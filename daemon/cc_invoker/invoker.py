@@ -630,6 +630,27 @@ class ClaudeInvoker:
 
         return False, ""
 
+    def approaching_restart(self, threshold: float = 0.8) -> tuple[bool, str]:
+        """
+        Check if session is approaching restart thresholds.
+
+        Use this for proactive restarts between requests, before hitting
+        the hard limit that needs_restart() checks.
+
+        Args:
+            threshold: Fraction of limit to trigger (default 0.8 = 80%)
+
+        Returns:
+            (approaching, reason) tuple
+        """
+        if self.context_size >= self.max_context_tokens * threshold:
+            return True, f"approaching_context ({self.context_size}/{self.max_context_tokens} tokens, {threshold:.0%})"
+
+        if self._turn_count >= self.max_turns * threshold:
+            return True, f"approaching_turns ({self._turn_count}/{self.max_turns} turns, {threshold:.0%})"
+
+        return False, ""
+
     async def restart(self, reason: str = "", startup_prompt: Optional[str] = None) -> dict:
         """
         Gracefully restart the session.

@@ -14,8 +14,16 @@ Architecture:
               ↓
     Claude Code CLI
 
+Hardened for production use:
+    - Zero-downtime restarts (requests queue during restart, never 503)
+    - Role priming after restart (no identity confusion)
+    - Proactive restart at 80% context (restart between requests)
+    - Response validation with retry (no empty responses)
+    - Request-level retry on failure
+    - Full observability (timing, context %, restart counts)
+
 Usage:
-    docker compose up pps-cc-wrapper
+    docker compose up pps-haiku-wrapper
 
     curl http://localhost:8000/v1/chat/completions \
         -H "Content-Type: application/json" \
@@ -29,6 +37,7 @@ Usage:
 """
 
 import asyncio
+import json
 import os
 import re
 import sys
@@ -46,7 +55,21 @@ import uvicorn
 # Add daemon directory to path for ClaudeInvoker import
 sys.path.insert(0, str(Path(__file__).parent / "daemon"))
 
-from cc_invoker.invoker import ClaudeInvoker
+from cc_invoker.invoker import ClaudeInvoker, InvokerQueryError
+
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+STARTUP_PROMPT = (
+    "You are a stateless JSON extraction API. "
+    "You receive requests in 'System: ... User: ...' format. "
+    "Respond with exactly what is requested - typically raw JSON. "
+    "Do not introduce yourself. Do not explain what you are. "
+    "Do not wrap JSON in markdown code fences. "
+    "Just output the requested content directly."
+)
 
 
 # =============================================================================
@@ -105,6 +128,19 @@ class ChatCompletionResponse(BaseModel):
 
 invoker: Optional[ClaudeInvoker] = None
 
+# Zero-downtime restart coordination
+_ready_event: asyncio.Event = None  # Initialized in lifespan (needs running loop)
+_restart_lock: asyncio.Lock = None
+
+# Observability counters
+_restart_count = 0
+_total_requests = 0
+_total_errors = 0
+
+
+# =============================================================================
+# Helpers
+# =============================================================================
 
 def estimate_tokens(text: str) -> int:
     """Rough token estimate: ~4 chars per token."""
@@ -124,6 +160,44 @@ def strip_markdown_fences(text: str) -> str:
     return text
 
 
+# =============================================================================
+# Restart Management
+# =============================================================================
+
+async def _perform_restart(reason: str):
+    """Restart invoker while blocking new requests.
+
+    Uses _restart_lock to prevent concurrent restarts and _ready_event
+    to queue incoming requests during the restart window.
+    """
+    global _restart_count
+
+    if _restart_lock.locked():
+        # Another restart already in progress, just wait for it
+        await _ready_event.wait()
+        return
+
+    async with _restart_lock:
+        _ready_event.clear()
+        try:
+            print(f"[RESTART] Starting: {reason}", flush=True)
+            start = time.monotonic()
+            await invoker.restart(reason=reason)
+            elapsed = time.monotonic() - start
+            _restart_count += 1
+            print(f"[RESTART] Complete in {elapsed:.1f}s (total restarts: {_restart_count})", flush=True)
+        except Exception as e:
+            print(f"[RESTART] FAILED: {e}", flush=True)
+            # Still set the event so queued requests can fail gracefully
+            # rather than hanging forever
+        finally:
+            _ready_event.set()
+
+
+# =============================================================================
+# Lifecycle
+# =============================================================================
+
 async def initialize_invoker():
     """Initialize ClaudeInvoker on startup."""
     global invoker
@@ -135,14 +209,10 @@ async def initialize_invoker():
 
     start = time.time()
 
-    # Create invoker in API endpoint mode:
-    # - No identity (stateless extraction)
-    # - No MCP servers (not needed for extraction)
-    # - No permission bypass (safe for root/Docker containers)
     invoker = ClaudeInvoker(
         model=model,
         bypass_permissions=False,
-        startup_prompt=None,
+        startup_prompt=STARTUP_PROMPT,
         mcp_servers={},
         max_context_tokens=150_000,
         max_turns=100,
@@ -151,16 +221,27 @@ async def initialize_invoker():
     await invoker.initialize()
 
     elapsed = time.time() - start
-    print(f"✓ ClaudeInvoker initialized in {elapsed:.1f}s")
+    print(f"Initialized in {elapsed:.1f}s")
+    print(f"  Model: {model}")
     print(f"  Context limits: {invoker.max_context_tokens} tokens, {invoker.max_turns} turns")
+    print(f"  Startup prompt: {len(STARTUP_PROMPT)} chars")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle."""
+    global _ready_event, _restart_lock
+
+    # Initialize async primitives (need running event loop)
+    _ready_event = asyncio.Event()
+    _restart_lock = asyncio.Lock()
+
     # Startup
     await initialize_invoker()
+    _ready_event.set()  # Signal ready for requests
+
     yield
+
     # Shutdown
     if invoker:
         await invoker.shutdown()
@@ -170,7 +251,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Claude Code OpenAI Wrapper",
     description="OpenAI-compatible wrapper for ClaudeInvoker",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan
 )
 
@@ -182,14 +263,26 @@ app = FastAPI(
 @app.get("/health")
 async def health_check():
     """Health check for Docker."""
-    if invoker is None or not invoker.is_connected:
+    if invoker is None:
         return JSONResponse(
             status_code=503,
-            content={
-                "status": "unhealthy",
-                "message": "ClaudeInvoker not initialized"
-            }
+            content={"status": "starting", "message": "Invoker not yet created"}
         )
+
+    restarting = not _ready_event.is_set() if _ready_event else False
+
+    # During restart, report as healthy but restarting
+    # (the invoker will be back shortly — don't fail Docker health checks)
+    if restarting:
+        return {
+            "status": "restarting",
+            "invoker_connected": False,
+            "stats": {
+                "total_requests": _total_requests,
+                "total_errors": _total_errors,
+                "restart_count": _restart_count,
+            }
+        }
 
     stats = invoker.context_stats
 
@@ -199,7 +292,15 @@ async def health_check():
         "context_usage": {
             "tokens": stats["total_tokens"],
             "turns": stats["turn_count"],
-            "limit": invoker.max_context_tokens
+            "token_limit": invoker.max_context_tokens,
+            "turn_limit": invoker.max_turns,
+            "token_pct": round(stats["total_tokens"] / max(invoker.max_context_tokens, 1) * 100, 1),
+            "turn_pct": round(stats["turn_count"] / max(invoker.max_turns, 1) * 100, 1),
+        },
+        "stats": {
+            "total_requests": _total_requests,
+            "total_errors": _total_errors,
+            "restart_count": _restart_count,
         }
     }
 
@@ -210,28 +311,31 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
     OpenAI-compatible chat completions endpoint.
 
     Translates OpenAI format → ClaudeInvoker → OpenAI format.
+    Handles restarts transparently — requests queue instead of failing.
     """
-    if invoker is None or not invoker.is_connected:
+    global _total_requests, _total_errors
+
+    _total_requests += 1
+
+    if invoker is None:
+        raise HTTPException(status_code=503, detail="Invoker not initialized")
+
+    # Wait for readiness (blocks during restart instead of returning 503)
+    try:
+        await asyncio.wait_for(_ready_event.wait(), timeout=30.0)
+    except asyncio.TimeoutError:
+        _total_errors += 1
         raise HTTPException(
-            status_code=503,
-            detail="ClaudeInvoker not initialized"
+            status_code=504,
+            detail="Timed out waiting for invoker restart"
         )
 
-    # Check if restart needed (context limits)
+    # Check if hard restart needed (at 100% — safety net)
     needs_restart, reason = invoker.needs_restart()
     if needs_restart:
-        print(f"Restarting invoker: {reason}")
-        try:
-            await invoker.restart(reason=reason)
-        except Exception as e:
-            print(f"Restart failed: {e}")
-            raise HTTPException(
-                status_code=503,
-                detail=f"Invoker restart failed: {e}"
-            )
+        await _perform_restart(reason)
 
-    # Combine messages into single prompt for ClaudeInvoker
-    # Claude doesn't need strict role separation for extraction tasks
+    # Build prompt from OpenAI messages
     wants_json = request.response_format and request.response_format.get("type") in (
         "json_object", "json_schema"
     )
@@ -258,7 +362,6 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
             schema_info = request.response_format.get("json_schema", {})
             schema = schema_info.get("schema")
             if schema:
-                import json
                 json_instruction += (
                     f"\n\nYour response MUST conform to this JSON schema:\n"
                     f"{json.dumps(schema, indent=2)}"
@@ -268,28 +371,52 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
 
     combined_prompt = "\n\n".join(prompt_parts)
 
-    # Estimate input tokens
+    # Log request
     prompt_tokens = estimate_tokens(combined_prompt)
+    schema_name = ""
+    if wants_json and request.response_format.get("type") == "json_schema":
+        schema_name = request.response_format.get("json_schema", {}).get("name", "unknown")
 
-    # Query Claude
-    try:
-        response_text = await invoker.query(combined_prompt)
-    except Exception as e:
-        print(f"Query failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"ClaudeInvoker query failed: {e}"
-        )
+    query_start = time.monotonic()
+
+    # Query with retry logic
+    response_text = await _query_with_retry(combined_prompt)
+
+    # Validate response (retry once on empty)
+    if not response_text or not response_text.strip():
+        print("[WARN] Empty response, retrying once...", flush=True)
+        response_text = await _query_with_retry(combined_prompt)
+
+    if not response_text or not response_text.strip():
+        _total_errors += 1
+        print("[ERROR] Empty response after retry", flush=True)
+        raise HTTPException(status_code=502, detail="Backend returned empty response")
 
     # Strip markdown fences if caller expects JSON
     if wants_json:
         response_text = strip_markdown_fences(response_text)
 
-    # Estimate output tokens
+    # Timing and observability
+    query_elapsed = time.monotonic() - query_start
     completion_tokens = estimate_tokens(response_text)
+    stats = invoker.context_stats
+    print(
+        f"[DONE] {query_elapsed:.1f}s | "
+        f"ctx={stats['total_tokens']}/{invoker.max_context_tokens} "
+        f"({stats['total_tokens'] * 100 // max(invoker.max_context_tokens, 1)}%) | "
+        f"turns={stats['turn_count']}/{invoker.max_turns} | "
+        f"schema={schema_name or 'none'}",
+        flush=True
+    )
+
+    # Proactive restart: schedule between requests at 80% threshold
+    approaching, approach_reason = invoker.approaching_restart()
+    if approaching:
+        print(f"[PROACTIVE] Scheduling restart: {approach_reason}", flush=True)
+        asyncio.create_task(_perform_restart(f"proactive: {approach_reason}"))
 
     # Build OpenAI-compatible response
-    response = ChatCompletionResponse(
+    return ChatCompletionResponse(
         id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
         created=int(time.time()),
         model=request.model,
@@ -310,7 +437,37 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
         )
     )
 
-    return response
+
+async def _query_with_retry(prompt: str) -> str:
+    """Query invoker with retry on failure.
+
+    Leverages InvokerQueryError.retried flag — if the invoker already
+    did a reconnect+retry internally, we don't pile on. If it was a
+    non-connection error, we retry once at the wrapper level.
+    """
+    global _total_errors
+
+    try:
+        return await invoker.query(prompt)
+    except InvokerQueryError as e:
+        if e.retried:
+            # Invoker already retried (connection error + reconnect), don't pile on
+            _total_errors += 1
+            print(f"[ERROR] Query failed after invoker retry: {e}", flush=True)
+            raise HTTPException(status_code=502, detail=f"Query failed after retry: {e}")
+        else:
+            # Non-connection error, retry once at wrapper level
+            print(f"[WARN] Query failed ({e}), retrying once...", flush=True)
+            try:
+                return await invoker.query(prompt)
+            except Exception as retry_err:
+                _total_errors += 1
+                print(f"[ERROR] Retry also failed: {retry_err}", flush=True)
+                raise HTTPException(status_code=502, detail=f"Query failed after retry: {retry_err}")
+    except Exception as e:
+        _total_errors += 1
+        print(f"[ERROR] Unexpected query error: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
 
 
 if __name__ == "__main__":
