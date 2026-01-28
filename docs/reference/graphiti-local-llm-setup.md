@@ -6,7 +6,19 @@ This guide documents how to use local LLMs (LM Studio, Ollama) for Graphiti enti
 
 Full OpenAI-based Graphiti ingestion costs ~$7/hour for entity extraction. For 11,000+ historical messages (~43 hours), that's $300+ in API costs.
 
-## The Solution: Hybrid Mode
+## Solutions
+
+### Quick Option: Claude Haiku via Wrapper (Recommended for Most Users)
+
+If you have Claude Code CLI installed, skip local hardware and use the **Claude Haiku OpenAI Wrapper**:
+- **Cost**: $0 (included in your Claude subscription)
+- **Setup**: ~5 minutes, no hardware required
+- **Quality**: Excellent for entity extraction
+- **Speed**: 2-4 seconds per extraction
+
+See **[graphiti-haiku-wrapper-setup.md](graphiti-haiku-wrapper-setup.md)** for complete setup instructions.
+
+### Local Option: Hybrid Mode
 
 Use local LLM for entity extraction (the expensive part) while keeping OpenAI for embeddings (cheap and compatible with existing graph data).
 

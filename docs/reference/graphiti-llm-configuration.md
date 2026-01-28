@@ -298,9 +298,73 @@ graphiti = Graphiti(
 
 ---
 
+### Claude Haiku via OpenAI Wrapper (Cost-Optimized)
+
+> **Note:** This approach uses Claude Haiku via an OpenAI-compatible wrapper to eliminate API costs while maintaining full compatibility.
+
+For setup and details, see **[graphiti-haiku-wrapper-setup.md](graphiti-haiku-wrapper-setup.md)**.
+
+**Cost**: $0 (included in Claude Code subscription)
+**Quality**: Excellent for entity extraction
+**Speed**: 2-4 seconds per request
+
+**Prerequisites**:
+- Claude Code CLI installed and authenticated
+- `pps-haiku-wrapper` service running (Docker container)
+
+**Configuration**:
+
+```python
+from graphiti_core import Graphiti
+from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
+from graphiti_core.llm_client.config import LLMConfig
+from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
+from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
+
+llm_config = LLMConfig(
+    api_key="dummy",  # Wrapper doesn't need a real key
+    model="haiku",
+    small_model="haiku",
+    base_url="http://pps-haiku-wrapper:8000",  # Or http://127.0.0.1:8204
+)
+
+graphiti = Graphiti(
+    "bolt://localhost:7687",
+    "neo4j",
+    "password",
+    llm_client=OpenAIGenericClient(config=llm_config),
+    embedder=OpenAIEmbedder(
+        config=OpenAIEmbedderConfig(
+            api_key="<your-openai-api-key>",
+            embedding_model="text-embedding-3-small",
+        )
+    ),
+    cross_encoder=OpenAIRerankerClient(
+        config=LLMConfig(
+            api_key="<your-openai-api-key>",
+            model="gpt-4o-mini",
+        )
+    )
+)
+```
+
+**Environment variables** (Docker):
+```bash
+GRAPHITI_LLM_BASE_URL=http://pps-haiku-wrapper:8000
+GRAPHITI_LLM_MODEL=haiku
+OPENAI_API_KEY=sk-...  # Still needed for embeddings
+```
+
+**Cost comparison**:
+- OpenAI GPT-4o: ~$0.003 per message
+- Claude Haiku (via CC subscription wrapper): $0 per message
+- Haiku also extracts 3x more entities with no content sanitization
+
+---
+
 ### OpenAI-Compatible Services (Generic)
 
-For any provider with an OpenAI-compatible API (e.g., Mistral, Together AI, etc.):
+For any provider with an OpenAI-compatible API (e.g., Mistral, Together AI, Ollama, etc.):
 
 ```python
 from graphiti_core import Graphiti
