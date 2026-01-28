@@ -2026,6 +2026,8 @@ Create a concise summary that captures what actually happened and what was accom
                 # Query for summaries that overlap this time range
                 try:
                     target_time = datetime.fromisoformat(timestamp)
+                    # Use space-separated format for SQLite string comparison (not 'T')
+                    db_timestamp = target_time.strftime('%Y-%m-%d %H:%M:%S')
 
                     with message_summaries.get_connection() as conn:
                         cursor = conn.cursor()
@@ -2036,7 +2038,7 @@ Create a concise summary that captures what actually happened and what was accom
                             FROM message_summaries
                             WHERE time_span_end >= ?
                             ORDER BY time_span_start ASC
-                        ''', (target_time.isoformat(),))
+                        ''', (db_timestamp,))
 
                         for row in cursor.fetchall():
                             summaries.append({
@@ -2058,7 +2060,9 @@ Create a concise summary that captures what actually happened and what was accom
             # This is the "blending" - summaries cover older content, raw turns for recent
             if summaries:
                 latest_summary_end = max(s['time_span_end'] for s in summaries)
-                messages = [m for m in messages if m['created_at'] > latest_summary_end]
+                # Convert to datetime for proper comparison (not string comparison)
+                latest_summary_time = datetime.fromisoformat(latest_summary_end)
+                messages = [m for m in messages if datetime.fromisoformat(m['created_at']) > latest_summary_time]
 
             # Format the output
             output = f"**Turns Since {timestamp}**\n\n"

@@ -720,27 +720,37 @@ class MessageSummariesLayer(PatternLayer):
         """
         Get all messages since a specific timestamp.
 
+        Returns ALL messages from ALL channels after the given timestamp,
+        without any filtering by session or channel type.
+
         Args:
             timestamp: ISO 8601 format timestamp (e.g., "2026-01-26T07:30:00")
             limit: Maximum number of messages to return (default: 1000)
 
         Returns:
-            List of message dicts ordered chronologically
+            List of message dicts ordered chronologically (oldest first)
         """
         try:
             from datetime import datetime
             target_time = datetime.fromisoformat(timestamp)
 
+            # CRITICAL: Database stores timestamps with space separator (2026-01-27 22:00:00)
+            # but ISO format uses 'T' (2026-01-27T22:00:00). For string comparison in SQLite,
+            # we must use space format, otherwise 'T' > ' ' causes incorrect filtering.
+            db_timestamp = target_time.strftime('%Y-%m-%d %H:%M:%S')
+
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
+                # Query ALL messages from ALL channels after the timestamp
+                # No session filtering, no channel filtering - return everything
                 cursor.execute('''
                     SELECT id, content, author_name, channel, created_at, is_lyra
                     FROM messages
                     WHERE created_at >= ?
                     ORDER BY created_at ASC
                     LIMIT ?
-                ''', (target_time.isoformat(), limit))
+                ''', (db_timestamp, limit))
 
                 results = []
                 for row in cursor.fetchall():
@@ -756,7 +766,11 @@ class MessageSummariesLayer(PatternLayer):
                 return results
 
         except Exception as e:
-            print(f"Error getting messages since {timestamp}: {e}")
+            import sys
+            # Log errors to stderr so they're visible for debugging
+            print(f"ERROR in get_messages_since({timestamp}): {type(e).__name__}: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
             return []
 
     def get_messages_around(self, timestamp: str, before_count: int, after_count: int) -> Dict:
@@ -774,6 +788,8 @@ class MessageSummariesLayer(PatternLayer):
         try:
             from datetime import datetime
             target_time = datetime.fromisoformat(timestamp)
+            # Use space-separated format for SQLite string comparison (not 'T')
+            db_timestamp = target_time.strftime('%Y-%m-%d %H:%M:%S')
 
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -785,7 +801,7 @@ class MessageSummariesLayer(PatternLayer):
                     WHERE created_at < ?
                     ORDER BY created_at DESC
                     LIMIT ?
-                ''', (target_time.isoformat(), before_count))
+                ''', (db_timestamp, before_count))
 
                 before_messages = []
                 for row in cursor.fetchall():
@@ -806,7 +822,7 @@ class MessageSummariesLayer(PatternLayer):
                     WHERE created_at >= ?
                     ORDER BY created_at ASC
                     LIMIT ?
-                ''', (target_time.isoformat(), after_count))
+                ''', (db_timestamp, after_count))
 
                 after_messages = []
                 for row in cursor.fetchall():
