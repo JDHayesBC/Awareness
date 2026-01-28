@@ -187,21 +187,17 @@ async def _perform_restart(reason: str):
         try:
             print(f"[RESTART] Starting: {reason}", flush=True)
             start = time.monotonic()
-            await invoker.restart(reason=reason)
+            # Skip invoker.restart() — its shutdown/disconnect hits anyio cancel
+            # scope errors when the client was created in a different task.
+            # Fresh init works every time and is just as fast.
+            await initialize_invoker()
             elapsed = time.monotonic() - start
             _restart_count += 1
             print(f"[RESTART] Complete in {elapsed:.1f}s (total restarts: {_restart_count})", flush=True)
         except Exception as e:
-            print(f"[RESTART] Failed ({e}), attempting full re-initialization...", flush=True)
-            try:
-                await initialize_invoker()
-                _restart_count += 1
-                elapsed = time.monotonic() - start
-                print(f"[RESTART] Recovered via re-init in {elapsed:.1f}s (total restarts: {_restart_count})", flush=True)
-            except Exception as e2:
-                print(f"[RESTART] CRITICAL: Re-init also failed: {e2}", flush=True)
-                print("[RESTART] Scheduling background recovery...", flush=True)
-                asyncio.create_task(_background_recovery())
+            print(f"[RESTART] FAILED: {e}", flush=True)
+            print("[RESTART] Scheduling background recovery...", flush=True)
+            asyncio.create_task(_background_recovery())
         finally:
             _ready_event.set()
 
