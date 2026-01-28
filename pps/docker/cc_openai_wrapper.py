@@ -30,12 +30,13 @@ Usage:
 
 import asyncio
 import os
+import re
 import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -64,6 +65,7 @@ class ChatCompletionRequest(BaseModel):
     messages: list[Message]
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
+    response_format: Optional[dict[str, Any]] = None
     # Ignore other OpenAI params (stream, top_p, etc.) - not needed for extraction
 
 
@@ -109,6 +111,19 @@ def estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+def strip_markdown_fences(text: str) -> str:
+    """Strip markdown code fences from Claude responses.
+
+    Claude wraps JSON in ```json ... ``` fences. Callers expecting raw JSON
+    (like Graphiti's json.loads()) need the fences removed.
+    """
+    # Match ```json\n...\n``` or ```\n...\n```
+    match = re.match(r'^```(?:json)?\s*\n(.*?)\n```\s*$', text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return text
+
+
 async def initialize_invoker():
     """Initialize ClaudeInvoker on startup."""
     global invoker
@@ -120,15 +135,15 @@ async def initialize_invoker():
 
     start = time.time()
 
-    # Create invoker with minimal config:
-    # - No identity (stateless mode)
+    # Create invoker in API endpoint mode:
+    # - No identity (stateless extraction)
     # - No MCP servers (not needed for extraction)
-    # - Bypass permissions (headless mode)
+    # - No permission bypass (safe for root/Docker containers)
     invoker = ClaudeInvoker(
         model=model,
-        bypass_permissions=True,
-        startup_prompt=None,  # No identity reconstruction
-        mcp_servers={},  # Disable MCP tools
+        bypass_permissions=False,
+        startup_prompt=None,
+        mcp_servers={},
         max_context_tokens=150_000,
         max_turns=100,
     )
@@ -217,6 +232,10 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
 
     # Combine messages into single prompt for ClaudeInvoker
     # Claude doesn't need strict role separation for extraction tasks
+    wants_json = request.response_format and request.response_format.get("type") in (
+        "json_object", "json_schema"
+    )
+
     prompt_parts = []
     for msg in request.messages:
         if msg.role == "system":
@@ -225,6 +244,27 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
             prompt_parts.append(f"User: {msg.content}")
         elif msg.role == "assistant":
             prompt_parts.append(f"Assistant: {msg.content}")
+
+    # When caller requests JSON output, tell Claude explicitly
+    if wants_json:
+        json_instruction = (
+            "IMPORTANT: Respond with raw JSON only. "
+            "No markdown formatting, no code fences, no explanation. "
+            "Just the JSON object."
+        )
+
+        # If a JSON schema is provided, include it so Claude uses exact field names
+        if request.response_format.get("type") == "json_schema":
+            schema_info = request.response_format.get("json_schema", {})
+            schema = schema_info.get("schema")
+            if schema:
+                import json
+                json_instruction += (
+                    f"\n\nYour response MUST conform to this JSON schema:\n"
+                    f"{json.dumps(schema, indent=2)}"
+                )
+
+        prompt_parts.append(json_instruction)
 
     combined_prompt = "\n\n".join(prompt_parts)
 
@@ -240,6 +280,10 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
             status_code=500,
             detail=f"ClaudeInvoker query failed: {e}"
         )
+
+    # Strip markdown fences if caller expects JSON
+    if wants_json:
+        response_text = strip_markdown_fences(response_text)
 
     # Estimate output tokens
     completion_tokens = estimate_tokens(response_text)

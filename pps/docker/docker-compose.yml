@@ -172,16 +172,21 @@ services:
 
   # OpenAI-compatible wrapper for ClaudeInvoker
   # Provides /v1/chat/completions endpoint for Graphiti to eliminate OpenAI costs
-  pps-cc-wrapper:
+  pps-haiku-wrapper:
     build:
       context: ../..
       dockerfile: pps/docker/Dockerfile.cc-wrapper
-    container_name: pps-cc-wrapper
+    container_name: pps-haiku-wrapper
     restart: unless-stopped
     ports:
       - "127.0.0.1:8204:8000"
+    volumes:
+      # Mount Claude CLI credentials from host
+      - ${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro
     environment:
       - WRAPPER_MODEL=${WRAPPER_MODEL:-haiku}
+    networks:
+      - default
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s

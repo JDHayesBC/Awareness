@@ -108,6 +108,7 @@ class ClaudeInvoker:
         bypass_permissions: bool = True,
         model: Optional[str] = None,
         mcp_servers: Optional[dict] = None,
+        allowed_tools: Optional[list[str]] = None,
         max_context_tokens: int = 150_000,
         max_turns: int = 100,
         max_idle_seconds: int = 4 * 3600,
@@ -118,12 +119,23 @@ class ClaudeInvoker:
         """
         Initialize invoker configuration.
 
+        Two typical usage modes:
+
+        Agent mode (default): Full Claude with MCP tools, permission bypass, identity.
+            ClaudeInvoker(model="sonnet", startup_prompt="...")
+
+        API endpoint mode: Stateless prompt→response, no tools, no permissions.
+            ClaudeInvoker(model="haiku", bypass_permissions=False, mcp_servers={})
+
         Args:
             working_dir: Working directory for Claude Code (defaults to Awareness project root)
-            bypass_permissions: If True, skip permission prompts (headless mode)
-            model: Model to use (e.g., 'claude-sonnet-4-5', 'opus')
+            bypass_permissions: If True, skip permission prompts (headless mode).
+                                Set False for containerized/root environments.
+            model: Model to use (e.g., 'claude-sonnet-4-5', 'opus', 'haiku')
             mcp_servers: MCP server configuration dict. Defaults to PPS via stdio.
                          Set to {} to disable MCP servers.
+            allowed_tools: List of tool patterns to pre-approve (e.g., ["mcp__pps__*"]).
+                           Defaults to PPS tools when mcp_servers are configured, empty otherwise.
             max_context_tokens: Maximum context tokens before restart (default 150k)
             max_turns: Maximum query turns before restart (default 100)
             max_idle_seconds: Maximum idle time before restart (default 4 hours)
@@ -136,6 +148,14 @@ class ClaudeInvoker:
         self.bypass_permissions = bypass_permissions
         self.model = model
         self.mcp_servers = mcp_servers if mcp_servers is not None else get_default_mcp_servers()
+
+        # Derive allowed_tools from mcp_servers if not explicitly set
+        if allowed_tools is not None:
+            self.allowed_tools = allowed_tools
+        elif self.mcp_servers:
+            self.allowed_tools = ["mcp__pps__*"]
+        else:
+            self.allowed_tools = []
 
         # Session limits
         self.max_context_tokens = max_context_tokens
@@ -333,11 +353,10 @@ class ClaudeInvoker:
         self._last_activity_time = datetime.now()
 
         # Configure options with inline MCP servers for portability
-        # allowed_tools grants permission for MCP tools (required!)
         options = ClaudeAgentOptions(
             cwd=str(self.working_dir),
-            mcp_servers=self.mcp_servers,
-            allowed_tools=["mcp__pps__*"],  # Allow all PPS tools
+            mcp_servers=self.mcp_servers if self.mcp_servers else None,
+            allowed_tools=self.allowed_tools if self.allowed_tools else None,
             permission_mode="bypassPermissions" if self.bypass_permissions else None,
         )
 
