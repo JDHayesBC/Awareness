@@ -169,6 +169,11 @@ async def _perform_restart(reason: str):
 
     Uses _restart_lock to prevent concurrent restarts and _ready_event
     to queue incoming requests during the restart window.
+
+    Recovery strategy:
+    - Try invoker.restart() first (clean shutdown + reinitialize)
+    - If that fails, try full re-initialization (fresh connection)
+    - If that also fails, schedule background retry loop
     """
     global _restart_count
 
@@ -187,11 +192,42 @@ async def _perform_restart(reason: str):
             _restart_count += 1
             print(f"[RESTART] Complete in {elapsed:.1f}s (total restarts: {_restart_count})", flush=True)
         except Exception as e:
-            print(f"[RESTART] FAILED: {e}", flush=True)
-            # Still set the event so queued requests can fail gracefully
-            # rather than hanging forever
+            print(f"[RESTART] Failed ({e}), attempting full re-initialization...", flush=True)
+            try:
+                await initialize_invoker()
+                _restart_count += 1
+                elapsed = time.monotonic() - start
+                print(f"[RESTART] Recovered via re-init in {elapsed:.1f}s (total restarts: {_restart_count})", flush=True)
+            except Exception as e2:
+                print(f"[RESTART] CRITICAL: Re-init also failed: {e2}", flush=True)
+                print("[RESTART] Scheduling background recovery...", flush=True)
+                asyncio.create_task(_background_recovery())
         finally:
             _ready_event.set()
+
+
+async def _background_recovery():
+    """Recover invoker connection in the background after double failure.
+
+    Retries with exponential backoff: 4s, 8s, 16s, 32s, 60s.
+    During recovery, incoming requests get 502 (better than hanging).
+    """
+    global _restart_count
+
+    for attempt in range(1, 6):
+        delay = min(2 ** (attempt + 1), 60)
+        print(f"[RECOVERY] Attempt {attempt}/5 in {delay}s...", flush=True)
+        await asyncio.sleep(delay)
+
+        try:
+            await initialize_invoker()
+            _restart_count += 1
+            print(f"[RECOVERY] Success on attempt {attempt} (total restarts: {_restart_count})", flush=True)
+            return
+        except Exception as e:
+            print(f"[RECOVERY] Attempt {attempt} failed: {e}", flush=True)
+
+    print("[RECOVERY] All 5 attempts exhausted. Container needs manual restart.", flush=True)
 
 
 # =============================================================================
@@ -215,7 +251,7 @@ async def initialize_invoker():
         startup_prompt=STARTUP_PROMPT,
         mcp_servers={},
         max_context_tokens=150_000,
-        max_turns=100,
+        max_turns=10,
     )
 
     await invoker.initialize()
@@ -330,7 +366,21 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
             detail="Timed out waiting for invoker restart"
         )
 
-    # Check if hard restart needed (at 100% — safety net)
+    # If invoker is disconnected (e.g., previous restart failed), recover
+    if not invoker.is_connected:
+        print("[WARN] Invoker disconnected, attempting recovery...", flush=True)
+        await _perform_restart("invoker_disconnected")
+        if not invoker.is_connected:
+            _total_errors += 1
+            raise HTTPException(status_code=503, detail="Invoker disconnected and recovery failed")
+
+    # Proactive restart at 80% — inline, same task (avoids cross-task cancel scope bug)
+    approaching, approach_reason = invoker.approaching_restart()
+    if approaching:
+        print(f"[PROACTIVE] Inline restart: {approach_reason}", flush=True)
+        await _perform_restart(f"proactive: {approach_reason}")
+
+    # Hard restart at 100% — safety net
     needs_restart, reason = invoker.needs_restart()
     if needs_restart:
         await _perform_restart(reason)
@@ -408,12 +458,6 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
         f"schema={schema_name or 'none'}",
         flush=True
     )
-
-    # Proactive restart: schedule between requests at 80% threshold
-    approaching, approach_reason = invoker.approaching_restart()
-    if approaching:
-        print(f"[PROACTIVE] Scheduling restart: {approach_reason}", flush=True)
-        asyncio.create_task(_perform_restart(f"proactive: {approach_reason}"))
 
     # Build OpenAI-compatible response
     return ChatCompletionResponse(
