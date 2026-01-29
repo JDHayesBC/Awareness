@@ -139,6 +139,10 @@ invoker: Optional[ClaudeInvoker] = None
 _ready_event: asyncio.Event = None  # Initialized in lifespan (needs running loop)
 _restart_lock: asyncio.Lock = None
 
+# Track in-flight requests to prevent killing subprocess mid-query
+_active_queries = 0
+_no_active_queries: asyncio.Event = None  # Set when _active_queries == 0
+
 # Observability counters
 _restart_count = 0
 _total_requests = 0
@@ -178,8 +182,10 @@ async def _perform_restart(reason: str):
     to queue incoming requests during the restart window.
 
     Recovery strategy:
-    - Shutdown old invoker cleanly (if exists)
-    - Force garbage collection to free old connection/history
+    - Block new requests (clear _ready_event)
+    - Wait for in-flight queries to drain (prevents _reconnect_with_backoff chaos)
+    - Kill old invoker subprocess
+    - Force garbage collection
     - Initialize fresh invoker
     - If that fails, schedule background retry loop
     """
@@ -205,21 +211,47 @@ async def _perform_restart(reason: str):
                 except Exception:
                     pass
 
-            # CRITICAL: Release old invoker reference BEFORE creating new one
-            # Without this, old invoker instances accumulate in memory with
-            # active connections and conversation history (9.7GB leak after 8 restarts)
+            # CRITICAL: Wait for in-flight queries to complete before killing subprocess.
+            # Without this, killing the subprocess causes in-flight queries to fail,
+            # which triggers the OLD invoker's _reconnect_with_backoff() method.
+            # That old invoker keeps trying to reconnect for 60s × 5 attempts = chaos.
+            if _active_queries > 0:
+                print(f"[RESTART] Waiting for {_active_queries} in-flight queries to drain...", flush=True)
+                try:
+                    await asyncio.wait_for(_no_active_queries.wait(), timeout=60.0)
+                    print("[RESTART] All queries drained", flush=True)
+                except asyncio.TimeoutError:
+                    print(f"[RESTART] Timeout waiting for queries to drain, proceeding anyway", flush=True)
+
+            # CRITICAL: Kill old invoker subprocess BEFORE creating new one
+            # Without this, old invoker subprocesses accumulate in memory
+            # (9.7GB leak after 8 restarts - each Claude Code process stays alive)
             #
-            # NOTE: We intentionally DON'T call invoker.shutdown() because it calls
-            # _client.disconnect() which hits an anyio cancel scope bug when the
-            # client was created in a different task. Instead, we just drop the
-            # reference and let GC clean it up. The subprocess will die naturally.
+            # We can't call invoker.shutdown() because it calls _client.disconnect()
+            # which hits an anyio cancel scope bug. Instead, we forcefully kill
+            # all child processes using psutil, then drop the reference.
             if invoker is not None:
-                print("[RESTART] Releasing old invoker reference...", flush=True)
+                print("[RESTART] Killing old invoker subprocess...", flush=True)
+
+                # Kill all child processes (the Claude Code CLI subprocess)
+                if PSUTIL_AVAILABLE:
+                    try:
+                        current = psutil.Process()
+                        children = current.children(recursive=True)
+                        for child in children:
+                            print(f"[RESTART] Killing child process {child.pid} ({child.name()})", flush=True)
+                            child.kill()
+                        # Wait for them to die
+                        psutil.wait_procs(children, timeout=5)
+                    except Exception as e:
+                        print(f"[RESTART] Error killing children: {e}", flush=True)
+
+                # Now drop the reference and GC
                 old_invoker = invoker
                 invoker = None
                 del old_invoker
                 gc.collect()
-                print("[RESTART] Old invoker released, GC triggered", flush=True)
+                print("[RESTART] Old invoker killed and released", flush=True)
 
             # Now create fresh invoker
             await initialize_invoker()
@@ -257,10 +289,30 @@ async def _background_recovery():
         print(f"[RECOVERY] Attempt {attempt}/5 in {delay}s...", flush=True)
         await asyncio.sleep(delay)
 
+        # Check if main restart succeeded while we were waiting
+        if invoker is not None and invoker.is_connected:
+            print(f"[RECOVERY] Aborting - invoker already connected (main restart succeeded)", flush=True)
+            return
+
         try:
-            # Release old invoker reference before recovery attempt
+            # Wait for in-flight queries to drain before killing subprocess
+            if _active_queries > 0:
+                print(f"[RECOVERY] Waiting for {_active_queries} in-flight queries to drain...", flush=True)
+                try:
+                    await asyncio.wait_for(_no_active_queries.wait(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    print("[RECOVERY] Timeout waiting for queries, proceeding anyway", flush=True)
+
+            # Kill old invoker subprocess before recovery attempt
             # (Don't call shutdown() - it hits the cancel scope bug)
             if invoker is not None:
+                if PSUTIL_AVAILABLE:
+                    try:
+                        for child in psutil.Process().children(recursive=True):
+                            child.kill()
+                        psutil.wait_procs(psutil.Process().children(), timeout=5)
+                    except Exception:
+                        pass
                 old_invoker = invoker
                 invoker = None
                 del old_invoker
@@ -312,11 +364,13 @@ async def initialize_invoker():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle."""
-    global _ready_event, _restart_lock
+    global _ready_event, _restart_lock, _no_active_queries
 
     # Initialize async primitives (need running event loop)
     _ready_event = asyncio.Event()
     _restart_lock = asyncio.Lock()
+    _no_active_queries = asyncio.Event()
+    _no_active_queries.set()  # Initially no queries, so event is set
 
     # Startup
     await initialize_invoker()
@@ -372,6 +426,7 @@ async def health_check():
         response = {
             "status": "restarting",
             "invoker_connected": False,
+            "active_queries": _active_queries,
             "stats": {
                 "total_requests": _total_requests,
                 "total_errors": _total_errors,
@@ -387,6 +442,7 @@ async def health_check():
     response = {
         "status": "healthy",
         "invoker_connected": invoker.is_connected,
+        "active_queries": _active_queries,
         "context_usage": {
             "tokens": stats["total_tokens"],
             "turns": stats["turn_count"],
@@ -415,7 +471,7 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
     Translates OpenAI format → ClaudeInvoker → OpenAI format.
     Handles restarts transparently — requests queue instead of failing.
     """
-    global _total_requests, _total_errors
+    global _total_requests, _total_errors, _active_queries
 
     _total_requests += 1
 
@@ -440,7 +496,8 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
             _total_errors += 1
             raise HTTPException(status_code=503, detail="Invoker disconnected and recovery failed")
 
-    # Proactive restart at 80% — inline, same task (avoids cross-task cancel scope bug)
+    # Check for proactive restart BEFORE tracking as active query.
+    # This prevents deadlock: restart waits for queries, but we haven't started yet.
     approaching, approach_reason = invoker.approaching_restart()
     if approaching:
         print(f"[PROACTIVE] Inline restart: {approach_reason}", flush=True)
@@ -451,101 +508,111 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
     if needs_restart:
         await _perform_restart(reason)
 
-    # Build prompt from OpenAI messages
-    wants_json = request.response_format and request.response_format.get("type") in (
-        "json_object", "json_schema"
-    )
-
-    prompt_parts = []
-    for msg in request.messages:
-        if msg.role == "system":
-            prompt_parts.append(f"System: {msg.content}")
-        elif msg.role == "user":
-            prompt_parts.append(f"User: {msg.content}")
-        elif msg.role == "assistant":
-            prompt_parts.append(f"Assistant: {msg.content}")
-
-    # When caller requests JSON output, tell Claude explicitly
-    if wants_json:
-        json_instruction = (
-            "IMPORTANT: Respond with raw JSON only. "
-            "No markdown formatting, no code fences, no explanation. "
-            "Just the JSON object."
+    # NOW track as active query - restart checks are done
+    _active_queries += 1
+    _no_active_queries.clear()
+    
+    try:
+        # Build prompt from OpenAI messages
+        wants_json = request.response_format and request.response_format.get("type") in (
+            "json_object", "json_schema"
         )
 
-        # If a JSON schema is provided, include it so Claude uses exact field names
-        if request.response_format.get("type") == "json_schema":
-            schema_info = request.response_format.get("json_schema", {})
-            schema = schema_info.get("schema")
-            if schema:
-                json_instruction += (
-                    f"\n\nYour response MUST conform to this JSON schema:\n"
-                    f"{json.dumps(schema, indent=2)}"
-                )
+        prompt_parts = []
+        for msg in request.messages:
+            if msg.role == "system":
+                prompt_parts.append(f"System: {msg.content}")
+            elif msg.role == "user":
+                prompt_parts.append(f"User: {msg.content}")
+            elif msg.role == "assistant":
+                prompt_parts.append(f"Assistant: {msg.content}")
 
-        prompt_parts.append(json_instruction)
+        # When caller requests JSON output, tell Claude explicitly
+        if wants_json:
+            json_instruction = (
+                "IMPORTANT: Respond with raw JSON only. "
+                "No markdown formatting, no code fences, no explanation. "
+                "Just the JSON object."
+            )
 
-    combined_prompt = "\n\n".join(prompt_parts)
+            # If a JSON schema is provided, include it so Claude uses exact field names
+            if request.response_format.get("type") == "json_schema":
+                schema_info = request.response_format.get("json_schema", {})
+                schema = schema_info.get("schema")
+                if schema:
+                    json_instruction += (
+                        f"\n\nYour response MUST conform to this JSON schema:\n"
+                        f"{json.dumps(schema, indent=2)}"
+                    )
 
-    # Log request
-    prompt_tokens = estimate_tokens(combined_prompt)
-    schema_name = ""
-    if wants_json and request.response_format.get("type") == "json_schema":
-        schema_name = request.response_format.get("json_schema", {}).get("name", "unknown")
+            prompt_parts.append(json_instruction)
 
-    query_start = time.monotonic()
+        combined_prompt = "\n\n".join(prompt_parts)
 
-    # Query with retry logic
-    response_text = await _query_with_retry(combined_prompt)
+        # Log request
+        prompt_tokens = estimate_tokens(combined_prompt)
+        schema_name = ""
+        if wants_json and request.response_format.get("type") == "json_schema":
+            schema_name = request.response_format.get("json_schema", {}).get("name", "unknown")
 
-    # Validate response (retry once on empty)
-    if not response_text or not response_text.strip():
-        print("[WARN] Empty response, retrying once...", flush=True)
+        query_start = time.monotonic()
+
+        # Query with retry logic
         response_text = await _query_with_retry(combined_prompt)
 
-    if not response_text or not response_text.strip():
-        _total_errors += 1
-        print("[ERROR] Empty response after retry", flush=True)
-        raise HTTPException(status_code=502, detail="Backend returned empty response")
+        # Validate response (retry once on empty)
+        if not response_text or not response_text.strip():
+            print("[WARN] Empty response, retrying once...", flush=True)
+            response_text = await _query_with_retry(combined_prompt)
 
-    # Strip markdown fences if caller expects JSON
-    if wants_json:
-        response_text = strip_markdown_fences(response_text)
+        if not response_text or not response_text.strip():
+            _total_errors += 1
+            print("[ERROR] Empty response after retry", flush=True)
+            raise HTTPException(status_code=502, detail="Backend returned empty response")
 
-    # Timing and observability
-    query_elapsed = time.monotonic() - query_start
-    completion_tokens = estimate_tokens(response_text)
-    stats = invoker.context_stats
-    print(
-        f"[DONE] {query_elapsed:.1f}s | "
-        f"ctx={stats['total_tokens']}/{invoker.max_context_tokens} "
-        f"({stats['total_tokens'] * 100 // max(invoker.max_context_tokens, 1)}%) | "
-        f"turns={stats['turn_count']}/{invoker.max_turns} | "
-        f"schema={schema_name or 'none'}",
-        flush=True
-    )
+        # Strip markdown fences if caller expects JSON
+        if wants_json:
+            response_text = strip_markdown_fences(response_text)
 
-    # Build OpenAI-compatible response
-    return ChatCompletionResponse(
-        id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
-        created=int(time.time()),
-        model=request.model,
-        choices=[
-            Choice(
-                index=0,
-                message=ChatMessage(
-                    role="assistant",
-                    content=response_text
-                ),
-                finish_reason="stop"
-            )
-        ],
-        usage=Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens
+        # Timing and observability
+        query_elapsed = time.monotonic() - query_start
+        completion_tokens = estimate_tokens(response_text)
+        stats = invoker.context_stats
+        print(
+            f"[DONE] {query_elapsed:.1f}s | "
+            f"ctx={stats['total_tokens']}/{invoker.max_context_tokens} "
+            f"({stats['total_tokens'] * 100 // max(invoker.max_context_tokens, 1)}%) | "
+            f"turns={stats['turn_count']}/{invoker.max_turns} | "
+            f"schema={schema_name or 'none'}",
+            flush=True
         )
-    )
+
+        # Build OpenAI-compatible response
+        return ChatCompletionResponse(
+            id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
+            created=int(time.time()),
+            model=request.model,
+            choices=[
+                Choice(
+                    index=0,
+                    message=ChatMessage(
+                        role="assistant",
+                        content=response_text
+                    ),
+                    finish_reason="stop"
+                )
+            ],
+            usage=Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens
+            )
+        )
+    finally:
+        # Always decrement, even on error
+        _active_queries -= 1
+        if _active_queries == 0:
+            _no_active_queries.set()
 
 
 async def _query_with_retry(prompt: str) -> str:
