@@ -37,6 +37,7 @@ Usage:
 """
 
 import asyncio
+import gc
 import json
 import os
 import re
@@ -51,6 +52,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
+
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
 
 # Add daemon directory to path for ClaudeInvoker import
 sys.path.insert(0, str(Path(__file__).parent / "daemon"))
@@ -171,11 +178,12 @@ async def _perform_restart(reason: str):
     to queue incoming requests during the restart window.
 
     Recovery strategy:
-    - Try invoker.restart() first (clean shutdown + reinitialize)
-    - If that fails, try full re-initialization (fresh connection)
-    - If that also fails, schedule background retry loop
+    - Shutdown old invoker cleanly (if exists)
+    - Force garbage collection to free old connection/history
+    - Initialize fresh invoker
+    - If that fails, schedule background retry loop
     """
-    global _restart_count
+    global invoker, _restart_count
 
     if _restart_lock.locked():
         # Another restart already in progress, just wait for it
@@ -187,12 +195,46 @@ async def _perform_restart(reason: str):
         try:
             print(f"[RESTART] Starting: {reason}", flush=True)
             start = time.monotonic()
-            # Skip invoker.restart() — its shutdown/disconnect hits anyio cancel
-            # scope errors when the client was created in a different task.
-            # Fresh init works every time and is just as fast.
+
+            # Log memory before cleanup (if psutil available)
+            mem_before = None
+            if PSUTIL_AVAILABLE:
+                try:
+                    mem_before = psutil.Process().memory_info().rss / 1024 / 1024
+                    print(f"[RESTART] Memory before: {mem_before:.1f} MB", flush=True)
+                except Exception:
+                    pass
+
+            # CRITICAL: Release old invoker reference BEFORE creating new one
+            # Without this, old invoker instances accumulate in memory with
+            # active connections and conversation history (9.7GB leak after 8 restarts)
+            #
+            # NOTE: We intentionally DON'T call invoker.shutdown() because it calls
+            # _client.disconnect() which hits an anyio cancel scope bug when the
+            # client was created in a different task. Instead, we just drop the
+            # reference and let GC clean it up. The subprocess will die naturally.
+            if invoker is not None:
+                print("[RESTART] Releasing old invoker reference...", flush=True)
+                old_invoker = invoker
+                invoker = None
+                del old_invoker
+                gc.collect()
+                print("[RESTART] Old invoker released, GC triggered", flush=True)
+
+            # Now create fresh invoker
             await initialize_invoker()
             elapsed = time.monotonic() - start
             _restart_count += 1
+
+            # Log memory after restart (if psutil available)
+            if PSUTIL_AVAILABLE and mem_before is not None:
+                try:
+                    mem_after = psutil.Process().memory_info().rss / 1024 / 1024
+                    mem_delta = mem_after - mem_before
+                    print(f"[RESTART] Memory after: {mem_after:.1f} MB (delta: {mem_delta:+.1f} MB)", flush=True)
+                except Exception:
+                    pass
+
             print(f"[RESTART] Complete in {elapsed:.1f}s (total restarts: {_restart_count})", flush=True)
         except Exception as e:
             print(f"[RESTART] FAILED: {e}", flush=True)
@@ -208,7 +250,7 @@ async def _background_recovery():
     Retries with exponential backoff: 4s, 8s, 16s, 32s, 60s.
     During recovery, incoming requests get 502 (better than hanging).
     """
-    global _restart_count
+    global invoker, _restart_count
 
     for attempt in range(1, 6):
         delay = min(2 ** (attempt + 1), 60)
@@ -216,6 +258,14 @@ async def _background_recovery():
         await asyncio.sleep(delay)
 
         try:
+            # Release old invoker reference before recovery attempt
+            # (Don't call shutdown() - it hits the cancel scope bug)
+            if invoker is not None:
+                old_invoker = invoker
+                invoker = None
+                del old_invoker
+                gc.collect()
+
             await initialize_invoker()
             _restart_count += 1
             print(f"[RECOVERY] Success on attempt {attempt} (total restarts: {_restart_count})", flush=True)
@@ -295,18 +345,31 @@ app = FastAPI(
 @app.get("/health")
 async def health_check():
     """Health check for Docker."""
+    # Get memory stats if psutil available
+    memory_info = None
+    if PSUTIL_AVAILABLE:
+        try:
+            process = psutil.Process()
+            mem = process.memory_info()
+            memory_info = {
+                "rss_mb": round(mem.rss / 1024 / 1024, 1),
+                "vms_mb": round(mem.vms / 1024 / 1024, 1),
+            }
+        except Exception:
+            pass  # Silently skip if psutil fails
+
     if invoker is None:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "starting", "message": "Invoker not yet created"}
-        )
+        response = {"status": "starting", "message": "Invoker not yet created"}
+        if memory_info:
+            response["memory"] = memory_info
+        return JSONResponse(status_code=503, content=response)
 
     restarting = not _ready_event.is_set() if _ready_event else False
 
     # During restart, report as healthy but restarting
     # (the invoker will be back shortly — don't fail Docker health checks)
     if restarting:
-        return {
+        response = {
             "status": "restarting",
             "invoker_connected": False,
             "stats": {
@@ -315,10 +378,13 @@ async def health_check():
                 "restart_count": _restart_count,
             }
         }
+        if memory_info:
+            response["memory"] = memory_info
+        return response
 
     stats = invoker.context_stats
 
-    return {
+    response = {
         "status": "healthy",
         "invoker_connected": invoker.is_connected,
         "context_usage": {
@@ -335,6 +401,10 @@ async def health_check():
             "restart_count": _restart_count,
         }
     }
+    if memory_info:
+        response["memory"] = memory_info
+
+    return response
 
 
 @app.post("/v1/chat/completions")
