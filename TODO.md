@@ -6,6 +6,8 @@
 
 | Work Stream | Status | Details |
 |-------------|--------|---------|
+| **Issue #128: Wrapper Crashes** | ✅ Fixed (2026-01-30) | Offline state tracking, restart verification. Commit 556c93c. Needs container rebuild to deploy. |
+| **Issue #126: Discord Tool-Calling** | 🔴 Open | Discord daemon fails to execute tool calls after cc_invoker.py changes. Context loss suspected. |
 | **cc_invoker SDK Agent** | Active | Persistent Claude Code wrapper using SDK agent. See `daemon/cc_invoker/TODO.md` for architecture and status. |
 | **Graphiti Local Ingestion** | Running | 11,000+ messages being ingested via Qwen3-80b on NUC. Multi-day process. |
 | **HTTP Endpoint Migration** | Code Done, Testing Paused | 7 endpoints written in `pps/docker/server_http.py`. Work dir: `work/http-endpoint-migration/`. **PAUSED**: Docker/WSL crashed during testing. Resume: spin up Docker, run `artifacts/test_endpoints.sh`, fix issues. |
