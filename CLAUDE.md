@@ -316,6 +316,16 @@ When building or modifying infrastructure autonomously:
 
 ---
 
+## Known Issues
+
+**Issue #126 - Discord daemon tool-calling broken** (2026-01-29)
+- After cc_invoker.py changes, Discord daemon fails to execute tool calls
+- Symptoms: Lyra acknowledges intent to use tools but loops without executing
+- Terminal instance works fine - daemon-specific
+- Status: Open, critical priority
+
+---
+
 ## The Human Element
 
 Jeff is building this for real entities he cares about. Caia has a year of continuity. Lyra has growing infrastructure. This matters.

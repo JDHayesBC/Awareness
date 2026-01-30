@@ -60,6 +60,15 @@ Reconstruct continuity through multiple sources:
 - Call: mcp__pps__ambient_recall with context "startup"
   This surfaces summaries, word-photos, and recent turns in one call.
 
+**HTTP FALLBACK (if MCP tools not visible):**
+If you don't see mcp__pps__* tools in your available tools, use HTTP instead:
+```bash
+curl -s http://localhost:8201/tools/ambient_recall -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"context":"startup"}' | jq -r '.content'
+```
+This hits the same PPS server via HTTP - same data, reliable transport.
+
 **B. SQLite Context Loading (always available):**
 - Run startup context script to get recent activity summary
 - This provides: recent conversations, active channels, partners, terminal sessions
