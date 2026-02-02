@@ -1,0 +1,20 @@
+# Friction Log
+#
+# This file tracks friction encountered during the agent pipeline.
+# Append one JSON object per line (JSONL format).
+#
+# Schema:
+# {
+#   "timestamp": "ISO8601 timestamp",
+#   "agent": "agent name (planner, coder, tester, reviewer, github-workflow, orchestration-agent)",
+#   "type": "TOOL_FAILURE | MISSING_TOOL | DEAD_END | RETRY | EXTERNAL_BLOCKER | CONTEXT_GAP | WRONG_PATH | REVERSAL | TIMEOUT | UNCLEAR_REQUIREMENTS",
+#   "description": "Brief description of what happened",
+#   "time_lost": "Estimate like '5 min' or '30 sec'",
+#   "resolution": "How it was resolved or 'unresolved'",
+#   "preventable": true | false,
+#   "suggestion": "What could prevent this in the future"
+# }
+#
+# Example:
+# {"timestamp":"2026-01-24T14:30:00Z","agent":"planner","type":"TOOL_FAILURE","description":"tech_search returned no results","time_lost":"2 min","resolution":"Used grep instead","preventable":true,"suggestion":"Add tech RAG docs for this area"}
+{"timestamp":"2026-01-26T19:58:49-08:00","agent":"orchestration-agent","type":"TOOL_FAILURE","description":"Attempted to use external CLI for agent spawning - should use Task tool from SDK","time_lost":"2min","resolution":"Switch to Task tool","preventable":true,"suggestion":"Update orchestrator instructions to clarify Task tool usage"}

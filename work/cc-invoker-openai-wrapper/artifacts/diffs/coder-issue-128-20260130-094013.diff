@@ -1,0 +1,146 @@
+diff --git a/pps/docker/cc_openai_wrapper.py b/pps/docker/cc_openai_wrapper.py
+index e2418b4..011ca1b 100644
+--- a/pps/docker/cc_openai_wrapper.py
++++ b/pps/docker/cc_openai_wrapper.py
+@@ -143,6 +143,10 @@ _restart_lock: asyncio.Lock = None
+ _active_queries = 0
+ _no_active_queries: asyncio.Event = None  # Set when _active_queries == 0
+ 
++# Unrecoverable state tracking (Issue #128)
++_wrapper_offline = False
++_offline_reason = ""
++
+ # Observability counters
+ _restart_count = 0
+ _total_requests = 0
+@@ -238,13 +242,29 @@ async def _perform_restart(reason: str):
+                     try:
+                         current = psutil.Process()
+                         children = current.children(recursive=True)
+-                        for child in children:
+-                            print(f"[RESTART] Killing child process {child.pid} ({child.name()})", flush=True)
+-                            child.kill()
+-                        # Wait for them to die
+-                        psutil.wait_procs(children, timeout=5)
++                        if children:
++                            print(f"[RESTART] Found {len(children)} child processes to kill", flush=True)
++                            for child in children:
++                                try:
++                                    print(f"[RESTART] Killing PID {child.pid} ({child.name()}) status={child.status()}", flush=True)
++                                    child.kill()
++                                except psutil.NoSuchProcess:
++                                    print(f"[RESTART] PID {child.pid} already dead", flush=True)
++
++                            # Wait and report results
++                            gone, alive = psutil.wait_procs(children, timeout=5)
++                            print(f"[RESTART] Killed: {len(gone)}, Still alive: {len(alive)}", flush=True)
++
++                            # Force kill any survivors
++                            for p in alive:
++                                try:
++                                    p.kill()
++                                except Exception:
++                                    pass
++                        else:
++                            print("[RESTART] No child processes to kill", flush=True)
+                     except Exception as e:
+-                        print(f"[RESTART] Error killing children: {e}", flush=True)
++                        print(f"[RESTART] Error killing children: {type(e).__name__}: {e}", flush=True)
+ 
+                 # Now drop the reference and GC
+                 old_invoker = invoker
+@@ -255,6 +275,11 @@ async def _perform_restart(reason: str):
+ 
+             # Now create fresh invoker
+             await initialize_invoker()
++
++            # Verify new invoker is actually connected (Issue #128)
++            if invoker is None or not invoker.is_connected:
++                raise Exception("New invoker failed to connect")
++
+             elapsed = time.monotonic() - start
+             _restart_count += 1
+ 
+@@ -282,7 +307,7 @@ async def _background_recovery():
+     Retries with exponential backoff: 4s, 8s, 16s, 32s, 60s.
+     During recovery, incoming requests get 502 (better than hanging).
+     """
+-    global invoker, _restart_count
++    global invoker, _restart_count, _wrapper_offline, _offline_reason
+ 
+     for attempt in range(1, 6):
+         delay = min(2 ** (attempt + 1), 60)
+@@ -292,6 +317,9 @@ async def _background_recovery():
+         # Check if main restart succeeded while we were waiting
+         if invoker is not None and invoker.is_connected:
+             print(f"[RECOVERY] Aborting - invoker already connected (main restart succeeded)", flush=True)
++            # Clear offline state if it was set
++            _wrapper_offline = False
++            _offline_reason = ""
+             return
+ 
+         try:
+@@ -319,13 +347,24 @@ async def _background_recovery():
+                 gc.collect()
+ 
+             await initialize_invoker()
++
++            # Verify new invoker is connected (Issue #128)
++            if invoker is None or not invoker.is_connected:
++                raise Exception("New invoker failed to connect")
++
+             _restart_count += 1
++            # Clear offline state on successful recovery
++            _wrapper_offline = False
++            _offline_reason = ""
+             print(f"[RECOVERY] Success on attempt {attempt} (total restarts: {_restart_count})", flush=True)
+             return
+         except Exception as e:
+             print(f"[RECOVERY] Attempt {attempt} failed: {e}", flush=True)
+ 
+-    print("[RECOVERY] All 5 attempts exhausted. Container needs manual restart.", flush=True)
++    # All recovery attempts exhausted - set offline state (Issue #128)
++    _wrapper_offline = True
++    _offline_reason = "All 5 recovery attempts exhausted. Manual restart required."
++    print(f"[RECOVERY] {_offline_reason}", flush=True)
+ 
+ 
+ # =============================================================================
+@@ -412,6 +451,22 @@ async def health_check():
+         except Exception:
+             pass  # Silently skip if psutil fails
+ 
++    # Check offline state first (Issue #128)
++    if _wrapper_offline:
++        response = {
++            "status": "offline",
++            "message": _offline_reason,
++            "recovery_attempts": 5,
++            "stats": {
++                "total_requests": _total_requests,
++                "total_errors": _total_errors,
++                "restart_count": _restart_count,
++            }
++        }
++        if memory_info:
++            response["memory"] = memory_info
++        return JSONResponse(status_code=503, content=response)
++
+     if invoker is None:
+         response = {"status": "starting", "message": "Invoker not yet created"}
+         if memory_info:
+@@ -475,6 +530,14 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
+ 
+     _total_requests += 1
+ 
++    # Check offline state first (Issue #128)
++    if _wrapper_offline:
++        _total_errors += 1
++        raise HTTPException(
++            status_code=503,
++            detail=f"Wrapper offline - {_offline_reason}"
++        )
++
+     if invoker is None:
+         raise HTTPException(status_code=503, detail="Invoker not initialized")
+ 
