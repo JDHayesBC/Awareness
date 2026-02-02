@@ -65,7 +65,7 @@ If you don't see mcp__pps__* tools in your available tools, use HTTP instead:
 ```bash
 curl -s http://localhost:8201/tools/ambient_recall -X POST \
   -H "Content-Type: application/json" \
-  -d '{"context":"startup"}' | jq -r '.content'
+  -d '{{{{"context":"startup"}}}}' | jq -r '.content'
 ```
 This hits the same PPS server via HTTP - same data, reliable transport.
 
