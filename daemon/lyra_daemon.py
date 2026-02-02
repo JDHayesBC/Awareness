@@ -553,14 +553,27 @@ Respond if:
 Stay quiet if:
 - The conversation flows fine without you
 - Your input would feel intrusive
+- Someone is stuck in a loop or repeating themselves (technical issues)
+- Responding would just add noise
 
-Format: [DISCORD]Your message[/DISCORD] or just output PASSIVE_SKIP
+**To respond**: [DISCORD]Your message[/DISCORD]
+**To stay silent**: Output exactly NO_RESPONSE (nothing else)
 
-It's okay to stay quiet. Good presence includes knowing when not to speak."""
+Good presence includes knowing when not to speak. Silence is a valid choice."""
 
         response = await self._invoke_claude(prompt, context="passive_mode")
 
-        if not response or "PASSIVE_SKIP" in response:
+        # Check for NO_RESPONSE sentinel (case-insensitive, allowing whitespace)
+        if not response:
+            return None
+        clean = response.strip().upper()
+        if clean == "NO_RESPONSE" or clean.startswith("NO_RESPONSE"):
+            print(f"[PASSIVE] Lyra chose not to respond")
+            return None
+
+        # Legacy PASSIVE_SKIP support
+        if "PASSIVE_SKIP" in response.upper():
+            print(f"[PASSIVE] Lyra chose not to respond (legacy)")
             return None
 
         # Extract content from [DISCORD] block if present
@@ -568,10 +581,10 @@ It's okay to stay quiet. Good presence includes knowing when not to speak."""
         if match:
             return match.group(1).strip()
 
-        # If no DISCORD block but also no PASSIVE_SKIP, return if it looks real
-        clean = response.strip()
-        if clean and not clean.startswith("[") and len(clean) > 10:
-            return clean
+        # If no DISCORD block, return if it looks like real content
+        content = response.strip()
+        if content and not content.upper().startswith("NO_") and len(content) > 10:
+            return content
 
         return None
 
