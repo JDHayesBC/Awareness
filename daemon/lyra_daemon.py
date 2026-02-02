@@ -196,9 +196,10 @@ class LyraBot(commands.Bot):
                     print(f"[STARTUP] Could not initialize channel {channel_id}: {e}")
 
         # Initialize ClaudeInvoker with full identity reconstruction
+        # Allow 180s for warmup: ~45s connection + ~90s startup prompt + buffer
         print("[WARMUP] Initializing ClaudeInvoker with identity reconstruction...")
         try:
-            await self.invoker.initialize()
+            await self.invoker.initialize(timeout=180.0)
             self.invoker_ready = True
             print(f"[WARMUP] ClaudeInvoker ready - context: {self.invoker.context_size} tokens, "
                   f"{self.invoker.turn_count} turns")
@@ -261,7 +262,7 @@ Keep it natural - just... be here.'''
         if not self.invoker_ready:
             print(f"[{context}] Invoker not ready, attempting initialization...")
             try:
-                await self.invoker.initialize()
+                await self.invoker.initialize(timeout=180.0)
                 self.invoker_ready = True
             except Exception as e:
                 print(f"[{context}] Failed to initialize invoker: {e}")

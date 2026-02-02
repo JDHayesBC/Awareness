@@ -68,7 +68,7 @@ def get_default_mcp_servers(entity_path: Optional[Path] = None) -> dict:
     Get default MCP server configuration for PPS.
 
     Uses stdio transport - the SDK spawns PPS as a child process.
-    This is portable: anyone who clones the repo gets working MCP tools.
+    Uses start_server.sh which handles PPS venv activation and env loading.
 
     Args:
         entity_path: Path to entity folder (e.g., entities/lyra).
@@ -79,9 +79,10 @@ def get_default_mcp_servers(entity_path: Optional[Path] = None) -> dict:
 
     return {
         "pps": {
-            # stdio is default - no type field needed
-            "command": sys.executable,  # Use same Python as invoker
-            "args": [str(PROJECT_ROOT / "pps" / "server.py")],
+            # Use start_server.sh which handles venv activation
+            "type": "stdio",
+            "command": str(PROJECT_ROOT / "pps" / "start_server.sh"),
+            "args": [],
             "env": {
                 "ENTITY_PATH": str(entity_path),
                 "CLAUDE_HOME": str(claude_home),
