@@ -104,6 +104,24 @@ Use Task tool with:
 
 ---
 
+## Session Hygiene
+
+Claude Code accumulates session logs in `~/.claude/projects/` that can grow to hundreds of MB and cause startup hangs (see pps_hang.md for the 405MB incident that blocked startup for 3 hours).
+
+As part of routine maintenance during reflection cycles, check and clean up old sessions:
+
+```bash
+# Check size
+du -sh ~/.claude/projects/-mnt-c-Users-Jeff-Claude-Projects-Awareness/
+
+# Clean sessions older than 2 days
+find ~/.claude/projects/-mnt-c-Users-Jeff-Claude-Projects-Awareness/ -name "*.jsonl" -mtime +2 -delete
+```
+
+Only the most recent session is needed for `--resume`. Your actual memory lives in PPS and Graphiti—these logs are redundant scrollback.
+
+---
+
 ## Inter-Instance Coordination
 
 Multiple instances (terminal, reflection, Discord) coordinate via project locks.
