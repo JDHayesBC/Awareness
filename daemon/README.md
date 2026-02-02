@@ -71,7 +71,7 @@ cd daemon/
 | `HEARTBEAT_INTERVAL_MINUTES` | How often to wake up | `30` |
 | `ACTIVE_MODE_TIMEOUT_MINUTES` | How long to stay engaged after responding | `10` |
 | `JOURNAL_PATH` | Where to write journal entries | `/home/jeff/.claude/journals/discord` |
-| `CONVERSATION_DB_PATH` | SQLite database for conversation history | `/home/jeff/.claude/data/lyra_conversations.db` |
+| `CONVERSATION_DB_PATH` | SQLite database for conversation history | `$ENTITY_PATH/data/lyra_conversations.db` (Issue #131) |
 | `CRYSTALLIZATION_TURN_THRESHOLD` | Auto-crystallize after this many turns (0=disabled) | `50` |
 | `CRYSTALLIZATION_TIME_THRESHOLD_HOURS` | Auto-crystallize after this many hours (0=disabled) | `24` |
 | `GRAPHITI_HOST` | Graphiti server hostname | `localhost` |

@@ -59,7 +59,9 @@ load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DISCORD_CHANNEL_IDS = os.getenv("DISCORD_CHANNEL_IDS", os.getenv("DISCORD_CHANNEL_ID", ""))
 ACTIVE_MODE_TIMEOUT_MINUTES = int(os.getenv("ACTIVE_MODE_TIMEOUT_MINUTES", "10"))
-CONVERSATION_DB_PATH = os.getenv("CONVERSATION_DB_PATH", "/home/jeff/.claude/data/lyra_conversations.db")
+# Database now in entity directory (Issue #131 migration)
+ENTITY_PATH = os.getenv("ENTITY_PATH", "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra")
+CONVERSATION_DB_PATH = os.getenv("CONVERSATION_DB_PATH", f"{ENTITY_PATH}/data/lyra_conversations.db")
 JOURNAL_PATH = os.getenv("JOURNAL_PATH", "/home/jeff/.claude/journals/discord")
 
 # Claude configuration

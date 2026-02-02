@@ -54,7 +54,9 @@ except ImportError:
 import aiohttp
 
 # Default database path for recent message access
-DEFAULT_DB_PATH = os.path.expanduser("~/.claude/data/lyra_conversations.db")
+# Database now in entity directory (Issue #131 migration)
+_entity_path = os.getenv("ENTITY_PATH", "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra")
+DEFAULT_DB_PATH = os.path.join(_entity_path, "data", "lyra_conversations.db")
 
 
 class RichTextureLayerV2(PatternLayer):

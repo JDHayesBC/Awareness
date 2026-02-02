@@ -254,7 +254,8 @@ def get_layers():
     """Initialize layers with Docker paths."""
     # Paths inside Docker container (configured via environment)
     memories_path = ENTITY_PATH / "memories" / "word_photos"
-    data_path = CLAUDE_HOME / "data" / "lyra_conversations.db"
+    # Database now in entity directory (Issue #131 migration)
+    data_path = ENTITY_PATH / "data" / "lyra_conversations.db"
     crystals_path = ENTITY_PATH / "crystals" / "current"
 
     # Use V2 rich texture layer if available (supports add_triplet_direct)
@@ -288,11 +289,13 @@ def get_layers():
 layers = get_layers()
 
 # Initialize message summaries for unsummarized count
-data_path = CLAUDE_HOME / "data" / "lyra_conversations.db"
+# Database now in entity directory (Issue #131 migration)
+data_path = ENTITY_PATH / "data" / "lyra_conversations.db"
 message_summaries = MessageSummariesLayer(db_path=data_path)
 
 # Initialize inventory layer (Layer 5) for enter_space
-inventory_db_path = CLAUDE_HOME / "data" / "inventory.db"
+# Database now in entity directory (Issue #131 migration)
+inventory_db_path = ENTITY_PATH / "data" / "inventory.db"
 inventory = InventoryLayer(db_path=inventory_db_path)
 
 # Initialize Tech RAG layer (Layer 6) if available

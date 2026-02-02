@@ -54,8 +54,8 @@ word_photos_path = ENTITY_PATH / "memories" / "word_photos"
 crystals_path = ENTITY_PATH / "crystals" / "current"
 archive_path = ENTITY_PATH / "crystals" / "archive"
 
-# Shared data paths (use CLAUDE_HOME for now - TODO: move to entity or repo)
-db_path = CLAUDE_HOME / "data" / "lyra_conversations.db"
+# Entity-specific database paths (Issue #131 migration - moved to entity directory)
+db_path = ENTITY_PATH / "data" / "lyra_conversations.db"
 
 # Try to use ChromaDB if available
 try:
@@ -92,7 +92,7 @@ layers = {
 message_summaries = MessageSummariesLayer(db_path=db_path)
 
 # Initialize inventory layer (Layer 5)
-inventory_db_path = CLAUDE_HOME / "data" / "inventory.db"
+inventory_db_path = ENTITY_PATH / "data" / "inventory.db"
 inventory = InventoryLayer(db_path=inventory_db_path)
 print(f"[PPS] Inventory layer initialized: {inventory_db_path}", file=sys.stderr)
 

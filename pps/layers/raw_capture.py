@@ -26,10 +26,12 @@ class RawCaptureLayer(PatternLayer):
         Initialize the raw capture layer.
 
         Args:
-            db_path: Path to SQLite database. Defaults to ~/.claude/data/lyra_memory.db
+            db_path: Path to SQLite database. Defaults to $ENTITY_PATH/data/lyra_conversations.db
         """
         if db_path is None:
-            db_path = Path.home() / ".claude" / "data" / "lyra_conversations.db"
+            # Database now in entity directory (Issue #131 migration)
+            entity_path = os.getenv("ENTITY_PATH", "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra")
+            db_path = Path(entity_path) / "data" / "lyra_conversations.db"
         self.db_path = db_path
 
     def _connect_with_wal(self) -> sqlite3.Connection:

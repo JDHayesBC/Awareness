@@ -46,9 +46,9 @@ class TerminalIntegration:
             db_path: Path to SQLite database. Uses daemon default if None.
         """
         if db_path is None:
-            # Use same database as daemon
-            claude_home = Path(os.getenv("CLAUDE_HOME", str(Path.home() / ".claude")))
-            db_path = claude_home / "data" / "lyra_conversations.db"
+            # Database now in entity directory (Issue #131 migration)
+            entity_path = Path(os.getenv("ENTITY_PATH", "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra"))
+            db_path = entity_path / "data" / "lyra_conversations.db"
             
         self.conversation_manager = ConversationManager(db_path)
         

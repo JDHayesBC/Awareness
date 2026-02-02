@@ -5,7 +5,13 @@ entities/*/
 
 # Docker entity runtime data (journals, state)
 pps/docker/entities/
-pps/docker/*.db
+
+# Databases - NEVER commit (data, not code)
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
 
 # Credentials and secrets
 discord_bot_token.txt
@@ -49,6 +55,11 @@ logs/
 # Docker build artifacts
 pps/deploy/*.tar.gz
 
+# Docker bind-mount data directories (host-side persistence)
+docker/pps/
+
+# Work directory backups (temporary files)
+
 # Test coverage
 .coverage
 htmlcov/
@@ -59,7 +70,6 @@ tools/**/credentials.json
 tools/**/token.json
 tools/**/*.json
 tools/**/venv/
-data/*.db
 tools/google_oauth_credentials.txt
 tools/jeff-gmail-mcp/venv/
 pps/venv/

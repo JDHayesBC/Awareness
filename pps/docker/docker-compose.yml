@@ -11,10 +11,10 @@
 #   - pps-server: MCP server for Claude Code integration
 #   - pps-web: Web dashboard for observability
 #
-# Volumes:
-#   - chromadb_data: Persistent vector storage
-#   - falkordb_data: Persistent graph storage
-#   - Bind mounts for identity files and SQLite (configure in .env)
+# Data Persistence:
+#   - ChromaDB data: ${PROJECT_ROOT}/docker/pps/chromadb_data (bind-mount)
+#   - Neo4j data: ${PROJECT_ROOT}/docker/pps/neo4j_data (bind-mount)
+#   - SQLite, identity files: bind-mounts configured in .env
 
 services:
   # Vector Database for semantic search
@@ -26,7 +26,8 @@ services:
       - "${CHROMA_PORT:-8200}:8000"
     volumes:
       # Note: ChromaDB stores data in /data/ (not /chroma/chroma/ as older docs suggest)
-      - chromadb_data:/data
+      # Bind-mount to host for persistence (Issue #131)
+      - ${PROJECT_ROOT}/docker/pps/chromadb_data:/data
     environment:
       - IS_PERSISTENT=TRUE
       - ANONYMIZED_TELEMETRY=FALSE
@@ -40,7 +41,8 @@ services:
       - "127.0.0.1:7474:7474"  # HTTP
       - "127.0.0.1:7687:7687"  # Bolt
     volumes:
-      - neo4j_data:/data
+      # Bind-mount to host for persistence (Issue #131)
+      - ${PROJECT_ROOT}/docker/pps/neo4j_data:/data
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-password123}
       - NEO4J_PLUGINS=["apoc"]
@@ -114,11 +116,12 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # Ambient recall optimization (per-turn context enrichment)
       - PPS_ENABLE_EXPLORE=${PPS_ENABLE_EXPLORE:-true}
-      - PPS_MESSAGE_DB_PATH=${PPS_MESSAGE_DB_PATH:-/app/claude_home/data/lyra_conversations.db}
+      # Database now in entity directory (Issue #131 migration)
+      - PPS_MESSAGE_DB_PATH=${PPS_MESSAGE_DB_PATH:-/app/entity/data/lyra_conversations.db}
     volumes:
-      # Mount entity directory (identity files, crystals, word-photos)
+      # Mount entity directory (identity files, crystals, word-photos, AND databases)
       - ${ENTITY_PATH}:/app/entity:rw
-      # Shared data (SQLite needs rw for WAL mode)
+      # Legacy mount - kept for logs/state files, databases moved to entity/data/
       - ${CLAUDE_HOME}/data:/app/claude_home/data:rw
       - ${CLAUDE_HOME}/journals:/app/claude_home/journals:ro
       # Spaces (read-only reference)
@@ -194,11 +197,8 @@ services:
       retries: 3
       start_period: 60s  # ClaudeInvoker init takes ~33s
 
-volumes:
-  chromadb_data:
-    driver: local
-  neo4j_data:
-    driver: local
+# Volumes removed - now using bind-mounts to ${PROJECT_ROOT}/docker/pps/ (Issue #131)
+# This ensures data survives Docker incidents
 
 networks:
   default:

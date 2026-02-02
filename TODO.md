@@ -50,6 +50,11 @@
 
 Use `gh issue list` to see current issues from the command line.
 
+### 🚨 CRITICAL - DO THIS FIRST
+- [#131](https://github.com/JDHayesBC/Awareness/issues/131) - **URGENT: Implement proper backup system for PPS data** - Docker incident (2026-02-02) nuked Graphiti/Neo4j. SQLite survived by luck (on host HD). We need automated backups BEFORE re-ingesting 10k+ messages. Shot across the bow.
+  - **Work directory**: `work/pps_backup/` - DESIGN.md, PRIVACY_AUDIT.md, backup files
+  - **Security incident**: Privacy audit found committed secrets (.env files, OAuth creds, email archive). Plan: scrub, rotate tokens, migrate to private repo.
+
 ### Current Priority Issues
 - [#74](https://github.com/JDHayesBC/Awareness/issues/74) - Tech RAG layer - **COMPLETED** (2026-01-06) - 20 docs indexed, 584 chunks
 - [#63](https://github.com/JDHayesBC/Awareness/issues/63) - Multi-entity support (Haven foundation) - **CREATED** (2026-01-04) - requires architectural planning

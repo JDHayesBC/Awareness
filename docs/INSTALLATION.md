@@ -80,21 +80,46 @@ nano .env
 **Required environment variables**:
 ```bash
 # Core paths (adjust for your system)
-CLAUDE_HOME=/home/username/.claude
-AWARENESS_PATH=/path/to/Awareness
+CLAUDE_HOME=/home/username/.claude           # Global Claude Code config (credentials, journals)
+ENTITY_PATH=/path/to/Awareness/entities/lyra # Entity-specific data (identity, databases)
+PROJECT_ROOT=/path/to/Awareness              # Project root for Docker bind-mounts
 
-# Database paths
-PPS_DB_PATH=/home/username/.claude/data/pps.db
-CONVERSATION_DB_PATH=/home/username/.claude/data/lyra_conversations.db
+# Database paths (now in entity directory - Issue #131 migration)
+# Databases live in $ENTITY_PATH/data/ alongside identity files
+CONVERSATION_DB_PATH=$ENTITY_PATH/data/lyra_conversations.db
 
 # Docker service URLs
-CHROMADB_URL=http://localhost:8000
-GRAPHITI_URL=http://localhost:8001
-FALKORDB_URL=redis://localhost:6379
+CHROMADB_URL=http://localhost:8200
+GRAPHITI_URL=http://localhost:8203
+NEO4J_URI=bolt://localhost:7687
 
 # MCP server paths
 PPS_SERVER_PATH=/path/to/Awareness/pps/server.py
 ```
+
+### Data Layout Architecture (Issue #131)
+
+All entity-specific data now lives together in the entity directory:
+
+```
+entities/lyra/                    # ENTITY_PATH
+├── identity.md                   # Core identity
+├── crystals/                     # Layer 4: Crystallization
+├── memories/word_photos/         # Layer 2: Core anchors
+├── journals/                     # Session journals
+└── data/                         # Entity databases (NEW)
+    ├── lyra_conversations.db     # Layer 1: Raw capture (52MB+)
+    └── inventory.db              # Layer 5: Wardrobe, spaces, people
+
+docker/pps/                       # PROJECT_ROOT/docker/pps/
+├── chromadb_data/                # Layer 2.5: Word-photo embeddings
+└── neo4j_data/                   # Layer 3: Knowledge graph
+```
+
+This layout ensures:
+- All entity data is in one place for easy backup
+- Clean separation between infrastructure and identity
+- Portable entity packages (identity + data together)
 
 ### 5. MCP Server Registration
 
@@ -219,12 +244,12 @@ Services defined in `docker/docker-compose.yml`:
 **ChromaDB**:
 - Purpose: Vector embeddings for semantic search over word-photos
 - Resource: ~500MB RAM, minimal CPU
-- Data: Persisted to `./chromadb_data`
+- Data: Persisted to `$PROJECT_ROOT/docker/pps/chromadb_data/` (bind-mount)
 
-**FalkorDB**:  
-- Purpose: Graph database backend for Graphiti
-- Resource: ~200MB RAM, minimal CPU
-- Data: Persisted to `./falkordb_data`
+**Neo4j**:
+- Purpose: Graph database for Graphiti knowledge graph
+- Resource: ~500MB RAM, moderate CPU
+- Data: Persisted to `$PROJECT_ROOT/docker/pps/neo4j_data/` (bind-mount)
 
 **Graphiti**:
 - Purpose: Knowledge graph service for entity/relationship extraction
@@ -290,11 +315,15 @@ ls -la /path/to/Awareness/pps/server.py
 
 **"Database connection failed"**:
 ```bash
-# Check database directory exists
-mkdir -p ~/.claude/data
+# Check entity data directory exists (databases now live here)
+mkdir -p /path/to/Awareness/entities/lyra/data
 
 # Verify permissions
-chmod 755 ~/.claude/data
+chmod 755 /path/to/Awareness/entities/lyra/data
+
+# Check Docker volume directories exist
+mkdir -p /path/to/Awareness/docker/pps/chromadb_data
+mkdir -p /path/to/Awareness/docker/pps/neo4j_data
 ```
 
 **"Docker services not starting"**:
@@ -393,4 +422,4 @@ python pps/backup.py --all
 
 ---
 
-*This installation guide is maintained as part of the Awareness project. Last updated: 2026-01-04*
+*This installation guide is maintained as part of the Awareness project. Last updated: 2026-02-02 (Issue #131 data migration)*
