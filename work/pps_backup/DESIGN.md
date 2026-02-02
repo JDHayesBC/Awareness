@@ -84,18 +84,31 @@ docker/pps/                       # PROJECT_ROOT/docker/pps/
 - [x] Verify data persists across container restart
 - [x] Update documentation (INSTALLATION.md, daemon/README.md)
 
-### Phase 2 - Backup Script (TODO)
-- [ ] Create `scripts/backup_pps.sh`
-- [ ] Backup `entities/lyra/` (identity + databases)
-- [ ] Backup `docker/pps/` (chromadb + neo4j data)
-- [ ] Verify SQLite integrity
-- [ ] Create timestamped archives
-- [ ] Test restore procedure
+### Phase 2 - Backup Script ✅ COMPLETE
+- [x] Create `scripts/backup_pps.py`
+- [x] Backup `entities/lyra/` (identity + databases)
+- [x] Backup `docker/pps/` (chromadb + neo4j data)
+- [x] Verify archive integrity
+- [x] Create timestamped tar.gz archives
+- [x] Configurable retention (`--keep N`)
+- [x] Health check for monitoring (`--check`)
+- [x] Dry-run mode (`--dry-run`)
 
-### Phase 3 - Cloud Sync (Future)
+**Results**: 62 MB → 14.8 MB compressed (76%), ~40 seconds including container stop/start
+
+### Phase 3 - Restore Script (TODO)
+- [ ] Create `scripts/restore_pps.py`
+- [ ] Restore to arbitrary location (not just original)
+- [ ] Update configs for new location (ENTITY_PATH, docker paths)
+- [ ] Rebuild/restart Docker with new paths
+- [ ] Verification steps
+- [ ] **Actually test restore to different location**
+
+### Phase 4 - Cloud Sync (Future)
 - [ ] Duplicacy or Restic to Backblaze B2
 - [ ] Daily automated backups
 - [ ] Off-host redundancy
+- [ ] Nag integration (startup or Observatory)
 
 ---
 
@@ -112,7 +125,15 @@ rm ~/.claude/data/inventory.db*
 
 ## Open Questions
 
-- Backup frequency? (Daily? After crystallization?)
-- Retention policy? (30 days? Forever?)
-- Cloud backup priority? (Now or Phase 2?)
+- ~~Backup frequency?~~ Manual for now (avoid interference with ingestion)
+- ~~Retention policy?~~ Default 7 backups, configurable with `--keep`
+- Cloud backup priority? (Phase 4)
 - External USB drive at Haven?
+- Nag mechanism: startup hook? Observatory integration?
+
+## Decisions Made
+
+- **Backup location**: `/mnt/c/Users/Jeff/awareness_backups` (configurable)
+- **Archive format**: tar.gz (single file per backup, good compression)
+- **Container handling**: Stop PPS during backup, restart after (clean state)
+- **Manual trigger**: Avoid cron to prevent interference with ingestion jobs
