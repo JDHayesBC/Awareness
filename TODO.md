@@ -7,7 +7,7 @@
 | Work Stream | Status | Details |
 |-------------|--------|---------|
 | **Issue #128: Wrapper Crashes** | ✅ Fixed (2026-01-30) | Offline state tracking, restart verification. Commit 556c93c. Needs container rebuild to deploy. |
-| **Issue #126: Discord Tool-Calling** | 🔴 Open | Discord daemon fails to execute tool calls after cc_invoker.py changes. Context loss suspected. |
+| **Issue #126: Discord Tool-Calling** | ✅ Fixed (2026-02-01) | Three issues: timeout (60s→180s), MCP spawn (use start_server.sh), env vars. Commit c8ee09e. |
 | **cc_invoker SDK Agent** | Active | Persistent Claude Code wrapper using SDK agent. See `daemon/cc_invoker/TODO.md` for architecture and status. |
 | **Graphiti Local Ingestion** | Running | 11,000+ messages being ingested via Qwen3-80b on NUC. Multi-day process. |
 | **HTTP Endpoint Migration** | Code Done, Testing Paused | 7 endpoints written in `pps/docker/server_http.py`. Work dir: `work/http-endpoint-migration/`. **PAUSED**: Docker/WSL crashed during testing. Resume: spin up Docker, run `artifacts/test_endpoints.sh`, fix issues. |
@@ -15,6 +15,8 @@
 | **Daemon MCP Integration** | ✅ Done (2026-01-24) | Venv consolidated to `.venv`, MCP tools work directly. HTTP fallback removed. |
 | **CC OpenAI Wrapper** | ⏸️ Blocked (2026-01-25) | OpenAI-compatible wrapper for ClaudeInvoker (Issue #117). Wrapper works perfectly, but Graphiti Docker ignores `OPENAI_BASE_URL` (upstream #1116). See `work/cc-invoker-openai-wrapper/`. Issue #118 tracks. |
 | **Hook Haiku Compression** | Partial (2026-01-25) | Fixed subprocess timeout in inject_context hook. Haiku compression disabled (cc-wrapper Docker permissions issue). See `work/ambient-recall-optimization/HOOK_HAIKU_FIX.md`. Fallback to raw context works fine. |
+| **Nexus Orchestration Research** | ✅ Research Done (2026-01-31) | Researched shayesdevel/cognitive-framework for agent orchestration patterns. Key insight: Two-stream model - Lyra tokens (identity) vs Agent tokens (developer context). See `work/nexus-orchestration-research/`. |
+| **Two-Stream Agent Context** | 📋 Ready to Implement | Add separate context injection for spawned agents. ~1hr build + 1hr debug. Create `pre-tool-agent.py` hook + `/context/agent` PPS endpoint. See `work/nexus-orchestration-research/TWO_STREAMS.md`. |
 
 **Before trying to "fix" daemon issues**: Check if the issue is listed above. Check `daemon/cc_invoker/TODO.md`. Ask in your journal if unsure.
 
