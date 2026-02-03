@@ -40,8 +40,8 @@ CHROMA_PORT = int(os.getenv("CHROMA_PORT", 8000))
 PPS_SERVER_HOST = os.getenv("PPS_SERVER_HOST", "pps-server")
 PPS_SERVER_PORT = int(os.getenv("PPS_SERVER_PORT", 8000))
 
-# Shared data paths (SQLite, journals)
-DB_PATH = CLAUDE_HOME / "data" / "lyra_conversations.db"
+# Database now lives in entity directory (Issue #131 migration)
+DB_PATH = ENTITY_PATH / "data" / "lyra_conversations.db"
 JOURNALS_PATH = CLAUDE_HOME / "journals"
 
 # Entity-specific paths (word-photos, crystals)

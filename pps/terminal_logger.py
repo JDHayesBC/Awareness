@@ -40,8 +40,8 @@ class TerminalLogger:
         self.session_id = session_id or f"terminal-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         
         # Initialize raw capture layer
-        claude_home = Path(os.getenv("CLAUDE_HOME", str(Path.home() / ".claude")))
-        db_path = claude_home / "data" / "lyra_conversations.db"
+        entity_path = Path(os.getenv("ENTITY_PATH", str(Path.home() / ".claude")))
+        db_path = entity_path / "data" / "lyra_conversations.db"
         self.raw_capture = RawCaptureLayer(db_path=db_path)
         
         # Track session context
