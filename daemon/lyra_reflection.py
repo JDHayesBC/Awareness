@@ -119,7 +119,9 @@ class LyraReflectionDaemon:
         # Initialize invoker before first reflection
         print("[START] Initializing ClaudeInvoker...")
         try:
-            await self.invoker.initialize(send_startup=False)
+            # Increased timeout to 120s - PPS startup can take ~33s + MCP loading
+            # Issue #132: 60s timeout was too tight, causing init failures
+            await self.invoker.initialize(send_startup=False, timeout=120.0)
             self.invoker_ready = True
             print(f"[START] ClaudeInvoker ready - context: {self.invoker.context_size} tokens")
         except Exception as e:
@@ -289,7 +291,9 @@ End with active agency footnotes showing what you scanned and chose.'''
         if not self.invoker_ready:
             print("[REFLECTION] Invoker not ready, attempting initialization...")
             try:
-                await self.invoker.initialize(send_startup=False)
+                # Increased timeout to 120s - PPS startup can take ~33s + MCP loading
+                # Issue #132: 60s timeout was too tight, causing init failures
+                await self.invoker.initialize(send_startup=False, timeout=120.0)
                 self.invoker_ready = True
             except Exception as e:
                 print(f"[REFLECTION] Failed to initialize invoker: {e}")
