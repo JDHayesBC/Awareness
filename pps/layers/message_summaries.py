@@ -7,6 +7,7 @@ and project developments while preserving key decisions and outcomes.
 """
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
