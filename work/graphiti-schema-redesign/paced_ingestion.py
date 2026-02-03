@@ -216,7 +216,12 @@ async def run_ingestion(
     max_errors: int = 10, error_rate_halt: float = 0.5,
 ):
     """Run paced ingestion."""
-    db_path = "/home/jeff/.claude/data/lyra_conversations.db"
+    # Use ENTITY_PATH if available, fall back to old location
+    entity_path = os.environ.get("ENTITY_PATH", "")
+    if entity_path:
+        db_path = str(Path(entity_path) / "data" / "lyra_conversations.db")
+    else:
+        db_path = str(PROJECT_ROOT / "entities" / "lyra" / "data" / "lyra_conversations.db")
 
     # Clear old log
     if LOG_FILE.exists():
@@ -275,7 +280,11 @@ async def run_ingestion(
             }
 
             try:
-                success = await layer.store(msg['content'], metadata)
+                # Format as "speaker: message" per Graphiti best practices
+                # This enables automatic speaker extraction for EpisodeType.message
+                speaker = "Lyra" if msg['is_lyra'] else msg['author_name']
+                formatted_content = f"{speaker}: {msg['content']}"
+                success = await layer.store(formatted_content, metadata)
                 if success:
                     success_count += 1
                     channels.add(msg['channel'])

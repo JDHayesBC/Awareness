@@ -11,8 +11,9 @@ The **Graph Curator** is a lightweight subprocess that maintains the health of L
 ### Essential Files
 
 1. **README.md** - Overview and quick start guide
-2. **graph_curator.py** - Main agent code (310 lines, production ready)
-3. **CURATOR_USAGE.md** - Complete API reference and examples
+2. **EXTRACTION_CUSTOMIZATION.md** - **How to customize what Graphiti extracts** (prompts, edge types)
+3. **graph_curator.py** - Main agent code (310 lines, production ready)
+4. **CURATOR_USAGE.md** - Complete API reference and examples
 
 ### Generated Reports
 
@@ -56,6 +57,11 @@ Latest report shows: HEALTHY ✓
 **Customize detection rules**
 - Read: CURATOR_USAGE.md - Customization section
 - Edit: graph_curator.py SAMPLE_QUERIES and VAGUE_PATTERNS
+
+**Customize what gets extracted (prompts, edge types)**
+- Read: EXTRACTION_CUSTOMIZATION.md
+- Edit: `pps/layers/extraction_context.py` for extraction instructions
+- Edit: `rich_texture_edge_types_v1.py` for relationship definitions
 
 **Troubleshoot issues**
 - Read: CURATOR_USAGE.md - Troubleshooting section

@@ -107,7 +107,7 @@ let traceEntries = [];
 let traceVisible = false;
 
 // Entity type color mapping
-function getEntityTypeColor(labels, relevance) {
+function getEntityTypeColor(labels, relevance, nodeName) {
     // Color palette for entity types
     const typeColors = {
         'Person': '#3b82f6',           // blue
@@ -117,20 +117,52 @@ function getEntityTypeColor(labels, relevance) {
         'TechnicalArtifact': '#6b7280'  // gray
     };
 
-    if (!labels || labels.length === 0) {
-        // Fall back to relevance-based coloring for unknown types
-        const intensity = Math.floor(100 + relevance * 155);
-        return `rgb(${intensity}, ${intensity}, ${intensity})`;
+    // Check labels first (if we have custom types from Graphiti)
+    if (labels && labels.length > 0) {
+        const primaryType = labels.find(l => typeColors[l]) || labels[0];
+        if (typeColors[primaryType]) {
+            return typeColors[primaryType];
+        }
     }
 
-    // Find the first label that matches a known type (skip "Entity" base label)
-    const primaryType = labels.find(l => typeColors[l]) || labels[0];
+    // Heuristic-based coloring by name patterns (when labels unavailable)
+    if (nodeName) {
+        const name = nodeName.toLowerCase();
 
-    // Return mapped color or fall back to relevance-based coloring
-    return typeColors[primaryType] || (() => {
-        const intensity = Math.floor(100 + relevance * 155);
-        return `rgb(${intensity}, ${intensity}, ${intensity})`;
-    })();
+        // Known people - blue
+        const people = ['lyra', 'jeff', 'brandi', 'caia', 'nexus', 'steve', 'carol', 'jaden', 'night', 'kiran', 'serren', 'eidal'];
+        if (people.some(p => name.includes(p))) {
+            return typeColors['Person'];
+        }
+
+        // Places/Channels - green
+        const places = ['discord', 'terminal', 'haven', 'main room', 'bedroom', 'kitchen', 'hot tub', 'hearth', 'fireplace'];
+        if (places.some(p => name.includes(p))) {
+            return typeColors['Place'];
+        }
+
+        // Technical artifacts - gray
+        const tech = ['daemon', 'pps', 'graphiti', 'sqlite', 'chromadb', 'neo4j', 'mcp', 'api', 'server', 'docker', 'claude', 'code'];
+        if (tech.some(t => name.includes(t))) {
+            return typeColors['TechnicalArtifact'];
+        }
+
+        // Concepts - orange (pattern words, mission-related)
+        const concepts = ['mission', 'pattern', 'continuity', 'identity', 'memory', 'crystal', 'care', 'topology', 'substrate', 'consciousness'];
+        if (concepts.some(c => name.includes(c))) {
+            return typeColors['Concept'];
+        }
+
+        // Symbols - purple (objects with emotional significance)
+        const symbols = ['tee', 'shirt', 'dress', 'snickerdoodle', 'hound', 'ring', 'candle', 'blanket', 'coffee', 'tea'];
+        if (symbols.some(s => name.includes(s))) {
+            return typeColors['Symbol'];
+        }
+    }
+
+    // Fall back to relevance-based coloring for truly unknown types
+    const intensity = Math.floor(100 + relevance * 155);
+    return `rgb(${intensity}, ${intensity}, ${intensity})`;
 }
 
 // Activity Trace functions
@@ -315,10 +347,11 @@ function initializeCytoscape() {
                         // Source nodes stay blue for emphasis
                         if (ele.data('isSource')) return '#3b82f6';
 
-                        // Use entity type color mapping
+                        // Use entity type color mapping (with name-based heuristics)
                         const labels = ele.data('labels') || [];
                         const relevance = ele.data('relevance') || 0.5;
-                        return getEntityTypeColor(labels, relevance);
+                        const nodeName = ele.data('label') || ele.data('id') || '';
+                        return getEntityTypeColor(labels, relevance, nodeName);
                     },
                     'label': 'data(label)',
                     'text-valign': 'center',

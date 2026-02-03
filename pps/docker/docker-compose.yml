@@ -188,6 +188,7 @@ services:
       - ${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro
     environment:
       - WRAPPER_MODEL=${WRAPPER_MODEL:-haiku}
+      - WRAPPER_VERBOSE=${WRAPPER_VERBOSE:-0}  # Set to 1 to log full prompts/responses
     networks:
       - default
     healthcheck:

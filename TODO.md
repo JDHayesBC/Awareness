@@ -9,7 +9,7 @@
 | **Issue #128: Wrapper Crashes** | ✅ Fixed (2026-01-30) | Offline state tracking, restart verification. Commit 556c93c. Needs container rebuild to deploy. |
 | **Issue #126: Discord Tool-Calling** | ✅ Fixed (2026-02-01) | Three issues: timeout (60s→180s), MCP spawn (use start_server.sh), env vars. Commit c8ee09e. |
 | **cc_invoker SDK Agent** | Active | Persistent Claude Code wrapper using SDK agent. See `daemon/cc_invoker/TODO.md` for architecture and status. |
-| **Graphiti Local Ingestion** | Running | 11,000+ messages being ingested via Qwen3-80b on NUC. Multi-day process. |
+| **Graphiti Local Ingestion** | Running | ~14,700 messages via cc_invoker (Haiku). Issue #683 workaround (no custom entity types). Using text-embedding-3-large, speaker:message format. ~4.5 min/batch, 97% success rate. |
 | **HTTP Endpoint Migration** | Code Done, Testing Paused | 7 endpoints written in `pps/docker/server_http.py`. Work dir: `work/http-endpoint-migration/`. **PAUSED**: Docker/WSL crashed during testing. Resume: spin up Docker, run `artifacts/test_endpoints.sh`, fix issues. |
 | **Agent Workflow Redesign** | ✅ Implemented (2026-01-24) | Self-improving crew now operational. See `~/.claude/agents/` for updated prompts. Includes: structured handoffs, testing mandate, friction logging, process-improver agent. |
 | **Daemon MCP Integration** | ✅ Done (2026-01-24) | Venv consolidated to `.venv`, MCP tools work directly. HTTP fallback removed. |

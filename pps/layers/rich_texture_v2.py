@@ -117,8 +117,8 @@ class RichTextureLayerV2(PatternLayer):
         # GRAPHITI_EMBEDDING_PROVIDER: "local" (uses LLM_BASE_URL) or "openai" (default, uses OPENAI_API_KEY)
         # OpenAI embeddings recommended for compatibility with existing graph data
         self.embedding_provider = os.environ.get("GRAPHITI_EMBEDDING_PROVIDER", "openai")
-        self.embedding_model = os.environ.get("GRAPHITI_EMBEDDING_MODEL", "text-embedding-3-small")
-        self.embedding_dim = int(os.environ.get("GRAPHITI_EMBEDDING_DIM", "1536"))  # OpenAI default
+        self.embedding_model = os.environ.get("GRAPHITI_EMBEDDING_MODEL", "text-embedding-3-large")
+        self.embedding_dim = int(os.environ.get("GRAPHITI_EMBEDDING_DIM", "3072"))  # text-embedding-3-large
 
         # Clients (lazy initialized)
         self._graphiti_client: Optional[Graphiti] = None
@@ -501,7 +501,8 @@ class RichTextureLayerV2(PatternLayer):
             # Create episode name from speaker and timestamp
             episode_name = f"{speaker}_{timestamp.strftime('%Y%m%d_%H%M%S')}"
 
-            # Add episode with our entity types, edge types, and instructions
+            # Add episode - temporarily using Graphiti defaults (Issue #683 workaround)
+            # TODO: Re-enable custom types once Graphiti fixes Map serialization bug
             result = await client.add_episode(
                 name=episode_name,
                 episode_body=content,
@@ -509,10 +510,11 @@ class RichTextureLayerV2(PatternLayer):
                 reference_time=timestamp,
                 source=EpisodeType.message,
                 group_id=self.group_id,
-                entity_types=ENTITY_TYPES,
-                excluded_entity_types=EXCLUDED_ENTITY_TYPES,
-                edge_types=EDGE_TYPES,
-                edge_type_map=EDGE_TYPE_MAP,
+                # DISABLED due to Graphiti Issue #683 - entity attributes cause Neo4j Map errors
+                # entity_types=ENTITY_TYPES,
+                # excluded_entity_types=EXCLUDED_ENTITY_TYPES,
+                # edge_types=EDGE_TYPES,
+                # edge_type_map=EDGE_TYPE_MAP,
                 custom_extraction_instructions=extraction_instructions,
             )
 
@@ -578,8 +580,9 @@ class RichTextureLayerV2(PatternLayer):
             if not client:
                 return []
 
-            # Configuration (reduced from 200 to 75 - hook truncates at 10K chars anyway)
-            EDGE_LIMIT = 75  # Reduced 2026-01-25 - see Issue #121 for compression plans
+            # Configuration - balance between context richness and output size
+            # Note: Hook truncates at 10K chars, but observatory visualization benefits from more
+            EDGE_LIMIT = 200  # Restored for richer graph visualization
             NODE_LIMIT = 3   # Entity summaries
             EXPLORE_DEPTH = 2  # BFS depth from extracted entities
 

@@ -693,7 +693,7 @@ async def api_graph_search(query: str, limit: int = 20):
                     "content": result.content
                 }
 
-            elif metadata.get("type") == "fact":
+            elif metadata.get("type") in ("fact", "edge"):
                 # Add fact as edges and ensure nodes exist
                 # Use 'or' to handle None values
                 subject = metadata.get("subject") or "unknown"
@@ -811,7 +811,7 @@ async def api_graph_explore(entity: str, depth: int = 2):
                     "content": result.content
                 }
                 
-            elif metadata.get("type") == "fact":
+            elif metadata.get("type") in ("fact", "edge"):
                 # Process relationships
                 subject = metadata.get("subject", "unknown")
                 predicate = metadata.get("predicate", "relates_to")
