@@ -78,6 +78,10 @@ STARTUP_PROMPT = (
     "Just output the requested content directly."
 )
 
+# Verbose mode for debugging extraction issues
+# Set WRAPPER_VERBOSE=1 to log full prompts and responses
+VERBOSE = os.getenv("WRAPPER_VERBOSE", "0") == "1"
+
 
 # =============================================================================
 # Request/Response Models (OpenAI Chat Completions format)
@@ -497,6 +501,7 @@ async def health_check():
     response = {
         "status": "healthy",
         "invoker_connected": invoker.is_connected,
+        "verbose_mode": VERBOSE,
         "active_queries": _active_queries,
         "context_usage": {
             "tokens": stats["total_tokens"],
@@ -612,6 +617,14 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
 
         combined_prompt = "\n\n".join(prompt_parts)
 
+        # Verbose logging: dump full prompt
+        if VERBOSE:
+            print("=" * 80, flush=True)
+            print("[VERBOSE] PROMPT:", flush=True)
+            print("-" * 40, flush=True)
+            print(combined_prompt, flush=True)
+            print("-" * 40, flush=True)
+
         # Log request
         prompt_tokens = estimate_tokens(combined_prompt)
         schema_name = ""
@@ -636,6 +649,14 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
         # Strip markdown fences if caller expects JSON
         if wants_json:
             response_text = strip_markdown_fences(response_text)
+
+        # Verbose logging: dump full response
+        if VERBOSE:
+            print("[VERBOSE] RESPONSE:", flush=True)
+            print("-" * 40, flush=True)
+            print(response_text, flush=True)
+            print("-" * 40, flush=True)
+            print("=" * 80, flush=True)
 
         # Timing and observability
         query_elapsed = time.monotonic() - query_start
