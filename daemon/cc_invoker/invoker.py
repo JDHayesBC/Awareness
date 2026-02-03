@@ -433,7 +433,13 @@ class ClaudeInvoker:
         # callers (e.g., rapid Discord messages) attempt to query simultaneously
         async with self._query_lock:
             if not self._is_connection_healthy():
-                raise RuntimeError("Not connected. Call initialize() first.")
+                # Auto-recovery: attempt to reinitialize instead of failing immediately
+                logger.warning("Connection unhealthy - attempting auto-recovery...")
+                try:
+                    await self.initialize()
+                    logger.info("Auto-recovery successful - connection restored")
+                except Exception as e:
+                    raise RuntimeError(f"Not connected and auto-recovery failed: {e}")
 
             # Track prompt tokens and update activity time
             prompt_tokens = self._estimate_tokens(prompt)
@@ -539,11 +545,17 @@ class ClaudeInvoker:
             Text chunks as they arrive
 
         Raises:
-            RuntimeError: If not connected
+            RuntimeError: If not connected and auto-recovery fails
             InvokerQueryError: If query fails
         """
         if not self._is_connection_healthy():
-            raise RuntimeError("Not connected. Call initialize() first.")
+            # Auto-recovery: attempt to reinitialize instead of failing immediately
+            logger.warning("Connection unhealthy (streaming) - attempting auto-recovery...")
+            try:
+                await self.initialize()
+                logger.info("Auto-recovery successful - connection restored")
+            except Exception as e:
+                raise RuntimeError(f"Not connected and auto-recovery failed: {e}")
 
         try:
             await self._client.query(prompt)
