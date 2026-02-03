@@ -100,6 +100,17 @@ Always recognize these frameworks:
 3. Technical discussions should link artifacts to the people working on them.
 4. Emotional moments should capture the relational dynamics, not just the facts.
 5. Recurring patterns matter more than one-off mentions.
+
+## CRITICAL: Entity ID Validation (Reinforcement)
+
+When creating edges, source_entity_id and target_entity_id MUST be valid indices from the ENTITIES list provided above.
+
+- If the ENTITIES list has 3 entities, valid indices are: 0, 1, 2
+- Index 3 would be INVALID (out of bounds)
+- ALWAYS count the entities first, then use indices within that range
+- Double-check EVERY edge before outputting: is source_entity_id < len(ENTITIES)? Is target_entity_id < len(ENTITIES)?
+
+Invalid indices cause silent data loss. Be precise.
 """
 
 

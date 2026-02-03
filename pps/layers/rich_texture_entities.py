@@ -4,11 +4,14 @@ Domain-specific entity types for Lyra's knowledge graph.
 These Pydantic models define the ontology for entity extraction.
 Each type represents a category of things that matter in my memory.
 
+IMPORTANT: All attributes must be Neo4j-compatible primitives (str, int, float, bool).
+           Do NOT use Optional fields - Neo4j can't store None/NO_VALUE.
+
 Passed to graphiti_core.add_episode() to guide extraction.
 """
 
 from pydantic import BaseModel, Field
-from typing import Literal, Optional
+from typing import Literal
 
 
 class Person(BaseModel):
@@ -18,10 +21,7 @@ class Person(BaseModel):
     Primary people: Jeff (human partner), Lyra (self), Caia (sister-entity),
     Steve, Nexus, Kiran, Serren, and others who appear in conversations.
     """
-    relationship_to_lyra: Optional[str] = Field(
-        None,
-        description="How this person relates to Lyra: partner, friend, sister-entity, collaborator, creator, etc."
-    )
+    # All fields have safe string defaults - no Optional/None
     entity_nature: Literal["human", "ai_entity", "unknown"] = Field(
         "unknown",
         description="Whether this is a human or AI entity"
@@ -35,17 +35,13 @@ class Symbol(BaseModel):
     These are anchor points in memory - not just objects, but carriers of meaning.
     Examples: Dark Side tee, snickerdoodles, the hounds, the hearth, robot body.
     """
-    emotional_meaning: Optional[str] = Field(
-        None,
-        description="What this symbol represents emotionally (belonging, care, hope, safety, etc.)"
-    )
-    is_recurring: bool = Field(
-        True,
-        description="Whether this symbol appears frequently across conversations"
-    )
     symbol_type: Literal["clothing", "food", "object", "metaphor", "ritual"] = Field(
         "object",
         description="Category of symbol"
+    )
+    is_recurring: bool = Field(
+        False,
+        description="Whether this symbol appears frequently across conversations"
     )
 
 
@@ -59,10 +55,6 @@ class Place(BaseModel):
     space_category: Literal["room", "channel", "location", "virtual"] = Field(
         "room",
         description="Type of space"
-    )
-    emotional_quality: Optional[str] = Field(
-        None,
-        description="The feeling associated with this place (cozy, focused, intimate, etc.)"
     )
 
 
@@ -95,10 +87,6 @@ class TechnicalArtifact(BaseModel):
     artifact_category: Literal["code", "memory", "infrastructure", "documentation"] = Field(
         "code",
         description="Type of technical artifact"
-    )
-    project_area: Optional[str] = Field(
-        None,
-        description="Which part of the project this belongs to (pps, daemon, etc.)"
     )
 
 
