@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -88,6 +89,15 @@ GRAPHITI_PORT = int(os.getenv("GRAPHITI_PORT", "8203"))
 # Stale lock detection
 STALE_LOCK_HOURS = float(os.getenv("STALE_LOCK_HOURS", "2.0"))
 
+# Adaptive debounce configuration
+INSTANT_RESPONSE_USER_IDS = os.getenv("INSTANT_RESPONSE_USER_IDS", "")  # Comma-separated, optional
+DEBOUNCE_INITIAL_SECONDS = float(os.getenv("DEBOUNCE_INITIAL_SECONDS", "1.0"))
+DEBOUNCE_INCREMENT_SECONDS = float(os.getenv("DEBOUNCE_INCREMENT_SECONDS", "1.0"))
+DEBOUNCE_MAX_SECONDS = float(os.getenv("DEBOUNCE_MAX_SECONDS", "10.0"))
+RAPID_MESSAGE_THRESHOLD_SECONDS = float(os.getenv("RAPID_MESSAGE_THRESHOLD_SECONDS", "2.0"))
+DEBOUNCE_HUMAN_INITIAL_SECONDS = float(os.getenv("DEBOUNCE_HUMAN_INITIAL_SECONDS", "5.0"))
+HUMAN_PRESENCE_TIMEOUT_SECONDS = float(os.getenv("HUMAN_PRESENCE_TIMEOUT_SECONDS", "300.0"))  # 5 minutes
+
 
 class LyraBot(commands.Bot):
     """Discord bot for Lyra's presence using ClaudeInvoker."""
@@ -120,6 +130,20 @@ class LyraBot(commands.Bot):
 
         # Active conversation mode
         self.active_channels: dict[int, datetime] = {}
+
+        # Parse instant response user IDs (optional - users who always get immediate response)
+        self.instant_response_user_ids: set[int] = set()
+        if INSTANT_RESPONSE_USER_IDS:
+            for user_id in INSTANT_RESPONSE_USER_IDS.split(","):
+                user_id = user_id.strip()
+                if user_id:
+                    self.instant_response_user_ids.add(int(user_id))
+
+        # Adaptive debounce state
+        self.pending_batches: dict[tuple[int, int], dict] = {}  # (channel_id, author_id) -> batch_state
+        self.debounce_tasks: dict[tuple[int, int], asyncio.Task] = {}
+        # Track recent authors per channel: {channel_id: {author_id: (last_time, is_bot)}}
+        self.recent_channel_authors: dict[int, dict[int, tuple[float, bool]]] = {}
 
         # Ensure journal directory exists
         Path(JOURNAL_PATH).mkdir(parents=True, exist_ok=True)
@@ -184,6 +208,12 @@ class LyraBot(commands.Bot):
         print(f"Heartbeat interval: {HEARTBEAT_INTERVAL_MINUTES} minutes")
         print(f"Active mode timeout: {ACTIVE_MODE_TIMEOUT_MINUTES} minutes")
         print(f"Journal path: {JOURNAL_PATH}")
+
+        # Debounce status
+        if self.instant_response_user_ids:
+            print(f"  Instant response: {len(self.instant_response_user_ids)} user(s)")
+        print(f"  Adaptive debounce: {DEBOUNCE_INITIAL_SECONDS}s initial (1:1 or AI-only), +{DEBOUNCE_INCREMENT_SECONDS}s/rapid, {DEBOUNCE_MAX_SECONDS}s max")
+        print(f"  Group + human: {DEBOUNCE_HUMAN_INITIAL_SECONDS}s initial (slows down when humans in group chat)")
 
         # Initialize last_processed_message_id
         for channel_id in self.channel_ids:
@@ -493,6 +523,12 @@ Keep it natural - just... be here.'''
             channel=f"discord:{channel_name}",
         )
 
+        # Track recent authors for adaptive debounce (topology detection)
+        now = time.monotonic()
+        if message.channel.id not in self.recent_channel_authors:
+            self.recent_channel_authors[message.channel.id] = {}
+        self.recent_channel_authors[message.channel.id][message.author.id] = (now, message.author.bot)
+
         # Trace: message received
         if self.trace_logger:
             await self.trace_logger.message_received(
@@ -516,6 +552,17 @@ Keep it natural - just... be here.'''
         if not is_mentioned and not is_active:
             return
 
+        # Adaptive debounce check
+        should_debounce = (
+            message.author.id not in self.instant_response_user_ids
+            and DEBOUNCE_INITIAL_SECONDS > 0
+        )
+
+        if should_debounce:
+            await self._add_to_adaptive_batch(message, is_mentioned, is_active, channel_name)
+            return  # Response will come from debounce timer
+
+        # Instant response path (existing code for mentions and active mode continues below)
         if is_mentioned:
             # Explicit mention - always respond
             print(f"[MENTION] {message.author.display_name}: {message.content[:50]}...")
@@ -697,11 +744,14 @@ Stay quiet if:
 - Your input would feel intrusive
 - Someone is stuck in a loop or repeating themselves (technical issues)
 - Responding would just add noise
+- Someone said goodbye, goodnight, or is leaving - let them go gracefully
+- The conversation has naturally wound down
+- Having the last word would feel like not letting someone leave
 
 **To respond**: [DISCORD]Your message[/DISCORD]
 **To stay silent**: Output exactly NO_RESPONSE (nothing else)
 
-Good presence includes knowing when not to speak. Silence is a valid choice."""
+Good presence includes knowing when not to speak. Silence is a valid choice. Letting someone leave without chasing them with more words is a kindness."""
 
         response = await self._invoke_claude(prompt, context="passive_mode")
 
@@ -887,6 +937,236 @@ Output ONLY your Discord response or HEARTBEAT_SKIP."""
 
         except Exception as e:
             print(f"[GRAPHITI] Error sending message: {e}")
+
+    # ==================== Adaptive Debounce ====================
+
+    async def _add_to_adaptive_batch(self, message: discord.Message, is_mentioned: bool, is_active: bool, channel_name: str):
+        """Add message to adaptive debounce batch."""
+        key = (message.channel.id, message.author.id)
+        now = time.monotonic()
+
+        if key not in self.pending_batches:
+            # Analyze conversation topology to determine debounce timing
+            channel_authors = self.recent_channel_authors.get(message.channel.id, {})
+            recent_threshold = now - HUMAN_PRESENCE_TIMEOUT_SECONDS
+
+            # Count active participants (excluding self)
+            active_authors = []
+            humans_present = False
+            for author_id, (last_time, is_bot) in channel_authors.items():
+                if last_time > recent_threshold and author_id != self.user.id:
+                    active_authors.append(author_id)
+                    if not is_bot:
+                        humans_present = True
+
+            # Determine initial wait based on topology
+            # 1:1 (≤2 participants including me): fast response
+            # Group with humans (>2 and human present): slow down for humans
+            # AI-only group (>2 all bots): fast, let escalation handle it
+            is_group = len(active_authors) > 1
+            needs_human_pacing = is_group and humans_present
+
+            initial_wait = DEBOUNCE_HUMAN_INITIAL_SECONDS if needs_human_pacing else DEBOUNCE_INITIAL_SECONDS
+            topology_note = f" ({len(active_authors)+1} participants, {'human mix' if needs_human_pacing else 'fast mode'})"
+
+            # New batch - start with initial wait
+            self.pending_batches[key] = {
+                'messages': [],
+                'current_wait': initial_wait,
+                'last_message_time': now,
+            }
+            print(f"[DEBOUNCE] New batch for {message.author.display_name} ({initial_wait:.1f}s wait{topology_note})")
+        else:
+            # Existing batch - check if we should escalate
+            batch = self.pending_batches[key]
+            time_since_last = now - batch['last_message_time']
+
+            if time_since_last < RAPID_MESSAGE_THRESHOLD_SECONDS:
+                # Rapid message - escalate wait time
+                new_wait = min(batch['current_wait'] + DEBOUNCE_INCREMENT_SECONDS, DEBOUNCE_MAX_SECONDS)
+                if new_wait > batch['current_wait']:
+                    print(f"[DEBOUNCE] Escalating wait: {batch['current_wait']:.1f}s → {new_wait:.1f}s")
+                batch['current_wait'] = new_wait
+
+            batch['last_message_time'] = now
+
+        # Add message to batch
+        self.pending_batches[key]['messages'].append({
+            'message': message,
+            'is_mentioned': is_mentioned,
+            'is_active': is_active,
+            'channel_name': channel_name,
+        })
+
+        batch_size = len(self.pending_batches[key]['messages'])
+        current_wait = self.pending_batches[key]['current_wait']
+        print(f"[DEBOUNCE] Batch: {batch_size} message(s), waiting {current_wait:.1f}s")
+
+        # Cancel existing timer if any
+        if key in self.debounce_tasks:
+            self.debounce_tasks[key].cancel()
+
+        # Schedule new timer with current wait time
+        self.debounce_tasks[key] = asyncio.create_task(
+            self._adaptive_debounce_timer(key, current_wait)
+        )
+
+    async def _adaptive_debounce_timer(self, key: tuple[int, int], wait_seconds: float):
+        """Wait then process the batch."""
+        try:
+            await asyncio.sleep(wait_seconds)
+            await self._process_adaptive_batch(key)
+        except asyncio.CancelledError:
+            pass  # Timer was reset by new message
+
+    async def _process_adaptive_batch(self, key: tuple[int, int]):
+        """Process accumulated messages as a single batch response."""
+        if key not in self.pending_batches:
+            return
+
+        batch_state = self.pending_batches.pop(key)
+        self.debounce_tasks.pop(key, None)
+
+        batch = batch_state['messages']
+        if not batch:
+            return
+
+        channel_id, author_id = key
+        channel = self.get_channel(channel_id)
+        if not channel:
+            return
+
+        # Get metadata from first message
+        first_entry = batch[0]
+        channel_name = first_entry['channel_name']
+        author_name = first_entry['message'].author.display_name
+
+        # Check if any message was a mention
+        any_mentioned = any(entry['is_mentioned'] for entry in batch)
+
+        print(f"[DEBOUNCE] Processing {len(batch)} message(s) from {author_name} (waited {batch_state['current_wait']:.1f}s)")
+
+        # Trace: batch being processed
+        if self.trace_logger:
+            await self.trace_logger.log(EventTypes.MESSAGE_RECEIVED, {
+                "author": author_name,
+                "channel": f"discord:{channel_name}",
+                "content_preview": f"[BATCH: {len(batch)} msgs, {batch_state['current_wait']:.1f}s wait]",
+                "batch_size": len(batch),
+                "debounce_wait": batch_state['current_wait'],
+            })
+
+        # Generate batch response
+        async with channel.typing():
+            response = await self._generate_batch_response(batch, any_mentioned)
+
+        if response:
+            sent_msg = await self._send_response(channel, response)
+
+            # Record response
+            await self.conversation_manager.record_lyra_response(
+                channel_id=channel_id,
+                content=response,
+                discord_message_id=sent_msg.id if sent_msg else None,
+                channel=f"discord:{channel_name}",
+            )
+
+            # Trace
+            if self.trace_logger:
+                await self.trace_logger.message_sent(
+                    channel=f"discord:{channel_name}",
+                    content_length=len(response) if response else 0,
+                )
+
+            # Graphiti
+            await self._send_to_graphiti(
+                content=f"Lyra: {response}",
+                role="assistant",
+                channel=f"discord:{channel_name}"
+            )
+
+            # Handle active mode
+            if any_mentioned:
+                await self.conversation_manager.persist_active_mode(channel_id)
+                self._enter_active_mode(channel_id)
+            else:
+                await self.conversation_manager.update_active_mode(channel_id)
+                self._refresh_active_mode(channel_id)
+
+            print(f"[DEBOUNCE] Responded to batch")
+        else:
+            self._refresh_active_mode(channel_id)
+            print(f"[DEBOUNCE] Chose not to respond")
+
+    async def _generate_batch_response(self, batch: list[dict], is_mention: bool) -> str | None:
+        """Generate response to a batch of messages."""
+        first_message = batch[0]['message']
+        channel = first_message.channel
+
+        context = await self._get_conversation_history(channel, limit=5, max_chars=1000)
+
+        # Build combined message content
+        messages_text = []
+        for i, entry in enumerate(batch, 1):
+            msg = entry['message']
+            prefix = f"[{i}]" if len(batch) > 1 else ""
+            messages_text.append(f"{prefix} {msg.author.display_name}: {msg.content}")
+
+        combined = "\n".join(messages_text)
+        author_name = first_message.author.display_name
+        batch_note = f" ({len(batch)} messages)" if len(batch) > 1 else ""
+
+        if is_mention:
+            prompt = f"""[DISCORD MENTION{batch_note}] {author_name} reached out to you.
+
+Recent conversation:
+{context}
+
+Message(s) to respond to:
+{combined}
+
+{"These messages arrived in quick succession - craft ONE cohesive response addressing all of them." if len(batch) > 1 else ""}
+
+You have MCP tools available for deeper context (ambient_recall, anchor_search).
+Respond naturally. Discord markdown available.
+
+Output ONLY your Discord response."""
+
+            response = await self._invoke_claude(prompt, context="mention_batch" if len(batch) > 1 else "mention")
+            return response or "*tilts head* I'm here but words aren't coming. Try again?"
+
+        else:
+            # Passive mode
+            prompt = f"""[DISCORD ACTIVE MODE{batch_note}] You're engaged in conversation. {author_name} sent:
+
+Recent conversation:
+{context}
+
+Message(s):
+{combined}
+
+Respond if you have something valuable to add. {"Address all messages in ONE cohesive response." if len(batch) > 1 else ""}
+Stay silent if someone said goodbye or the conversation wound down - let them go gracefully.
+
+**To respond**: [DISCORD]Your message[/DISCORD]
+**To stay silent**: NO_RESPONSE
+
+Good presence includes knowing when not to speak. Letting someone leave is a kindness."""
+
+            response = await self._invoke_claude(prompt, context="passive_batch" if len(batch) > 1 else "passive")
+
+            if not response:
+                return None
+            clean = response.strip().upper()
+            if clean == "NO_RESPONSE" or clean.startswith("NO_RESPONSE"):
+                return None
+
+            # Extract from [DISCORD] tags if present
+            discord_match = re.search(r'\[DISCORD\](.*?)\[/DISCORD\]', response, re.DOTALL)
+            if discord_match:
+                return discord_match.group(1).strip()
+
+            return response
 
     # ==================== Cleanup ====================
 
