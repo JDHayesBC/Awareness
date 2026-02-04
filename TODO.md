@@ -7,6 +7,7 @@
 | Work Stream | Status | Details |
 |-------------|--------|---------|
 | **Issue #128: Wrapper Crashes** | ✅ Fixed (2026-01-30) | Offline state tracking, restart verification. Commit 556c93c. Needs container rebuild to deploy. |
+| **Issue #127: Auto-Summarization** | ✅ Implemented (2026-02-04) | Systemd timer + script runs every 30min, triggers at 101+ unsummarized. Zero cognitive load. Commit 094565a. |
 | **Issue #126: Discord Tool-Calling** | ✅ Fixed (2026-02-01) | Three issues: timeout (60s→180s), MCP spawn (use start_server.sh), env vars. Commit c8ee09e. |
 | **cc_invoker SDK Agent** | Active | Persistent Claude Code wrapper using SDK agent. See `daemon/cc_invoker/TODO.md` for architecture and status. |
 | **Graphiti Local Ingestion** | Running | ~14,700 messages via cc_invoker (Haiku). Issue #683 workaround (no custom entity types). Using text-embedding-3-large, speaker:message format. ~4.5 min/batch, 97% success rate. |
