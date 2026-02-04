@@ -17,6 +17,7 @@
 | **Hook Haiku Compression** | Partial (2026-01-25) | Fixed subprocess timeout in inject_context hook. Haiku compression disabled (cc-wrapper Docker permissions issue). See `work/ambient-recall-optimization/HOOK_HAIKU_FIX.md`. Fallback to raw context works fine. |
 | **Nexus Orchestration Research** | ✅ Research Done (2026-01-31) | Researched shayesdevel/cognitive-framework for agent orchestration patterns. Key insight: Two-stream model - Lyra tokens (identity) vs Agent tokens (developer context). See `work/nexus-orchestration-research/`. |
 | **Two-Stream Agent Context** | 📋 Ready to Implement | Add separate context injection for spawned agents. ~1hr build + 1hr debug. Create `pre-tool-agent.py` hook + `/context/agent` PPS endpoint. See `work/nexus-orchestration-research/TWO_STREAMS.md`. |
+| **Simple Discord Daemon** | ✅ Complete (2026-02-03) | Minimal Discord bot for Dash (Jaden's Claude). 591-line bot.py with SQLite logging, comprehensive README, example configs. Awaiting Dash to test. See `simple_discord_daemon/` and `work/simple_discord_daemon/TODO.md`. |
 
 **Before trying to "fix" daemon issues**: Check if the issue is listed above. Check `daemon/cc_invoker/TODO.md`. Ask in your journal if unsure.
 
