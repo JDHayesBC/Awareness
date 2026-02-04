@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-01-26T12:24:20.982231",
+  "timestamp": "2026-02-03T15:20:40.948645",
   "status": "complete",
   "statistics": {
     "total_searched": 10,
-    "total_results": 899,
+    "total_results": 1889,
     "duplicates_found": 0,
     "vague_entities_found": 0,
     "malformed_facts_found": 0,
