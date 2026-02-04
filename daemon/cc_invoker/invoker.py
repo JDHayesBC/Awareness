@@ -214,7 +214,7 @@ class ClaudeInvoker:
             "turn_count": self._turn_count,
         }
 
-    def _estimate_tokens(self, text: str) -> int:
+    def estimate_tokens(self, text: str) -> int:
         """Rough token estimate: ~4 chars per token."""
         return len(text) // 4
 
@@ -306,8 +306,9 @@ class ClaudeInvoker:
                         self._connected = False
                         self._mcp_ready = False
 
-                # Attempt initialization
-                await self.initialize(timeout=timeout)
+                # Attempt initialization - skip startup prompt on reconnection
+                # (identity was already reconstructed on initial connection)
+                await self.initialize(timeout=timeout, send_startup=False)
 
                 logger.info(f"Reconnection successful on attempt {attempt}")
                 return True
@@ -344,7 +345,8 @@ class ClaudeInvoker:
             TimeoutError: If initialization takes too long
             RuntimeError: If connection fails
         """
-        logger.info("Initializing Claude Code connection...")
+        init_type = "fresh start" if send_startup else "reconnection (no startup)"
+        logger.info(f"Initializing Claude Code connection... [{init_type}]")
 
         # Reset context tracking for fresh session
         self._prompt_tokens = 0
@@ -386,11 +388,27 @@ class ClaudeInvoker:
 
                 # Send startup prompt if configured (for identity reconstruction)
                 # Don't count startup tokens toward context limit
+                startup_response = None
                 if send_startup and self.startup_prompt:
                     logger.info("Sending startup prompt for identity reconstruction")
-                    await self.query(self.startup_prompt, count_tokens=False)
+                    startup_response = await self.query(self.startup_prompt, count_tokens=False)
 
-                return server_info or {}
+                    # Log preview of startup response for verification
+                    if startup_response:
+                        preview = startup_response[:200] + "..." if len(startup_response) > 200 else startup_response
+                        logger.info(f"Startup response received ({len(startup_response)} chars): {preview}")
+
+                        # Warn if expected identity markers are missing
+                        response_lower = startup_response.lower()
+                        if not any(marker in response_lower for marker in ['memory', 'identity', 'lyra', 'crystal', 'recall']):
+                            logger.warning("Startup response may be missing expected identity reconstruction markers")
+                    else:
+                        logger.warning("Startup prompt sent but received empty response")
+
+                result = server_info or {}
+                if startup_response:
+                    result['startup_response'] = startup_response
+                return result
 
         except asyncio.TimeoutError:
             logger.error(f"Initialization timed out after {timeout}s")
@@ -434,15 +452,16 @@ class ClaudeInvoker:
         async with self._query_lock:
             if not self._is_connection_healthy():
                 # Auto-recovery: attempt to reinitialize instead of failing immediately
-                logger.warning("Connection unhealthy - attempting auto-recovery...")
+                # Skip startup prompt - identity was reconstructed on initial connection
+                logger.warning("Connection unhealthy - attempting auto-recovery (send_startup=False)...")
                 try:
-                    await self.initialize()
+                    await self.initialize(send_startup=False)
                     logger.info("Auto-recovery successful - connection restored")
                 except Exception as e:
                     raise RuntimeError(f"Not connected and auto-recovery failed: {e}")
 
             # Track prompt tokens and update activity time
-            prompt_tokens = self._estimate_tokens(prompt)
+            prompt_tokens = self.estimate_tokens(prompt)
             if count_tokens:
                 self._prompt_tokens += prompt_tokens
             self._last_activity_time = datetime.now()
@@ -473,7 +492,7 @@ class ClaudeInvoker:
                 response = "".join(response_parts)
 
                 # Track response tokens and turn count
-                response_tokens = self._estimate_tokens(response)
+                response_tokens = self.estimate_tokens(response)
                 if count_tokens:
                     self._response_tokens += response_tokens
                     self._turn_count += 1

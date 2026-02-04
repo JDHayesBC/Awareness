@@ -200,9 +200,29 @@ class LyraBot(commands.Bot):
         # Initialize ClaudeInvoker with full identity reconstruction
         # Allow 180s for warmup: ~45s connection + ~90s startup prompt + buffer
         print("[WARMUP] Initializing ClaudeInvoker with identity reconstruction...")
+
+        # Trace: identity reconstruction start
+        import time
+        identity_start_time = time.monotonic()
+        if self.trace_logger:
+            await self.trace_logger.log(EventTypes.IDENTITY_START, {
+                "context": "discord",
+                "startup_prompt_length": len(self._build_startup_prompt("discord"))
+            })
+
         try:
             await self.invoker.initialize(timeout=180.0)
             self.invoker_ready = True
+
+            # Trace: identity reconstruction complete
+            if self.trace_logger:
+                identity_duration_ms = int((time.monotonic() - identity_start_time) * 1000)
+                await self.trace_logger.log(EventTypes.IDENTITY_COMPLETE, {
+                    "context_tokens": self.invoker.context_size,
+                    "turn_count": self.invoker.turn_count,
+                    "model": self.invoker.model,
+                }, duration_ms=identity_duration_ms)
+
             print(f"[WARMUP] ClaudeInvoker ready - context: {self.invoker.context_size} tokens, "
                   f"{self.invoker.turn_count} turns")
         except Exception as e:
@@ -273,11 +293,39 @@ Keep it natural - just... be here.'''
         # Check if restart needed before query
         await self.invoker.check_and_restart_if_needed()
 
+        # Log API call start with metrics
+        if self.trace_logger:
+            start_time = await self.trace_logger.api_call_start(
+                model=self.invoker.model or "unknown",
+                prompt_tokens=self.invoker.estimate_tokens(prompt)
+            )
+        else:
+            start_time = None
+
         try:
             response = await self.invoker.query(prompt)
+
+            # Log API call completion with metrics
+            if self.trace_logger and start_time is not None:
+                stats = self.invoker.context_stats
+                await self.trace_logger.api_call_complete(
+                    start_time=start_time,
+                    tokens_in=stats["prompt_tokens"],
+                    tokens_out=stats["response_tokens"],
+                    model=self.invoker.model
+                )
+
             return response
         except Exception as e:
             print(f"[{context}] Invoker error: {e}")
+
+            # Log API call error
+            if self.trace_logger:
+                await self.trace_logger.api_call_error(
+                    error=str(e),
+                    model=self.invoker.model
+                )
+
             return None
 
     # ==================== Active Conversation Mode ====================
@@ -328,6 +376,91 @@ Keep it natural - just... be here.'''
         """Wait until bot is ready."""
         await self.wait_until_ready()
 
+    # ==================== Attachment Handling ====================
+
+    def _is_text_attachment(self, attachment: discord.Attachment) -> bool:
+        """Check if attachment is likely text-based (can be decoded as UTF-8)."""
+        # Check MIME type first
+        text_mime_prefixes = ('text/', 'application/json', 'application/xml',
+                               'application/x-yaml', 'application/x-sh')
+        if attachment.content_type:
+            for prefix in text_mime_prefixes:
+                if attachment.content_type.startswith(prefix):
+                    return True
+
+        # Check filename extension
+        text_extensions = {
+            '.txt', '.md', '.log', '.py', '.js', '.sh', '.yaml', '.json',
+            '.csv', '.xml', '.html', '.yml', '.env', '.conf', '.cfg',
+            '.java', '.cpp', '.rb', '.go', '.rs', '.ts', '.tsx', '.jsx',
+            '.sql', '.toml', '.ini', '.c', '.h', '.hpp', '.cs'
+        }
+        ext = Path(attachment.filename).suffix.lower()
+        return ext in text_extensions
+
+    async def _extract_attachment_content(
+        self,
+        attachment: discord.Attachment,
+        max_size_bytes: int = 5_000_000,  # 5 MB limit
+        max_text_length: int = 10_000,  # Truncate very long files
+    ) -> str | None:
+        """
+        Extract text content from attachment with comprehensive error handling.
+
+        Returns:
+            String with file content, or placeholder for binary/large/error cases.
+        """
+        try:
+            # Size check
+            if attachment.size > max_size_bytes:
+                return f"[File too large: {attachment.filename} ({attachment.size:,} bytes)]"
+
+            # Voice message check (discord.py 2.0+)
+            if hasattr(attachment, 'is_voice_message') and attachment.is_voice_message():
+                return f"[Voice message: {attachment.filename}]"
+
+            # Type check
+            if not self._is_text_attachment(attachment):
+                return f"[Non-text file: {attachment.filename}]"
+
+            # Download with timeout
+            try:
+                content = await asyncio.wait_for(
+                    attachment.read(),
+                    timeout=10.0  # 10 second timeout
+                )
+            except asyncio.TimeoutError:
+                return f"[Download timeout: {attachment.filename}]"
+
+            # Decode
+            text = content.decode('utf-8', errors='replace')
+
+            # Truncate very long files
+            if len(text) > max_text_length:
+                text = text[:max_text_length - 3] + "..."
+
+            return f"[Attachment: {attachment.filename}]\n{text}"
+
+        except Exception as e:
+            print(f"[ATTACHMENT] Error processing {attachment.filename}: {e}")
+            return f"[Error reading: {attachment.filename}]"
+
+    async def _get_full_message_content(self, message: discord.Message) -> str:
+        """
+        Combine message text with any text attachments.
+
+        Returns:
+            Full message content including attachment text.
+        """
+        full_content = message.content
+
+        for attachment in message.attachments:
+            attachment_text = await self._extract_attachment_content(attachment)
+            if attachment_text:
+                full_content += f"\n{attachment_text}"
+
+        return full_content
+
     # ==================== Message Handling ====================
 
     async def on_message(self, message: discord.Message):
@@ -341,13 +474,20 @@ Keep it natural - just... be here.'''
             if not isinstance(message.channel, discord.DMChannel):
                 return
 
-        # Record ALL messages to SQLite
+        # Get full message content including any text attachments
         channel_name = getattr(message.channel, 'name', None) or f"dm:{message.author.id}"
+        full_content = await self._get_full_message_content(message)
+
+        # Log if attachments were processed
+        if message.attachments:
+            print(f"[ATTACHMENT] Processed {len(message.attachments)} attachment(s) from {message.author.display_name}")
+
+        # Record ALL messages to SQLite (with attachment content included)
         await self.conversation_manager.record_message(
             channel_id=message.channel.id,
             author_id=message.author.id,
             author_name=message.author.display_name,
-            content=message.content,
+            content=full_content,
             discord_message_id=message.id,
             is_bot=message.author.bot,
             channel=f"discord:{channel_name}",
@@ -358,12 +498,12 @@ Keep it natural - just... be here.'''
             await self.trace_logger.message_received(
                 author=message.author.display_name,
                 channel=f"discord:{channel_name}",
-                content_preview=message.content[:100] if message.content else "",
+                content_preview=full_content[:100] if full_content else "",
             )
 
-        # Send user message to Graphiti
+        # Send user message to Graphiti (with attachment content included)
         await self._send_to_graphiti(
-            content=f"{message.author.display_name}: {message.content}",
+            content=f"{message.author.display_name}: {full_content}",
             role="user",
             channel=f"discord:{channel_name}"
         )
@@ -774,22 +914,74 @@ Output ONLY your Discord response or HEARTBEAT_SKIP."""
         await super().close()
 
 
+def check_and_create_pidfile() -> bool:
+    """
+    Check if another daemon is running and create PID file.
+
+    Returns:
+        True if we can start (no other daemon running), False otherwise.
+    """
+    pidfile = Path(__file__).parent / "lyra_daemon.pid"
+
+    if pidfile.exists():
+        try:
+            old_pid = int(pidfile.read_text().strip())
+            # Check if process is still running
+            os.kill(old_pid, 0)  # Signal 0 = check if process exists
+            # Process exists - another daemon is running!
+            print(f"ERROR: Another daemon instance is already running (PID {old_pid})")
+            print(f"If this is stale, remove {pidfile} and try again.")
+            return False
+        except (ProcessLookupError, ValueError):
+            # Process doesn't exist or PID file is corrupt - safe to continue
+            print(f"Stale PID file found, removing...")
+            pidfile.unlink()
+        except PermissionError:
+            # Can't check process (different user?) - be safe and refuse
+            print(f"ERROR: Cannot verify if PID {old_pid} is running (permission denied)")
+            return False
+
+    # Create new PID file
+    pidfile.write_text(str(os.getpid()))
+    print(f"Created PID file: {pidfile} (PID {os.getpid()})")
+    return True
+
+
+def cleanup_pidfile():
+    """Remove PID file on shutdown."""
+    pidfile = Path(__file__).parent / "lyra_daemon.pid"
+    if pidfile.exists():
+        try:
+            pidfile.unlink()
+            print(f"Removed PID file: {pidfile}")
+        except Exception as e:
+            print(f"Warning: Could not remove PID file: {e}")
+
+
 async def main():
     """Main entry point."""
-    if not DISCORD_BOT_TOKEN:
-        print("Error: DISCORD_BOT_TOKEN not set")
+    # Check for duplicate daemon instance
+    if not check_and_create_pidfile():
+        print("Aborting: another daemon is already running.")
         return
 
-    if not DISCORD_CHANNEL_IDS:
-        print("Warning: DISCORD_CHANNEL_IDS not set, will respond in any channel")
-
-    bot = LyraBot()
-
     try:
-        await bot.start(DISCORD_BOT_TOKEN)
-    except KeyboardInterrupt:
-        print("\nShutting down...")
-        await bot.close()
+        if not DISCORD_BOT_TOKEN:
+            print("Error: DISCORD_BOT_TOKEN not set")
+            return
+
+        if not DISCORD_CHANNEL_IDS:
+            print("Warning: DISCORD_CHANNEL_IDS not set, will respond in any channel")
+
+        bot = LyraBot()
+
+        try:
+            await bot.start(DISCORD_BOT_TOKEN)
+        except KeyboardInterrupt:
+            print("\nShutting down...")
+            await bot.close()
+    finally:
+        cleanup_pidfile()
 
 
 if __name__ == "__main__":

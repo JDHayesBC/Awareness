@@ -4,11 +4,24 @@
 #
 # This script runs the daemons directly in the foreground.
 # Useful for WSL2 or debugging without systemd.
+#
+# WARNING: Stop systemd daemons first to avoid double-running!
+#   systemctl --user stop lyra-discord lyra-reflection
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+# Check if systemd daemons are running
+check_systemd_conflict() {
+    local service=$1
+    if systemctl --user is-active --quiet "$service" 2>/dev/null; then
+        echo "ERROR: $service is running via systemd!"
+        echo "Stop it first: systemctl --user stop $service"
+        exit 1
+    fi
+}
 
 # Load environment
 if [ -f .env ]; then
@@ -25,18 +38,22 @@ fi
 
 case "$DAEMON" in
     discord)
-        echo "Starting Discord daemon..."
-        python3 -u lyra_discord.py
+        check_systemd_conflict "lyra-discord"
+        echo "Starting Discord daemon (lyra_daemon.py)..."
+        python3 -u lyra_daemon.py
         ;;
     reflection)
+        check_systemd_conflict "lyra-reflection"
         echo "Starting Reflection daemon..."
         python3 -u lyra_reflection.py
         ;;
     both)
+        check_systemd_conflict "lyra-discord"
+        check_systemd_conflict "lyra-reflection"
         echo "Starting both daemons in background..."
         echo "Discord logs: discord.log"
         echo "Reflection logs: reflection.log"
-        python3 -u lyra_discord.py > discord.log 2>&1 &
+        python3 -u lyra_daemon.py > discord.log 2>&1 &
         DISCORD_PID=$!
         echo "Discord PID: $DISCORD_PID"
 
@@ -60,6 +77,9 @@ case "$DAEMON" in
         echo "  discord     - Run Discord daemon in foreground"
         echo "  reflection  - Run Reflection daemon in foreground"
         echo "  both        - Run both daemons in background"
+        echo ""
+        echo "NOTE: Uses lyra_daemon.py (production) for Discord."
+        echo "      Stop systemd services first to avoid conflicts."
         exit 1
         ;;
 esac

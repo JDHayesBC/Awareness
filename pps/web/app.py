@@ -1242,25 +1242,112 @@ async def reflections(request: Request, hours: int = 24):
     })
 
 
+def enrich_discord_sessions(sessions: list) -> list:
+    """Enrich Discord sessions with trace data (metrics, message info)."""
+    conn = get_db_connection()
+    if not conn:
+        return sessions
+
+    try:
+        import json
+        cursor = conn.cursor()
+        for session in sessions:
+            session_id = session["session_id"]
+
+            # Get message info from first message_received event
+            cursor.execute("""
+                SELECT event_data FROM daemon_traces
+                WHERE session_id = ? AND event_type = 'message_received'
+                ORDER BY timestamp ASC LIMIT 1
+            """, (session_id,))
+            row = cursor.fetchone()
+            if row and row["event_data"]:
+                data = json.loads(row["event_data"])
+                session["channel"] = data.get("channel", "unknown")
+                session["author"] = data.get("author", "unknown")
+                session["message_content"] = data.get("content_preview", "")[:100]
+            else:
+                session["channel"] = "unknown"
+                session["author"] = "unknown"
+                session["message_content"] = ""
+
+            # Get API call metrics
+            cursor.execute("""
+                SELECT event_data, duration_ms FROM daemon_traces
+                WHERE session_id = ? AND event_type = 'api_call_complete'
+                ORDER BY timestamp DESC LIMIT 1
+            """, (session_id,))
+            row = cursor.fetchone()
+            if row:
+                data = json.loads(row["event_data"]) if row["event_data"] else {}
+                session["api_time"] = row["duration_ms"] or 0
+                session["context_tokens"] = data.get("tokens_in", 0)
+                session["response_tokens"] = data.get("tokens_out", 0)
+            else:
+                session["api_time"] = 0
+                session["context_tokens"] = 0
+                session["response_tokens"] = 0
+
+            # Identity load time
+            cursor.execute("""
+                SELECT duration_ms FROM daemon_traces
+                WHERE session_id = ? AND event_type = 'identity_reconstruction_complete'
+                LIMIT 1
+            """, (session_id,))
+            row = cursor.fetchone()
+            session["identity_load_time"] = row["duration_ms"] if row and row["duration_ms"] else 0
+
+            # Processing time from session span
+            session["processing_time"] = 0
+            if session.get("started_at") and session.get("ended_at"):
+                try:
+                    start = datetime.fromisoformat(session["started_at"].replace("Z", "+00:00"))
+                    end = datetime.fromisoformat(session["ended_at"].replace("Z", "+00:00"))
+                    session["processing_time"] = int((end - start).total_seconds() * 1000)
+                except:
+                    pass
+
+            # Format timestamp for display (convert UTC to readable)
+            if session.get("started_at"):
+                session["timestamp"] = session["started_at"][:19].replace("T", " ")
+
+            session["trace_events"] = []
+        conn.close()
+    except Exception:
+        for session in sessions:
+            session.setdefault("channel", "unknown")
+            session.setdefault("author", "unknown")
+            session.setdefault("message_content", "")
+            session.setdefault("processing_time", 0)
+            session.setdefault("identity_load_time", 0)
+            session.setdefault("context_tokens", 0)
+            session.setdefault("api_time", 0)
+            session.setdefault("response_tokens", 0)
+            session.setdefault("trace_events", [])
+
+    return sessions
+
+
 @app.get("/discord", response_class=HTMLResponse)
 async def discord(request: Request, hours: int = 24, channel: Optional[str] = None):
     """Discord processing viewer."""
-    # Get Discord sessions from daemon_traces
+    # Get and enrich Discord sessions
     sessions = get_daemon_sessions(daemon_type="discord", hours=hours)
-    
+    sessions = enrich_discord_sessions(sessions)
+
     # Get daemon status info
     daemon_status = "unknown"
     last_message_time = None
     messages_today = 0
-    
+
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
             # Check last Discord message
             cursor.execute("""
-                SELECT created_at FROM messages 
-                WHERE channel LIKE 'discord:%' 
+                SELECT created_at FROM messages
+                WHERE channel LIKE 'discord:%'
                 ORDER BY created_at DESC LIMIT 1
             """)
             row = cursor.fetchone()
@@ -1273,19 +1360,19 @@ async def discord(request: Request, hours: int = 24, channel: Optional[str] = No
                     daemon_status = "online"
                 else:
                     daemon_status = "idle"
-            
+
             # Count today's messages
             today = datetime.now().strftime("%Y-%m-%d")
             cursor.execute("""
-                SELECT COUNT(*) as count FROM messages 
+                SELECT COUNT(*) as count FROM messages
                 WHERE channel LIKE 'discord:%' AND created_at >= ?
             """, (today,))
             messages_today = cursor.fetchone()["count"]
-            
+
             conn.close()
         except:
             pass
-    
+
     return templates.TemplateResponse("discord.html", {
         "request": request,
         "sessions": sessions,
@@ -1300,6 +1387,88 @@ async def heartbeat_redirect(request: Request):
     """Redirect old heartbeat URL to reflections."""
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/reflections", status_code=301)
+
+
+@app.get("/discord/sessions", response_class=HTMLResponse)
+async def discord_sessions_partial(request: Request, hours: int = 24, channel: Optional[str] = None):
+    """Return HTML partial for Discord sessions list (for HTMX refresh)."""
+    sessions = get_daemon_sessions(daemon_type="discord", hours=hours)
+    sessions = enrich_discord_sessions(sessions)
+
+    # Render just the sessions list HTML
+    if not sessions:
+        return HTMLResponse("""
+            <div class="bg-gray-700 rounded-lg p-8 text-center">
+                <p class="text-gray-400">No Discord sessions found in the selected time range.</p>
+                <p class="text-sm text-gray-500 mt-2">Discord processing traces will appear here when messages are processed.</p>
+            </div>
+        """)
+
+    html_parts = []
+    for session in sessions:
+        timestamp = session.get("started_at", "")[:19].replace("T", " ") if session.get("started_at") else ""
+        session_id = session.get('session_id', '')
+        processing_time_sec = round(session.get('processing_time', 0) / 1000, 1)
+        message_content = session.get('message_content', '') or '(empty)'
+
+        html_parts.append(f"""
+        <div class="bg-gray-700 rounded-lg p-4 border-l-4 border-purple-500">
+            <div class="flex justify-between items-start mb-3">
+                <div>
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="text-xs bg-purple-600 px-2 py-0.5 rounded">Context Window</span>
+                        <span class="text-xs text-gray-500">{session_id[:8]}</span>
+                    </div>
+                    <h3 class="font-semibold">{timestamp}</h3>
+                    <p class="text-sm text-gray-400">
+                        Channel: {session.get('channel', 'unknown')} |
+                        Triggered by: {session.get('author', 'unknown')}
+                    </p>
+                </div>
+                <div class="text-right">
+                    <span class="text-xs text-gray-500">Session duration</span>
+                    <p class="text-sm text-gray-400">{processing_time_sec}s</p>
+                </div>
+            </div>
+
+            <div class="bg-gray-800 rounded p-3 mb-3">
+                <p class="text-sm font-medium text-purple-300 mb-1">Wake-up Message (first message in this context):</p>
+                <p class="text-sm text-gray-300">{message_content}</p>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-3">
+                <div class="bg-gray-800 rounded px-3 py-2">
+                    <p class="text-gray-400 text-xs">Identity Reconstruction</p>
+                    <p class="font-semibold">{session.get('identity_load_time', 0)}ms</p>
+                </div>
+                <div class="bg-gray-800 rounded px-3 py-2">
+                    <p class="text-gray-400 text-xs">Context Sent to Model</p>
+                    <p class="font-semibold">{session.get('context_tokens', 0)} tokens</p>
+                </div>
+                <div class="bg-gray-800 rounded px-3 py-2">
+                    <p class="text-gray-400 text-xs">Model Response Time</p>
+                    <p class="font-semibold">{session.get('api_time', 0)}ms</p>
+                </div>
+                <div class="bg-gray-800 rounded px-3 py-2">
+                    <p class="text-gray-400 text-xs">Response Generated</p>
+                    <p class="font-semibold">{session.get('response_tokens', 0)} tokens</p>
+                </div>
+            </div>
+
+            <button class="text-blue-400 hover:text-blue-300 text-sm"
+                    onclick="toggleTrace('{session_id}')">
+                View Processing Timeline →
+            </button>
+
+            <div id="trace-{session_id}" class="hidden mt-4">
+                <div class="bg-gray-800 rounded p-4 text-xs text-gray-400">
+                    Loading timeline...
+                </div>
+            </div>
+        </div>
+        """)
+
+    return HTMLResponse("\n".join(html_parts))
 
 
 # API endpoints for new reflection/discord pages
@@ -1379,19 +1548,99 @@ async def api_reflection_trace(session_id: str):
 async def api_discord(hours: int = 24, channel: Optional[str] = None):
     """Get Discord processing sessions."""
     sessions = get_daemon_sessions(daemon_type="discord", hours=hours)
-    
-    # Add placeholder fields (would come from actual trace data)
-    for session in sessions:
-        session["channel"] = "general"  # Would extract from trace
-        session["author"] = "User"  # Would extract from trace
-        session["message_content"] = "Message content would appear here..."
-        session["processing_time"] = 250
-        session["identity_load_time"] = 50
-        session["context_tokens"] = 48000
-        session["api_time"] = 180
-        session["response_tokens"] = 1200
-        session["trace_events"] = []  # Would populate from traces
-    
+
+    # Enrich each session with actual trace data
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            for session in sessions:
+                session_id = session["session_id"]
+
+                # Get message info from first message_received event
+                cursor.execute("""
+                    SELECT event_data FROM daemon_traces
+                    WHERE session_id = ? AND event_type = 'message_received'
+                    ORDER BY timestamp ASC LIMIT 1
+                """, (session_id,))
+                row = cursor.fetchone()
+                if row and row["event_data"]:
+                    import json
+                    data = json.loads(row["event_data"])
+                    session["channel"] = data.get("channel", "unknown")
+                    session["author"] = data.get("author", "unknown")
+                    session["message_content"] = data.get("content_preview", "")[:100]
+                else:
+                    session["channel"] = "unknown"
+                    session["author"] = "unknown"
+                    session["message_content"] = ""
+
+                # Get API call metrics
+                cursor.execute("""
+                    SELECT event_data, duration_ms FROM daemon_traces
+                    WHERE session_id = ? AND event_type = 'api_call_complete'
+                    ORDER BY timestamp DESC LIMIT 1
+                """, (session_id,))
+                row = cursor.fetchone()
+                if row:
+                    data = json.loads(row["event_data"]) if row["event_data"] else {}
+                    session["api_time"] = row["duration_ms"] or 0
+                    session["context_tokens"] = data.get("tokens_in", 0)
+                    session["response_tokens"] = data.get("tokens_out", 0)
+                else:
+                    session["api_time"] = 0
+                    session["context_tokens"] = 0
+                    session["response_tokens"] = 0
+
+                # Get identity load time (from identity_reconstruction_complete event)
+                cursor.execute("""
+                    SELECT duration_ms FROM daemon_traces
+                    WHERE session_id = ? AND event_type = 'identity_reconstruction_complete'
+                    LIMIT 1
+                """, (session_id,))
+                row = cursor.fetchone()
+                session["identity_load_time"] = row["duration_ms"] if row and row["duration_ms"] else 0
+
+                # Calculate total processing time from session span
+                session["processing_time"] = 0
+                if session.get("started_at") and session.get("ended_at"):
+                    from datetime import datetime
+                    try:
+                        start = datetime.fromisoformat(session["started_at"].replace("Z", "+00:00"))
+                        end = datetime.fromisoformat(session["ended_at"].replace("Z", "+00:00"))
+                        session["processing_time"] = int((end - start).total_seconds() * 1000)
+                    except:
+                        pass
+
+                # Get recent trace events for this session
+                cursor.execute("""
+                    SELECT timestamp, event_type, event_data, duration_ms FROM daemon_traces
+                    WHERE session_id = ?
+                    ORDER BY timestamp DESC LIMIT 10
+                """, (session_id,))
+                session["trace_events"] = [
+                    {
+                        "timestamp": r["timestamp"],
+                        "event_type": r["event_type"],
+                        "duration_ms": r["duration_ms"],
+                        "data": json.loads(r["event_data"]) if r["event_data"] else {}
+                    }
+                    for r in cursor.fetchall()
+                ]
+            conn.close()
+        except Exception as e:
+            # Fall back to defaults on error
+            for session in sessions:
+                session.setdefault("channel", "unknown")
+                session.setdefault("author", "unknown")
+                session.setdefault("message_content", "")
+                session.setdefault("processing_time", 0)
+                session.setdefault("identity_load_time", 0)
+                session.setdefault("context_tokens", 0)
+                session.setdefault("api_time", 0)
+                session.setdefault("response_tokens", 0)
+                session.setdefault("trace_events", [])
+
     return {"sessions": sessions}
 
 
@@ -1399,7 +1648,7 @@ async def api_discord(hours: int = 24, channel: Optional[str] = None):
 async def api_discord_trace(session_id: str):
     """Get detailed trace for a Discord session."""
     traces = get_session_traces(session_id)
-    
+
     # Format events for display
     events = []
     for trace in traces:
@@ -1408,7 +1657,26 @@ async def api_discord_trace(session_id: str):
             "event_type": trace["event_type"],
             "details": trace.get("event_data", {}).get("summary", "")
         })
-    
+
+    return {"session_id": session_id, "events": events}
+
+
+@app.get("/api/discord/trace/{session_id}/detailed")
+async def api_discord_trace_detailed(session_id: str):
+    """Get detailed trace with full event data for a Discord session."""
+    traces = get_session_traces(session_id)
+
+    # Return events with full data for rich frontend rendering
+    events = []
+    for trace in traces:
+        events.append({
+            "id": trace.get("id"),
+            "timestamp": trace["timestamp"],
+            "event_type": trace["event_type"],
+            "duration_ms": trace.get("duration_ms"),
+            "data": trace.get("event_data", {})
+        })
+
     return {"session_id": session_id, "events": events}
 
 

@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
 """
+DEPRECATED: Use lyra_daemon.py instead!
+
+This file is preserved for reference but should NOT be run in production.
+The production Discord daemon is lyra_daemon.py which uses ClaudeInvoker
+for persistent connections and better performance.
+
+If you're seeing this in a stack trace, you're running the wrong daemon.
+Stop this and start the correct one:
+  - Production: systemctl --user start lyra-discord
+  - Testing: ./run.sh discord (now uses lyra_daemon.py)
+
+--- Original docstring below ---
+
 Lyra Discord Daemon - Discord presence with conversation handling.
 
 This daemon handles:
@@ -16,6 +29,12 @@ Uses --resume <sessionId> with per-channel session IDs to maintain
 separate conversation contexts. This allows Discord to run independently
 of other Lyra daemons.
 """
+import warnings
+warnings.warn(
+    "lyra_discord.py is DEPRECATED. Use lyra_daemon.py instead!",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 import asyncio
 import os

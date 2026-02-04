@@ -74,3 +74,4 @@ tools/google_oauth_credentials.txt
 tools/jeff-gmail-mcp/venv/
 pps/venv/
 delve (old work from steve)/
+daemon/lyra_daemon.pid

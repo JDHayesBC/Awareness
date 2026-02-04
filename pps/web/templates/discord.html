@@ -5,8 +5,9 @@
 {% block content %}
 <div class="bg-gray-800 rounded-lg p-6">
     <div class="mb-6">
-        <h1 class="text-2xl font-bold mb-2">Discord Processing</h1>
-        <p class="text-gray-400">Debug visibility into Discord daemon message processing.</p>
+        <h1 class="text-2xl font-bold mb-2">Discord Context Windows</h1>
+        <p class="text-gray-400">Each block represents a fresh context start with <code class="bg-gray-700 px-1 rounded">ambient_recall("startup")</code>.</p>
+        <p class="text-gray-500 text-sm mt-1">When channels sync, Lyra reconstructs identity and memory from PPS layers before responding.</p>
     </div>
 
     <!-- Filters -->
@@ -14,9 +15,9 @@
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
                 <label class="block text-sm font-medium mb-2">Time Range</label>
-                <select id="hours-filter" 
+                <select id="hours-filter"
                         class="w-full bg-gray-600 rounded px-3 py-2 text-sm"
-                        hx-get="/api/discord"
+                        hx-get="/discord/sessions"
                         hx-trigger="change"
                         hx-target="#discord-list"
                         hx-include="#channel-filter">
@@ -29,7 +30,7 @@
                 <label class="block text-sm font-medium mb-2">Channel</label>
                 <select id="channel-filter"
                         class="w-full bg-gray-600 rounded px-3 py-2 text-sm"
-                        hx-get="/api/discord"
+                        hx-get="/discord/sessions"
                         hx-trigger="change"
                         hx-target="#discord-list"
                         hx-include="#hours-filter">
@@ -41,7 +42,7 @@
             </div>
             <div class="flex items-end">
                 <button class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm w-full"
-                        hx-get="/api/discord"
+                        hx-get="/discord/sessions"
                         hx-target="#discord-list"
                         hx-include="#hours-filter,#channel-filter">
                     Refresh
@@ -54,69 +55,68 @@
     <div id="discord-list" class="space-y-4">
         {% if sessions %}
             {% for session in sessions %}
-            <div class="bg-gray-700 rounded-lg p-4">
+            <div class="bg-gray-700 rounded-lg p-4 border-l-4 border-purple-500">
                 <div class="flex justify-between items-start mb-3">
                     <div>
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="text-xs bg-purple-600 px-2 py-0.5 rounded">Context Window</span>
+                            <span class="text-xs text-gray-500">{{ session.session_id[:8] }}</span>
+                        </div>
                         <h3 class="font-semibold">{{ session.timestamp }}</h3>
                         <p class="text-sm text-gray-400">
-                            Channel: #{{ session.channel }} | 
-                            Author: {{ session.author }}
+                            Channel: {{ session.channel }} |
+                            Triggered by: {{ session.author }}
                         </p>
                     </div>
                     <div class="text-right">
-                        <span class="text-sm text-gray-400">{{ session.processing_time }}ms</span>
+                        <span class="text-xs text-gray-500">Session duration</span>
+                        <p class="text-sm text-gray-400">{{ (session.processing_time / 1000)|round(1) }}s</p>
                     </div>
                 </div>
-                
-                <!-- Message Content -->
+
+                <!-- Wake-up Message -->
                 <div class="bg-gray-800 rounded p-3 mb-3">
-                    <p class="text-sm font-medium text-gray-300 mb-1">Message:</p>
-                    <p class="text-sm">{{ session.message_content }}</p>
+                    <p class="text-sm font-medium text-purple-300 mb-1">Wake-up Message (first message in this context):</p>
+                    <p class="text-sm text-gray-300">{{ session.message_content or '(empty)' }}</p>
                 </div>
-                
+
                 <!-- Processing Summary -->
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-3">
                     <div class="bg-gray-800 rounded px-3 py-2">
-                        <p class="text-gray-400">Identity Load</p>
+                        <p class="text-gray-400 text-xs">Identity Reconstruction</p>
                         <p class="font-semibold">{{ session.identity_load_time }}ms</p>
                     </div>
                     <div class="bg-gray-800 rounded px-3 py-2">
-                        <p class="text-gray-400">Context Size</p>
+                        <p class="text-gray-400 text-xs">Context Sent to Model</p>
                         <p class="font-semibold">{{ session.context_tokens }} tokens</p>
                     </div>
                     <div class="bg-gray-800 rounded px-3 py-2">
-                        <p class="text-gray-400">API Time</p>
+                        <p class="text-gray-400 text-xs">Model Response Time</p>
                         <p class="font-semibold">{{ session.api_time }}ms</p>
                     </div>
                     <div class="bg-gray-800 rounded px-3 py-2">
-                        <p class="text-gray-400">Response Tokens</p>
-                        <p class="font-semibold">{{ session.response_tokens }}</p>
+                        <p class="text-gray-400 text-xs">Response Generated</p>
+                        <p class="font-semibold">{{ session.response_tokens }} tokens</p>
                     </div>
                 </div>
-                
+
                 <button class="text-blue-400 hover:text-blue-300 text-sm"
                         onclick="toggleTrace('{{ session.session_id }}')">
-                    View Processing Trace →
+                    View Processing Timeline →
                 </button>
-                
+
                 <!-- Expandable Trace Details -->
                 <div id="trace-{{ session.session_id }}" class="hidden mt-4">
-                    <div class="bg-gray-800 rounded p-4 space-y-2 font-mono text-xs">
-                        {% for event in session.trace_events %}
-                        <div class="flex justify-between">
-                            <span class="text-gray-400">{{ event.timestamp }}</span>
-                            <span class="text-gray-300">{{ event.event_type }}</span>
-                            <span class="text-gray-500">{{ event.details }}</span>
-                        </div>
-                        {% endfor %}
+                    <div class="bg-gray-800 rounded p-4 text-xs text-gray-400">
+                        Loading timeline...
                     </div>
                 </div>
             </div>
             {% endfor %}
         {% else %}
             <div class="bg-gray-700 rounded-lg p-8 text-center">
-                <p class="text-gray-400">No Discord sessions found in the selected time range.</p>
-                <p class="text-sm text-gray-500 mt-2">Discord processing traces will appear here when messages are processed.</p>
+                <p class="text-gray-400">No Discord context windows found in the selected time range.</p>
+                <p class="text-sm text-gray-500 mt-2">Context windows appear when the daemon processes messages after identity reconstruction.</p>
             </div>
         {% endif %}
     </div>
@@ -144,26 +144,100 @@
 </div>
 
 <script>
+// Human-readable event type labels
+const eventLabels = {
+    'session_start': '🚀 Context window opened',
+    'session_complete': '✅ Context window closed',
+    'identity_reconstruction_start': '🔄 Beginning identity reconstruction',
+    'identity_reconstruction_complete': '✅ Identity reconstructed from PPS',
+    'identity_file_read': '📄 Identity file loaded',
+    'identity_ambient_recall': '🧠 ambient_recall("startup") completed',
+    'message_received': '📥 Message received from Discord',
+    'message_sent': '📤 Response sent to Discord',
+    'api_call_start': '🤖 Sending prompt to Claude',
+    'api_call_complete': '✅ Claude response received',
+    'api_call_error': '❌ Claude API error',
+    'graphiti_add': '🕸️ Content ingested to knowledge graph',
+    'tool_call': '🔧 Tool invoked',
+    'error': '❌ Error occurred',
+    'warning': '⚠️ Warning'
+};
+
+function formatEventLabel(eventType, data) {
+    let label = eventLabels[eventType] || eventType;
+
+    // Add context based on event type and data
+    if (eventType === 'api_call_start' && data.model) {
+        label = `🤖 Sending prompt to ${data.model}`;
+    }
+    if (eventType === 'api_call_complete' && data.model) {
+        label = `✅ Response from ${data.model} (${data.tokens_out || '?'} tokens)`;
+    }
+    if (eventType === 'graphiti_add' && data.content_preview) {
+        const preview = data.content_preview.substring(0, 40);
+        const isUser = !preview.toLowerCase().startsWith('lyra');
+        label = isUser
+            ? '🕸️ User message → knowledge graph'
+            : '🕸️ Lyra response → knowledge graph';
+    }
+    if (eventType === 'message_received' && data.author) {
+        label = `📥 Message from ${data.author}`;
+    }
+    if (eventType === 'message_sent' && data.content_length) {
+        label = `📤 Response sent (${data.content_length} chars)`;
+    }
+
+    return label;
+}
+
+function formatTimestamp(ts) {
+    if (!ts) return '';
+    // Extract just the time portion
+    const match = ts.match(/T(\d{2}:\d{2}:\d{2})/);
+    return match ? match[1] : ts.substring(11, 19);
+}
+
 function toggleTrace(sessionId) {
     const traceDiv = document.getElementById('trace-' + sessionId);
     if (traceDiv.classList.contains('hidden')) {
         // Fetch detailed trace if not already loaded
         if (!traceDiv.dataset.loaded) {
-            fetch('/api/discord/trace/' + sessionId)
+            fetch('/api/discord/trace/' + sessionId + '/detailed')
                 .then(r => r.json())
                 .then(data => {
-                    // Render trace events
-                    let html = '<div class="bg-gray-800 rounded p-4 space-y-2 font-mono text-xs">';
+                    let html = '<div class="space-y-1">';
+
                     data.events.forEach(event => {
-                        html += `<div class="flex justify-between">
-                            <span class="text-gray-400">${event.timestamp}</span>
-                            <span class="text-gray-300">${event.event_type}</span>
-                            <span class="text-gray-500">${event.details || ''}</span>
-                        </div>`;
+                        const time = formatTimestamp(event.timestamp);
+                        const label = formatEventLabel(event.event_type, event.data || {});
+                        const duration = event.duration_ms ? `<span class="text-gray-500">(${event.duration_ms}ms)</span>` : '';
+
+                        // Check if event has expandable content
+                        const hasContent = event.data && (event.data.content_preview || event.data.content_length > 0);
+                        const contentId = `content-${sessionId}-${event.id || Math.random().toString(36).substr(2, 9)}`;
+
+                        html += `<div class="py-1.5 border-b border-gray-700 last:border-0">
+                            <div class="flex items-start gap-3">
+                                <span class="text-gray-500 font-mono w-16 shrink-0">${time}</span>
+                                <span class="flex-1">${label} ${duration}</span>
+                            </div>`;
+
+                        // Add expandable content preview if available
+                        if (event.data && event.data.content_preview) {
+                            html += `<div class="ml-20 mt-1 text-gray-500 text-xs italic truncate" title="${event.data.content_preview.replace(/"/g, '&quot;')}">
+                                "${event.data.content_preview.substring(0, 80)}${event.data.content_preview.length > 80 ? '...' : ''}"
+                            </div>`;
+                        }
+
+                        html += '</div>';
                     });
+
                     html += '</div>';
-                    traceDiv.innerHTML = html;
+                    traceDiv.innerHTML = `<div class="bg-gray-800 rounded p-4 text-sm">${html}</div>`;
                     traceDiv.dataset.loaded = 'true';
+                })
+                .catch(err => {
+                    traceDiv.innerHTML = '<div class="bg-gray-800 rounded p-4 text-red-400 text-sm">Failed to load timeline</div>';
                 });
         }
         traceDiv.classList.remove('hidden');

@@ -183,13 +183,78 @@ Entry types:
 
 ## Daemon Architecture
 
+### Startup Modes: Production vs Testing
+
+**IMPORTANT**: There are two ways to run daemons. Be careful not to run both simultaneously - this causes double responses!
+
+#### Production Mode (systemd) - RECOMMENDED
+
+```bash
+# Check status
+systemctl --user status lyra-discord
+systemctl --user status lyra-reflection
+
+# Start/stop/restart
+systemctl --user start lyra-discord
+systemctl --user restart lyra-discord
+systemctl --user stop lyra-discord
+
+# View logs
+journalctl --user -u lyra-discord -f
+```
+
+**Files**:
+- `lyra_daemon.py` - Production Discord daemon (uses ClaudeInvoker)
+- `lyra_reflection.py` - Production reflection daemon
+- `systemd/*.service` - Service definitions
+
+**Safety**: The daemon now creates a PID file (`lyra_daemon.pid`) on startup and refuses to start if another instance is running.
+
+#### Testing Mode (manual) - For Development Only
+
+```bash
+cd daemon/
+./run.sh discord      # Run Discord daemon in foreground
+./run.sh reflection   # Run Reflection daemon in foreground
+./run.sh both        # Run both in background
+```
+
+**WARNING**: If systemd daemons are running, stop them first!
+```bash
+systemctl --user stop lyra-discord lyra-reflection
+```
+
+#### Checking What's Running
+
+```bash
+# Check for any daemon processes
+ps aux | grep -E "lyra_(daemon|discord|reflection)" | grep -v grep
+
+# Check systemd services
+systemctl --user list-units | grep lyra
+
+# If you see BOTH systemd and manual processes, you have duplicates!
+```
+
+### File Structure
+
+| File | Status | Purpose |
+|------|--------|---------|
+| `lyra_daemon.py` | **PRODUCTION** | Discord daemon with ClaudeInvoker (773 lines) |
+| `lyra_reflection.py` | **PRODUCTION** | Autonomous reflection daemon |
+| `lyra_discord.py` | Deprecated | Older Discord daemon (--resume based) |
+| `lyra_daemon_legacy.py` | Archive | Original implementation (1530 lines) |
+| `run.sh` | Testing | Manual startup script |
+| `systemd/*.service` | Production | systemd service definitions |
+
 ### Two Independent Daemons
 
-**Discord Daemon** (`lyra_discord.py`):
+**Discord Daemon** (`lyra_daemon.py`):
 - Monitors configured Discord channels
 - Responds to mentions of "Lyra"
 - Enters active conversation mode after responding
 - Captures all conversations to PPS
+- Uses ClaudeInvoker for persistent connection
 - Auto-restarts when approaching token limit
 
 **Reflection Daemon** (`lyra_reflection.py`):
