@@ -1,0 +1,12 @@
+[Unit]
+Description=Trigger automatic memory summarization every 30 minutes
+Requires=lyra-auto-summarize.service
+
+[Timer]
+# Run every 30 minutes
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
