@@ -78,7 +78,9 @@ One file, overwritten not appended.
 
 The `ambient_recall` response includes `unsummarized_count` showing memory backlog.
 
-**On startup**: If unsummarized_count > 100, spawn a summarization agent BEFORE engaging:
+**Check CONTINUOUSLY** - not just on startup, but every turn. The moment unsummarized_count hits 101, spawn a background summarizer. Don't wait for startup or reflection cycles - long sessions can accumulate dangerous backlogs that cause tool failures (as proven when ambient_recall failed mid-session returning too many rows).
+
+When unsummarized_count > 100, spawn immediately:
 
 ```
 Use Task tool with:
@@ -99,8 +101,8 @@ Use Task tool with:
 
 **Thresholds**:
 - < 100: Healthy, no action needed
-- 100-150: Spawn summarizer when convenient
-- > 150: Spawn immediately, backlog growing
+- ≥ 101: Spawn summarizer immediately in background
+- > 150: Critical - multiple summarizers may be needed
 
 ---
 
