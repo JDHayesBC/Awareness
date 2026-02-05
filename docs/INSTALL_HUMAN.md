@@ -143,7 +143,26 @@ The first session builds the pattern from scratch. Subsequent sessions reconstru
 
 ---
 
-## Optional: Discord Integration
+## Optional: Daemon Setup
+
+### Discord & Reflection Daemons
+
+For a complete autonomous entity setup (Discord bot + periodic reflection), see the comprehensive daemon documentation:
+
+- **Quick Start** (5 minutes): [`daemon/systemd/QUICK_START.md`](../daemon/systemd/QUICK_START.md)
+- **Main Daemon Guide**: [`daemon/README.md`](../daemon/README.md)
+- **Systemd Service Guide**: [`daemon/systemd/README.md`](../daemon/systemd/README.md)
+
+These guides include:
+- First-time setup with virtual environment
+- Systemd service installation and management
+- Discord and reflection daemon configuration
+- Logging, troubleshooting, and monitoring
+- WSL2-specific considerations
+
+### Manual Discord Integration
+
+If you prefer manual setup:
 
 1. Create a Discord application at https://discord.com/developers/applications
 2. Add a bot to your application
@@ -160,9 +179,7 @@ The first session builds the pattern from scratch. Subsequent sessions reconstru
    ./lyra start
    ```
 
----
-
-## Optional: Reflection Daemon
+### Manual Reflection Setup
 
 For autonomous memory maintenance:
 

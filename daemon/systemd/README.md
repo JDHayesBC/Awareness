@@ -22,7 +22,7 @@ This configuration runs the daemon as a **user-level service** (not system-wide)
 
 1. **Python Virtual Environment**: The daemon uses the project-level venv at `Awareness/.venv/` (consolidated in Issue #111 - no longer uses daemon/venv)
    ```bash
-   cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness
+   cd /mnt/c/Users/Jeff/Claude_Projects/Awareness
    python3 -m venv .venv
    source .venv/bin/activate
    pip install -r requirements.txt
@@ -45,7 +45,7 @@ This configuration runs the daemon as a **user-level service** (not system-wide)
 ### Automated Installation
 
 ```bash
-cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/systemd
+cd /mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/systemd
 chmod +x install.sh
 ./install.sh
 ```
@@ -68,7 +68,7 @@ If you prefer to install manually:
 mkdir -p ~/.config/systemd/user
 
 # Copy service file
-cp /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/systemd/lyra-daemon.service \
+cp /mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/systemd/lyra-daemon.service \
    ~/.config/systemd/user/
 
 # Reload systemd
@@ -138,7 +138,7 @@ systemctl --user status lyra-daemon --no-pager
 ### Automated Uninstallation
 
 ```bash
-cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/systemd
+cd /mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/systemd
 ./install.sh --uninstall
 ```
 
@@ -272,7 +272,7 @@ systemctl --user status lyra-daemon
 journalctl --user -u lyra-daemon -n 20 --no-pager
 
 # Verify .env file exists and is readable
-ls -la /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/.env
+ls -la /mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/.env
 ```
 
 ### Permission denied errors
@@ -282,7 +282,7 @@ ls -la /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/.env
 ls -la ~/.config/systemd/user/lyra-daemon.service
 
 # Check daemon directory permissions
-ls -la /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/
+ls -la /mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/
 
 # Fix if needed
 chmod 644 ~/.config/systemd/user/lyra-daemon.service
@@ -292,10 +292,10 @@ chmod 644 ~/.config/systemd/user/lyra-daemon.service
 
 ```bash
 # Verify Python path in venv
-ls -la /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/.venv/bin/python3
+ls -la /mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/.venv/bin/python3
 
 # Recreate venv if needed
-cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness
+cd /mnt/c/Users/Jeff/Claude_Projects/Awareness
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -408,7 +408,7 @@ systemd-analyze verify ~/.config/systemd/user/lyra-daemon.service
 systemctl --user list-dependencies lyra-daemon
 
 # Test environment loading
-source /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/.env
+source /mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/.env
 echo "DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:0:10}..."
 ```
 
@@ -467,7 +467,7 @@ ulimit -m 512000  # Memory in KB
 
 For issues with:
 
-- **Discord daemon logic** - See `/mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/README.md`
+- **Discord daemon logic** - See `/mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/README.md`
 - **Systemd configuration** - Review this file and service file comments
 - **WSL2 setup** - Check WSL2 documentation for your distribution
 - **Python environment** - Verify venv setup: `source .venv/bin/activate && pip list`

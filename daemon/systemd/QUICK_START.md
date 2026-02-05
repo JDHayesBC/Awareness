@@ -6,7 +6,7 @@
 
 ```bash
 # Ensure you have Python venv set up
-cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon
+cd /mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon
 ls -la venv/bin/python3
 
 # Ensure you have .env configured
@@ -17,7 +17,7 @@ cat .env | grep DISCORD_BOT_TOKEN
 
 ```bash
 # Navigate to systemd directory
-cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/systemd
+cd /mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/systemd
 
 # Make install script executable
 chmod +x install.sh
@@ -102,7 +102,7 @@ journalctl --user -u lyra-daemon --no-pager | grep -i restart
 ### Want to reconfigure?
 ```bash
 # Edit .env file
-vim /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/.env
+vim /mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/.env
 
 # Restart service to load new values
 systemctl --user restart lyra-daemon
@@ -114,7 +114,7 @@ journalctl --user -u lyra-daemon -n 5
 ## Uninstall
 
 ```bash
-cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/systemd
+cd /mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/systemd
 ./install.sh --uninstall
 ```
 

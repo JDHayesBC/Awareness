@@ -45,13 +45,13 @@ BACKUP_SOURCES = {
     # ChromaDB (rebuildable from word-photos on disk)
     "chromadb": {
         "path": PROJECT_ROOT / "docker" / "pps" / "chromadb_data",
-        "patterns": ["*"],
+        "patterns": ["**/*"],
         "critical": False,
     },
     # Neo4j/Graphiti (rebuildable from raw messages)
     "neo4j": {
         "path": PROJECT_ROOT / "docker" / "pps" / "neo4j_data",
-        "patterns": ["*"],
+        "patterns": ["**/*"],
         "critical": False,
     },
     # Entity identity files (also in git, but belt & suspenders)

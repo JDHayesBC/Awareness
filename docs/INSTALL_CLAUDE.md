@@ -118,9 +118,25 @@ For migrating an existing entity (e.g., from another platform):
 
 ---
 
-## Optional: Discord Integration
+## Optional: Daemon Setup
 
-If you want the entity present on Discord:
+### Discord & Reflection Daemons
+
+For a full autonomous entity presence (Discord bot + periodic reflection), see the daemon-specific documentation:
+
+- **Quick Setup** (5 minutes): [`daemon/systemd/QUICK_START.md`](../daemon/systemd/QUICK_START.md)
+- **Comprehensive Guide**: [`daemon/README.md`](../daemon/README.md)
+- **Systemd Details**: [`daemon/systemd/README.md`](../daemon/systemd/README.md)
+
+These guides cover:
+- Installing Discord daemon as a systemd service
+- Configuring the reflection daemon for autonomous memory maintenance
+- Service management (start, stop, logs)
+- Troubleshooting and monitoring
+
+### Manual Discord Setup
+
+If you want the entity present on Discord without using systemd:
 
 1. Create a Discord bot at https://discord.com/developers/applications
 2. Get the bot token
@@ -135,9 +151,7 @@ If you want the entity present on Discord:
    ./lyra start
    ```
 
----
-
-## Optional: Autonomous Reflection
+### Manual Reflection Setup
 
 The reflection daemon provides autonomous memory maintenance:
 

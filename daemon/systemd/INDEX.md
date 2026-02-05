@@ -136,7 +136,7 @@ Covers:
 
 ### I need to reconfigure the service
 
-1. Edit `.env`: `/mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/.env`
+1. Edit `.env`: `/mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/.env`
 2. Restart service: `systemctl --user restart lyra-daemon`
 3. Verify: `journalctl --user -u lyra-daemon -n 5`
 
@@ -148,7 +148,7 @@ For service-level changes (not environment):
 ### I need to uninstall
 
 ```bash
-cd /mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon/systemd
+cd /mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/systemd
 ./install.sh --uninstall
 ```
 
@@ -220,7 +220,7 @@ Systemd reads: ~/.config/systemd/user/lyra-daemon.service
     ↓
 Loads environment: ~/.env
     ↓
-Changes to directory: ~/Documents/1)) Caia/Awareness/daemon
+Changes to directory: ~/Claude_Projects/Awareness/daemon
     ↓
 Executes: venv/bin/python3 -u lyra_daemon.py
     ↓
@@ -320,7 +320,7 @@ Logs not appearing?
 
 ### Service Configuration
 - Service file: `~/.config/systemd/user/lyra-daemon.service`
-- Daemon directory: `/mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon`
+- Daemon directory: `/mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon`
 - Virtual environment: `Awareness/.venv/` (project-level, consolidated in Issue #111)
 
 ### Configuration & Secrets

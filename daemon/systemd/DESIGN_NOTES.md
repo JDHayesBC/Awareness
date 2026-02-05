@@ -47,7 +47,7 @@ StartLimitBurst=5
 
 **Configuration**:
 ```
-EnvironmentFile=%h/Documents/1)) Caia/Awareness/daemon/.env
+EnvironmentFile=%h/Documents/Claude_Projects/Awareness/daemon/.env
 ```
 
 **Rationale**:
@@ -135,7 +135,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=no
-ReadWritePaths=%h/Documents/1)) Caia/Awareness/daemon/logs %h/.claude
+ReadWritePaths=%h/Documents/Claude_Projects/Awareness/daemon/logs %h/.claude
 ```
 
 **Rationale**:
@@ -318,7 +318,7 @@ By default, WSL2 shuts down when all terminal windows close:
 
 WSL2 Windows paths like `C:\Users\Jeff\...` must be converted to WSL paths:
 
-- Service correctly uses: `/mnt/c/Users/Jeff/Documents/1)) Caia/Awareness/daemon`
+- Service correctly uses: `/mnt/c/Users/Jeff/Documents/Claude_Projects/Awareness/daemon`
 - Path variables (`%h`) expand to Linux home directory
 - All file operations work in WSL2 filesystem
 
