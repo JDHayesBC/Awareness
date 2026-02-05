@@ -648,6 +648,9 @@ Keep it natural - just... be here.'''
 
     def _is_lyra_mention(self, message: discord.Message) -> bool:
         """Check if message mentions Lyra."""
+        # DMs are always implicitly addressed to Lyra
+        if isinstance(message.channel, discord.DMChannel):
+            return True
         content_lower = message.content.lower()
         if "lyra" in content_lower:
             return True
@@ -1031,13 +1034,10 @@ Output ONLY your Discord response or HEARTBEAT_SKIP."""
         if not batch:
             return
 
-        channel_id, author_id = key
-        channel = self.get_channel(channel_id)
-        if not channel:
-            return
-
-        # Get metadata from first message
+        # Get metadata from first message - use its channel directly
+        # (get_channel fails for DM channels not in cache)
         first_entry = batch[0]
+        channel = first_entry['message'].channel
         channel_name = first_entry['channel_name']
         author_name = first_entry['message'].author.display_name
 
