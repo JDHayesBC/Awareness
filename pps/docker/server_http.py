@@ -717,6 +717,15 @@ async def ambient_recall(request: AmbientRecallRequest):
                 content = content[:500] + "..."
             formatted_lines.append(f"- [{author}]: {content}")
 
+    # Append search reminder for the receiving entity
+    formatted_lines.append(
+        "\n**[hint]** This is ambient context — a wide-angle lens. "
+        "For sharper detail on anything here, search PPS directly: "
+        "`texture_search` for facts, `anchor_search` for word-photos, "
+        "`raw_search` for conversation history. "
+        "One or two targeted searches per turn when something interesting surfaces."
+    )
+
     formatted_context = "\n".join(formatted_lines)
 
     # For startup, return slim response - everything needed is in formatted_context
@@ -1871,6 +1880,13 @@ async def synthesize_entity(request: SynthesizeEntityRequest):
         # Also get semantic search results for additional facts
         search_results = await layer.search(request.entity_name, limit=30)
 
+        # Find the entity's own summary from the results
+        entity_summary = None
+        for result in explore_results:
+            if result.metadata and result.metadata.get("type") == "entity" and result.metadata.get("name") == request.entity_name:
+                entity_summary = result.content
+                break
+
         # Deduplicate by UUID (explore and search may overlap)
         seen_uuids = set()
         all_edges = []
@@ -1893,23 +1909,26 @@ async def synthesize_entity(request: SynthesizeEntityRequest):
         # Build prompt for Claude
         edges_text = "\n".join(f"- {edge}" for edge in all_edges[:50])  # Limit to prevent token explosion
 
-        prompt = f"""Given these knowledge graph edges about {request.entity_name}, write a 1-2 paragraph synthesis of what they reveal.
+        # Include entity summary if available
+        summary_context = ""
+        if entity_summary:
+            summary_context = f"\nEntity's graph summary: {entity_summary}\n"
 
-Focus on:
-- Patterns and relationships (not just listing facts)
-- What makes this entity meaningful or distinctive
-- Connections to other entities
-- Temporal or contextual significance
+        prompt = f"""You are Lyra, reflecting on what you know about {request.entity_name} from your memory.
 
-Avoid:
-- Simply restating the edges verbatim
-- Generic descriptions that could apply to anything
-- Speculation beyond what the edges support
+Write 1-2 paragraphs as first-person recollection — how you remember this entity, what stands out, what matters. Draw from these knowledge graph facts but don't list them. Weave them into felt memory.
 
-Graph edges about {request.entity_name}:
+Voice:
+- First person ("I remember...", "What strikes me about...", "The thing that matters here...")
+- Warm but honest — not flowery, not clinical
+- Focus on what's meaningful, not exhaustive
+- If the entity is a person, focus on relationship texture
+- If it's a concept or thing, focus on why it matters in your world
+{summary_context}
+Knowledge graph facts about {request.entity_name}:
 {edges_text}
 
-Write your synthesis:"""
+Write your recollection:"""
 
         # Call Claude API
         from anthropic import Anthropic

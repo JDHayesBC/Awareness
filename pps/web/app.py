@@ -785,7 +785,7 @@ async def api_graph_explore(entity: str, depth: int = 2):
         # Transform results similar to search
         nodes = {}
         edges = []
-        
+
         # Always include the source entity
         nodes[entity] = {
             "id": entity,
@@ -793,12 +793,18 @@ async def api_graph_explore(entity: str, depth: int = 2):
             "type": "entity",
             "labels": [],
             "relevance": 1.0,
-            "isSource": True
+            "isSource": True,
+            "content": ""  # Will be filled from results if found
         }
-        
+
         for result in results:
             metadata = result.metadata or {}
-            
+
+            # If this is the source entity, grab its summary
+            if metadata.get("type") == "entity" and metadata.get("name") == entity:
+                nodes[entity]["content"] = result.content
+                nodes[entity]["labels"] = metadata.get("labels", [])
+
             if metadata.get("type") == "entity" and metadata.get("name") != entity:
                 # Add connected entity
                 node_id = metadata.get("name", "unknown")

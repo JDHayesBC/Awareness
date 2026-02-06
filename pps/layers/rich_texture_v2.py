@@ -35,6 +35,12 @@ try:
         EDGE_HYBRID_SEARCH_NODE_DISTANCE,
         NODE_HYBRID_SEARCH_RRF,
     )
+    from graphiti_core.search.search_config import (
+        SearchConfig,
+        EdgeSearchConfig,
+        EdgeSearchMethod,
+        EdgeReranker,
+    )
     GRAPHITI_CORE_AVAILABLE = True
 except ImportError:
     GRAPHITI_CORE_AVAILABLE = False
@@ -49,6 +55,10 @@ except ImportError:
     OpenAIRerankerClient = None
     EDGE_HYBRID_SEARCH_NODE_DISTANCE = None
     NODE_HYBRID_SEARCH_RRF = None
+    SearchConfig = None
+    EdgeSearchConfig = None
+    EdgeSearchMethod = None
+    EdgeReranker = None
 
 # Also keep aiohttp for fallback HTTP mode
 import aiohttp
@@ -135,6 +145,16 @@ class RichTextureLayerV2(PatternLayer):
         self._message_cache_ttl = timedelta(seconds=30)
         self._db_path = os.environ.get("PPS_MESSAGE_DB_PATH", DEFAULT_DB_PATH)
         self._enable_explore = os.environ.get("PPS_ENABLE_EXPLORE", "true").lower() == "true"
+
+        # Entity UUID cache (avoid re-lookup every search)
+        self._entity_uuid_cache: dict[str, str] = {}
+        self._entity_uuid_cache_time: Optional[datetime] = None
+        self._entity_uuid_cache_ttl = timedelta(hours=1)
+
+        # Neighborhood cache (cast of characters doesn't change fast)
+        self._neighborhood_cache: Optional[list[dict]] = None
+        self._neighborhood_cache_time: Optional[datetime] = None
+        self._neighborhood_cache_ttl = timedelta(minutes=10)
 
     async def _get_graphiti_client(self) -> Optional[Graphiti]:
         """
@@ -551,6 +571,96 @@ class RichTextureLayerV2(PatternLayer):
         except Exception:
             return False
 
+    async def _get_entity_uuid(self, entity_name: str) -> Optional[str]:
+        """Get entity UUID by name, with caching. Picks most-connected if duplicates."""
+        now = datetime.now(timezone.utc)
+
+        # Check cache freshness
+        if (self._entity_uuid_cache_time and
+                (now - self._entity_uuid_cache_time) < self._entity_uuid_cache_ttl and
+                entity_name in self._entity_uuid_cache):
+            return self._entity_uuid_cache[entity_name]
+
+        try:
+            client = await self._get_graphiti_client()
+            if not client:
+                return None
+
+            result = await client.driver.execute_query(
+                """
+                MATCH (e:Entity {name: $name, group_id: $gid})
+                OPTIONAL MATCH (e)-[r]-()
+                WITH e, count(r) as connections
+                ORDER BY connections DESC
+                LIMIT 1
+                RETURN e.uuid as uuid
+                """,
+                name=entity_name,
+                gid=self.group_id,
+            )
+            records = result[0] if isinstance(result, tuple) else result
+            if records:
+                uuid = records[0].get("uuid")
+                self._entity_uuid_cache[entity_name] = uuid
+                self._entity_uuid_cache_time = now
+                return uuid
+        except Exception as e:
+            print(f"Entity UUID lookup failed for {entity_name}: {e}")
+
+        return None
+
+    async def _get_neighborhood(self, client, center_uuid: str, limit: int = 15) -> list[dict]:
+        """
+        Get entity's direct neighbors via Cypher, sorted by connection count.
+
+        Returns the "cast of characters" - the entities most connected to
+        the center entity, with their pre-computed summaries.
+        ~150ms, ~1200 tokens for 15 results.
+        """
+        now = datetime.now(timezone.utc)
+
+        # Check cache
+        if (self._neighborhood_cache is not None and
+                self._neighborhood_cache_time and
+                (now - self._neighborhood_cache_time) < self._neighborhood_cache_ttl):
+            return self._neighborhood_cache[:limit]
+
+        try:
+            result = await client.driver.execute_query(
+                """
+                MATCH (center:Entity {uuid: $uuid})-[r]-(neighbor:Entity)
+                WHERE neighbor.group_id = $gid
+                  AND neighbor.uuid <> $uuid
+                WITH neighbor, count(r) as edge_count
+                ORDER BY edge_count DESC
+                LIMIT $limit
+                RETURN neighbor.name as name,
+                       neighbor.summary as summary,
+                       neighbor.uuid as uuid,
+                       edge_count
+                """,
+                uuid=center_uuid,
+                gid=self.group_id,
+                limit=limit,
+            )
+            records = result[0] if isinstance(result, tuple) else result
+            neighborhood = []
+            for rec in records:
+                neighborhood.append({
+                    "name": rec.get("name", "?"),
+                    "summary": rec.get("summary", "") or "",
+                    "uuid": rec.get("uuid", ""),
+                    "edge_count": rec.get("edge_count", 0),
+                })
+
+            self._neighborhood_cache = neighborhood
+            self._neighborhood_cache_time = now
+            return neighborhood[:limit]
+
+        except Exception as e:
+            print(f"Neighborhood query failed: {e}")
+            return []
+
     async def search(self, query: str, limit: int = 10) -> list[SearchResult]:
         """
         Search knowledge graph for relevant facts and entities.
@@ -570,48 +680,95 @@ class RichTextureLayerV2(PatternLayer):
         """
         Search using graphiti_core directly with optimized configuration.
 
-        Three-part search strategy:
-        1. Edge search (relationship facts) - EDGE_HYBRID_SEARCH_NODE_DISTANCE
-        2. Node search (entity summaries) - NODE_HYBRID_SEARCH_RRF
-        3. Explore (conversation-specific facts) - BFS from recent entities
+        Two-part retrieval strategy:
+        1. Neighborhood (Cypher) - Lyra's direct neighbors with summaries.
+           These are pre-compressed "index cards" - the cast of characters.
+           ~150ms, ~1200 tokens. Cached for 10 minutes.
+        2. Edge search (semantic) - Query-relevant facts ranked by proximity
+           to Lyra in the graph. 10-15 targeted facts, not 200.
         """
         try:
             client = await self._get_graphiti_client()
             if not client:
                 return []
 
-            # Configuration - balance between context richness and output size
-            # Note: Hook truncates at 10K chars, but observatory visualization benefits from more
-            EDGE_LIMIT = 200  # Restored for richer graph visualization
-            NODE_LIMIT = 3   # Entity summaries
-            EXPLORE_DEPTH = 2  # BFS depth from extracted entities
-
-            # Lyra's canonical UUID for proximity ranking
-            LYRA_UUID = "5bd21fca-52de-41fd-a6b1-c78371d77a36"
+            # Configuration - tuned via RETRIEVAL_TUNING.md parameter sweep
+            NEIGHBORHOOD_LIMIT = 10  # Top neighbors by connection count
+            ND_EDGE_LIMIT = 10       # Lyra-proximate facts (node_distance)
+            RRF_EDGE_LIMIT = 5       # Broader perspective facts (RRF)
 
             all_results = []
 
-            # 1. Edge search (relationship facts)
+            # Get focal entity UUID (dynamic lookup, cached 1hr)
+            lyra_uuid = await self._get_entity_uuid("Lyra")
+
+            # 1. Cast of Characters - neighborhood via Cypher
+            if lyra_uuid:
+                neighborhood = await self._get_neighborhood(
+                    client, lyra_uuid, NEIGHBORHOOD_LIMIT
+                )
+                for i, neighbor in enumerate(neighborhood):
+                    score = 1.0 - (i / max(len(neighborhood), 1)) * 0.15
+
+                    all_results.append(SearchResult(
+                        content=f"{neighbor['name']}: {neighbor['summary']}",
+                        source=neighbor.get("uuid", ""),
+                        layer=LayerType.RICH_TEXTURE,
+                        relevance_score=score,
+                        metadata={
+                            "type": "neighborhood",
+                            "entity": neighbor["name"],
+                            "edge_count": neighbor["edge_count"],
+                        }
+                    ))
+
+            # 2. Lyra-proximate facts via node_distance ranking
             edge_config = EDGE_HYBRID_SEARCH_NODE_DISTANCE.model_copy(deep=True)
-            edge_config.limit = EDGE_LIMIT
+            edge_config.limit = ND_EDGE_LIMIT
 
             edge_results = await client.search_(
                 query=query,
                 config=edge_config,
-                center_node_uuid=LYRA_UUID,
+                center_node_uuid=lyra_uuid,
                 group_ids=[self.group_id]
             )
 
-            # Filter IS_DUPLICATE_OF edges
-            edges = [e for e in edge_results.edges if e.name != "IS_DUPLICATE_OF"]
+            nd_edges = [e for e in edge_results.edges if e.name != "IS_DUPLICATE_OF"]
+            nd_edge_uuids = {e.uuid for e in nd_edges}
 
-            # Collect all unique node UUIDs to batch-fetch names
+            # 3. Broader perspective via RRF (finds non-Lyra-origin edges)
+            rrf_edges = []
+            if RRF_EDGE_LIMIT > 0 and SearchConfig is not None:
+                rrf_config = SearchConfig(
+                    edge_config=EdgeSearchConfig(
+                        search_methods=[
+                            EdgeSearchMethod.cosine_similarity,
+                            EdgeSearchMethod.bm25,
+                        ],
+                        reranker=EdgeReranker.rrf,
+                    ),
+                    limit=RRF_EDGE_LIMIT,
+                )
+                rrf_results = await client.search_(
+                    query=query,
+                    config=rrf_config,
+                    center_node_uuid=lyra_uuid,
+                    group_ids=[self.group_id],
+                )
+                # Deduplicate against node_distance results
+                rrf_edges = [
+                    e for e in rrf_results.edges
+                    if e.name != "IS_DUPLICATE_OF" and e.uuid not in nd_edge_uuids
+                ]
+
+            all_edges = nd_edges + rrf_edges
+
+            # Batch-fetch node names for all edges
             node_uuids = set()
-            for edge in edges:
+            for edge in all_edges:
                 node_uuids.add(edge.source_node_uuid)
                 node_uuids.add(edge.target_node_uuid)
 
-            # Fetch nodes by UUID to get actual names and labels
             node_names: dict[str, str] = {}
             node_labels: dict[str, list[str]] = {}
             if node_uuids:
@@ -623,11 +780,12 @@ class RichTextureLayerV2(PatternLayer):
                     node_names[node.uuid] = node.name
                     node_labels[node.uuid] = node.labels
 
-            # Format edges as SearchResult
-            for i, edge in enumerate(edges):
-                score = 1.0 - (i / max(len(edges), 1)) * 0.3  # Higher base score
+            for i, edge in enumerate(all_edges):
+                # ND edges score higher than RRF edges
+                is_rrf = edge.uuid not in nd_edge_uuids
+                base_score = 0.75 if is_rrf else 0.85
+                score = base_score - (i / max(len(all_edges), 1)) * 0.2
 
-                # Get actual node names from lookup
                 source_name = node_names.get(edge.source_node_uuid, edge.source_node_uuid)
                 target_name = node_names.get(edge.target_node_uuid, edge.target_node_uuid)
 
@@ -650,64 +808,6 @@ class RichTextureLayerV2(PatternLayer):
                         "target_labels": node_labels.get(edge.target_node_uuid, []),
                     }
                 ))
-
-            # 2. Node search (entity summaries)
-            node_config = NODE_HYBRID_SEARCH_RRF.model_copy(deep=True)
-            node_config.limit = NODE_LIMIT
-
-            node_results = await client.search_(
-                query=query,
-                config=node_config,
-                group_ids=[self.group_id]
-            )
-
-            for node in node_results.nodes:
-                all_results.append(SearchResult(
-                    content=f"{node.name}: {node.summary}",
-                    source=str(node.uuid),
-                    layer=LayerType.RICH_TEXTURE,
-                    relevance_score=0.85,  # High relevance for entity context
-                    metadata={
-                        "type": "entity_summary",
-                        "entity": node.name,
-                    }
-                ))
-
-            # 3. Explore (conversation-specific facts)
-            if self._enable_explore and EXPLORE_DEPTH > 0:
-                # Fetch recent messages
-                recent_messages = self._fetch_recent_messages(limit=8)
-
-                if recent_messages:
-                    # Extract entities
-                    entity_names = self._extract_entities_from_messages(recent_messages)
-
-                    # Explore from those entities
-                    explore_facts = await self._explore_from_entities(
-                        client,
-                        entity_names,
-                        EXPLORE_DEPTH
-                    )
-
-                    # Format explore results
-                    for i, fact in enumerate(explore_facts):
-                        score = 0.8 - (i / max(len(explore_facts), 1)) * 0.2
-
-                        content = f"{fact['source']} → {fact['rel_type']} → {fact['target']}"
-                        if fact['fact']:
-                            content = f"{content}: {fact['fact']}"
-
-                        all_results.append(SearchResult(
-                            content=content,
-                            source=str(fact['uuid']),
-                            layer=LayerType.RICH_TEXTURE,
-                            relevance_score=score,
-                            metadata={
-                                "type": "explore",
-                                "from_entity": fact['from_entity'],
-                                "predicate": fact['rel_type'],
-                            }
-                        ))
 
             return all_results
 

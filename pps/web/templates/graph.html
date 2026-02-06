@@ -594,26 +594,36 @@ function runLayout(layoutName) {
 function showNodeInfo(node) {
     const panel = document.getElementById('infoPanel');
     const content = document.getElementById('infoContent');
-    
+
     const data = node.data();
     let html = `
         <div class="mb-2"><strong>Entity:</strong> ${data.label}</div>
     `;
-    
+
     if (data.labels && data.labels.length > 0) {
         html += `<div class="mb-2"><strong>Types:</strong> ${data.labels.join(', ')}</div>`;
     }
-    
+
+    // Show Graphiti summary prominently
     if (data.content) {
-        html += `<div class="mb-2"><strong>Description:</strong> ${data.content}</div>`;
+        html += `
+            <div class="p-3 bg-gray-700/50 rounded-lg mb-4 border-l-2 border-blue-500">
+                <div class="text-gray-400 text-xs mb-1">Graph Summary</div>
+                <div class="text-gray-200">${data.content}</div>
+            </div>
+        `;
     }
-    
-    html += `<div class="mb-2"><strong>Relevance:</strong> ${(data.relevance * 100).toFixed(0)}%</div>`;
-    
-    // Show connected edges
+
+    // Show connected edges in collapsible section
     const connectedEdges = node.connectedEdges();
     if (connectedEdges.length > 0) {
-        html += `<div class="mt-4"><strong>Relationships:</strong></div><ul class="list-disc list-inside mt-2 space-y-2">`;
+        html += `
+            <details class="mt-4">
+                <summary class="cursor-pointer text-sm text-blue-400 hover:text-blue-300">
+                    Show ${connectedEdges.length} relationships
+                </summary>
+                <ul class="list-disc list-inside mt-2 space-y-2">
+        `;
         connectedEdges.forEach(edge => {
             const edgeData = edge.data();
             const source = edge.source().data('label');
@@ -644,7 +654,7 @@ function showNodeInfo(node) {
                 html += `<li class="text-gray-400 font-mono text-sm">${technicalDetails}</li>`;
             }
         });
-        html += '</ul>';
+        html += '</ul></details>';
     }
     
     html += `
