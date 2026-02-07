@@ -1036,6 +1036,7 @@ Output ONLY your Discord response or HEARTBEAT_SKIP."""
 
         # Get metadata from first message - use its channel directly
         # (get_channel fails for DM channels not in cache)
+        channel_id, author_id = key
         first_entry = batch[0]
         channel = first_entry['message'].channel
         channel_name = first_entry['channel_name']
