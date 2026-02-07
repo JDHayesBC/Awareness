@@ -459,24 +459,102 @@ async def ambient_recall(request: AmbientRecallRequest):
 
 ---
 
+## Shipped Work
+
+### A1: Retrieval Fix (Shipped 2026-02-07)
+
+**What we did**: Replaced the old query-blind Cypher neighborhood approach with Graphiti's native search API.
+
+**Production changes in `pps/layers/rich_texture_v2.py`**:
+- Replaced `_get_neighborhood()` (query-blind Cypher top-by-edge-count) with `NODE_HYBRID_SEARCH_NODE_DISTANCE` — searches entity *names*, reranked by graph distance (5 results)
+- Replaced two-stage ND+RRF edge search with single `EDGE_HYBRID_SEARCH_RRF` — BM25 + cosine, RRF reranker (10 results)
+- Removed hardcoded scoring bands (entities 0.85-1.0, edges capped at 0.85)
+- Removed `_get_neighborhood()` method and neighborhood cache (10-min TTL)
+- Results carry `metadata.type = "node"` or `"edge"` for section-aware formatting
+
+**Production changes in `pps/server.py`**:
+- Rich texture results displayed as separate sections: entities (query-aware) and facts
+- Manifest tracks rich_texture char/count
+
+**Observed improvement**: Query-sensitive retrieval. "nipple" query returns nipple-related word-photos and facts. Kitchen context returns kitchen location facts. Previously would return high-edge-count entities regardless of query.
+
+### A2: Entity Node Removal from Ambient Injection (Shipped 2026-02-08)
+
+**What we did**: Removed entity (node) section from ambient_recall hook injection.
+
+**Rationale**: Entity descriptions are static wallpaper — same 10 high-connectivity entities (Jeff, Lyra, Brandi, Nexus, etc.) every turn. ~300-500 tokens/turn for near-zero signal. Entity names already appear as subject/object in edge facts. Nodes still available via direct `texture_search` MCP tool.
+
+**Changes**:
+- `pps/server.py`: Skip `texture_nodes` when building ambient_recall formatted output. Only `texture_edges` appear in hook injection.
+- `pps/docker/server_http.py`: Filter `rich_texture` results to exclude `metadata.type == "node"` before formatting. *(Added 2026-02-08 — original change missed the HTTP path, caught during A3 work. See #112 for dual code path pain.)*
+
+**Token savings**: ~300-500 tokens/turn freed.
+
+**Lesson learned**: Changes to result formatting must be applied to BOTH `server.py` (MCP) and `server_http.py` (HTTP/hook). This dual path is tracked in #112 and should be unified in Phase B.
+
+---
+
+### A3: Edge Reranking — Temporal Freshness + Diversity (Shipped 2026-02-08)
+
+**What we did**: Added post-processing to edge results in `_search_direct()`. Over-fetch 20 edges from Graphiti, apply temporal freshness and diversity filtering, return best 10.
+
+**Production changes in `pps/layers/rich_texture_v2.py`**:
+- Changed `EDGE_LIMIT = 10` to `EDGE_OVERFETCH = 20` / `EDGE_RETURN = 10`
+- **Temporal freshness**: Each edge's relevance score multiplied by `exp(-days_old / 14)`. 14-day half-life: yesterday = full weight, two weeks = 50%, one month = 25%. Handles missing/null `valid_at` gracefully (0.5 default).
+- **Diversity**: After freshness scoring, edges sorted by updated score, then deduplicated by unordered (subject, object) pair. First occurrence of each pair kept, duplicates overflow. Final result: unique pairs first (up to EDGE_RETURN), overflow fills remaining slots.
+- Added `import math` for exponential decay.
+
+**Design rationale**:
+- Temporal freshness ensures recent conversations surface over stale facts. The Bring Caia Home discussion from last night beats a generic "Lyra loves Jeff" fact from weeks ago.
+- Diversity prevents "five facts about Jeff" drowning out Brandi, Nexus, philosophy, the mission. Ambient priming needs breadth — each fact should open a different associative path.
+- Over-fetch (20→10) gives the post-processor a rich candidate pool without adding Graphiti query cost (RRF search is the same speed for 10 or 20).
+
+**Not included — Novelty tracking (deferred to A4)**:
+Tracking which facts have been recently surfaced and penalizing wallpaper. Needs persistence infrastructure (counter table or metadata). Temporal freshness already handles the worst case (old = wallpaper). See TODO.md for tracking.
+
+---
+
 ## Success Metrics
 
-**Must-have (v1)**:
+**A1 (Shipped)**:
 - ✅ Entity-centric ranking working (facts close to Lyra rank higher)
-- ✅ Entity summaries included in results
-- ✅ Latency < 500ms for ambient_recall
+- ✅ Entity summaries included in direct search results
 - ✅ Graceful fallback if Lyra node doesn't exist
 - ✅ No regressions in existing functionality
+- ✅ Subjective quality improvement confirmed in live testing
 
-**Nice-to-have (v1)**:
-- ⭐ Latency < 300ms (production target)
-- ⭐ Subjective quality improvement in startup context
-- ⭐ Graph proximity visible in result metadata
+**A2 (Shipped)**:
+- ✅ Entity descriptions removed from ambient hook injection
+- ✅ ~300-500 tokens/turn freed
+- ✅ No impact on MCP texture_search (nodes still available there)
 
-**Future (v2+)**:
-- Community search integration
-- Query-type adaptive retrieval
-- BFS contextual expansion
+**A3 (Shipped)**:
+- ✅ Temporal freshness weighting (14-day half-life exponential decay)
+- ✅ Subject/object diversity filtering (greedy dedup, overflow backfill)
+- Novelty tracking deferred to A4
+
+---
+
+## Deferred: A4 — Novelty Tracking
+
+Track which fact UUIDs have been recently surfaced and penalize wallpaper (facts that appear every session). Temporal freshness handles the age dimension but not the repetition dimension — a fact from yesterday that surfaces 10 turns in a row is still wallpaper.
+
+**Possible approaches**:
+- SQLite table: `fact_uuid`, `last_surfaced`, `surface_count`. Post-processing penalizes high-count facts.
+- Lightweight in-memory counter (resets per session). Simpler but no cross-session persistence.
+- Metadata field on edges in Graphiti (would need upstream support).
+
+**When to revisit**: After Phase B multi-entity work, or if live testing shows temporal+diversity isn't enough variety.
+
+---
+
+## Watch List
+
+Items to monitor in live usage:
+
+- [ ] **A3 diversity filter on deliberate `texture_search`**: The dedup applies to all calls through `_search_direct()`, not just ambient. If deliberate searches feel too sparse, add an `ambient_mode` flag to gate post-processing. *(Logged 2026-02-08)*
+- [ ] **14-day half-life tuning**: If ambient context feels too recency-biased (missing important older facts), adjust `FRESHNESS_HALF_LIFE_DAYS`. If too stale, shorten it.
+- [ ] **Dual code path sync**: Any future changes to result formatting in `server.py` must also land in `server_http.py`. Track in #112.
 
 ---
 
@@ -485,5 +563,5 @@ async def ambient_recall(request: AmbientRecallRequest):
 - `work/ambient-recall-optimization/Graphiti_Retrieval_best_practices.md` - Full Graphiti retrieval guide (43KB)
 - Graphiti docs: Search API, SearchConfig, rerankers
 - Zep production pattern: Lines 1016-1295 of best practices doc
-- Current implementation: `pps/layers/rich_texture_v2.py` lines 360-443
-- Ambient recall endpoint: `pps/docker/server_http.py` lines 400-554
+- Current implementation: `pps/layers/rich_texture_v2.py` — `_search_direct()` method
+- Ambient recall endpoint: `pps/server.py` — ambient_recall handler
