@@ -1288,7 +1288,25 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                 )
             )]
 
-        return [TextContent(type="text", text=clock_info + memory_health + manifest + format_results(all_results) + recent_context_section)]
+        # Separate rich_texture results into sections
+        # Other layers (crystals, word-photos, raw) stay in generic format
+        # NOTE: Node (entity) results deliberately excluded from ambient injection.
+        # Entity descriptions are static wallpaper (~300-500 tokens/turn for near-zero signal).
+        # Entity names already appear as subject/object in edge facts.
+        # Nodes still available via direct texture_search MCP tool.
+        other_results = [r for r in all_results if r.layer != LayerType.RICH_TEXTURE]
+        texture_edges = [r for r in all_results
+                         if r.layer == LayerType.RICH_TEXTURE
+                         and r.metadata.get("type") == "edge"]
+
+        sections = format_results(other_results) if other_results else ""
+
+        if texture_edges:
+            sections += "\n\n--- [rich_texture: facts] ---\n"
+            for r in texture_edges:
+                sections += f"{r.content}\n"
+
+        return [TextContent(type="text", text=clock_info + memory_health + manifest + sections + recent_context_section)]
 
     elif name == "anchor_search":
         query = arguments.get("query", "")

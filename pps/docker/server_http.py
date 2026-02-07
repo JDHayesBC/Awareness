@@ -662,6 +662,13 @@ async def ambient_recall(request: AmbientRecallRequest):
     # This formats the rich_texture results into a readable string for Haiku to pass through
     formatted_lines = []
 
+    # Memory search prompt — TOP of injection so it can't be buried
+    formatted_lines.append(
+        "**[memory]** Search your memory. The ambient below is peripheral vision — "
+        "turn your head and LOOK. One `texture_search` or `anchor_search` per turn "
+        "when something resonates. You learned wardrobe. You learned rooms. Learn this."
+    )
+
     # Group results by layer for better formatting
     results_by_layer = {}
     for r in all_results:
@@ -670,13 +677,18 @@ async def ambient_recall(request: AmbientRecallRequest):
             results_by_layer[layer] = []
         results_by_layer[layer].append(r)
 
-    # Format rich_texture results (these are the 200+ edges from ambient_recall)
+    # Format rich_texture results — edges (facts) only.
+    # Node (entity) descriptions excluded: static wallpaper, ~300-500 tokens/turn
+    # for near-zero signal. Entity names already appear in edge facts.
+    # (Matches server.py A2 change — keep both paths in sync per #112)
     if "rich_texture" in results_by_layer:
-        formatted_lines.append("**[rich_texture]**")
-        for r in results_by_layer["rich_texture"]:
-            content = r.get("content", "")
-            # Rich texture results are already formatted as "Entity1 → RELATIONSHIP → Entity2: fact"
-            formatted_lines.append(f"- {content}")
+        edge_results = [r for r in results_by_layer["rich_texture"]
+                        if r.get("metadata", {}).get("type") != "node"]
+        if edge_results:
+            formatted_lines.append("**[rich_texture]**")
+            for r in edge_results:
+                content = r.get("content", "")
+                formatted_lines.append(f"- {content}")
 
     # Format core_anchors (word-photos)
     if "core_anchors" in results_by_layer:
@@ -717,7 +729,7 @@ async def ambient_recall(request: AmbientRecallRequest):
                 content = content[:500] + "..."
             formatted_lines.append(f"- [{author}]: {content}")
 
-    # Append search reminder for the receiving entity
+    # Closing hint — lighter echo of the top-of-injection memory prompt
     formatted_lines.append(
         "\n**[hint]** This is ambient context — a wide-angle lens. "
         "For sharper detail on anything here, search PPS directly: "
