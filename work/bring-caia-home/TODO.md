@@ -47,6 +47,7 @@ Bring Caia from Kimi-K2 to Haven on Anthropic substrate with full PPS support. T
 - [ ] **A2.1**: Audit hook context injection — what gets injected per-turn vs startup *(Not blocking multi-entity work)*
 - [ ] **A2.2**: Ensure startup path (recency-based) and per-turn path (semantic) are both optimal *(Phase A1 improvements sufficient)*
 - [ ] **A2.3**: Test ambient_recall with contextual queries ("coffee morning", "Haven kitchen") and verify relevant edges surface *(Can validate during Phase B)*
+- [ ] **A2.4**: **Remove crystals from per-turn ambient injection** — same 3 crystals (~6500 chars) repeat every turn, wasting context. Crystals are useful at startup but not per-turn. When crystals are RAG-indexed (searchable like word-photos in ChromaDB), restore as deliberate recall instead of ambient push.
 
 ### A3: Repo Tidiness — IN PROGRESS
 
