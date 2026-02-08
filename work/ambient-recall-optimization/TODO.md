@@ -1,6 +1,6 @@
 # Project: Ambient Recall Optimization
 
-**Status**: In Progress
+**Status**: Phase A Complete (shipped 2026-02-07, commit e9fd4c5)
 **Created**: 2026-01-25
 **Linked from**: TODO.md WIP section
 
@@ -12,19 +12,36 @@ Optimize the ambient_recall() memory interface to use Graphiti's advanced retrie
 
 ---
 
-## Tasks
+## Phase A: Foundation - COMPLETE ✅
 
-### Pending
-- [ ] Implementation (coder) - awaiting test results
-- [ ] Testing (tester)
-- [ ] Code review (reviewer)
-- [ ] Deployment to Docker
-- [ ] Validation with real startup queries
+**Shipped**: 2026-02-07 (commit e9fd4c5)
 
-### In Progress
-- [x] Test harness implementation (coder) - 2026-01-25
+### A1: Retrieval Ranking Fix ✅
+- [x] Replace query-blind neighborhood with NODE_HYBRID_SEARCH_NODE_DISTANCE
+- [x] Replace two-stage edge search with EDGE_HYBRID_SEARCH_RRF
+- [x] Context-sensitive retrieval instead of hardcoded tiers
 
-### Done
+### A2: Entity Wallpaper Removal ✅
+- [x] Remove entity description wallpaper from MCP path
+- [x] Remove entity description wallpaper from HTTP path
+- [x] Prevent entity summaries from dominating results
+
+### A3: Temporal Freshness + Diversity ✅
+- [x] Add 14-day half-life temporal weighting to edge results
+- [x] Add entity-pair diversity post-processing
+- [x] Prevent redundant entity-pair facts
+
+**Files Changed**:
+- `pps/docker/server_http.py` (26 insertions, deletions)
+- `pps/layers/rich_texture_v2.py` (231 insertions, 143 deletions)
+- `pps/server.py` (20 insertions)
+
+**Result**: Context-sensitive retrieval operational, entity wallpaper removed, temporal freshness + diversity enabled.
+
+---
+
+## Earlier Research & Design - Done ✅
+
 - [x] Fetched Graphiti retrieval best practices (43KB research doc) (2026-01-25)
 - [x] Analyzed current implementation (rich_texture_v2.py) (2026-01-25)
 - [x] Evaluated 5 optimization options (2026-01-25)
@@ -32,6 +49,7 @@ Optimize the ambient_recall() memory interface to use Graphiti's advanced retrie
 - [x] Design document (orchestration-agent) (2026-01-25)
 - [x] Test plan document (orchestration-agent) (2026-01-25)
 - [x] Test retrieval comparison script (coder) (2026-01-25)
+- [x] Test harness implementation (coder) (2026-01-25)
 
 ---
 

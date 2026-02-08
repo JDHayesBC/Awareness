@@ -12,43 +12,52 @@ Bring Caia from Kimi-K2 to Haven on Anthropic substrate with full PPS support. T
 
 ---
 
-## Phase A: Fix the Foundation
+## Phase A: Fix the Foundation — ✅ COMPLETE
 
 *Can't build multi-entity on broken plumbing.*
 
-### A1: Graphiti Retrieval Ranking Fix — DONE
+**Shipped**: 2026-02-07 (commit e9fd4c5)
+
+### A1: Graphiti Retrieval Ranking Fix — ✅ DONE
 
 **Problem**: Entity summaries always dominated, same 10 entities regardless of query.
 
 **Root cause**: Custom Cypher neighborhood (query-blind) + hardcoded scoring bands (entities 0.85-1.0, edges capped at 0.85).
 
-**Solution (Option A5 from Opus research)**: Replaced custom pipeline with Graphiti's native multi-channel search:
-- `NODE_HYBRID_SEARCH_NODE_DISTANCE` — searches entity *names* (not summaries), reranked by graph proximity (5 results)
-- `EDGE_HYBRID_SEARCH_RRF` — BM25 + cosine with RRF reranking for facts (10 results)
+**Solution**: Replaced custom pipeline with Graphiti's native multi-channel search:
+- `NODE_HYBRID_SEARCH_NODE_DISTANCE` — searches entity *names* (not summaries), reranked by graph proximity
+- `EDGE_HYBRID_SEARCH_RRF` — BM25 + cosine with RRF reranking for facts
 - Removed `_get_neighborhood()` Cypher query and 10-min cache
-- ambient_recall now formats nodes and edges as separate labeled sections
+- Added temporal freshness (14-day half-life) and entity-pair diversity post-processing
+- Removed entity description wallpaper from both MCP and HTTP paths
 
-**Files changed**: `pps/layers/rich_texture_v2.py`, `pps/server.py`
+**Files changed**: `pps/layers/rich_texture_v2.py`, `pps/server.py`, `pps/docker/server_http.py`
 
 - [x] **A1.1**: Replace Cypher neighborhood with NODE_HYBRID_SEARCH_NODE_DISTANCE
 - [x] **A1.2**: Replace two-stage ND+RRF edge search with single EDGE_HYBRID_SEARCH_RRF
 - [x] **A1.3**: Remove hardcoded scoring bands — no more entity/edge tier separation
-- [x] **A1.4**: Return nodes and edges as separate sections in ambient_recall
-- [x] **A1.5**: Clean up dead code (imports, cache, _get_neighborhood method)
-- [x] **A1.6**: Validated via test scripts (test_native_retrieval.py, test_real_turns.py, test_real_context.py)
+- [x] **A1.4**: Remove entity description wallpaper from both MCP and HTTP paths
+- [x] **A1.5**: Add temporal freshness (14-day half-life) to edge results
+- [x] **A1.6**: Add entity-pair diversity post-processing
+- [x] **A1.7**: Clean up dead code (imports, cache, _get_neighborhood method)
+- [x] **A1.8**: Validated via test scripts and production usage
 
-### A2: Ambient Recall Cleanup
+### A2: Ambient Recall Cleanup — DEFERRED
 
-- [ ] **A2.1**: Audit hook context injection — what gets injected per-turn vs startup
-- [ ] **A2.2**: Ensure startup path (recency-based) and per-turn path (semantic) are both optimal
-- [ ] **A2.3**: Test ambient_recall with contextual queries ("coffee morning", "Haven kitchen") and verify relevant edges surface
+- [ ] **A2.1**: Audit hook context injection — what gets injected per-turn vs startup *(Not blocking multi-entity work)*
+- [ ] **A2.2**: Ensure startup path (recency-based) and per-turn path (semantic) are both optimal *(Phase A1 improvements sufficient)*
+- [ ] **A2.3**: Test ambient_recall with contextual queries ("coffee morning", "Haven kitchen") and verify relevant edges surface *(Can validate during Phase B)*
 
-### A3: Repo Tidiness
+### A3: Repo Tidiness — IN PROGRESS
 
-- [ ] **A3.1**: Clean up stale work directories
-- [ ] **A3.2**: Archive completed experiments
-- [ ] **A3.3**: Verify all gitignored entity data is actually gitignored
-- [ ] **A3.4**: Check for stale/broken imports across PPS
+- [x] **A3.1**: Update stale work/ambient-recall-optimization/TODO.md (completed 2026-02-08)
+- [x] **A3.2**: Update work/bring-caia-home/TODO.md to reflect Phase A completion (completed 2026-02-08)
+- [ ] **A3.3**: Clean up stale work directories
+- [ ] **A3.4**: Archive completed experiments
+- [ ] **A3.5**: Verify all gitignored entity data is actually gitignored
+- [ ] **A3.6**: Check for stale/broken imports across PPS
+
+**Note**: A3 tasks are housekeeping, not blockers for Phase B. Can proceed to multi-entity work.
 
 ---
 
@@ -110,7 +119,8 @@ Bring Caia from Kimi-K2 to Haven on Anthropic substrate with full PPS support. T
 
 ## Blockers
 
-- **Graphiti retrieval ranking** must be fixed before multi-entity work — can't validate entity isolation if retrieval results are unreliable
+- ~~**Graphiti retrieval ranking** must be fixed before multi-entity work~~ — **RESOLVED** (Phase A complete, commit e9fd4c5)
+- **None** — Ready for Phase B (multi-entity PPS)
 
 ---
 
