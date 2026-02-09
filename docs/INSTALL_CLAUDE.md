@@ -39,6 +39,20 @@ claude --version
 
 ---
 
+## Important: Architectural Constraints
+
+Before you install anything, internalize these two rules:
+
+### Single Virtual Environment
+
+The project uses **one venv** at the repository root. All components share it. If you're tempted to create a separate venv for any component, don't. That's legacy thinking. Activate the root venv and work from there.
+
+### Data Path: entities/, Not ~/.claude/
+
+Entity data (SQLite databases, word-photos, crystals) lives in `entities/<name>/data/`. You may encounter references to `~/.claude/data/` — that's a ghost path from an earlier architecture. The canonical location is always under ENTITY_PATH. If your entity can't find their memories, check this first.
+
+---
+
 ## Installation Steps
 
 ### 1. Clone the Repository

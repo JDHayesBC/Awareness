@@ -14,6 +14,42 @@ For humans who prefer to understand every step.
 
 ---
 
+## Key Architectural Decisions (Read This First)
+
+Two things will save you hours of debugging:
+
+### One Venv to Rule Them All
+
+This project uses a **single Python virtual environment** at the repository root. All components — PPS server, daemons, tools — share it.
+
+If you encounter instructions that seem to call for creating a separate venv, **stop and think**. That's almost certainly legacy cruft from earlier in development. The correct approach is always to activate the root venv.
+
+```bash
+# The one true venv
+cd /path/to/Awareness
+source venv/bin/activate  # All components use this
+```
+
+### Where Data Lives
+
+Your entity's data lives in `entities/<entity_name>/data/`, **not** in `~/.claude/data/`.
+
+You may see references to `~/.claude/data/` in older documentation or config — that path is a ghost from an earlier architecture. The canonical data location is always relative to ENTITY_PATH:
+
+```
+entities/<name>/
+├── data/              ← SQLite databases live HERE
+│   ├── raw_messages.db
+│   └── summaries.db
+├── memories/          ← Word-photos
+├── crystals/          ← Continuity chain
+└── identity.md        ← Core identity
+```
+
+Docker volumes for Neo4j and ChromaDB are managed by Docker Compose and defined in `pps/docker/docker-compose.yml`.
+
+---
+
 ## Step 1: Clone the Repository
 
 ```bash

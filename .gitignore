@@ -58,7 +58,10 @@ pps/deploy/*.tar.gz
 # Docker bind-mount data directories (host-side persistence)
 docker/pps/
 
-# Work directory backups (temporary files)
+# Work directories - temporary project workspaces
+# Important outputs get promoted to production locations (scripts/, docs/, etc.)
+work/
+!work/_template/
 
 # Test coverage
 .coverage
@@ -75,3 +78,6 @@ tools/jeff-gmail-mcp/venv/
 pps/venv/
 delve (old work from steve)/
 daemon/lyra_daemon.pid
+
+# Training data - large files, not code
+spicy/

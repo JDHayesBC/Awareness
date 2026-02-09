@@ -227,6 +227,8 @@ For development or special cases:
    pip install -r requirements.txt
    ```
 
+   > **Note**: For development, prefer using the project root's single venv instead of creating a new one. This section is for standalone PPS deployment only. If you're running the full Awareness stack, use the root venv: `source /path/to/Awareness/venv/bin/activate`
+
 2. Run ChromaDB separately:
    ```bash
    docker run -p 8200:8000 chromadb/chroma:latest
