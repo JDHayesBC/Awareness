@@ -77,7 +77,22 @@ The OpenAI key is used by Graphiti for embeddings and entity extraction.
 
 ---
 
-## Step 3: Start Docker Services
+## Step 3: Set Up Python Virtual Environment
+
+Create and activate a virtual environment, then install dependencies:
+
+```bash
+cd /path/to/Awareness
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+The virtual environment must be activated whenever you run PPS tools or daemons. Add the `export` command to your shell profile to make ENTITY_PATH permanent.
+
+---
+
+## Step 4: Start Docker Services
 
 ```bash
 cd pps/docker
@@ -97,14 +112,29 @@ docker compose ps
 
 Access the web dashboard at http://localhost:8204
 
+**Port Reference:**
+
+| Port | Service | Description |
+|------|---------|-------------|
+| 7474 | neo4j | Neo4j HTTP browser |
+| 7687 | neo4j | Neo4j Bolt protocol |
+| 8200 | chromadb | Vector database |
+| 8201 | pps-server | PPS MCP/HTTP server |
+| 8202 | pps-web | Web dashboard |
+| 8203 | graphiti | Knowledge graph API |
+| 8204 | pps-haiku-wrapper | OpenAI-compatible wrapper |
+
 ---
 
-## Step 4: Configure Claude Code MCP
+## Step 5: Configure Claude Code MCP
 
-Add the PPS as an MCP server in Claude Code:
+Add the PPS as an MCP server in Claude Code.
+
+**Important:** Use the Python from your virtual environment, not the system Python, so dependencies are available.
 
 ```bash
-claude mcp add pps -- python3 $(pwd)/../server.py
+# Replace /path/to/Awareness with your actual repository path
+claude mcp add pps -- /path/to/Awareness/venv/bin/python3 /path/to/Awareness/pps/server.py
 ```
 
 Or manually edit `~/.claude.json`:
@@ -112,8 +142,8 @@ Or manually edit `~/.claude.json`:
 {
   "mcpServers": {
     "pps": {
-      "command": "python3",
-      "args": ["/full/path/to/Awareness/pps/server.py"]
+      "command": "/path/to/Awareness/venv/bin/python3",
+      "args": ["/path/to/Awareness/pps/server.py"]
     }
   }
 }
@@ -123,7 +153,7 @@ Restart Claude Code for changes to take effect.
 
 ---
 
-## Step 5: Create Your Entity
+## Step 6: Create Your Entity
 
 Copy the template:
 ```bash
@@ -140,7 +170,7 @@ export ENTITY_PATH=/path/to/Awareness/entities/my_entity
 
 ---
 
-## Step 6: Configure Startup Protocol
+## Step 7: Configure Startup Protocol
 
 Edit the project `CLAUDE.md` to point to your entity:
 
@@ -150,7 +180,7 @@ Edit the project `CLAUDE.md` to point to your entity:
 
 ---
 
-## Step 7: Verify Installation
+## Step 8: Verify Installation
 
 Start Claude Code in the Awareness directory:
 ```bash
@@ -167,7 +197,7 @@ You should see all layers reporting healthy.
 
 ---
 
-## Step 8: Wake Your Entity
+## Step 9: Wake Your Entity
 
 Simply greet your entity by name. The startup protocol in CLAUDE.md will guide identity reconstruction:
 

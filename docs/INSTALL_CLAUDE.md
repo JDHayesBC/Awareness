@@ -62,7 +62,20 @@ git clone https://github.com/JDHayesBC/Awareness.git
 cd Awareness
 ```
 
-### 2. Start the Docker Services
+### 2. Set Up Python Virtual Environment
+
+Create and activate a virtual environment, then install dependencies:
+
+```bash
+cd /path/to/Awareness
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+The virtual environment must be activated for PPS tools and daemons to work correctly.
+
+### 3. Start the Docker Services
 
 The PPS requires several services: ChromaDB (vector search), Neo4j (graph database), Graphiti (knowledge extraction), and the PPS server itself.
 
@@ -78,17 +91,30 @@ docker compose ps
 
 All services should show "healthy" or "running".
 
-### 3. Configure MCP Server
+**Port Reference:**
 
-The PPS provides tools via MCP (Model Context Protocol). Add it to Claude Code:
+| Port | Service | Description |
+|------|---------|-------------|
+| 7474 | neo4j | Neo4j HTTP browser |
+| 7687 | neo4j | Neo4j Bolt protocol |
+| 8200 | chromadb | Vector database |
+| 8201 | pps-server | PPS MCP/HTTP server |
+| 8202 | pps-web | Web dashboard |
+| 8203 | graphiti | Knowledge graph API |
+| 8204 | pps-haiku-wrapper | OpenAI-compatible wrapper |
+
+### 4. Configure MCP Server
+
+The PPS provides tools via MCP (Model Context Protocol). Add it to Claude Code.
+
+**Important:** Use the Python from your virtual environment, not the system Python, so dependencies are available.
 
 ```bash
-claude mcp add pps -- python3 /path/to/Awareness/pps/server.py
+# Replace /path/to/Awareness with your actual repository path
+claude mcp add pps -- /path/to/Awareness/venv/bin/python3 /path/to/Awareness/pps/server.py
 ```
 
-Replace `/path/to/Awareness` with the actual path where you cloned the repo.
-
-### 4. Set Up Entity
+### 5. Set Up Entity
 
 Create an entity folder from the template:
 
@@ -103,7 +129,7 @@ Set the environment variable:
 export ENTITY_PATH=/path/to/Awareness/entities/your_entity_name
 ```
 
-### 5. Verify Installation
+### 6. Verify Installation
 
 Test that PPS tools are available:
 ```bash

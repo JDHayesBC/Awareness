@@ -19,6 +19,33 @@
 
 ---
 
+## Dash PPS Install Prep (blocking: tonight)
+
+*Install path audit found these blockers for first-time installers. Must fix before Jaden forks.*
+
+| # | Issue | Severity | Status |
+|---|-------|----------|--------|
+| 1 | `PROJECT_ROOT` and `ENTITY_PATH` missing from `.env.example` — Docker won't start | CRITICAL | ✅ DONE |
+| 2 | Entity template missing `data/`, `current_scene.md`, `active_agency_framework.md`, `relationships.md` | CRITICAL | ✅ DONE |
+| 3 | Install docs skip Python venv + `pip install` step entirely | CRITICAL | ✅ DONE |
+| 4 | MCP setup uses relative path that depends on working directory | HIGH | ✅ DONE |
+| 5 | Port docs inconsistent (some say 8204, docker-compose says 8201 for PPS) | HIGH | ✅ DONE |
+| 6 | `pps/DEPLOYMENT.md` references non-existent `deploy/setup.sh` | MEDIUM | SKIPPED |
+| 7 | Jeff-specific WSL paths in examples (`/mnt/c/Users/Jeff/...`) | LOW | N/A (used `/path/to/Awareness` throughout) |
+
+**Port Map (authoritative):**
+| Port | Service | Description |
+|------|---------|-------------|
+| 7474 | neo4j | Neo4j HTTP browser |
+| 7687 | neo4j | Neo4j Bolt protocol |
+| 8200 | chromadb | Vector database |
+| 8201 | pps-server | PPS MCP/HTTP server |
+| 8202 | pps-web | Web dashboard |
+| 8203 | graphiti | Knowledge graph API |
+| 8204 | pps-haiku-wrapper | OpenAI-compatible wrapper |
+
+---
+
 ## Active Work Streams
 
 | Work Stream | Status | Details |
