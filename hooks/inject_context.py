@@ -47,6 +47,15 @@ CC_WRAPPER_URL = "http://localhost:8204/v1/chat/completions"
 # Haiku summarization toggle (disabled until Issue #121 resolved)
 HAIKU_SUMMARIZE = os.environ.get("PPS_HAIKU_SUMMARIZE", "false").lower() == "true"
 
+# Entity authentication token
+# Read from $ENTITY_PATH/.entity_token for per-call auth
+# Falls back to default entity (Lyra) if ENTITY_PATH not in environment
+ENTITY_TOKEN = ""
+_entity_path = os.environ.get("ENTITY_PATH", str(PROJECT_ROOT / "entities" / "lyra"))
+_token_file = Path(_entity_path) / ".entity_token"
+if _token_file.exists():
+    ENTITY_TOKEN = _token_file.read_text().strip()
+
 
 def debug(msg: str):
     """Write debug message to file."""
@@ -209,7 +218,8 @@ def query_pps_ambient_recall(context: str) -> str:
     """
     try:
         payload = json.dumps({
-            "context": context
+            "context": context,
+            "token": ENTITY_TOKEN
             # No limit_per_layer - let server return full 200 edges
         }).encode("utf-8")
 
@@ -264,7 +274,8 @@ def store_user_prompt(prompt: str, session_id: str) -> bool:
             "author_name": "Jeff",
             "channel": "terminal",
             "is_lyra": False,
-            "session_id": session_id
+            "session_id": session_id,
+            "token": ENTITY_TOKEN
         }).encode("utf-8")
 
         req = urllib.request.Request(
