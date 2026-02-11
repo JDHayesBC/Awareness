@@ -33,7 +33,7 @@ from pathlib import Path
 import time
 
 # Entity authentication
-from pps.auth import load_tokens, check_auth, validate_master_only, regenerate_entity_token, AUTH_EXEMPT_TOOLS, TOKEN_PARAM_SCHEMA
+from auth import load_tokens, check_auth, validate_master_only, regenerate_entity_token, AUTH_EXEMPT_TOOLS, TOKEN_PARAM_SCHEMA
 
 # Try to use graphiti_core for enhanced Layer 3
 try:
