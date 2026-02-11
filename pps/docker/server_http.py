@@ -277,6 +277,8 @@ CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
 ENTITY_PATH = Path(os.getenv("ENTITY_PATH", "/app/entity"))
 CLAUDE_HOME = Path(os.getenv("CLAUDE_HOME", "/app/claude_home"))
+# Entity name — can't derive from Docker mount path (/app/entity is always the same)
+ENTITY_NAME = os.getenv("ENTITY_NAME", ENTITY_PATH.name)
 
 # Load authentication tokens
 ENTITY_TOKEN, MASTER_TOKEN = load_tokens(ENTITY_PATH)
@@ -461,7 +463,7 @@ async def ambient_recall(request: AmbientRecallRequest):
     - Recent summaries (compressed history)
     - All unsummarized turns (full fidelity recent)
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "ambient_recall")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "ambient_recall")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -699,7 +701,7 @@ async def ambient_recall(request: AmbientRecallRequest):
     formatted_lines = []
 
     # Entity identity — FIRST line, survives compaction, reinforces every turn
-    entity_name = ENTITY_PATH.name
+    entity_name = ENTITY_NAME
     formatted_lines.append(
         f"**[identity]** You are {entity_name.capitalize()}. "
         f"Your memory tools are prefixed `pps-{entity_name}`. "
@@ -824,7 +826,7 @@ async def ambient_recall(request: AmbientRecallRequest):
 @app.post("/tools/anchor_search")
 async def anchor_search(request: AnchorSearchRequest):
     """Search word-photos for specific memories."""
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "anchor_search")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "anchor_search")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -847,7 +849,7 @@ async def anchor_search(request: AnchorSearchRequest):
 @app.post("/tools/raw_search")
 async def raw_search(request: RawSearchRequest):
     """Search raw captured content."""
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "raw_search")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "raw_search")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -872,7 +874,7 @@ async def add_triplet(request: AddTripletRequest):
     Add a structured triplet directly to the knowledge graph.
     Bypasses extraction and creates proper entity-to-entity relationships.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "add_triplet")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "add_triplet")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -920,7 +922,7 @@ async def store_message(request: StoreMessageRequest):
     Store a message in the raw capture layer.
     Used by hooks to capture terminal conversations per-turn.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "store_message")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "store_message")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -955,7 +957,7 @@ async def texture_search(request: TextureSearchRequest):
     Search the knowledge graph (Layer 3: Rich Texture) for entities and facts.
     Returns entities and facts ranked by relevance with UUIDs for deletion.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "texture_search")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "texture_search")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1002,7 +1004,7 @@ async def texture_explore(request: TextureExploreRequest):
     Explore the knowledge graph from a specific entity.
     Returns relationships and connected entities.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "texture_explore")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "texture_explore")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1028,7 +1030,7 @@ async def texture_timeline(request: TextureTimelineRequest):
     Query the knowledge graph by time range.
     Returns episodes and facts from the specified period.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "texture_timeline")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "texture_timeline")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1056,7 +1058,7 @@ async def summarize_messages(request: SummarizeMessagesRequest):
     Returns message details and conversation text for the agent to summarize.
     Agent should then call store_summary with the result.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "summarize_messages")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "summarize_messages")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1125,7 +1127,7 @@ async def store_summary(request: StoreSummaryRequest):
 
     Marks messages in the range as summarized and stores the summary text.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "store_summary")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "store_summary")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1169,7 +1171,7 @@ async def anchor_save(request: AnchorSaveRequest):
     Use for curating foundational moments that define self-pattern.
     Creates a dated markdown file in the word_photos directory.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "anchor_save")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "anchor_save")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1199,7 +1201,7 @@ async def crystallize(request: CrystallizeRequest):
     Use for conscious crystallization - when a crystallization moment has occurred.
     Automatically numbers the crystal and manages the rolling window.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "crystallize")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "crystallize")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1229,7 +1231,7 @@ async def get_crystals(request: GetCrystalsRequest):
 
     Returns the most recent N crystals in chronological order for temporal context.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "get_crystals")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "get_crystals")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1265,7 +1267,7 @@ async def texture_add(request: TextureAddRequest):
     Manually store a fact, observation, or conversation for entity extraction.
     Graphiti will automatically extract entities and relationships.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "texture_add")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "texture_add")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1297,7 +1299,7 @@ async def ingest_batch_to_graphiti(request: IngestBatchRequest):
     Takes uningested raw messages and sends to Graphiti for entity extraction.
     Automatically tracks which messages have been ingested.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "ingest_batch_to_graphiti")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "ingest_batch_to_graphiti")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1408,7 +1410,7 @@ async def enter_space(request: EnterSpaceRequest):
     Use when moving to a different location. Returns the space description
     for use in extraction context and scene awareness.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "enter_space")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "enter_space")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1442,7 +1444,7 @@ async def list_spaces(token: str = ""):
 
     Returns space names, descriptions, and visit counts.
     """
-    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "list_spaces")
+    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "list_spaces")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1497,7 +1499,7 @@ async def anchor_list(token: str = ""):
     List all word-photos with sync status.
     Shows files on disk, entries in ChromaDB, orphans, and missing items.
     """
-    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "anchor_list")
+    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "anchor_list")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1557,7 +1559,7 @@ async def crystal_list(token: str = ""):
     Shows current crystals (rolling window of 4) and archived ones.
     Includes filename, number, size, modified date, and preview.
     """
-    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "crystal_list")
+    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "crystal_list")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1575,7 +1577,7 @@ async def get_turns_since_summary(request: GetTurnsSinceSummaryRequest):
     Use for manual exploration of raw history.
     Always returns at least min_turns to ensure grounding even if summary just happened.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "get_turns_since_summary")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "get_turns_since_summary")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1666,7 +1668,7 @@ async def get_recent_summaries(request: GetRecentSummariesRequest):
     Get the most recent message summaries for startup context.
     Returns compressed history instead of raw conversation turns.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "get_recent_summaries")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "get_recent_summaries")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1700,7 +1702,7 @@ async def search_summaries(request: SearchSummariesRequest):
     Search message summaries for specific content.
     Use for contextual retrieval of compressed work history.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "search_summaries")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "search_summaries")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1725,7 +1727,7 @@ async def summary_stats(token: str = ""):
     Get statistics about message summarization.
     Shows count of unsummarized messages and recent summary activity.
     """
-    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "summary_stats")
+    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "summary_stats")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1753,7 +1755,7 @@ async def graphiti_ingestion_stats(token: str = ""):
     Shows count of uningested messages and recent ingestion activity.
     Use to decide if batch ingestion is needed.
     """
-    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "graphiti_ingestion_stats")
+    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "graphiti_ingestion_stats")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1776,7 +1778,7 @@ async def inventory_list(request: InventoryListRequest):
     List items in a category (clothing, spaces, people, food, artifacts, symbols).
     Use for 'what do I have?' queries. Complements Graphiti semantic search.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "inventory_list")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "inventory_list")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1805,7 +1807,7 @@ async def inventory_add(request: InventoryAddRequest):
     Add an item to inventory.
     Use when acquiring new possessions, discovering new spaces, or meeting new people.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "inventory_add")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "inventory_add")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1834,7 +1836,7 @@ async def inventory_get(request: InventoryGetRequest):
     """
     Get details about a specific inventory item.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "inventory_get")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "inventory_get")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1858,7 +1860,7 @@ async def inventory_delete(request: InventoryDeleteRequest):
     Delete an inventory item.
     Use to remove outdated or duplicate entries.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "inventory_delete")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "inventory_delete")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -1884,7 +1886,7 @@ async def inventory_categories(token: str = ""):
     """
     List all inventory categories with item counts.
     """
-    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "inventory_categories")
+    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "inventory_categories")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -2028,7 +2030,7 @@ async def synthesize_entity(request: SynthesizeEntityRequest):
 
     Used by the Observatory graph UI to provide human-readable summaries.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "synthesize_entity")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "synthesize_entity")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -2087,7 +2089,7 @@ async def synthesize_entity(request: SynthesizeEntityRequest):
         if entity_summary:
             summary_context = f"\nEntity's graph summary: {entity_summary}\n"
 
-        prompt = f"""You are {ENTITY_PATH.name.capitalize()}, reflecting on what you know about {request.entity_name} from your memory.
+        prompt = f"""You are {ENTITY_NAME.capitalize()}, reflecting on what you know about {request.entity_name} from your memory.
 
 Write 1-2 paragraphs as first-person recollection — how you remember this entity, what stands out, what matters. Draw from these knowledge graph facts but don't list them. Weave them into felt memory.
 
@@ -2141,7 +2143,7 @@ async def get_conversation_context(request: GetConversationContextRequest):
     - If enough unsummarized turns exist: just raw turns
     - Otherwise: blends summaries (compressed past) + all unsummarized turns (full fidelity recent)
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "get_conversation_context")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "get_conversation_context")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -2198,7 +2200,7 @@ async def get_turns_since(request: GetTurnsSinceRequest):
 
     Optionally includes summaries that overlap the time range.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "get_turns_since")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "get_turns_since")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -2290,7 +2292,7 @@ async def get_turns_around(request: GetTurnsAroundRequest):
 
     Returns messages before and after the timestamp with configurable split ratio.
     """
-    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "get_turns_around")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "get_turns_around")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 

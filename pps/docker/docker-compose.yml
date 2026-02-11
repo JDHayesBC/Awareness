@@ -109,6 +109,8 @@ services:
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password123}
       # Entity path - container internal path (host path in .env is for volume mount only)
       - ENTITY_PATH=/app/entity
+      # Entity name - can't derive from mount path, must be explicit
+      - ENTITY_NAME=${ENTITY_NAME:-lyra}
       # Shared data path (SQLite, logs) - container internal path
       - CLAUDE_HOME=/app/claude_home
       - JINA_API_KEY=${JINA_API_KEY:-}
