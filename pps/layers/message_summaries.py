@@ -35,8 +35,8 @@ class MessageSummariesLayer(PatternLayer):
         """Initialize message summaries layer."""
         if db_path is None:
             # Database now in entity directory (Issue #131 migration)
-            entity_path = os.getenv("ENTITY_PATH", "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra")
-            db_path = Path(entity_path) / "data" / "lyra_conversations.db"
+            entity_path = os.getenv("ENTITY_PATH", str(Path.home() / ".claude"))
+            db_path = Path(entity_path) / "data" / "conversations.db"
         self.db_path = db_path
         self._ensure_tables()
 

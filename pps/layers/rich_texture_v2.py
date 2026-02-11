@@ -56,8 +56,9 @@ import aiohttp
 
 # Default database path for recent message access
 # Database now in entity directory (Issue #131 migration)
-_entity_path = os.getenv("ENTITY_PATH", "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra")
-DEFAULT_DB_PATH = os.path.join(_entity_path, "data", "lyra_conversations.db")
+from pathlib import Path as _Path
+_entity_path = os.getenv("ENTITY_PATH", str(_Path.home() / ".claude"))
+DEFAULT_DB_PATH = os.path.join(_entity_path, "data", "conversations.db")
 
 
 class RichTextureLayerV2(PatternLayer):
@@ -105,7 +106,12 @@ class RichTextureLayerV2(PatternLayer):
             port = os.environ.get("GRAPHITI_PORT", "8203")
             self.graphiti_url = f"http://{host}:{port}"
 
-        self.group_id = group_id or os.environ.get("GRAPHITI_GROUP_ID", "lyra")
+        # Entity-aware group_id default
+        default_group_id = "default"
+        entity_path = os.getenv("ENTITY_PATH", "")
+        if entity_path:
+            default_group_id = Path(entity_path).name.lower()
+        self.group_id = group_id or os.environ.get("GRAPHITI_GROUP_ID", default_group_id)
 
         # Local LLM configuration (for using Ollama, LM Studio, etc.)
         # When GRAPHITI_LLM_BASE_URL is set, uses local LLM for entity extraction

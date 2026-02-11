@@ -61,7 +61,7 @@ fi
 
 # Database files - 600
 echo -e "\n=== Database Files (600) ==="
-set_perms "/home/jeff/.claude/data/lyra_conversations.db" 600 "Conversation database"
+set_perms "/home/jeff/.claude/data/conversations.db" 600 "Conversation database"
 find /home/jeff/.claude -name "*.db" -o -name "*.sqlite" -o -name "*.sqlite3" | while read -r file; do
     set_perms "$file" 600 "Database file"
 done

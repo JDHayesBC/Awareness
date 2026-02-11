@@ -255,7 +255,7 @@ def get_layers():
     # Paths inside Docker container (configured via environment)
     memories_path = ENTITY_PATH / "memories" / "word_photos"
     # Database now in entity directory (Issue #131 migration)
-    data_path = ENTITY_PATH / "data" / "lyra_conversations.db"
+    data_path = ENTITY_PATH / "data" / "conversations.db"
     crystals_path = ENTITY_PATH / "crystals" / "current"
 
     # Use V2 rich texture layer if available (supports add_triplet_direct)
@@ -290,7 +290,7 @@ layers = get_layers()
 
 # Initialize message summaries for unsummarized count
 # Database now in entity directory (Issue #131 migration)
-data_path = ENTITY_PATH / "data" / "lyra_conversations.db"
+data_path = ENTITY_PATH / "data" / "conversations.db"
 message_summaries = MessageSummariesLayer(db_path=data_path)
 
 # Initialize inventory layer (Layer 5) for enter_space

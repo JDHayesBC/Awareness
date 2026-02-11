@@ -41,7 +41,7 @@ class TerminalLogger:
         
         # Initialize raw capture layer
         entity_path = Path(os.getenv("ENTITY_PATH", str(Path.home() / ".claude")))
-        db_path = entity_path / "data" / "lyra_conversations.db"
+        db_path = entity_path / "data" / "conversations.db"
         self.raw_capture = RawCaptureLayer(db_path=db_path)
         
         # Track session context

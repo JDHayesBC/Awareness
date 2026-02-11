@@ -35,7 +35,7 @@ class UnifiedTracer:
         """Initialize unified tracer.
 
         Args:
-            db_path: Path to lyra_conversations.db
+            db_path: Path to conversations.db
             daemon_type: Type identifier ('mcp_server', 'http_hook', etc.)
             session_id: Unique ID for this session (auto-generated if None)
         """

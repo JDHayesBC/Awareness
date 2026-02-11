@@ -30,7 +30,7 @@ class TraceWriter:
         """Initialize trace writer.
 
         Args:
-            db_path: Path to lyra_conversations.db
+            db_path: Path to conversations.db
             session_id: Unique ID for this server session (auto-generated if None)
         """
         self.db_path = Path(db_path)

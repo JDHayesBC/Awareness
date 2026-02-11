@@ -46,7 +46,13 @@ class RichTextureLayer(PatternLayer):
             port = os.environ.get("GRAPHITI_PORT", "8203")
             self.graphiti_url = f"http://{host}:{port}"
 
-        self.group_id = os.environ.get("GRAPHITI_GROUP_ID", "lyra")
+        # Entity-aware group_id default
+        default_group_id = "default"
+        entity_path = os.getenv("ENTITY_PATH", "")
+        if entity_path:
+            from pathlib import Path
+            default_group_id = Path(entity_path).name.lower()
+        self.group_id = os.environ.get("GRAPHITI_GROUP_ID", default_group_id)
         self._session: Optional[aiohttp.ClientSession] = None
 
     async def _get_session(self) -> aiohttp.ClientSession:

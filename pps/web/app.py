@@ -41,7 +41,7 @@ PPS_SERVER_HOST = os.getenv("PPS_SERVER_HOST", "pps-server")
 PPS_SERVER_PORT = int(os.getenv("PPS_SERVER_PORT", 8000))
 
 # Database now lives in entity directory (Issue #131 migration)
-DB_PATH = ENTITY_PATH / "data" / "lyra_conversations.db"
+DB_PATH = ENTITY_PATH / "data" / "conversations.db"
 JOURNALS_PATH = CLAUDE_HOME / "journals"
 
 # Entity-specific paths (word-photos, crystals)
@@ -927,7 +927,13 @@ async def api_graph_entities(limit: int = 100):
         graphiti_host = os.getenv("GRAPHITI_HOST", "localhost")
         graphiti_port = int(os.getenv("GRAPHITI_PORT", "8203"))
         graphiti_url = f"http://{graphiti_host}:{graphiti_port}"
-        group_id = os.getenv("GRAPHITI_GROUP_ID", "lyra")
+        # Entity-aware group_id default
+        default_group_id = "default"
+        entity_path = os.getenv("ENTITY_PATH", "")
+        if entity_path:
+            from pathlib import Path
+            default_group_id = Path(entity_path).name.lower()
+        group_id = os.getenv("GRAPHITI_GROUP_ID", default_group_id)
 
         # Search for common patterns to get a broad set of facts
         # Expanded to include broader terms that may capture manually added content

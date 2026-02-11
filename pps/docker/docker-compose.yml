@@ -73,7 +73,7 @@ services:
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password123}
       # Graphiti config
-      - DEFAULT_GROUP_ID=lyra
+      - DEFAULT_GROUP_ID=default
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthcheck"]
       interval: 30s
@@ -117,7 +117,9 @@ services:
       # Ambient recall optimization (per-turn context enrichment)
       - PPS_ENABLE_EXPLORE=${PPS_ENABLE_EXPLORE:-true}
       # Database now in entity directory (Issue #131 migration)
-      - PPS_MESSAGE_DB_PATH=${PPS_MESSAGE_DB_PATH:-/app/entity/data/lyra_conversations.db}
+      - PPS_MESSAGE_DB_PATH=${PPS_MESSAGE_DB_PATH:-/app/entity/data/conversations.db}
+      # Graphiti group_id for entity isolation (derived from ENTITY_PATH if not set)
+      - GRAPHITI_GROUP_ID=${GRAPHITI_GROUP_ID:-}
     volumes:
       # Mount entity directory (identity files, crystals, word-photos, AND databases)
       - ${ENTITY_PATH}:/app/entity:rw

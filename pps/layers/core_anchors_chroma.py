@@ -25,8 +25,6 @@ class CoreAnchorsChromaLayer(PatternLayer):
     Embeddings are generated automatically by ChromaDB using sentence-transformers.
     """
 
-    COLLECTION_NAME = "word_photos"
-
     def __init__(
         self,
         word_photos_path: Optional[Path] = None,
@@ -46,6 +44,14 @@ class CoreAnchorsChromaLayer(PatternLayer):
         self.word_photos_path = word_photos_path
         self.chroma_host = chroma_host
         self.chroma_port = chroma_port
+
+        # Entity-aware collection name
+        entity_path = os.getenv("ENTITY_PATH", "")
+        if entity_path:
+            entity_name = Path(entity_path).name.lower()
+        else:
+            entity_name = "default"
+        self.collection_name = f"{entity_name}_word_photos"
 
         # Initialize ChromaDB client
         self._client = None
@@ -67,7 +73,7 @@ class CoreAnchorsChromaLayer(PatternLayer):
             client = self._get_client()
             # Use default embedding function (sentence-transformers)
             self._collection = client.get_or_create_collection(
-                name=self.COLLECTION_NAME,
+                name=self.collection_name,
                 metadata={"description": "Soul anchors - foundational word-photos"}
             )
         return self._collection
@@ -361,7 +367,7 @@ class CoreAnchorsChromaLayer(PatternLayer):
 
             # Delete the collection entirely
             try:
-                client.delete_collection(self.COLLECTION_NAME)
+                client.delete_collection(self.collection_name)
             except Exception:
                 pass  # Collection might not exist
 

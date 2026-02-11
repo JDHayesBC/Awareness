@@ -55,7 +55,7 @@ crystals_path = ENTITY_PATH / "crystals" / "current"
 archive_path = ENTITY_PATH / "crystals" / "archive"
 
 # Entity-specific database paths (Issue #131 migration - moved to entity directory)
-db_path = ENTITY_PATH / "data" / "lyra_conversations.db"
+db_path = ENTITY_PATH / "data" / "conversations.db"
 
 # Try to use ChromaDB if available
 try:
