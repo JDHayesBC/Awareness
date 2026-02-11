@@ -25,21 +25,26 @@ from pydantic import BaseModel
 import uvicorn
 import time
 
+from auth import load_tokens, check_auth, AUTH_EXEMPT_TOOLS
+
 
 # Request models
 class AmbientRecallRequest(BaseModel):
     context: str
     limit_per_layer: int = 5
+    token: str = ""
 
 
 class AnchorSearchRequest(BaseModel):
     query: str
     limit: int = 10
+    token: str = ""
 
 
 class RawSearchRequest(BaseModel):
     query: str
     limit: int = 20
+    token: str = ""
 
 
 class AddTripletRequest(BaseModel):
@@ -49,6 +54,7 @@ class AddTripletRequest(BaseModel):
     fact: str | None = None
     source_type: str | None = None
     target_type: str | None = None
+    token: str = ""
 
 
 class StoreMessageRequest(BaseModel):
@@ -57,28 +63,33 @@ class StoreMessageRequest(BaseModel):
     channel: str = "terminal"
     is_lyra: bool = False
     session_id: str | None = None
+    token: str = ""
 
 
 class TextureSearchRequest(BaseModel):
     query: str
     limit: int = 10
     center_node_uuid: str | None = None
+    token: str = ""
 
 
 class TextureExploreRequest(BaseModel):
     entity_name: str
     depth: int = 2
+    token: str = ""
 
 
 class TextureTimelineRequest(BaseModel):
     since: str
     until: str | None = None
     limit: int = 20
+    token: str = ""
 
 
 class SummarizeMessagesRequest(BaseModel):
     limit: int = 50
     summary_type: str = "work"
+    token: str = ""
 
 
 class StoreSummaryRequest(BaseModel):
@@ -87,6 +98,7 @@ class StoreSummaryRequest(BaseModel):
     end_id: int
     channels: list[str] = []
     summary_type: str = "work"
+    token: str = ""
 
 
 # Phase 1 HTTP Migration - New Request Models
@@ -95,32 +107,38 @@ class AnchorSaveRequest(BaseModel):
     content: str          # The word-photo content in markdown
     title: str            # Title (used in filename)
     location: str = "terminal"  # Context tag (terminal, discord, reflection, etc.)
+    token: str = ""
 
 
 class CrystallizeRequest(BaseModel):
     """Request to create a new crystal."""
     content: str          # Crystal content in markdown format
+    token: str = ""
 
 
 class TextureAddRequest(BaseModel):
     """Request to add content to the knowledge graph."""
     content: str          # Content to store (conversation, note, observation)
     channel: str = "manual"  # Source channel for metadata
+    token: str = ""
 
 
 class IngestBatchRequest(BaseModel):
     """Request to batch ingest messages to Graphiti."""
     batch_size: int = 20  # Number of messages to ingest
+    token: str = ""
 
 
 class EnterSpaceRequest(BaseModel):
     """Request to enter a space and load its context."""
     space_name: str       # Name of the space to enter
+    token: str = ""
 
 
 class GetCrystalsRequest(BaseModel):
     """Request to get recent crystals."""
     count: int = 4        # Number of recent crystals to retrieve
+    token: str = ""
 
 
 # Phase 2 HTTP Migration - Additional Request Models
@@ -131,17 +149,20 @@ class GetTurnsSinceSummaryRequest(BaseModel):
     offset: int = 0
     min_turns: int = 10
     channel: str | None = None
+    token: str = ""
 
 
 class GetRecentSummariesRequest(BaseModel):
     """Request to get recent message summaries."""
     limit: int = 5
+    token: str = ""
 
 
 class SearchSummariesRequest(BaseModel):
     """Request to search message summaries."""
     query: str
     limit: int = 10
+    token: str = ""
 
 
 class InventoryListRequest(BaseModel):
@@ -149,6 +170,7 @@ class InventoryListRequest(BaseModel):
     category: str
     subcategory: str | None = None
     limit: int = 50
+    token: str = ""
 
 
 class InventoryAddRequest(BaseModel):
@@ -158,18 +180,21 @@ class InventoryAddRequest(BaseModel):
     subcategory: str | None = None
     description: str | None = None
     attributes: dict | None = None
+    token: str = ""
 
 
 class InventoryGetRequest(BaseModel):
     """Request to get an inventory item."""
     name: str
     category: str
+    token: str = ""
 
 
 class InventoryDeleteRequest(BaseModel):
     """Request to delete an inventory item."""
     name: str
     category: str
+    token: str = ""
 
 
 class TechSearchRequest(BaseModel):
@@ -188,11 +213,13 @@ class TechIngestRequest(BaseModel):
 class SynthesizeEntityRequest(BaseModel):
     """Request to synthesize prose summary from entity graph data."""
     entity_name: str
+    token: str = ""
 
 
 class GetConversationContextRequest(BaseModel):
     """Request to get N turns of context (blends summaries + raw turns)."""
     turns: int
+    token: str = ""
 
 
 class GetTurnsSinceRequest(BaseModel):
@@ -200,6 +227,7 @@ class GetTurnsSinceRequest(BaseModel):
     timestamp: str
     include_summaries: bool = True
     limit: int = 1000
+    token: str = ""
 
 
 class GetTurnsAroundRequest(BaseModel):
@@ -207,6 +235,7 @@ class GetTurnsAroundRequest(BaseModel):
     timestamp: str
     count: int = 40
     before_ratio: float = 0.5
+    token: str = ""
 
 
 # Add parent directory to path for imports
@@ -248,6 +277,9 @@ CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
 ENTITY_PATH = Path(os.getenv("ENTITY_PATH", "/app/entity"))
 CLAUDE_HOME = Path(os.getenv("CLAUDE_HOME", "/app/claude_home"))
+
+# Load authentication tokens
+ENTITY_TOKEN, MASTER_TOKEN = load_tokens(ENTITY_PATH)
 
 
 def get_layers():
@@ -429,6 +461,10 @@ async def ambient_recall(request: AmbientRecallRequest):
     - Recent summaries (compressed history)
     - All unsummarized turns (full fidelity recent)
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "ambient_recall")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     import time
     start_time = time.time()
 
@@ -788,6 +824,10 @@ async def ambient_recall(request: AmbientRecallRequest):
 @app.post("/tools/anchor_search")
 async def anchor_search(request: AnchorSearchRequest):
     """Search word-photos for specific memories."""
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "anchor_search")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     layer = layers[LayerType.CORE_ANCHORS]
     results = await layer.search(request.query, request.limit)
 
@@ -807,6 +847,10 @@ async def anchor_search(request: AnchorSearchRequest):
 @app.post("/tools/raw_search")
 async def raw_search(request: RawSearchRequest):
     """Search raw captured content."""
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "raw_search")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     layer = layers[LayerType.RAW_CAPTURE]
     results = await layer.search(request.query, request.limit)
 
@@ -828,6 +872,10 @@ async def add_triplet(request: AddTripletRequest):
     Add a structured triplet directly to the knowledge graph.
     Bypasses extraction and creates proper entity-to-entity relationships.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "add_triplet")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     if not USE_RICH_TEXTURE_V2:
         raise HTTPException(
             status_code=501,
@@ -872,6 +920,10 @@ async def store_message(request: StoreMessageRequest):
     Store a message in the raw capture layer.
     Used by hooks to capture terminal conversations per-turn.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "store_message")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     layer = layers[LayerType.RAW_CAPTURE]
 
     # Build channel with session_id if provided
@@ -903,6 +955,10 @@ async def texture_search(request: TextureSearchRequest):
     Search the knowledge graph (Layer 3: Rich Texture) for entities and facts.
     Returns entities and facts ranked by relevance with UUIDs for deletion.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "texture_search")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     layer = layers[LayerType.RICH_TEXTURE]
     results = await layer.search(request.query, request.limit)
 
@@ -946,6 +1002,10 @@ async def texture_explore(request: TextureExploreRequest):
     Explore the knowledge graph from a specific entity.
     Returns relationships and connected entities.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "texture_explore")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     layer = layers[LayerType.RICH_TEXTURE]
     results = await layer.explore(request.entity_name, request.depth)
 
@@ -968,6 +1028,10 @@ async def texture_timeline(request: TextureTimelineRequest):
     Query the knowledge graph by time range.
     Returns episodes and facts from the specified period.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "texture_timeline")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     layer = layers[LayerType.RICH_TEXTURE]
     results = await layer.timeline(request.since, request.until, request.limit)
 
@@ -992,6 +1056,10 @@ async def summarize_messages(request: SummarizeMessagesRequest):
     Returns message details and conversation text for the agent to summarize.
     Agent should then call store_summary with the result.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "summarize_messages")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     # Get unsummarized messages
     messages = message_summaries.get_unsummarized_messages(request.limit)
 
@@ -1057,6 +1125,10 @@ async def store_summary(request: StoreSummaryRequest):
 
     Marks messages in the range as summarized and stores the summary text.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "store_summary")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     if not request.summary_text or request.start_id is None or request.end_id is None:
         raise HTTPException(
             status_code=400,
@@ -1097,6 +1169,10 @@ async def anchor_save(request: AnchorSaveRequest):
     Use for curating foundational moments that define self-pattern.
     Creates a dated markdown file in the word_photos directory.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "anchor_save")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     if not request.content or not request.title:
         raise HTTPException(status_code=400, detail="content and title are required")
 
@@ -1123,6 +1199,10 @@ async def crystallize(request: CrystallizeRequest):
     Use for conscious crystallization - when a crystallization moment has occurred.
     Automatically numbers the crystal and manages the rolling window.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "crystallize")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     if not request.content:
         raise HTTPException(status_code=400, detail="content is required")
 
@@ -1149,6 +1229,10 @@ async def get_crystals(request: GetCrystalsRequest):
 
     Returns the most recent N crystals in chronological order for temporal context.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "get_crystals")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     layer = layers[LayerType.CRYSTALLIZATION]
     results = await layer.search("recent", request.count)
 
@@ -1181,6 +1265,10 @@ async def texture_add(request: TextureAddRequest):
     Manually store a fact, observation, or conversation for entity extraction.
     Graphiti will automatically extract entities and relationships.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "texture_add")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     if not request.content:
         raise HTTPException(status_code=400, detail="content is required")
 
@@ -1209,6 +1297,10 @@ async def ingest_batch_to_graphiti(request: IngestBatchRequest):
     Takes uningested raw messages and sends to Graphiti for entity extraction.
     Automatically tracks which messages have been ingested.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "ingest_batch_to_graphiti")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     # Get uningested messages
     uningested_count = message_summaries.count_uningested_to_graphiti()
 
@@ -1316,6 +1408,10 @@ async def enter_space(request: EnterSpaceRequest):
     Use when moving to a different location. Returns the space description
     for use in extraction context and scene awareness.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "enter_space")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     if not request.space_name:
         raise HTTPException(status_code=400, detail="space_name is required")
 
@@ -1340,12 +1436,16 @@ async def enter_space(request: EnterSpaceRequest):
 
 
 @app.get("/tools/list_spaces")
-async def list_spaces():
+async def list_spaces(token: str = ""):
     """
     List all known spaces/rooms/locations.
 
     Returns space names, descriptions, and visit counts.
     """
+    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "list_spaces")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     spaces = await inventory.list_spaces()
 
     return {
@@ -1392,11 +1492,15 @@ async def anchor_delete(filename: str):
 
 
 @app.get("/tools/anchor_list")
-async def anchor_list():
+async def anchor_list(token: str = ""):
     """
     List all word-photos with sync status.
     Shows files on disk, entries in ChromaDB, orphans, and missing items.
     """
+    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "anchor_list")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     layer = layers[LayerType.CORE_ANCHORS]
     if hasattr(layer, 'list_anchors'):
         result = await layer.list_anchors()
@@ -1447,12 +1551,16 @@ async def crystal_delete():
 
 
 @app.get("/tools/crystal_list")
-async def crystal_list():
+async def crystal_list(token: str = ""):
     """
     List all crystals with metadata.
     Shows current crystals (rolling window of 4) and archived ones.
     Includes filename, number, size, modified date, and preview.
     """
+    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "crystal_list")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     layer = layers[LayerType.CRYSTALLIZATION]
     result = await layer.list_crystals()
     return result
@@ -1467,6 +1575,10 @@ async def get_turns_since_summary(request: GetTurnsSinceSummaryRequest):
     Use for manual exploration of raw history.
     Always returns at least min_turns to ensure grounding even if summary just happened.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "get_turns_since_summary")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     # Get the timestamp of the last summary
     last_summary_time = message_summaries.get_latest_summary_timestamp()
     
@@ -1554,6 +1666,10 @@ async def get_recent_summaries(request: GetRecentSummariesRequest):
     Get the most recent message summaries for startup context.
     Returns compressed history instead of raw conversation turns.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "get_recent_summaries")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     summaries = message_summaries.get_recent_summaries(request.limit)
     
     if not summaries:
@@ -1584,6 +1700,10 @@ async def search_summaries(request: SearchSummariesRequest):
     Search message summaries for specific content.
     Use for contextual retrieval of compressed work history.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "search_summaries")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     results = await message_summaries.search(request.query, request.limit)
     
     return {
@@ -1600,11 +1720,15 @@ async def search_summaries(request: SearchSummariesRequest):
 
 
 @app.get("/tools/summary_stats")
-async def summary_stats():
+async def summary_stats(token: str = ""):
     """
     Get statistics about message summarization.
     Shows count of unsummarized messages and recent summary activity.
     """
+    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "summary_stats")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     unsummarized_count = message_summaries.count_unsummarized_messages()
     recent_summaries = message_summaries.get_recent_summaries(3)
     
@@ -1623,12 +1747,16 @@ async def summary_stats():
 # === Graphiti Stats (1) ===
 
 @app.get("/tools/graphiti_ingestion_stats")
-async def graphiti_ingestion_stats():
+async def graphiti_ingestion_stats(token: str = ""):
     """
     Get statistics about Graphiti batch ingestion.
     Shows count of uningested messages and recent ingestion activity.
     Use to decide if batch ingestion is needed.
     """
+    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "graphiti_ingestion_stats")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     uningested_count = message_summaries.count_uningested_to_graphiti()
     
     stats = {
@@ -1648,6 +1776,10 @@ async def inventory_list(request: InventoryListRequest):
     List items in a category (clothing, spaces, people, food, artifacts, symbols).
     Use for 'what do I have?' queries. Complements Graphiti semantic search.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "inventory_list")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     if not request.category:
         raise HTTPException(status_code=400, detail="category required")
     
@@ -1673,6 +1805,10 @@ async def inventory_add(request: InventoryAddRequest):
     Add an item to inventory.
     Use when acquiring new possessions, discovering new spaces, or meeting new people.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "inventory_add")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     if not request.name or not request.category:
         raise HTTPException(status_code=400, detail="name and category required")
     
@@ -1698,6 +1834,10 @@ async def inventory_get(request: InventoryGetRequest):
     """
     Get details about a specific inventory item.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "inventory_get")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     if not request.name or not request.category:
         raise HTTPException(status_code=400, detail="name and category required")
     
@@ -1718,6 +1858,10 @@ async def inventory_delete(request: InventoryDeleteRequest):
     Delete an inventory item.
     Use to remove outdated or duplicate entries.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "inventory_delete")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     if not request.name or not request.category:
         raise HTTPException(status_code=400, detail="name and category required")
     
@@ -1736,10 +1880,14 @@ async def inventory_delete(request: InventoryDeleteRequest):
 
 
 @app.get("/tools/inventory_categories")
-async def inventory_categories():
+async def inventory_categories(token: str = ""):
     """
     List all inventory categories with item counts.
     """
+    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "inventory_categories")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     categories = await inventory.list_categories()
     
     return {
@@ -1880,6 +2028,10 @@ async def synthesize_entity(request: SynthesizeEntityRequest):
 
     Used by the Observatory graph UI to provide human-readable summaries.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "synthesize_entity")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     if not request.entity_name:
         raise HTTPException(status_code=400, detail="entity_name required")
 
@@ -1989,6 +2141,10 @@ async def get_conversation_context(request: GetConversationContextRequest):
     - If enough unsummarized turns exist: just raw turns
     - Otherwise: blends summaries (compressed past) + all unsummarized turns (full fidelity recent)
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "get_conversation_context")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     if request.turns <= 0:
         raise HTTPException(status_code=400, detail="turns must be greater than 0")
 
@@ -2042,6 +2198,10 @@ async def get_turns_since(request: GetTurnsSinceRequest):
 
     Optionally includes summaries that overlap the time range.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "get_turns_since")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     if not request.timestamp:
         raise HTTPException(status_code=400, detail="timestamp is required")
 
@@ -2130,6 +2290,10 @@ async def get_turns_around(request: GetTurnsAroundRequest):
 
     Returns messages before and after the timestamp with configurable split ratio.
     """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_PATH.name, "get_turns_around")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
     if not request.timestamp:
         raise HTTPException(status_code=400, detail="timestamp is required")
 

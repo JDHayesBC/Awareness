@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt -r requirements-docker.txt
 # Copy application code
 COPY layers/ ./layers/
 COPY server.py .
+COPY auth.py .
 COPY docker/server_http.py .
 
 # Create mount points for volumes (actual data comes from volume mounts)

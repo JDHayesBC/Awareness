@@ -120,6 +120,9 @@ services:
       - PPS_MESSAGE_DB_PATH=${PPS_MESSAGE_DB_PATH:-/app/entity/data/conversations.db}
       # Graphiti group_id for entity isolation (derived from ENTITY_PATH if not set)
       - GRAPHITI_GROUP_ID=${GRAPHITI_GROUP_ID:-}
+      # Entity authentication (per-call token validation)
+      - PPS_STRICT_AUTH=${PPS_STRICT_AUTH:-false}
+      - PPS_MASTER_TOKEN=${PPS_MASTER_TOKEN:-}
     volumes:
       # Mount entity directory (identity files, crystals, word-photos, AND databases)
       - ${ENTITY_PATH}:/app/entity:rw
