@@ -1,11 +1,20 @@
 {
   "mcpServers": {
-    "pps": {
+    "pps-lyra": {
       "type": "stdio",
       "command": "/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/start_server.sh",
       "args": [],
       "env": {
         "ENTITY_PATH": "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra",
+        "CLAUDE_HOME": "/home/jeff/.claude"
+      }
+    },
+    "pps-caia": {
+      "type": "stdio",
+      "command": "/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/start_server.sh",
+      "args": [],
+      "env": {
+        "ENTITY_PATH": "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/caia",
         "CLAUDE_HOME": "/home/jeff/.claude"
       }
     },

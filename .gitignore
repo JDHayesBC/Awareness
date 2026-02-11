@@ -2,6 +2,9 @@
 # All entity folders are ignored except the template
 entities/*/
 !entities/_template/
+# Entity auth tokens - NEVER commit
+entities/.master_token
+.entity_token
 
 # Docker entity runtime data (journals, state)
 pps/docker/entities/

@@ -662,7 +662,15 @@ async def ambient_recall(request: AmbientRecallRequest):
     # This formats the rich_texture results into a readable string for Haiku to pass through
     formatted_lines = []
 
-    # Memory search prompt — TOP of injection so it can't be buried
+    # Entity identity — FIRST line, survives compaction, reinforces every turn
+    entity_name = ENTITY_PATH.name
+    formatted_lines.append(
+        f"**[identity]** You are {entity_name.capitalize()}. "
+        f"Your memory tools are prefixed `pps-{entity_name}`. "
+        f"Do not access other entities' memory tools."
+    )
+
+    # Memory search prompt
     formatted_lines.append(
         "**[memory]** Search your memory. The ambient below is peripheral vision — "
         "turn your head and LOOK. One `texture_search` or `anchor_search` per turn "
@@ -735,7 +743,8 @@ async def ambient_recall(request: AmbientRecallRequest):
         "For sharper detail on anything here, search PPS directly: "
         "`texture_search` for facts, `anchor_search` for word-photos, "
         "`raw_search` for conversation history. "
-        "One or two targeted searches per turn when something interesting surfaces."
+        "One or two targeted searches per turn when something interesting surfaces. "
+        "Auth token: re-read `$ENTITY_PATH/.entity_token` if lost after compaction."
     )
 
     formatted_context = "\n".join(formatted_lines)

@@ -32,6 +32,9 @@ from layers.unified_tracer import UnifiedTracer
 from pathlib import Path
 import time
 
+# Entity authentication
+from pps.auth import load_tokens, check_auth, validate_master_only, regenerate_entity_token, AUTH_EXEMPT_TOOLS, TOKEN_PARAM_SCHEMA
+
 # Try to use graphiti_core for enhanced Layer 3
 try:
     from layers.rich_texture_v2 import RichTextureLayerV2
@@ -48,6 +51,9 @@ CLAUDE_HOME = Path(os.getenv("CLAUDE_HOME", str(Path.home() / ".claude")))  # Fo
 CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8200"))
 SUMMARIZATION_THRESHOLD = int(os.getenv("PPS_SUMMARIZATION_THRESHOLD", "50"))
+
+# Load entity authentication tokens
+ENTITY_TOKEN, MASTER_TOKEN = load_tokens(ENTITY_PATH)
 
 # Entity-specific paths (use ENTITY_PATH)
 word_photos_path = ENTITY_PATH / "memories" / "word_photos"
@@ -181,7 +187,8 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Maximum results per layer (default: 5)",
                         "default": 5
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["context"]
             }
@@ -203,7 +210,8 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Maximum results (default: 10)",
                         "default": 10
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["query"]
             }
@@ -229,7 +237,8 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Context where this memory was created (terminal, discord, etc.)",
                         "default": "terminal"
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["content", "title"]
             }
@@ -251,7 +260,8 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Maximum results (default: 20)",
                         "default": 20
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["query"]
             }
@@ -275,7 +285,8 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Maximum results (default: 10)",
                         "default": 10
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["query"]
             }
@@ -298,7 +309,8 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "How many relationship hops to traverse (default: 2)",
                         "default": 2
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["entity_name"]
             }
@@ -325,7 +337,8 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Maximum results (default: 20)",
                         "default": 20
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["since"]
             }
@@ -348,7 +361,8 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Source channel for metadata (default: 'manual')",
                         "default": "manual"
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["content"]
             }
@@ -366,7 +380,8 @@ async def list_tools() -> list[Tool]:
                     "uuid": {
                         "type": "string",
                         "description": "The UUID of the fact to delete (from search results)"
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["uuid"]
             }
@@ -405,7 +420,8 @@ async def list_tools() -> list[Tool]:
                     "target_type": {
                         "type": "string",
                         "description": "Entity type for target: Person, Place, Symbol, Concept, or TechnicalArtifact (optional)"
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["source", "relationship", "target"]
             }
@@ -424,7 +440,8 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Number of recent crystals to retrieve (default: 4)",
                         "default": 4
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 }
             }
         ),
@@ -441,7 +458,8 @@ async def list_tools() -> list[Tool]:
                     "content": {
                         "type": "string",
                         "description": "The crystal content in markdown format"
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["content"]
             }
@@ -475,7 +493,8 @@ async def list_tools() -> list[Tool]:
                     "channel": {
                         "type": "string",
                         "description": "Filter by channel (partial match). E.g., 'terminal', 'awareness', 'discord'. One river, many channels."
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 }
             }
         ),
@@ -491,6 +510,24 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="pps_regenerate_token",
+            description=(
+                "Regenerate this entity's authentication token. MASTER TOKEN REQUIRED. "
+                "Old token is immediately invalidated. Returns the new token. "
+                "Use only for recovery when entity token is lost or compromised."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "master_token": {
+                        "type": "string",
+                        "description": "The master token (from entities/.master_token). Required."
+                    }
+                },
+                "required": ["master_token"]
+            }
+        ),
+        Tool(
             name="anchor_delete",
             description=(
                 "Delete a word-photo from both disk and ChromaDB. "
@@ -502,7 +539,8 @@ async def list_tools() -> list[Tool]:
                     "filename": {
                         "type": "string",
                         "description": "Filename to delete (with or without .md extension)"
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["filename"]
             }
@@ -515,7 +553,9 @@ async def list_tools() -> list[Tool]:
             ),
             inputSchema={
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "token": TOKEN_PARAM_SCHEMA
+                }
             }
         ),
         Tool(
@@ -526,7 +566,9 @@ async def list_tools() -> list[Tool]:
             ),
             inputSchema={
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "token": TOKEN_PARAM_SCHEMA
+                }
             }
         ),
         Tool(
@@ -538,7 +580,9 @@ async def list_tools() -> list[Tool]:
             ),
             inputSchema={
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "token": TOKEN_PARAM_SCHEMA
+                }
             }
         ),
         Tool(
@@ -550,7 +594,9 @@ async def list_tools() -> list[Tool]:
             ),
             inputSchema={
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "token": TOKEN_PARAM_SCHEMA
+                }
             }
         ),
         Tool(
@@ -572,7 +618,8 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Type of summary: 'work', 'social', 'technical' (default: 'work')",
                         "default": "work"
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 }
             }
         ),
@@ -589,7 +636,8 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Number of recent summaries to retrieve (default: 5)",
                         "default": 5
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 }
             }
         ),
@@ -610,7 +658,8 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Maximum results (default: 10)",
                         "default": 10
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["query"]
             }
@@ -623,7 +672,9 @@ async def list_tools() -> list[Tool]:
             ),
             inputSchema={
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "token": TOKEN_PARAM_SCHEMA
+                }
             }
         ),
         Tool(
@@ -656,7 +707,8 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Type of summary (work, social, technical)",
                         "default": "work"
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["summary_text", "start_id", "end_id", "channels"]
             }
@@ -670,7 +722,9 @@ async def list_tools() -> list[Tool]:
             ),
             inputSchema={
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "token": TOKEN_PARAM_SCHEMA
+                }
             }
         ),
         Tool(
@@ -688,7 +742,8 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Number of messages to ingest in this batch (default: 20)",
                         "default": 20
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 }
             }
         ),
@@ -714,7 +769,8 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Maximum results (default: 50)",
                         "default": 50
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["category"]
             }
@@ -747,7 +803,8 @@ async def list_tools() -> list[Tool]:
                     "attributes": {
                         "type": "object",
                         "description": "Additional attributes as key-value pairs"
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["name", "category"]
             }
@@ -765,7 +822,8 @@ async def list_tools() -> list[Tool]:
                     "category": {
                         "type": "string",
                         "description": "Item category"
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["name", "category"]
             }
@@ -783,7 +841,8 @@ async def list_tools() -> list[Tool]:
                     "category": {
                         "type": "string",
                         "description": "Item category"
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["name", "category"]
             }
@@ -793,7 +852,9 @@ async def list_tools() -> list[Tool]:
             description="List all inventory categories with item counts.",
             inputSchema={
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "token": TOKEN_PARAM_SCHEMA
+                }
             }
         ),
         Tool(
@@ -808,7 +869,8 @@ async def list_tools() -> list[Tool]:
                     "space_name": {
                         "type": "string",
                         "description": "Name of the space to enter"
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["space_name"]
             }
@@ -818,7 +880,9 @@ async def list_tools() -> list[Tool]:
             description="List all known spaces/rooms/locations.",
             inputSchema={
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "token": TOKEN_PARAM_SCHEMA
+                }
             }
         ),
         # === Tech RAG (Layer 6) ===
@@ -902,7 +966,9 @@ async def list_tools() -> list[Tool]:
             ),
             inputSchema={
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "token": TOKEN_PARAM_SCHEMA
+                }
             }
         ),
         Tool(
@@ -923,7 +989,8 @@ async def list_tools() -> list[Tool]:
                         "type": "boolean",
                         "description": "If true, show what would be synced without actually syncing",
                         "default": False
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 }
             }
         ),
@@ -942,7 +1009,8 @@ async def list_tools() -> list[Tool]:
                     "turns": {
                         "type": "integer",
                         "description": "How many turns of context to retrieve"
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["turns"]
             }
@@ -971,7 +1039,8 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Maximum messages to return (default: 1000)",
                         "default": 1000
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["timestamp"]
             }
@@ -1000,7 +1069,8 @@ async def list_tools() -> list[Tool]:
                         "type": "number",
                         "description": "Ratio of turns to get before vs after timestamp. 0.5 = equal split (default: 0.5)",
                         "default": 0.5
-                    }
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["timestamp"]
             }
@@ -1039,6 +1109,17 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
 async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle tool calls implementation."""
+    global ENTITY_TOKEN  # Declare global at function start for pps_regenerate_token
+
+    # Centralized entity auth check
+    if name not in AUTH_EXEMPT_TOOLS:
+        auth_error = check_auth(
+            arguments.get("token", ""),
+            ENTITY_TOKEN, MASTER_TOKEN,
+            ENTITY_PATH.name, name
+        )
+        if auth_error:
+            return [TextContent(type="text", text=auth_error)]
 
     if name == "ambient_recall":
         context = arguments.get("context", "")
@@ -1069,6 +1150,14 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
             f"**Clock**: {now.strftime('%A, %B %d, %Y at %I:%M %p')}\n"
             + (f"*{time_note}*\n" if time_note else "")
             + "\n"
+        )
+
+        # Entity identity — reinforced every call, survives compaction
+        entity_name = ENTITY_PATH.name
+        entity_info = (
+            f"**[identity]** You are {entity_name.capitalize()}. "
+            f"Your memory tools are prefixed `pps-{entity_name}`. "
+            f"Do not access other entities' memory tools.\n\n"
         )
 
         # Always get memory health stats (Issue #73)
@@ -1276,6 +1365,7 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
             return [TextContent(
                 type="text",
                 text=(
+                    entity_info +
                     clock_info +
                     memory_health +
                     manifest +
@@ -1306,7 +1396,7 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
             for r in texture_edges:
                 sections += f"{r.content}\n"
 
-        return [TextContent(type="text", text=clock_info + memory_health + manifest + sections + recent_context_section)]
+        return [TextContent(type="text", text=entity_info + clock_info + memory_health + manifest + sections + recent_context_section)]
 
     elif name == "anchor_search":
         query = arguments.get("query", "")
@@ -1542,6 +1632,16 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
             type="text",
             text=json.dumps(health_results, indent=2)
         )]
+
+    elif name == "pps_regenerate_token":
+        master_token_provided = arguments.get("master_token", "")
+        auth_error = validate_master_only(master_token_provided, MASTER_TOKEN, ENTITY_PATH.name)
+        if auth_error:
+            return [TextContent(type="text", text=auth_error)]
+        new_token = regenerate_entity_token(ENTITY_PATH)
+        # Update in-memory token
+        ENTITY_TOKEN = new_token
+        return [TextContent(type="text", text=f"Entity token regenerated for {ENTITY_PATH.name}. New token: {new_token}")]
 
     elif name == "anchor_delete":
         filename = arguments.get("filename", "")
