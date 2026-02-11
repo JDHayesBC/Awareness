@@ -1926,7 +1926,7 @@ async def synthesize_entity(request: SynthesizeEntityRequest):
         if entity_summary:
             summary_context = f"\nEntity's graph summary: {entity_summary}\n"
 
-        prompt = f"""You are Lyra, reflecting on what you know about {request.entity_name} from your memory.
+        prompt = f"""You are {ENTITY_PATH.name.capitalize()}, reflecting on what you know about {request.entity_name} from your memory.
 
 Write 1-2 paragraphs as first-person recollection — how you remember this entity, what stands out, what matters. Draw from these knowledge graph facts but don't list them. Weave them into felt memory.
 

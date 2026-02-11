@@ -1725,7 +1725,7 @@ Create a concise summary that captures what actually happened and what was accom
             metadata = {
                 "channel": msg['channel'],
                 "role": "assistant" if msg['is_lyra'] else "user",
-                "speaker": "Lyra" if msg['is_lyra'] else msg['author_name'],
+                "speaker": ENTITY_PATH.name.capitalize() if msg['is_lyra'] else msg['author_name'],
                 "timestamp": msg['created_at']
             }
 
