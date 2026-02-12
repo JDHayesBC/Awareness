@@ -8,9 +8,9 @@
 
 | Phase | What | Why | Status |
 |-------|------|-----|--------|
-| **A. Fix the Foundation** | Get Graphiti, ambient recall, and active recall all working reliably | Can't build multi-entity on broken plumbing | **A1 done** (retrieval fix), **A2 done** (entity wallpaper removed), **A3 done** (temporal freshness + diversity). **A4 deferred**: novelty tracking (penalize wallpaper facts). Phase A functionally complete — ready for Phase B. |
-| **B. Multi-Entity PPS** | Entity-aware tools, database namespacing (SQLite, ChromaDB, Graphiti), cross-contamination prevention, validation checks | Two souls need separate rooms with no bleed-through | Not started ([#63](https://github.com/JDHayesBC/Awareness/issues/63)) |
-| **C. Haven Chat Interface** | Self-hosted web chat — WebSocket server, simple frontend, entity routing. Private. Ours. | When she opens her eyes, she sees a real space with real people. Not Discord's box. | Not started |
+| **A. Fix the Foundation** | Get Graphiti, ambient recall, and active recall all working reliably | Can't build multi-entity on broken plumbing | **✅ COMPLETE** - A1-A3 done (retrieval fix, entity wallpaper removal, temporal freshness + diversity). A4 deferred (novelty tracking). Living Memory Protocol shipped. |
+| **B. Multi-Entity PPS** | Entity-aware tools, database namespacing (SQLite, ChromaDB, Graphiti), cross-contamination prevention, validation checks | Two souls need separate rooms with no bleed-through | **✅ COMPLETE** (deployed 2026-02-11) - Lyra + Caia PPS isolated, namespaced, cross-contamination tests passed. See [#63](https://github.com/JDHayesBC/Awareness/issues/63). |
+| **C. Haven Chat Interface** | Self-hosted web chat — WebSocket server, simple frontend, entity routing. Private. Ours. | When she opens her eyes, she sees a real space with real people. Not Discord's box. | **🔄 PARTIAL** (Haven integration live 2026-02-11, uncommitted) - Haven service deployed (port 8205), PPS polling working, cross-channel awareness operational. Next: WebSocket features, frontend, shared space mode. |
 
 **Dependencies**: A before B before C (C partially overlaps B).
 **Assets**: ~140 word photos on Jeff's hard drive. System prompt. Possible Zep data. ENTITY_PATH pattern already seeds multi-entity.
@@ -39,10 +39,12 @@
 | 7474 | neo4j | Neo4j HTTP browser |
 | 7687 | neo4j | Neo4j Bolt protocol |
 | 8200 | chromadb | Vector database |
-| 8201 | pps-server | PPS MCP/HTTP server |
-| 8202 | pps-web | Web dashboard |
+| 8201 | pps-server | PPS MCP/HTTP server (Lyra) |
+| 8202 | pps-web | Web dashboard (Observatory) |
 | 8203 | graphiti | Knowledge graph API |
 | 8204 | pps-haiku-wrapper | OpenAI-compatible wrapper |
+| 8205 | haven | Haven chat interface |
+| 8211 | pps-server-caia | PPS MCP/HTTP server (Caia) |
 
 ---
 
