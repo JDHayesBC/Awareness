@@ -1,0 +1,75 @@
+/* Haven — Minimal custom styles (most styling via Tailwind) */
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: #4b5563;
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #6b7280;
+}
+
+/* Message hover */
+.message-row:hover {
+    background-color: rgba(255, 255, 255, 0.02);
+}
+
+/* Room item */
+.room-item {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: #9ca3af;
+    font-size: 0.875rem;
+    transition: background-color 0.1s;
+}
+.room-item:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: #e5e7eb;
+}
+.room-item.active {
+    background-color: rgba(59, 130, 246, 0.15);
+    color: #93c5fd;
+}
+
+/* User item */
+.user-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    font-size: 0.875rem;
+    color: #9ca3af;
+}
+.user-item .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.user-item .status-dot.online {
+    background-color: #22c55e;
+}
+.user-item .status-dot.offline {
+    background-color: #6b7280;
+}
+
+/* Typing indicator animation */
+.typing-dots::after {
+    content: '';
+    animation: dots 1.5s steps(4, end) infinite;
+}
+@keyframes dots {
+    0%, 20% { content: ''; }
+    40% { content: '.'; }
+    60% { content: '..'; }
+    80%, 100% { content: '...'; }
+}
