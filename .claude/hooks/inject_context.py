@@ -219,7 +219,8 @@ def query_pps_ambient_recall(context: str) -> str:
     try:
         payload = json.dumps({
             "context": context,
-            "token": ENTITY_TOKEN
+            "token": ENTITY_TOKEN,
+            "channel": "terminal"
             # No limit_per_layer - let server return full 200 edges
         }).encode("utf-8")
 

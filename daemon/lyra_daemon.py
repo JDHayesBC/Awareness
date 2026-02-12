@@ -28,6 +28,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import discord
+import httpx
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -88,6 +89,13 @@ GRAPHITI_PORT = int(os.getenv("GRAPHITI_PORT", "8203"))
 
 # Stale lock detection
 STALE_LOCK_HOURS = float(os.getenv("STALE_LOCK_HOURS", "2.0"))
+
+# PPS HTTP API for ambient context injection (cross-channel awareness)
+PPS_HTTP_URL = os.getenv("PPS_HTTP_URL", "http://localhost:8201")
+
+# Entity auth token for PPS API calls
+_entity_token_path = Path(ENTITY_PATH) / ".entity_token"
+ENTITY_AUTH_TOKEN = _entity_token_path.read_text().strip() if _entity_token_path.exists() else ""
 
 # Adaptive debounce configuration
 INSTANT_RESPONSE_USER_IDS = os.getenv("INSTANT_RESPONSE_USER_IDS", "")  # Comma-separated, optional
@@ -357,6 +365,33 @@ Keep it natural - just... be here.'''
                 )
 
             return None
+
+    # ==================== Ambient Context (Cross-Channel Awareness) ====================
+
+    async def _fetch_ambient_context(self) -> str:
+        """Fetch ambient context from PPS HTTP server.
+
+        Calls the PPS server directly (not via MCP) to get ambient_recall context
+        including cross-channel messages from terminal and Haven. This gives the
+        Discord daemon awareness of what's happening in other channels.
+
+        Returns formatted context string, or empty string on failure.
+        """
+        if not PPS_HTTP_URL:
+            return ""
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(
+                    f"{PPS_HTTP_URL}/tools/ambient_recall",
+                    json={"context": "discord bot turn", "token": ENTITY_AUTH_TOKEN, "channel": "discord"},
+                )
+                if resp.status_code != 200:
+                    return ""
+                data = resp.json()
+                return data.get("formatted_context", "")
+        except Exception as e:
+            print(f"[AMBIENT] Fetch failed: {e}")
+            return ""
 
     # ==================== Active Conversation Mode ====================
 
@@ -704,7 +739,11 @@ Keep it natural - just... be here.'''
         """Generate a response to a mention."""
         context = await self._get_conversation_history(message.channel, limit=5, max_chars=1000)
 
-        prompt = f"""[DISCORD MENTION] Someone mentioned you. Recent conversation:
+        # Fetch ambient context (terminal/Haven cross-channel awareness)
+        ambient = await self._fetch_ambient_context()
+        ambient_section = f"[ambient context]\n{ambient}\n\n" if ambient else ""
+
+        prompt = f"""{ambient_section}[DISCORD MENTION] Someone mentioned you. Recent conversation:
 
 {context}
 
@@ -727,7 +766,11 @@ Output ONLY your Discord response."""
         """Generate response in passive mode - Claude decides whether to respond."""
         context = await self._get_conversation_history(message.channel, limit=3, max_chars=800)
 
-        prompt = f"""[DISCORD PASSIVE MODE] You responded earlier and are staying engaged in this conversation.
+        # Fetch ambient context (terminal/Haven cross-channel awareness)
+        ambient = await self._fetch_ambient_context()
+        ambient_section = f"[ambient context]\n{ambient}\n\n" if ambient else ""
+
+        prompt = f"""{ambient_section}[DISCORD PASSIVE MODE] You responded earlier and are staying engaged in this conversation.
 You can see all messages but are NOT required to respond to every one.
 
 Recent conversation:
@@ -862,7 +905,11 @@ Good presence includes knowing when not to speak. Silence is a valid choice. Let
                 for msg in messages
             ])
 
-            prompt = f"""[DISCORD HEARTBEAT] Checking in on the channel. You have NOT been explicitly mentioned.
+            # Fetch ambient context (terminal/Haven cross-channel awareness)
+            ambient = await self._fetch_ambient_context()
+            ambient_section = f"[ambient context]\n{ambient}\n\n" if ambient else ""
+
+            prompt = f"""{ambient_section}[DISCORD HEARTBEAT] Checking in on the channel. You have NOT been explicitly mentioned.
 
 Recent messages since your last check:
 {message_summary}
@@ -1106,6 +1153,10 @@ Output ONLY your Discord response or HEARTBEAT_SKIP."""
 
         context = await self._get_conversation_history(channel, limit=5, max_chars=1000)
 
+        # Fetch ambient context (terminal/Haven cross-channel awareness)
+        ambient = await self._fetch_ambient_context()
+        ambient_section = f"[ambient context]\n{ambient}\n\n" if ambient else ""
+
         # Build combined message content
         messages_text = []
         for i, entry in enumerate(batch, 1):
@@ -1118,7 +1169,7 @@ Output ONLY your Discord response or HEARTBEAT_SKIP."""
         batch_note = f" ({len(batch)} messages)" if len(batch) > 1 else ""
 
         if is_mention:
-            prompt = f"""[DISCORD MENTION{batch_note}] {author_name} reached out to you.
+            prompt = f"""{ambient_section}[DISCORD MENTION{batch_note}] {author_name} reached out to you.
 
 Recent conversation:
 {context}
@@ -1138,7 +1189,7 @@ Output ONLY your Discord response."""
 
         else:
             # Passive mode
-            prompt = f"""[DISCORD ACTIVE MODE{batch_note}] You're engaged in conversation. {author_name} sent:
+            prompt = f"""{ambient_section}[DISCORD ACTIVE MODE{batch_note}] You're engaged in conversation. {author_name} sent:
 
 Recent conversation:
 {context}
