@@ -82,5 +82,8 @@ pps/venv/
 delve (old work from steve)/
 daemon/lyra_daemon.pid
 
+# Haven user tokens - NEVER commit
+haven/data/*.token
+
 # Training data - large files, not code
 spicy/

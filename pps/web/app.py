@@ -928,11 +928,14 @@ async def api_graph_entities(limit: int = 100):
         graphiti_port = int(os.getenv("GRAPHITI_PORT", "8203"))
         graphiti_url = f"http://{graphiti_host}:{graphiti_port}"
         # Entity-aware group_id default
-        default_group_id = "default"
-        entity_path = os.getenv("ENTITY_PATH", "")
-        if entity_path:
+        # Prefer ENTITY_NAME env var (required in Docker where ENTITY_PATH.name is always "entity")
+        entity_name = os.getenv("ENTITY_NAME", "")
+        if entity_name:
+            default_group_id = entity_name.lower()
+        else:
+            entity_path = os.getenv("ENTITY_PATH", "")
             from pathlib import Path
-            default_group_id = Path(entity_path).name.lower()
+            default_group_id = Path(entity_path).name.lower() if entity_path else "default"
         group_id = os.getenv("GRAPHITI_GROUP_ID", default_group_id)
 
         # Search for common patterns to get a broad set of facts

@@ -5,17 +5,22 @@ from pathlib import Path
 
 def get_entity_name() -> str:
     """
-    Extract entity name from ENTITY_PATH env var. Returns lowercase.
+    Get entity name. Prefers ENTITY_NAME env var, falls back to ENTITY_PATH directory name.
+
+    In Docker, ENTITY_PATH is always /app/entity (mount point), so ENTITY_NAME
+    env var is required to distinguish entities. Outside Docker, ENTITY_PATH.name works.
 
     Returns:
-        Entity name (lowercase) from ENTITY_PATH directory name,
-        or "default" if ENTITY_PATH is not set.
+        Entity name (lowercase), or "default" if neither env var is set.
 
     Examples:
-        ENTITY_PATH=/path/to/entities/lyra -> "lyra"
-        ENTITY_PATH=/path/to/entities/caia -> "caia"
-        ENTITY_PATH not set -> "default"
+        ENTITY_NAME=lyra -> "lyra"
+        ENTITY_NAME not set, ENTITY_PATH=/path/to/entities/caia -> "caia"
+        Neither set -> "default"
     """
+    entity_name = os.getenv("ENTITY_NAME", "")
+    if entity_name:
+        return entity_name.lower()
     entity_path = os.getenv("ENTITY_PATH", "")
     if entity_path:
         return Path(entity_path).name.lower()

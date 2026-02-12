@@ -15,10 +15,12 @@ from typing import Optional, Literal
 
 def get_entity_name() -> str:
     """
-    Get the current entity name from ENTITY_PATH.
-    Returns the folder name (e.g., "lyra" from ".../entities/lyra").
-    Falls back to "entity" if not set.
+    Get the current entity name, capitalized.
+    Prefers ENTITY_NAME env var (required in Docker), falls back to ENTITY_PATH directory name.
     """
+    entity_name = os.environ.get("ENTITY_NAME", "")
+    if entity_name:
+        return entity_name.capitalize()
     entity_path = os.environ.get("ENTITY_PATH", "")
     if entity_path:
         return Path(entity_path).name.capitalize()

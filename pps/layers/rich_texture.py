@@ -8,6 +8,7 @@ The flesh, not bone - ephemeral unless folded into response.
 
 import os
 import asyncio
+from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
@@ -47,11 +48,13 @@ class RichTextureLayer(PatternLayer):
             self.graphiti_url = f"http://{host}:{port}"
 
         # Entity-aware group_id default
-        default_group_id = "default"
-        entity_path = os.getenv("ENTITY_PATH", "")
-        if entity_path:
-            from pathlib import Path
-            default_group_id = Path(entity_path).name.lower()
+        # Prefer ENTITY_NAME env var (required in Docker where ENTITY_PATH.name is always "entity")
+        entity_name = os.getenv("ENTITY_NAME", "")
+        if entity_name:
+            default_group_id = entity_name.lower()
+        else:
+            entity_path = os.getenv("ENTITY_PATH", "")
+            default_group_id = Path(entity_path).name.lower() if entity_path else "default"
         self.group_id = os.environ.get("GRAPHITI_GROUP_ID", default_group_id)
         self._session: Optional[aiohttp.ClientSession] = None
 

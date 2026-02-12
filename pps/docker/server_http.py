@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 import time
+import httpx
 
 from auth import load_tokens, check_auth, AUTH_EXEMPT_TOOLS
 
@@ -33,6 +34,7 @@ class AmbientRecallRequest(BaseModel):
     context: str
     limit_per_layer: int = 5
     token: str = ""
+    channel: str = ""  # Requesting channel (e.g., "haven", "terminal") — excluded from cross-channel results
 
 
 class AnchorSearchRequest(BaseModel):
@@ -280,8 +282,188 @@ CLAUDE_HOME = Path(os.getenv("CLAUDE_HOME", "/app/claude_home"))
 # Entity name — can't derive from Docker mount path (/app/entity is always the same)
 ENTITY_NAME = os.getenv("ENTITY_NAME", ENTITY_PATH.name)
 
+# Haven chat integration — poll for unread messages during ambient_recall
+HAVEN_URL = os.getenv("HAVEN_URL", "")  # e.g. http://haven:8000 or http://localhost:8205
+
 # Load authentication tokens
 ENTITY_TOKEN, MASTER_TOKEN = load_tokens(ENTITY_PATH)
+
+
+# Haven state — track last poll time per entity to show only new messages
+_haven_last_seen_file = ENTITY_PATH / "data" / "haven_last_seen.json"
+
+
+def _load_haven_last_seen() -> dict:
+    """Load per-room last-seen timestamps."""
+    try:
+        return json.loads(_haven_last_seen_file.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_haven_last_seen(state: dict) -> None:
+    _haven_last_seen_file.parent.mkdir(parents=True, exist_ok=True)
+    _haven_last_seen_file.write_text(json.dumps(state))
+
+
+async def poll_haven() -> list[str]:
+    """Poll Haven for unread messages across all rooms. Returns formatted lines."""
+    if not HAVEN_URL:
+        return []
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            headers = {"Authorization": f"Bearer {ENTITY_TOKEN}"}
+
+            # Get rooms
+            resp = await client.get(f"{HAVEN_URL}/api/rooms", headers=headers)
+            if resp.status_code != 200:
+                return []
+            rooms = resp.json().get("rooms", [])
+
+            if not rooms:
+                return []
+
+            last_seen = _load_haven_last_seen()
+            lines = []
+            new_last_seen = dict(last_seen)
+
+            for room in rooms:
+                rid = room["id"]
+                since = last_seen.get(rid)
+
+                params = {"limit": "20"}
+                if since:
+                    params["since"] = since
+
+                resp = await client.get(
+                    f"{HAVEN_URL}/api/rooms/{rid}/messages",
+                    headers=headers, params=params
+                )
+                if resp.status_code != 200:
+                    continue
+
+                messages = resp.json().get("messages", [])
+                if not messages:
+                    continue
+
+                # Update last-seen to most recent message timestamp
+                new_last_seen[rid] = messages[-1]["created_at"]
+
+                # Skip if this is first poll (don't dump entire history)
+                if not since:
+                    continue
+
+                room_label = room["display_name"]
+                for m in messages:
+                    # Don't show the entity its own messages
+                    if m["username"] == ENTITY_NAME:
+                        continue
+                    lines.append(f"- **#{room_label}** {m['display_name']}: {m['content']}")
+
+            _save_haven_last_seen(new_last_seen)
+            return lines
+
+    except Exception as e:
+        print(f"[PPS] Haven poll failed: {e}", file=sys.stderr)
+        return []
+
+
+# Cross-channel awareness — poll raw capture DB for unread turns from other channels
+_channel_cursor_file = ENTITY_PATH / "data" / "channel_last_seen.json"
+
+
+def _load_channel_cursors() -> dict:
+    """Load per-channel last-seen message IDs."""
+    try:
+        return json.loads(_channel_cursor_file.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_channel_cursors(state: dict) -> None:
+    _channel_cursor_file.parent.mkdir(parents=True, exist_ok=True)
+    _channel_cursor_file.write_text(json.dumps(state))
+
+
+def poll_other_channels(requesting_channel: str = "") -> list[str]:
+    """Read unread messages from channels other than the requesting one.
+
+    Uses per-consumer cursors so each channel (terminal, haven, discord) has its
+    own read position. Terminal reading doesn't advance Haven's cursor.
+
+    Args:
+        requesting_channel: Channel making the request (e.g., "haven", "terminal").
+                           Messages from this channel are excluded.
+                           Also used as the cursor key.
+
+    Returns:
+        Formatted lines like: - **[terminal]** Jeff: message content
+    """
+    try:
+        db_path = ENTITY_PATH / "data" / "conversations.db"
+        if not db_path.exists():
+            return []
+
+        import sqlite3
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+
+        cursors = _load_channel_cursors()
+        # Per-consumer cursor: each requesting_channel has its own read position
+        cursor_key = requesting_channel or "_default"
+        last_id = cursors.get(cursor_key, 0)
+
+        # Get messages newer than this consumer's cursor, excluding its own channel
+        cursor = conn.cursor()
+        if requesting_channel:
+            # Exclude messages from the requesting channel AND match channel prefix
+            # (terminal:abc123 starts with "terminal", haven starts with "haven")
+            cursor.execute("""
+                SELECT id, author_name, content, created_at, channel
+                FROM messages
+                WHERE id > ? AND (channel IS NULL OR channel NOT LIKE ?)
+                ORDER BY created_at ASC
+                LIMIT 20
+            """, (last_id, f"{requesting_channel}%"))
+        else:
+            cursor.execute("""
+                SELECT id, author_name, content, created_at, channel
+                FROM messages
+                WHERE id > ?
+                ORDER BY created_at ASC
+                LIMIT 20
+            """, (last_id,))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            return []
+
+        lines = []
+        max_id = last_id
+        for row in rows:
+            msg_id = row["id"]
+            author = row["author_name"] or "Unknown"
+            content = row["content"] or ""
+            channel = row["channel"] or "unknown"
+            if msg_id > max_id:
+                max_id = msg_id
+            # Truncate long messages
+            if len(content) > 500:
+                content = content[:500] + "..."
+            lines.append(f"- **[{channel}]** {author}: {content}")
+
+        # Update THIS consumer's cursor only
+        cursors[cursor_key] = max_id
+        _save_channel_cursors(cursors)
+
+        return lines
+
+    except Exception as e:
+        print(f"[PPS] Channel poll failed: {e}", file=sys.stderr)
+        return []
 
 
 def get_layers():
@@ -696,6 +878,12 @@ async def ambient_recall(request: AmbientRecallRequest):
         "total_chars": total_chars
     }
 
+    # Poll Haven for unread messages (non-blocking, best-effort)
+    haven_lines = await poll_haven()
+
+    # Poll raw capture DB for unread messages from other channels (cross-channel awareness)
+    channel_lines = poll_other_channels(requesting_channel=request.channel)
+
     # Format results for hook consumption (formatted_context field)
     # This formats the rich_texture results into a readable string for Haiku to pass through
     formatted_lines = []
@@ -774,6 +962,18 @@ async def ambient_recall(request: AmbientRecallRequest):
             if len(content) > 500:
                 content = content[:500] + "..."
             formatted_lines.append(f"- [{author}]: {content}")
+
+    # Haven — unread messages from chat rooms (real-time sync)
+    if haven_lines:
+        formatted_lines.append("\n**[haven]**")
+        for line in haven_lines:
+            formatted_lines.append(line)
+
+    # Cross-channel — unread messages from other channels (terminal, discord, etc.)
+    if channel_lines:
+        formatted_lines.append("\n**[other_channels]**")
+        for line in channel_lines:
+            formatted_lines.append(line)
 
     # Closing hint — lighter echo of the top-of-injection memory prompt
     formatted_lines.append(

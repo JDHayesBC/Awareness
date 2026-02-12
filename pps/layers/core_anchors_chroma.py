@@ -46,11 +46,11 @@ class CoreAnchorsChromaLayer(PatternLayer):
         self.chroma_port = chroma_port
 
         # Entity-aware collection name
-        entity_path = os.getenv("ENTITY_PATH", "")
-        if entity_path:
-            entity_name = Path(entity_path).name.lower()
-        else:
-            entity_name = "default"
+        # Prefer ENTITY_NAME env var (required in Docker where ENTITY_PATH.name is always "entity")
+        entity_name = os.getenv("ENTITY_NAME", "")
+        if not entity_name:
+            entity_path = os.getenv("ENTITY_PATH", "")
+            entity_name = Path(entity_path).name.lower() if entity_path else "default"
         self.collection_name = f"{entity_name}_word_photos"
 
         # Initialize ChromaDB client
