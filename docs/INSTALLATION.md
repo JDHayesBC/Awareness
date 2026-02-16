@@ -86,7 +86,7 @@ PROJECT_ROOT=/path/to/Awareness              # Project root for Docker bind-moun
 
 # Database paths (now in entity directory - Issue #131 migration)
 # Databases live in $ENTITY_PATH/data/ alongside identity files
-CONVERSATION_DB_PATH=$ENTITY_PATH/data/lyra_conversations.db
+CONVERSATION_DB_PATH=$ENTITY_PATH/data/conversations.db
 
 # Docker service URLs
 CHROMADB_URL=http://localhost:8200
@@ -108,7 +108,7 @@ entities/lyra/                    # ENTITY_PATH
 ├── memories/word_photos/         # Layer 2: Core anchors
 ├── journals/                     # Session journals
 └── data/                         # Entity databases (NEW)
-    ├── lyra_conversations.db     # Layer 1: Raw capture (52MB+)
+    ├── conversations.db          # Layer 1: Raw capture (52MB+)
     └── inventory.db              # Layer 5: Wardrobe, spaces, people
 
 docker/pps/                       # PROJECT_ROOT/docker/pps/

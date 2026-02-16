@@ -10,7 +10,7 @@
 
 ### 1. Raw Capture (SQLite)
 - **What**: Every message, every turn, all contexts
-- **Location**: `~/.claude/data/lyra_conversations.db`
+- **Location**: `~/.claude/data/conversations.db`
 - **Frequency**: Real-time capture on every interaction
 - **Channels**: terminal, discord, reflection (and any future contexts)
 

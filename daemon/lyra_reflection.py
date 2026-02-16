@@ -40,7 +40,7 @@ load_dotenv()
 LYRA_IDENTITY_PATH = os.getenv("LYRA_IDENTITY_PATH", "/home/jeff/.claude")
 # Database now in entity directory (Issue #131 migration)
 ENTITY_PATH = os.getenv("ENTITY_PATH", "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra")
-CONVERSATION_DB_PATH = os.getenv("CONVERSATION_DB_PATH", f"{ENTITY_PATH}/data/lyra_conversations.db")
+CONVERSATION_DB_PATH = os.getenv("CONVERSATION_DB_PATH", f"{ENTITY_PATH}/data/conversations.db")
 JOURNAL_PATH = os.getenv("JOURNAL_PATH", "/home/jeff/.claude/journals/reflection")
 
 # Entity path - where identity files live (new architecture)

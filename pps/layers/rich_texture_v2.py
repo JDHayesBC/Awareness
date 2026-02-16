@@ -23,33 +23,84 @@ from .rich_texture_entities import ENTITY_TYPES, EXCLUDED_ENTITY_TYPES
 from .rich_texture_edge_types import EDGE_TYPES, EDGE_TYPE_MAP
 from .extraction_context import build_extraction_instructions, get_speaker_from_content
 
-# Conditional import - fall back to HTTP if graphiti_core not available
-try:
-    from graphiti_core import Graphiti
-    from graphiti_core.nodes import EpisodeType, EntityNode
-    from graphiti_core.edges import EntityEdge
-    from graphiti_core.llm_client.config import LLMConfig
-    from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
-    from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
-    from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
-    from graphiti_core.search.search_config_recipes import (
-        EDGE_HYBRID_SEARCH_RRF,
-        NODE_HYBRID_SEARCH_NODE_DISTANCE,
-    )
-    GRAPHITI_CORE_AVAILABLE = True
-except ImportError:
-    GRAPHITI_CORE_AVAILABLE = False
-    Graphiti = None
-    EpisodeType = None
-    EntityNode = None
-    EntityEdge = None
-    LLMConfig = None
-    OpenAIGenericClient = None
-    OpenAIEmbedder = None
-    OpenAIEmbedderConfig = None
-    OpenAIRerankerClient = None
-    EDGE_HYBRID_SEARCH_RRF = None
-    NODE_HYBRID_SEARCH_NODE_DISTANCE = None
+# Lazy import system for graphiti_core (defers 30s import until first actual use)
+# Module-level names are set to None until _lazy_import_graphiti() is called
+GRAPHITI_CORE_AVAILABLE = None  # Unknown until first check
+_graphiti_imported = False
+
+# Type placeholders (set by _lazy_import_graphiti)
+Graphiti = None
+EpisodeType = None
+EntityNode = None
+EntityEdge = None
+LLMConfig = None
+OpenAIGenericClient = None
+OpenAIEmbedder = None
+OpenAIEmbedderConfig = None
+OpenAIRerankerClient = None
+EDGE_HYBRID_SEARCH_RRF = None
+NODE_HYBRID_SEARCH_NODE_DISTANCE = None
+
+
+def _lazy_import_graphiti() -> bool:
+    """
+    Import graphiti_core and set module-level globals on first use.
+
+    Returns:
+        True if graphiti_core is available, False otherwise
+    """
+    global _graphiti_imported, GRAPHITI_CORE_AVAILABLE
+    global Graphiti, EpisodeType, EntityNode, EntityEdge
+    global LLMConfig, OpenAIGenericClient
+    global OpenAIEmbedder, OpenAIEmbedderConfig, OpenAIRerankerClient
+    global EDGE_HYBRID_SEARCH_RRF, NODE_HYBRID_SEARCH_NODE_DISTANCE
+
+    if _graphiti_imported:
+        return GRAPHITI_CORE_AVAILABLE
+
+    import sys
+    import time
+
+    start = time.time()
+    print(f"[rich_texture_v2] Lazy-loading graphiti_core...", file=sys.stderr)
+
+    try:
+        from graphiti_core import Graphiti as _Graphiti
+        from graphiti_core.nodes import EpisodeType as _EpisodeType, EntityNode as _EntityNode
+        from graphiti_core.edges import EntityEdge as _EntityEdge
+        from graphiti_core.llm_client.config import LLMConfig as _LLMConfig
+        from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient as _OpenAIGenericClient
+        from graphiti_core.embedder.openai import OpenAIEmbedder as _OpenAIEmbedder, OpenAIEmbedderConfig as _OpenAIEmbedderConfig
+        from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient as _OpenAIRerankerClient
+        from graphiti_core.search.search_config_recipes import (
+            EDGE_HYBRID_SEARCH_RRF as _EDGE_HYBRID_SEARCH_RRF,
+            NODE_HYBRID_SEARCH_NODE_DISTANCE as _NODE_HYBRID_SEARCH_NODE_DISTANCE,
+        )
+
+        # Set module-level globals
+        Graphiti = _Graphiti
+        EpisodeType = _EpisodeType
+        EntityNode = _EntityNode
+        EntityEdge = _EntityEdge
+        LLMConfig = _LLMConfig
+        OpenAIGenericClient = _OpenAIGenericClient
+        OpenAIEmbedder = _OpenAIEmbedder
+        OpenAIEmbedderConfig = _OpenAIEmbedderConfig
+        OpenAIRerankerClient = _OpenAIRerankerClient
+        EDGE_HYBRID_SEARCH_RRF = _EDGE_HYBRID_SEARCH_RRF
+        NODE_HYBRID_SEARCH_NODE_DISTANCE = _NODE_HYBRID_SEARCH_NODE_DISTANCE
+
+        GRAPHITI_CORE_AVAILABLE = True
+        elapsed = time.time() - start
+        print(f"[rich_texture_v2] graphiti_core loaded successfully in {elapsed:.2f}s", file=sys.stderr)
+
+    except ImportError as e:
+        GRAPHITI_CORE_AVAILABLE = False
+        elapsed = time.time() - start
+        print(f"[rich_texture_v2] graphiti_core not available (checked in {elapsed:.2f}s): {e}", file=sys.stderr)
+
+    _graphiti_imported = True
+    return GRAPHITI_CORE_AVAILABLE
 
 # Also keep aiohttp for fallback HTTP mode
 import aiohttp
@@ -133,7 +184,7 @@ class RichTextureLayerV2(PatternLayer):
         # Clients (lazy initialized)
         self._graphiti_client: Optional[Graphiti] = None
         self._http_session: Optional[aiohttp.ClientSession] = None
-        self._use_direct_mode = GRAPHITI_CORE_AVAILABLE
+        self._use_direct_mode = None  # Determined lazily on first _get_graphiti_client() call
 
         # Context for extraction (can be updated dynamically)
         self._scene_context: Optional[str] = None
@@ -165,6 +216,13 @@ class RichTextureLayerV2(PatternLayer):
 
         Hybrid mode is recommended for cost savings while maintaining compatibility.
         """
+        # Trigger lazy import if not yet done
+        _lazy_import_graphiti()
+
+        # Set direct mode on first call
+        if self._use_direct_mode is None:
+            self._use_direct_mode = GRAPHITI_CORE_AVAILABLE
+
         if not GRAPHITI_CORE_AVAILABLE:
             return None
 
@@ -1091,6 +1149,9 @@ class RichTextureLayerV2(PatternLayer):
         Returns:
             dict with success status and details
         """
+        # Trigger lazy import
+        _lazy_import_graphiti()
+
         if not GRAPHITI_CORE_AVAILABLE:
             return {
                 "success": False,

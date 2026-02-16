@@ -48,7 +48,7 @@ class TerminalIntegration:
         if db_path is None:
             # Database now in entity directory (Issue #131 migration)
             entity_path = Path(os.getenv("ENTITY_PATH", "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra"))
-            db_path = entity_path / "data" / "lyra_conversations.db"
+            db_path = entity_path / "data" / "conversations.db"
             
         self.conversation_manager = ConversationManager(db_path)
         

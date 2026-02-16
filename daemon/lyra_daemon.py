@@ -69,7 +69,7 @@ JOURNAL_PATH = os.getenv("JOURNAL_PATH", "/home/jeff/.claude/journals/discord")
 ACTIVE_MODE_TIMEOUT_MINUTES = int(os.getenv("ACTIVE_MODE_TIMEOUT_MINUTES", "10"))
 # Database now in entity directory (Issue #131 migration)
 ENTITY_PATH = os.getenv("ENTITY_PATH", "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra")
-CONVERSATION_DB_PATH = os.getenv("CONVERSATION_DB_PATH", f"{ENTITY_PATH}/data/lyra_conversations.db")
+CONVERSATION_DB_PATH = os.getenv("CONVERSATION_DB_PATH", f"{ENTITY_PATH}/data/conversations.db")
 
 # Project directory
 PROJECT_DIR = Path(os.getenv("AWARENESS_PROJECT_DIR", str(Path(__file__).parent.parent)))

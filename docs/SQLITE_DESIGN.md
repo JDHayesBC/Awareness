@@ -798,7 +798,7 @@ class LyraBot(commands.Bot):
         # SQLite conversation storage
         db_path = Path(os.getenv(
             "CONVERSATION_DB_PATH",
-            "/home/jeff/.claude/data/lyra_conversations.db"
+            "/home/jeff/.claude/data/conversations.db"
         ))
         self.conversation_manager = ConversationManager(db_path)
 
@@ -961,9 +961,9 @@ daemon/
   journal_utils.py        # Existing
   requirements.txt        # Add: aiosqlite
   data/
-    lyra_conversations.db # Created at runtime
-    lyra_conversations.db-wal
-    lyra_conversations.db-shm
+    conversations.db # Created at runtime
+    conversations.db-wal
+    conversations.db-shm
 ```
 
 ### Dependencies to Add

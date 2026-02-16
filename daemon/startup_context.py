@@ -28,7 +28,7 @@ async def generate_startup_context(
     if db_path is None:
         # Database now in entity directory (Issue #131 migration)
         entity_path = os.getenv("ENTITY_PATH", "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra")
-        db_path = Path(entity_path) / "data" / "lyra_conversations.db"
+        db_path = Path(entity_path) / "data" / "conversations.db"
     
     # Check if database exists
     if not db_path.exists():
@@ -123,7 +123,7 @@ async def main():
             # Get raw summary data as JSON
             # Database now in entity directory (Issue #131 migration)
             entity_path = os.getenv("ENTITY_PATH", "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra")
-            db_path = args.db or Path(entity_path) / "data" / "lyra_conversations.db"
+            db_path = args.db or Path(entity_path) / "data" / "conversations.db"
             
             if not db_path.exists():
                 print(json.dumps({"error": f"Database not found: {db_path}"}, indent=2))

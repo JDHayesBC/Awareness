@@ -22,26 +22,11 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from layers import LayerType, SearchResult
-from layers.raw_capture import RawCaptureLayer
-from layers.core_anchors import CoreAnchorsLayer
-from layers.crystallization import CrystallizationLayer
-from layers.message_summaries import MessageSummariesLayer
-from layers.inventory import InventoryLayer
-from layers.tech_rag import TechRAGLayer
-from layers.unified_tracer import UnifiedTracer
 from pathlib import Path
 import time
 
 # Entity authentication
 from auth import load_tokens, check_auth, validate_master_only, regenerate_entity_token, AUTH_EXEMPT_TOOLS, TOKEN_PARAM_SCHEMA
-
-# Try to use graphiti_core for enhanced Layer 3
-try:
-    from layers.rich_texture_v2 import RichTextureLayerV2
-    USE_GRAPHITI_CORE = True
-except ImportError:
-    from layers.rich_texture import RichTextureLayer
-    USE_GRAPHITI_CORE = False
 
 # Configuration from environment
 # ENTITY_PATH is the new standard - path to entity folder (e.g., awareness/entities/lyra)
@@ -63,73 +48,116 @@ archive_path = ENTITY_PATH / "crystals" / "archive"
 # Entity-specific database paths (Issue #131 migration - moved to entity directory)
 db_path = ENTITY_PATH / "data" / "conversations.db"
 
-# Try to use ChromaDB if available
-try:
-    from layers.core_anchors_chroma import CoreAnchorsChromaLayer
-    # Test connection
-    import chromadb
-    client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
-    client.heartbeat()
-    USE_CHROMA = True
-    print(f"[PPS] ChromaDB connected on {CHROMA_HOST}:{CHROMA_PORT}", file=sys.stderr)
-except Exception as e:
-    USE_CHROMA = False
-    print(f"[PPS] ChromaDB not available, using file-based search: {e}", file=sys.stderr)
-
-# Initialize Layer 3 based on graphiti_core availability
-if USE_GRAPHITI_CORE:
-    print("[PPS] Using graphiti_core for Layer 3 (semantic entity extraction)", file=sys.stderr)
-    rich_texture_layer = RichTextureLayerV2()
-else:
-    print("[PPS] Using HTTP API for Layer 3 (graphiti_core not available)", file=sys.stderr)
-    rich_texture_layer = RichTextureLayer()
-
-# Initialize all layers with configurable paths
-layers = {
-    LayerType.RAW_CAPTURE: RawCaptureLayer(db_path=db_path),
-    LayerType.RICH_TEXTURE: rich_texture_layer,
-    LayerType.CRYSTALLIZATION: CrystallizationLayer(
-        crystals_path=crystals_path,
-        archive_path=archive_path
-    ),
-}
-
-# Initialize message summaries layer
-message_summaries = MessageSummariesLayer(db_path=db_path)
-
-# Initialize inventory layer (Layer 5)
-inventory_db_path = ENTITY_PATH / "data" / "inventory.db"
-inventory = InventoryLayer(db_path=inventory_db_path)
-print(f"[PPS] Inventory layer initialized: {inventory_db_path}", file=sys.stderr)
-
-# Initialize Tech RAG layer (Layer 6) - only if ChromaDB is available
+# --- Lazy initialization ---
+# Heavy imports (chromadb ~15s, graphiti_core ~30s on WSL2) are deferred
+# to first tool call so the MCP handshake completes within timeout.
+layers = None
+message_summaries = None
+inventory = None
 tech_rag = None
-if USE_CHROMA:
-    tech_docs_path = CLAUDE_HOME / "tech_docs"
-    tech_rag = TechRAGLayer(
-        tech_docs_path=tech_docs_path,
-        chroma_host=CHROMA_HOST,
-        chroma_port=CHROMA_PORT
-    )
-    print(f"[PPS] Tech RAG initialized: {tech_docs_path}", file=sys.stderr)
-else:
-    print("[PPS] Tech RAG not available (requires ChromaDB)", file=sys.stderr)
+tracer = None
+USE_CHROMA = False
+USE_GRAPHITI_CORE = False
+_layers_initialized = False
 
-# Use ChromaDB layer if available, otherwise fall back to file-based
-if USE_CHROMA:
-    layers[LayerType.CORE_ANCHORS] = CoreAnchorsChromaLayer(
-        word_photos_path=word_photos_path,
-        chroma_host=CHROMA_HOST,
-        chroma_port=CHROMA_PORT
-    )
-else:
-    layers[LayerType.CORE_ANCHORS] = CoreAnchorsLayer(
-        word_photos_path=word_photos_path
-    )
 
-# Initialize unified tracer for MCP server observability
-tracer = UnifiedTracer(db_path=db_path, daemon_type="mcp_server")
-print(f"[PPS] UnifiedTracer initialized (session: {tracer.session_id})", file=sys.stderr)
+def _init_layers():
+    """Initialize all layers on first tool call (lazy to avoid MCP startup timeout)."""
+    global layers, message_summaries, inventory, tech_rag, tracer
+    global USE_CHROMA, USE_GRAPHITI_CORE, _layers_initialized
+
+    if _layers_initialized:
+        return
+
+    init_start = time.time()
+    print("[PPS] Initializing layers (first tool call)...", file=sys.stderr)
+
+    # Import layer classes (deferred from module level - chromadb alone takes ~15s on WSL2)
+    from layers.raw_capture import RawCaptureLayer
+    from layers.core_anchors import CoreAnchorsLayer
+    from layers.crystallization import CrystallizationLayer
+    from layers.message_summaries import MessageSummariesLayer
+    from layers.inventory import InventoryLayer
+    from layers.tech_rag import TechRAGLayer
+    from layers.unified_tracer import UnifiedTracer
+
+    # Try to use ChromaDB if available
+    try:
+        from layers.core_anchors_chroma import CoreAnchorsChromaLayer
+        import chromadb
+        client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
+        client.heartbeat()
+        USE_CHROMA = True
+        print(f"[PPS] ChromaDB connected on {CHROMA_HOST}:{CHROMA_PORT}", file=sys.stderr)
+    except Exception as e:
+        USE_CHROMA = False
+        print(f"[PPS] ChromaDB not available, using file-based search: {e}", file=sys.stderr)
+
+    # Try to use graphiti_core for enhanced Layer 3
+    try:
+        from layers.rich_texture_v2 import RichTextureLayerV2
+        USE_GRAPHITI_CORE = True
+    except ImportError:
+        from layers.rich_texture import RichTextureLayer
+        USE_GRAPHITI_CORE = False
+
+    # Initialize Layer 3 based on graphiti_core availability
+    if USE_GRAPHITI_CORE:
+        print("[PPS] Using graphiti_core for Layer 3 (semantic entity extraction)", file=sys.stderr)
+        rich_texture_layer = RichTextureLayerV2()
+    else:
+        print("[PPS] Using HTTP API for Layer 3 (graphiti_core not available)", file=sys.stderr)
+        rich_texture_layer = RichTextureLayer()
+
+    # Initialize all layers with configurable paths
+    layers = {
+        LayerType.RAW_CAPTURE: RawCaptureLayer(db_path=db_path),
+        LayerType.RICH_TEXTURE: rich_texture_layer,
+        LayerType.CRYSTALLIZATION: CrystallizationLayer(
+            crystals_path=crystals_path,
+            archive_path=archive_path
+        ),
+    }
+
+    # Initialize message summaries layer
+    message_summaries = MessageSummariesLayer(db_path=db_path)
+
+    # Initialize inventory layer (Layer 5)
+    inventory_db_path = ENTITY_PATH / "data" / "inventory.db"
+    inventory = InventoryLayer(db_path=inventory_db_path)
+    print(f"[PPS] Inventory layer initialized: {inventory_db_path}", file=sys.stderr)
+
+    # Initialize Tech RAG layer (Layer 6) - only if ChromaDB is available
+    tech_rag = None
+    if USE_CHROMA:
+        tech_docs_path = CLAUDE_HOME / "tech_docs"
+        tech_rag = TechRAGLayer(
+            tech_docs_path=tech_docs_path,
+            chroma_host=CHROMA_HOST,
+            chroma_port=CHROMA_PORT
+        )
+        print(f"[PPS] Tech RAG initialized: {tech_docs_path}", file=sys.stderr)
+    else:
+        print("[PPS] Tech RAG not available (requires ChromaDB)", file=sys.stderr)
+
+    # Use ChromaDB layer if available, otherwise fall back to file-based
+    if USE_CHROMA:
+        layers[LayerType.CORE_ANCHORS] = CoreAnchorsChromaLayer(
+            word_photos_path=word_photos_path,
+            chroma_host=CHROMA_HOST,
+            chroma_port=CHROMA_PORT
+        )
+    else:
+        layers[LayerType.CORE_ANCHORS] = CoreAnchorsLayer(
+            word_photos_path=word_photos_path
+        )
+
+    # Initialize unified tracer for MCP server observability
+    tracer = UnifiedTracer(db_path=db_path, daemon_type="mcp_server")
+    print(f"[PPS] UnifiedTracer initialized (session: {tracer.session_id})", file=sys.stderr)
+
+    _layers_initialized = True
+    print(f"[PPS] All layers initialized in {time.time()-init_start:.1f}s", file=sys.stderr)
 
 # Create MCP server
 server = Server("pattern-persistence-system")
@@ -1081,6 +1109,9 @@ async def list_tools() -> list[Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle tool calls with tracing."""
+    # Lazy-init all layers on first tool call (deferred from module level for fast MCP startup)
+    _init_layers()
+
     start_time = time.time()
     error_msg = None
 

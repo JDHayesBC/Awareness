@@ -219,9 +219,9 @@ async def run_ingestion(
     # Use ENTITY_PATH if available, fall back to old location
     entity_path = os.environ.get("ENTITY_PATH", "")
     if entity_path:
-        db_path = str(Path(entity_path) / "data" / "lyra_conversations.db")
+        db_path = str(Path(entity_path) / "data" / "conversations.db")
     else:
-        db_path = str(PROJECT_ROOT / "entities" / "lyra" / "data" / "lyra_conversations.db")
+        db_path = str(PROJECT_ROOT / "entities" / "lyra" / "data" / "conversations.db")
 
     # Clear old log
     if LOG_FILE.exists():
