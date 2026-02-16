@@ -6,9 +6,9 @@
 
 ## 🎯 CURRENT STATUS (Read This First!)
 
-**Phase**: 2 - Discord Integration (mostly complete)
-**Status**: Phase 1 DONE, Phase 2.1 & 2.2 DONE, 2.3 ready for production test
-**Next Task**: Run daemon against Discord to verify integration
+**Phase**: 2 - Discord Integration ✅ COMPLETE
+**Status**: All phases 1-2 DONE, daemon running in production
+**Next Task**: Phase 3 - Context Management Integration (when needed)
 
 **What's Done**:
 - [x] Core invoker working (init ~33s, query ~2-4s)
@@ -136,14 +136,14 @@ Replace subprocess calls with invoker, nothing else.
 - [x] Wire shutdown → `invoker.shutdown()`
 - [x] Remove context reduction/retry complexity (invoker handles it)
 
-**2.3 Testing** ← NEXT
-- [ ] Test mention response flow
-- [ ] Test heartbeat flow
-- [ ] Test active mode flow
-- [ ] Verify MCP tools work (ambient_recall, etc.)
-- [ ] Compare response times to legacy
+**2.3 Testing** ✅ DONE
+- [x] Test mention response flow
+- [x] Test heartbeat flow
+- [x] Test active mode flow
+- [x] Verify MCP tools work (ambient_recall, etc.)
+- [x] Compare response times to legacy
 
-**Milestone**: Discord daemon works with invoker. Legacy as fallback.
+**Milestone**: Discord daemon works with invoker. Legacy as fallback. ✅ ACHIEVED (running in production as of 2026-02-16)
 
 ---
 
