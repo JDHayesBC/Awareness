@@ -151,6 +151,7 @@ class GetTurnsSinceSummaryRequest(BaseModel):
     offset: int = 0
     min_turns: int = 10
     channel: str | None = None
+    oldest_first: bool = False
     token: str = ""
 
 
@@ -807,10 +808,9 @@ async def ambient_recall(request: AmbientRecallRequest):
                     manifest_data["summaries"]["chars"] += len(text)
                     manifest_data["summaries"]["count"] += 1
 
-            # Get ALL unsummarized turns (no cap)
-            # Creates intentional pressure to summarize before sleep
-            # If you have 200 unsummarized turns, you should see ALL of them
-            MAX_UNSUMMARIZED_FOR_STARTUP = 999999  # Effectively unlimited
+            # Cap unsummarized turns to prevent context overflow
+            # Shows newest 50, with overflow message if more exist
+            MAX_UNSUMMARIZED_FOR_STARTUP = 50
             raw_layer = layers[LayerType.RAW_CAPTURE]
             with raw_layer.get_connection() as conn:
                 cursor = conn.cursor()
@@ -962,6 +962,15 @@ async def ambient_recall(request: AmbientRecallRequest):
             if len(content) > 500:
                 content = content[:500] + "..."
             formatted_lines.append(f"- [{author}]: {content}")
+
+        # Add overflow warning if there are more unsummarized turns than shown
+        showing = len(unsummarized_turns)
+        if unsummarized_count > showing:
+            critical_warning = ""
+            if unsummarized_count > 100:
+                critical_warning = f"\n🔥 CRITICAL: Run summarizer immediately — backlog is {unsummarized_count} messages."
+            formatted_lines.append(f"\n⚠️ Showing newest {showing} of {unsummarized_count} unsummarized turns.")
+            formatted_lines.append(f"For chronological catch-up: get_turns_since_summary(limit=50, offset=0, oldest_first=true){critical_warning}")
 
     # Haven — unread messages from chat rooms (real-time sync)
     if haven_lines:
@@ -1783,18 +1792,31 @@ async def get_turns_since_summary(request: GetTurnsSinceSummaryRequest):
 
     # Get the timestamp of the last summary
     last_summary_time = message_summaries.get_latest_summary_timestamp()
-    
+
     # Query SQLite for turns
     raw_layer = layers[LayerType.RAW_CAPTURE]
     try:
         rows_after = []
         rows_before = []
-        
+        total_count = 0
+
         with raw_layer.get_connection() as conn:
             cursor = conn.cursor()
 
             if last_summary_time:
-                # Get most recent turns after the last summary
+                # Get total count for pagination info
+                count_query = """
+                    SELECT COUNT(*) FROM messages
+                    WHERE created_at > ?
+                """
+                count_params = [last_summary_time.isoformat()]
+                if request.channel:
+                    count_query += " AND channel LIKE ?"
+                    count_params.append(f"%{request.channel}%")
+                cursor.execute(count_query, count_params)
+                total_count = cursor.fetchone()[0]
+
+                # Get turns after the last summary
                 query = """
                     SELECT author_name, content, created_at, channel
                     FROM messages
@@ -1804,10 +1826,19 @@ async def get_turns_since_summary(request: GetTurnsSinceSummaryRequest):
                 if request.channel:
                     query += " AND channel LIKE ?"
                     params.append(f"%{request.channel}%")
-                query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-                params.extend([request.limit, request.offset])
-                cursor.execute(query, params)
-                rows_after = list(reversed(cursor.fetchall()))
+
+                if request.oldest_first:
+                    # Chronological order (oldest first) - no reversal needed
+                    query += " ORDER BY created_at ASC LIMIT ? OFFSET ?"
+                    params.extend([request.limit, request.offset])
+                    cursor.execute(query, params)
+                    rows_after = cursor.fetchall()
+                else:
+                    # Newest first (default) - get DESC then reverse
+                    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                    params.extend([request.limit, request.offset])
+                    cursor.execute(query, params)
+                    rows_after = list(reversed(cursor.fetchall()))
 
                 # If we don't have enough turns, get some from before the summary
                 if len(rows_after) < request.min_turns:
@@ -1826,7 +1857,16 @@ async def get_turns_since_summary(request: GetTurnsSinceSummaryRequest):
                     cursor.execute(query, params)
                     rows_before = list(reversed(cursor.fetchall()))
             else:
-                # No summary yet, just get recent messages
+                # No summary yet - get total count
+                count_query = "SELECT COUNT(*) FROM messages"
+                count_params = []
+                if request.channel:
+                    count_query += " WHERE channel LIKE ?"
+                    count_params.append(f"%{request.channel}%")
+                cursor.execute(count_query, count_params)
+                total_count = cursor.fetchone()[0]
+
+                # Get most recent turns
                 query = """
                     SELECT author_name, content, created_at, channel
                     FROM messages
@@ -1835,10 +1875,19 @@ async def get_turns_since_summary(request: GetTurnsSinceSummaryRequest):
                 if request.channel:
                     query += " WHERE channel LIKE ?"
                     params.append(f"%{request.channel}%")
-                query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-                params.extend([request.limit, request.offset])
-                cursor.execute(query, params)
-                rows_after = list(reversed(cursor.fetchall()))
+
+                if request.oldest_first:
+                    # Chronological order (oldest first) - no reversal needed
+                    query += " ORDER BY created_at ASC LIMIT ? OFFSET ?"
+                    params.extend([request.limit, request.offset])
+                    cursor.execute(query, params)
+                    rows_after = cursor.fetchall()
+                else:
+                    # Newest first (default) - get DESC then reverse
+                    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                    params.extend([request.limit, request.offset])
+                    cursor.execute(query, params)
+                    rows_after = list(reversed(cursor.fetchall()))
         
         # Format turns
         turns = []
@@ -1853,6 +1902,8 @@ async def get_turns_since_summary(request: GetTurnsSinceSummaryRequest):
         return {
             "turns": turns,
             "count": len(turns),
+            "total_count": total_count,
+            "offset": request.offset,
             "last_summary_time": last_summary_time.isoformat() if last_summary_time else None
         }
 

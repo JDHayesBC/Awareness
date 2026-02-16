@@ -472,22 +472,32 @@ class ClaudeInvoker:
 
                 # Collect response
                 response_parts = []
+                msg_count = 0
+                text_block_count = 0
+                tool_block_count = 0
                 async for msg in self._client.receive_response():
+                    msg_count += 1
+                    msg_type = type(msg).__name__
                     if isinstance(msg, AssistantMessage):
+                        block_types = [type(b).__name__ for b in msg.content]
+                        logger.info(f"Response msg #{msg_count}: {msg_type} with {len(msg.content)} blocks: {block_types}")
                         for block in msg.content:
                             if isinstance(block, TextBlock):
+                                text_block_count += 1
+                                logger.info(f"  TextBlock #{text_block_count}: {len(block.text)} chars: {block.text[:100]}...")
                                 response_parts.append(block.text)
                             elif isinstance(block, ToolUseBlock):
-                                # Log tool calls for observability
+                                tool_block_count += 1
                                 tool_name = block.name
                                 tool_input = str(block.input)
-                                # Truncate long inputs for readability
                                 if len(tool_input) > 200:
                                     tool_input = tool_input[:200] + "..."
-                                logger.info(f"Tool call: {tool_name}({tool_input})")
+                                logger.info(f"  ToolUseBlock #{tool_block_count}: {tool_name}({tool_input})")
                     elif isinstance(msg, ResultMessage):
-                        # Final message - conversation turn complete
+                        logger.info(f"Response msg #{msg_count}: ResultMessage — ending. Collected {text_block_count} text blocks, {tool_block_count} tool blocks from {msg_count} messages")
                         break
+                    else:
+                        logger.info(f"Response msg #{msg_count}: {msg_type} (unhandled)")
 
                 response = "".join(response_parts)
 

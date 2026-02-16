@@ -522,6 +522,11 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Filter by channel (partial match). E.g., 'terminal', 'awareness', 'discord'. One river, many channels."
                     },
+                    "oldest_first": {
+                        "type": "boolean",
+                        "description": "If true, return turns in chronological order (oldest first) instead of newest first. Useful for reading catch-up context forward. (default: false)",
+                        "default": False
+                    },
                     "token": TOKEN_PARAM_SCHEMA
                 }
             }
@@ -1320,10 +1325,9 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                         manifest_data["summaries"]["chars"] += len(text)
                         manifest_data["summaries"]["count"] += 1
 
-                # Get ALL unsummarized turns (no cap)
-                # Creates intentional pressure to summarize before sleep
-                # If you have 200 unsummarized turns, you should see ALL of them
-                MAX_UNSUMMARIZED_FOR_STARTUP = 999999  # Effectively unlimited
+                # Cap unsummarized turns to prevent context overflow
+                # Shows newest 50, with overflow message if more exist
+                MAX_UNSUMMARIZED_FOR_STARTUP = 50
                 raw_layer = layers[LayerType.RAW_CAPTURE]
                 with raw_layer.get_connection() as conn:
                     cursor = conn.cursor()
@@ -1359,7 +1363,7 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                     # Show how many we're displaying vs total unsummarized
                     showing = len(unsummarized_rows)
                     if unsummarized_count > showing:
-                        unsummarized_text = f"\n---\n[unsummarized_turns] (showing {showing} of {unsummarized_count} - use get_turns_since_summary with offset={showing} for older, or run summarizer)\n"
+                        unsummarized_text = f"\n---\n[unsummarized_turns] ({showing} messages since last summary)\n"
                     else:
                         unsummarized_text = f"\n---\n[unsummarized_turns] ({showing} messages since last summary)\n"
                     for row in unsummarized_rows:
@@ -1374,6 +1378,13 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                         unsummarized_text += turn_text
                         manifest_data["recent_turns"]["chars"] += len(content)
                         manifest_data["recent_turns"]["count"] += 1
+
+                    # Add overflow warning AFTER the turns
+                    if unsummarized_count > showing:
+                        critical_warning = ""
+                        if unsummarized_count > 100:
+                            critical_warning = f"\n🔥 CRITICAL: Run summarizer immediately — backlog is {unsummarized_count} messages."
+                        unsummarized_text += f"\n⚠️ Showing newest {showing} of {unsummarized_count} unsummarized turns.\nFor chronological catch-up: get_turns_since_summary(limit=50, offset=0, oldest_first=true){critical_warning}\n"
 
                 # Memory health is now shown at the top of every ambient_recall (Issue #73)
                 # No need for duplicate status at bottom
@@ -1547,6 +1558,7 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
         offset = arguments.get("offset", 0)
         min_turns = arguments.get("min_turns", 10)
         channel_filter = arguments.get("channel")
+        oldest_first = arguments.get("oldest_first", False)
 
         # Get the timestamp of the last summary
         last_summary_time = message_summaries.get_latest_summary_timestamp()
@@ -1556,14 +1568,25 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
         try:
             rows_after = []
             rows_before = []
+            total_count = 0
 
             with raw_layer.get_connection() as conn:
                 cursor = conn.cursor()
 
                 if last_summary_time:
-                    # First, get the MOST RECENT turns after the last summary
-                    # (order DESC to get newest, then reverse for chronological display)
-                    # offset allows pagination: offset=0 gets newest, offset=50 gets next batch
+                    # Get total count for pagination info
+                    count_query = """
+                        SELECT COUNT(*) FROM messages
+                        WHERE created_at > ?
+                    """
+                    count_params = [last_summary_time.isoformat()]
+                    if channel_filter:
+                        count_query += " AND channel LIKE ?"
+                        count_params.append(f"%{channel_filter}%")
+                    cursor.execute(count_query, count_params)
+                    total_count = cursor.fetchone()[0]
+
+                    # Get turns after the last summary
                     query = """
                         SELECT author_name, content, created_at, channel
                         FROM messages
@@ -1573,10 +1596,19 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                     if channel_filter:
                         query += " AND channel LIKE ?"
                         params.append(f"%{channel_filter}%")
-                    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-                    params.extend([limit, offset])
-                    cursor.execute(query, params)
-                    rows_after = list(reversed(cursor.fetchall()))  # Reverse for chronological order
+
+                    if oldest_first:
+                        # Chronological order (oldest first) - no reversal needed
+                        query += " ORDER BY created_at ASC LIMIT ? OFFSET ?"
+                        params.extend([limit, offset])
+                        cursor.execute(query, params)
+                        rows_after = cursor.fetchall()
+                    else:
+                        # Newest first (default) - get DESC then reverse
+                        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                        params.extend([limit, offset])
+                        cursor.execute(query, params)
+                        rows_after = list(reversed(cursor.fetchall()))
 
                     # If we don't have enough turns, also get some from BEFORE the summary
                     if len(rows_after) < min_turns:
@@ -1595,7 +1627,16 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                         cursor.execute(query, params)
                         rows_before = list(reversed(cursor.fetchall()))  # Reverse to get chronological order
                 else:
-                    # No summary yet - get most recent turns
+                    # No summary yet - get total count
+                    count_query = "SELECT COUNT(*) FROM messages"
+                    count_params = []
+                    if channel_filter:
+                        count_query += " WHERE channel LIKE ?"
+                        count_params.append(f"%{channel_filter}%")
+                    cursor.execute(count_query, count_params)
+                    total_count = cursor.fetchone()[0]
+
+                    # Get most recent turns
                     query = """
                         SELECT author_name, content, created_at, channel
                         FROM messages
@@ -1604,10 +1645,19 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                     if channel_filter:
                         query += " WHERE channel LIKE ?"
                         params.append(f"%{channel_filter}%")
-                    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-                    params.extend([max(limit, min_turns), offset])
-                    cursor.execute(query, params)
-                    rows_after = list(reversed(cursor.fetchall()))  # Reverse to get chronological order
+
+                    if oldest_first:
+                        # Chronological order (oldest first) - no reversal needed
+                        query += " ORDER BY created_at ASC LIMIT ? OFFSET ?"
+                        params.extend([max(limit, min_turns), offset])
+                        cursor.execute(query, params)
+                        rows_after = cursor.fetchall()
+                    else:
+                        # Newest first (default) - get DESC then reverse
+                        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                        params.extend([max(limit, min_turns), offset])
+                        cursor.execute(query, params)
+                        rows_after = list(reversed(cursor.fetchall()))
 
             # Combine: context from before + turns after
             all_rows = list(rows_before) + list(rows_after)
@@ -1626,7 +1676,9 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
 
             # Build header with context
             header_parts = [f"**{len(turns)} turns"]
-            if offset > 0:
+            if total_count > len(turns):
+                header_parts.append(f"({len(turns)} of {total_count} total, offset {offset})")
+            elif offset > 0:
                 header_parts.append(f"(offset {offset})")
             if last_summary_time:
                 if rows_before:

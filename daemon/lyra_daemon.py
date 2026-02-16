@@ -183,6 +183,10 @@ class LyraBot(commands.Bot):
         )
         self.invoker_ready = False
 
+        # Startup state tracking
+        self._startup_message_sent = {}  # channel_id -> bool, tracks if we already sent "waking up" per channel
+        self._startup_queued_messages = []  # messages received during startup, to process after ready
+
     async def setup_hook(self):
         """Called when bot is setting up - initialize everything."""
         # Initialize SQLite conversation storage
@@ -263,6 +267,9 @@ class LyraBot(commands.Bot):
 
             print(f"[WARMUP] ClaudeInvoker ready - context: {self.invoker.context_size} tokens, "
                   f"{self.invoker.turn_count} turns")
+
+            # Clear startup tracking
+            self._startup_message_sent = {}
         except Exception as e:
             print(f"[WARMUP] Failed to initialize invoker: {e}")
             # Continue running - will retry on first query
@@ -579,6 +586,14 @@ Keep it natural - just... be here.'''
             channel=f"discord:{channel_name}"
         )
 
+        # If invoker isn't ready yet, send a startup message instead of dropping/failing
+        if not self.invoker_ready:
+            channel_id = message.channel.id
+            if channel_id not in self._startup_message_sent:
+                self._startup_message_sent[channel_id] = True
+                await message.channel.send("*waking up... give me a moment*")
+            return  # Don't try to process yet
+
         # Check if Lyra is mentioned
         is_mentioned = self._is_lyra_mention(message)
         is_active = self._is_in_active_mode(message.channel.id)
@@ -760,7 +775,20 @@ Respond naturally. Keep it conversational and concise (Discord style). Discord m
 Output ONLY your Discord response."""
 
         response = await self._invoke_claude(prompt, context="mention")
-        return response or "*tilts head* I'm here but words aren't coming. Try again?"
+
+        # Retry logic with state-aware fallback
+        if response is None:
+            if not self.invoker_ready:
+                # Still starting up
+                return "*still waking up... almost there*"
+            # Invoker is supposedly ready but query failed — retry once
+            await asyncio.sleep(3)
+            response = await self._invoke_claude(prompt, context="mention")
+            if response is None:
+                # Genuine failure after retry
+                return "*something's not working right now — try again in a moment*"
+
+        return response
 
     async def _generate_passive_response(self, message: discord.Message) -> str | None:
         """Generate response in passive mode - Claude decides whether to respond."""
@@ -1185,7 +1213,20 @@ Respond naturally. Discord markdown available.
 Output ONLY your Discord response."""
 
             response = await self._invoke_claude(prompt, context="mention_batch" if len(batch) > 1 else "mention")
-            return response or "*tilts head* I'm here but words aren't coming. Try again?"
+
+            # Retry logic with state-aware fallback
+            if response is None:
+                if not self.invoker_ready:
+                    # Still starting up
+                    return "*still waking up... almost there*"
+                # Invoker is supposedly ready but query failed — retry once
+                await asyncio.sleep(3)
+                response = await self._invoke_claude(prompt, context="mention_batch" if len(batch) > 1 else "mention")
+                if response is None:
+                    # Genuine failure after retry
+                    return "*something's not working right now — try again in a moment*"
+
+            return response
 
         else:
             # Passive mode
