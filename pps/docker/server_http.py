@@ -125,6 +125,13 @@ class TextureAddRequest(BaseModel):
     token: str = ""
 
 
+class PollChannelsRequest(BaseModel):
+    """Request to poll cross-channel messages (drain-only operation)."""
+    channel: str = ""  # Requesting channel (excluded from results)
+    limit: int = 100   # Number of messages to retrieve
+    token: str = ""
+
+
 class IngestBatchRequest(BaseModel):
     """Request to batch ingest messages to Graphiti."""
     batch_size: int = 20  # Number of messages to ingest
@@ -387,7 +394,7 @@ def _save_channel_cursors(state: dict) -> None:
     _channel_cursor_file.write_text(json.dumps(state))
 
 
-def poll_other_channels(requesting_channel: str = "") -> list[str]:
+def poll_other_channels(requesting_channel: str = "", limit: int = 100) -> tuple[list[str], int]:
     """Read unread messages from channels other than the requesting one.
 
     Uses per-consumer cursors so each channel (terminal, haven, discord) has its
@@ -397,14 +404,17 @@ def poll_other_channels(requesting_channel: str = "") -> list[str]:
         requesting_channel: Channel making the request (e.g., "haven", "terminal").
                            Messages from this channel are excluded.
                            Also used as the cursor key.
+        limit: Maximum number of messages to return per call (default 100).
 
     Returns:
-        Formatted lines like: - **[terminal]** Jeff: message content
+        Tuple of (formatted_lines, remaining_count):
+        - formatted_lines: List like ["- **[terminal]** Jeff: message content", ...]
+        - remaining_count: Number of messages still in the queue after this batch
     """
     try:
         db_path = ENTITY_PATH / "data" / "conversations.db"
         if not db_path.exists():
-            return []
+            return ([], 0)
 
         import sqlite3
         conn = sqlite3.connect(str(db_path))
@@ -414,6 +424,46 @@ def poll_other_channels(requesting_channel: str = "") -> list[str]:
         # Per-consumer cursor: each requesting_channel has its own read position
         cursor_key = requesting_channel or "_default"
         last_id = cursors.get(cursor_key, 0)
+
+        # Get total count of remaining messages
+        cursor = conn.cursor()
+        if requesting_channel:
+            cursor.execute("""
+                SELECT COUNT(*) as total
+                FROM messages
+                WHERE id > ? AND (channel IS NULL OR channel NOT LIKE ?)
+            """, (last_id, f"{requesting_channel}%"))
+        else:
+            cursor.execute("""
+                SELECT COUNT(*) as total
+                FROM messages
+                WHERE id > ?
+            """, (last_id,))
+
+        total_count = cursor.fetchone()["total"]
+
+        # Massive backlog protection: if cursor is way behind (>1000 messages),
+        # the entity is already caught up via startup (crystals/summaries cover history).
+        # Skip to near-current instead of trying to drain thousands of old messages.
+        if total_count > 1000:
+            cursor.execute("SELECT MAX(id) FROM messages")
+            max_row = cursor.fetchone()
+            if max_row and max_row[0]:
+                # Jump cursor forward, keeping only the most recent `limit` messages reachable
+                skip_to = max_row[0] - limit
+                if skip_to > last_id:
+                    print(f"[PPS] Channel poll: {cursor_key} cursor {total_count} msgs behind, skipping to near-current", file=sys.stderr)
+                    last_id = skip_to
+                    # Recalculate total_count from new position
+                    cursor = conn.cursor()
+                    if requesting_channel:
+                        cursor.execute("""
+                            SELECT COUNT(*) as total FROM messages
+                            WHERE id > ? AND (channel IS NULL OR channel NOT LIKE ?)
+                        """, (last_id, f"{requesting_channel}%"))
+                    else:
+                        cursor.execute("SELECT COUNT(*) as total FROM messages WHERE id > ?", (last_id,))
+                    total_count = cursor.fetchone()["total"]
 
         # Get messages newer than this consumer's cursor, excluding its own channel
         cursor = conn.cursor()
@@ -425,22 +475,22 @@ def poll_other_channels(requesting_channel: str = "") -> list[str]:
                 FROM messages
                 WHERE id > ? AND (channel IS NULL OR channel NOT LIKE ?)
                 ORDER BY created_at ASC
-                LIMIT 20
-            """, (last_id, f"{requesting_channel}%"))
+                LIMIT ?
+            """, (last_id, f"{requesting_channel}%", limit))
         else:
             cursor.execute("""
                 SELECT id, author_name, content, created_at, channel
                 FROM messages
                 WHERE id > ?
                 ORDER BY created_at ASC
-                LIMIT 20
-            """, (last_id,))
+                LIMIT ?
+            """, (last_id, limit))
 
         rows = cursor.fetchall()
         conn.close()
 
         if not rows:
-            return []
+            return ([], 0)
 
         lines = []
         max_id = last_id
@@ -460,11 +510,14 @@ def poll_other_channels(requesting_channel: str = "") -> list[str]:
         cursors[cursor_key] = max_id
         _save_channel_cursors(cursors)
 
-        return lines
+        # Calculate remaining count
+        remaining = max(0, total_count - len(rows))
+
+        return (lines, remaining)
 
     except Exception as e:
         print(f"[PPS] Channel poll failed: {e}", file=sys.stderr)
-        return []
+        return ([], 0)
 
 
 def get_layers():
@@ -882,7 +935,36 @@ async def ambient_recall(request: AmbientRecallRequest):
     haven_lines = await poll_haven()
 
     # Poll raw capture DB for unread messages from other channels (cross-channel awareness)
-    channel_lines = poll_other_channels(requesting_channel=request.channel)
+    # On startup: skip polling, just advance all cursors to current max ID.
+    # Startup already provides crystals + summaries + recent turns — the entity is caught up.
+    # Without this, a stale cursor (e.g. 17,000 messages behind) would try to drain the entire backlog.
+    if request.context.lower() == "startup":
+        channel_lines = []
+        cross_channel_remaining = 0
+        try:
+            db_path = ENTITY_PATH / "data" / "conversations.db"
+            if db_path.exists():
+                import sqlite3
+                conn = sqlite3.connect(str(db_path))
+                cur = conn.cursor()
+                cur.execute("SELECT MAX(id) FROM messages")
+                row = cur.fetchone()
+                max_id = row[0] if row and row[0] else 0
+                conn.close()
+                if max_id > 0:
+                    cursors = _load_channel_cursors()
+                    # Advance ALL cursors to current max — every channel starts fresh after startup
+                    for key in list(cursors.keys()):
+                        cursors[key] = max_id
+                    # Also ensure the requesting channel has a cursor
+                    if request.channel and request.channel not in cursors:
+                        cursors[request.channel] = max_id
+                    _save_channel_cursors(cursors)
+                    print(f"[PPS] Startup: advanced all channel cursors to {max_id}", file=sys.stderr)
+        except Exception as e:
+            print(f"[PPS] Startup cursor init failed: {e}", file=sys.stderr)
+    else:
+        channel_lines, cross_channel_remaining = poll_other_channels(requesting_channel=request.channel, limit=100)
 
     # Format results for hook consumption (formatted_context field)
     # This formats the rich_texture results into a readable string for Haiku to pass through
@@ -1010,6 +1092,7 @@ async def ambient_recall(request: AmbientRecallRequest):
             "memory_health": f"{unsummarized_count} unsummarized messages {memory_note}",
             "manifest": manifest,
             "formatted_context": formatted_context,
+            "cross_channel_remaining": cross_channel_remaining,
             "latency_ms": latency_ms
         }
 
@@ -1028,7 +1111,30 @@ async def ambient_recall(request: AmbientRecallRequest):
         "summaries": summaries,
         "unsummarized_turns": unsummarized_turns,
         "formatted_context": formatted_context,
+        "cross_channel_remaining": cross_channel_remaining,
         "latency_ms": latency_ms
+    }
+
+
+@app.post("/tools/poll_channels")
+async def poll_channels_endpoint(request: PollChannelsRequest):
+    """Poll cross-channel messages (drain-only operation for catching up on backlog).
+
+    This endpoint is separate from ambient_recall to allow daemon-side drain loops
+    without re-fetching crystals, word-photos, and other memory layers.
+    """
+    # Auth check
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "poll_channels")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
+    # Poll other channels with specified limit
+    lines, remaining = poll_other_channels(requesting_channel=request.channel, limit=request.limit)
+
+    return {
+        "lines": lines,
+        "remaining": remaining,
+        "count": len(lines)
     }
 
 

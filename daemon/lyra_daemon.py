@@ -186,6 +186,7 @@ class LyraBot(commands.Bot):
         # Startup state tracking
         self._startup_message_sent = {}  # channel_id -> bool, tracks if we already sent "waking up" per channel
         self._startup_queued_messages = []  # messages received during startup, to process after ready
+        self._init_in_progress = False  # prevents concurrent init attempts (heartbeat vs main startup)
 
     async def setup_hook(self):
         """Called when bot is setting up - initialize everything."""
@@ -327,13 +328,19 @@ Keep it natural - just... be here.'''
         - Error recovery and reconnection
         """
         if not self.invoker_ready:
+            if self._init_in_progress:
+                print(f"[{context}] Invoker not ready, init already in progress — skipping")
+                return None
             print(f"[{context}] Invoker not ready, attempting initialization...")
+            self._init_in_progress = True
             try:
                 await self.invoker.initialize(timeout=180.0)
                 self.invoker_ready = True
             except Exception as e:
                 print(f"[{context}] Failed to initialize invoker: {e}")
                 return None
+            finally:
+                self._init_in_progress = False
 
         # Check if restart needed before query
         await self.invoker.check_and_restart_if_needed()
@@ -376,18 +383,19 @@ Keep it natural - just... be here.'''
     # ==================== Ambient Context (Cross-Channel Awareness) ====================
 
     async def _fetch_ambient_context(self) -> str:
-        """Fetch ambient context from PPS HTTP server.
+        """Fetch ambient context from PPS HTTP server with cross-channel drain.
 
         Calls the PPS server directly (not via MCP) to get ambient_recall context
-        including cross-channel messages from terminal and Haven. This gives the
-        Discord daemon awareness of what's happening in other channels.
+        including cross-channel messages from terminal and Haven. If the response
+        indicates backlog, drains the queue by calling poll_channels repeatedly.
 
         Returns formatted context string, or empty string on failure.
         """
         if not PPS_HTTP_URL:
             return ""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # Step 1: Normal ambient_recall (gets everything including first batch of cross-channel)
                 resp = await client.post(
                     f"{PPS_HTTP_URL}/tools/ambient_recall",
                     json={"context": "discord bot turn", "token": ENTITY_AUTH_TOKEN, "channel": "discord"},
@@ -395,7 +403,43 @@ Keep it natural - just... be here.'''
                 if resp.status_code != 200:
                     return ""
                 data = resp.json()
-                return data.get("formatted_context", "")
+                formatted_context = data.get("formatted_context", "")
+                remaining = data.get("cross_channel_remaining", 0)
+
+                # Step 2: Drain cross-channel queue if behind
+                drain_lines = []
+                max_drain_iterations = 10  # Safety: max 10 * 100 = 1000 messages
+
+                for i in range(max_drain_iterations):
+                    if remaining <= 0:
+                        break
+                    drain_resp = await client.post(
+                        f"{PPS_HTTP_URL}/tools/poll_channels",
+                        json={"channel": "discord", "limit": 100, "token": ENTITY_AUTH_TOKEN},
+                    )
+                    if drain_resp.status_code != 200:
+                        break
+                    drain_data = drain_resp.json()
+                    batch_lines = drain_data.get("lines", [])
+                    remaining = drain_data.get("remaining", 0)
+                    if not batch_lines:
+                        break
+                    drain_lines.extend(batch_lines)
+                    print(f"[AMBIENT] Drained {len(batch_lines)} cross-channel messages, {remaining} remaining")
+
+                # Step 3: If we drained extra messages, append them to context
+                if drain_lines:
+                    # Context budget: if total drain is large, summarize older ones
+                    if len(drain_lines) > 50:
+                        older_count = len(drain_lines) - 50
+                        drain_summary = f"\n[Caught up through {older_count} older cross-channel messages]\n"
+                        recent_lines = drain_lines[-50:]
+                        formatted_context += drain_summary + "\n".join(recent_lines)
+                    else:
+                        formatted_context += "\n" + "\n".join(drain_lines)
+                    print(f"[AMBIENT] Total cross-channel drain: {len(drain_lines)} messages appended to context")
+
+                return formatted_context
         except Exception as e:
             print(f"[AMBIENT] Fetch failed: {e}")
             return ""
