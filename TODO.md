@@ -57,7 +57,7 @@
 | **Graphiti Local Ingestion** | Running | ~14,700 messages via cc_invoker (Haiku). ~4.5 min/batch, 97% success rate. |
 | **HTTP Endpoint Migration** | Paused | 7 endpoints in `pps/docker/server_http.py`. Docker/WSL crashed during testing. Resume: spin up Docker, run test script. |
 | **CC OpenAI Wrapper** | Blocked | OpenAI-compatible wrapper for ClaudeInvoker ([#117](https://github.com/JDHayesBC/Awareness/issues/117)). Graphiti Docker ignores `OPENAI_BASE_URL` (upstream #1116). See [#118](https://github.com/JDHayesBC/Awareness/issues/118). |
-| **Bot Hardening** | **Active** | Discord bot reliability: ambient_recall cap/pagination, startup UX, error recovery, observability. See `work/bot-hardening/DESIGN.md`. |
+| **Bot Hardening** | **Complete** | Discord bot reliability improvements shipped (commit 10200b7): ambient_recall cap/pagination, startup UX, retry logic, cross-channel cursor initialization, heartbeat race fix. See `work/bot-hardening/DESIGN.md`. |
 | **Hook Haiku Compression** | Partial | Fixed subprocess timeout. Haiku compression disabled (Docker permissions). Fallback to raw context works. |
 | **Two-Stream Agent Context** | Ready | Separate context injection for spawned agents. ~1hr build + 1hr debug. See `work/nexus-orchestration-research/TWO_STREAMS.md`. |
 
