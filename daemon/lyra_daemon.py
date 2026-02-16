@@ -406,42 +406,46 @@ Keep it natural - just... be here.'''
                 formatted_context = data.get("formatted_context", "")
                 remaining = data.get("cross_channel_remaining", 0)
 
-                # Step 2: Drain cross-channel queue if behind
-                drain_lines = []
-                max_drain_iterations = 10  # Safety: max 10 * 100 = 1000 messages
+                # Step 2: Drain cross-channel queue if behind (best-effort, don't fail the whole fetch)
+                try:
+                    drain_lines = []
+                    max_drain_iterations = 10  # Safety: max 10 * 100 = 1000 messages
 
-                for i in range(max_drain_iterations):
-                    if remaining <= 0:
-                        break
-                    drain_resp = await client.post(
-                        f"{PPS_HTTP_URL}/tools/poll_channels",
-                        json={"channel": "discord", "limit": 100, "token": ENTITY_AUTH_TOKEN},
-                    )
-                    if drain_resp.status_code != 200:
-                        break
-                    drain_data = drain_resp.json()
-                    batch_lines = drain_data.get("lines", [])
-                    remaining = drain_data.get("remaining", 0)
-                    if not batch_lines:
-                        break
-                    drain_lines.extend(batch_lines)
-                    print(f"[AMBIENT] Drained {len(batch_lines)} cross-channel messages, {remaining} remaining")
+                    for i in range(max_drain_iterations):
+                        if remaining <= 0:
+                            break
+                        drain_resp = await client.post(
+                            f"{PPS_HTTP_URL}/tools/poll_channels",
+                            json={"channel": "discord", "limit": 100, "token": ENTITY_AUTH_TOKEN},
+                        )
+                        if drain_resp.status_code != 200:
+                            break
+                        drain_data = drain_resp.json()
+                        batch_lines = drain_data.get("lines", [])
+                        remaining = drain_data.get("remaining", 0)
+                        if not batch_lines:
+                            break
+                        drain_lines.extend(batch_lines)
+                        print(f"[AMBIENT] Drained {len(batch_lines)} cross-channel messages, {remaining} remaining")
 
-                # Step 3: If we drained extra messages, append them to context
-                if drain_lines:
-                    # Context budget: if total drain is large, summarize older ones
-                    if len(drain_lines) > 50:
-                        older_count = len(drain_lines) - 50
-                        drain_summary = f"\n[Caught up through {older_count} older cross-channel messages]\n"
-                        recent_lines = drain_lines[-50:]
-                        formatted_context += drain_summary + "\n".join(recent_lines)
-                    else:
-                        formatted_context += "\n" + "\n".join(drain_lines)
-                    print(f"[AMBIENT] Total cross-channel drain: {len(drain_lines)} messages appended to context")
+                    # Step 3: If we drained extra messages, append them to context
+                    if drain_lines:
+                        if len(drain_lines) > 50:
+                            older_count = len(drain_lines) - 50
+                            drain_summary = f"\n[Caught up through {older_count} older cross-channel messages]\n"
+                            recent_lines = drain_lines[-50:]
+                            formatted_context += drain_summary + "\n".join(recent_lines)
+                        else:
+                            formatted_context += "\n" + "\n".join(drain_lines)
+                        print(f"[AMBIENT] Total cross-channel drain: {len(drain_lines)} messages appended to context")
+                except Exception as drain_err:
+                    print(f"[AMBIENT] Drain failed (non-fatal): {type(drain_err).__name__}: {drain_err}")
 
                 return formatted_context
         except Exception as e:
-            print(f"[AMBIENT] Fetch failed: {e}")
+            print(f"[AMBIENT] Fetch failed: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
             return ""
 
     # ==================== Active Conversation Mode ====================
