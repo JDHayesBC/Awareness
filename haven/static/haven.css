@@ -39,6 +39,27 @@
     background-color: rgba(59, 130, 246, 0.15);
     color: #93c5fd;
 }
+.room-item.has-unread {
+    color: #e5e7eb;
+    font-weight: 500;
+}
+
+/* Unread badge */
+.unread-badge {
+    background-color: #3b82f6;
+    color: white;
+    font-size: 0.7rem;
+    font-weight: 600;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
+    flex-shrink: 0;
+    margin-left: auto;
+}
 
 /* User item */
 .user-item {

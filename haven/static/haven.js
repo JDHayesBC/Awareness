@@ -12,6 +12,8 @@ const haven = (() => {
     let typingUsers = {};  // room_id -> {username -> timeout}
     let oldestMessageId = {};  // room_id -> oldest message id loaded
     let hasMore = {};  // room_id -> bool
+    let unread = {};  // room_id -> count
+    const originalTitle = document.title;
 
     const $ = (id) => document.getElementById(id);
 
@@ -151,8 +153,13 @@ const haven = (() => {
         if (data.room_id === currentRoomId) {
             appendMessage(data);
             scrollToBottom();
+        } else {
+            // Track unread for non-active rooms
+            if (!unread[data.room_id]) unread[data.room_id] = 0;
+            unread[data.room_id]++;
+            renderRooms();
+            updateTitle();
         }
-        // Could add unread indicators here
     }
 
     function onHistory(data) {
@@ -210,7 +217,20 @@ const haven = (() => {
         rooms.forEach(r => {
             const el = document.createElement('div');
             el.className = 'room-item' + (r.id === currentRoomId ? ' active' : '');
-            el.textContent = (r.is_dm ? '' : '# ') + r.display_name;
+
+            const label = (r.is_dm ? '' : '# ') + r.display_name;
+            const count = unread[r.id] || 0;
+
+            if (count > 0 && r.id !== currentRoomId) {
+                el.innerHTML = `
+                    <span class="flex-1 truncate">${escapeHtml(label)}</span>
+                    <span class="unread-badge">${count > 99 ? '99+' : count}</span>
+                `;
+                el.classList.add('has-unread');
+            } else {
+                el.textContent = label;
+            }
+
             el.addEventListener('click', () => selectRoom(r.id));
 
             if (r.is_dm) {
@@ -289,6 +309,9 @@ const haven = (() => {
         const room = rooms.find(r => r.id === roomId);
         $('room-name').textContent = room ? (room.is_dm ? room.display_name : `# ${room.display_name}`) : '';
 
+        // Clear unread for this room
+        delete unread[roomId];
+        updateTitle();
         renderRooms();
 
         // Clear messages and load history
@@ -343,6 +366,11 @@ const haven = (() => {
     }
 
     // --- Utilities ---
+
+    function updateTitle() {
+        const totalUnread = Object.values(unread).reduce((a, b) => a + b, 0);
+        document.title = totalUnread > 0 ? `(${totalUnread}) ${originalTitle}` : originalTitle;
+    }
 
     function scrollToBottom() {
         const container = $('messages');
