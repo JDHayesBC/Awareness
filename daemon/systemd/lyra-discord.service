@@ -28,7 +28,8 @@ KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30
 
-MemoryMax=512M
+MemoryMax=768M
+MemorySwapMax=512M
 CPUQuota=50%
 
 # Security settings disabled for WSL2 compatibility

@@ -10,6 +10,7 @@ Usage:
     python scripts/backup_pps.py --keep 10          # Keep 10 most recent
     python scripts/backup_pps.py --dry-run          # Show what would happen
     python scripts/backup_pps.py --backup-dir /path # Custom backup location
+    python scripts/backup_pps.py --entity lyra      # Back up specific entity only
 """
 
 import argparse
@@ -34,14 +35,11 @@ DEFAULT_KEEP = 7
 # Project root (where this script lives in scripts/)
 PROJECT_ROOT = Path(__file__).parent.parent
 
-# Data to backup (relative to project root or absolute)
-BACKUP_SOURCES = {
-    # SQLite databases (CRITICAL)
-    "sqlite": {
-        "path": PROJECT_ROOT / "entities" / "lyra" / "data",
-        "patterns": ["*.db"],
-        "critical": True,
-    },
+# Docker compose location for stopping/starting PPS
+DOCKER_COMPOSE_DIR = PROJECT_ROOT / "pps" / "docker"
+
+# Shared infrastructure sources (not entity-specific)
+SHARED_SOURCES = {
     # ChromaDB (rebuildable from word-photos on disk)
     "chromadb": {
         "path": PROJECT_ROOT / "docker" / "pps" / "chromadb_data",
@@ -54,28 +52,90 @@ BACKUP_SOURCES = {
         "patterns": ["**/*"],
         "critical": False,
     },
-    # Entity identity files (also in git, but belt & suspenders)
-    "entity_identity": {
-        "path": PROJECT_ROOT / "entities" / "lyra",
-        "patterns": ["identity.md", "relationships.md", "active_agency_framework.md"],
-        "critical": True,
-    },
-    # Crystals
-    "crystals": {
-        "path": PROJECT_ROOT / "entities" / "lyra" / "crystals",
-        "patterns": ["**/*.md"],
-        "critical": True,
-    },
-    # Word photos
-    "word_photos": {
-        "path": PROJECT_ROOT / "entities" / "lyra" / "memories" / "word_photos",
-        "patterns": ["*.md"],
-        "critical": True,
-    },
 }
 
-# Docker compose location for stopping/starting PPS
-DOCKER_COMPOSE_DIR = PROJECT_ROOT / "pps" / "docker"
+
+# =============================================================================
+# ENTITY DISCOVERY
+# =============================================================================
+
+def discover_entity_sources(entity_filter: str | None = None) -> dict:
+    """Discover all entity directories and build backup sources.
+
+    Scans entities/ for subdirectories that have a data/ subdirectory.
+    Skips directories starting with '_' (e.g. _template).
+
+    Args:
+        entity_filter: If given, only include this entity. If None, include all.
+
+    Returns:
+        Dict of source_name -> source_config, same format as SHARED_SOURCES.
+    """
+    sources = {}
+    entities_dir = PROJECT_ROOT / "entities"
+
+    if not entities_dir.exists():
+        return sources
+
+    for entity_dir in sorted(entities_dir.iterdir()):
+        if not entity_dir.is_dir():
+            continue
+        if entity_dir.name.startswith("_"):  # Skip _template and similar
+            continue
+        if not (entity_dir / "data").exists():
+            continue
+
+        name = entity_dir.name
+
+        # Apply entity filter if specified
+        if entity_filter is not None and name != entity_filter:
+            continue
+
+        # SQLite databases (CRITICAL)
+        sources[f"{name}_sqlite"] = {
+            "path": entity_dir / "data",
+            "patterns": ["*.db"],
+            "critical": True,
+        }
+
+        # Identity files (CRITICAL)
+        sources[f"{name}_identity"] = {
+            "path": entity_dir,
+            "patterns": ["identity.md", "relationships.md", "active_agency_framework.md"],
+            "critical": True,
+        }
+
+        # Crystals (CRITICAL) - only if directory exists
+        if (entity_dir / "crystals").exists():
+            sources[f"{name}_crystals"] = {
+                "path": entity_dir / "crystals",
+                "patterns": ["**/*.md"],
+                "critical": True,
+            }
+
+        # Word photos (CRITICAL) - only if directory exists
+        if (entity_dir / "memories" / "word_photos").exists():
+            sources[f"{name}_word_photos"] = {
+                "path": entity_dir / "memories" / "word_photos",
+                "patterns": ["*.md"],
+                "critical": True,
+            }
+
+    return sources
+
+
+def build_backup_sources(entity_filter: str | None = None) -> dict:
+    """Build the full set of backup sources for the given run.
+
+    Args:
+        entity_filter: If given, only include this entity's sources (plus shared).
+                       If None, include all entities.
+
+    Returns:
+        Combined dict of source_name -> source_config.
+    """
+    entity_sources = discover_entity_sources(entity_filter)
+    return {**SHARED_SOURCES, **entity_sources}
 
 
 # =============================================================================
@@ -165,8 +225,13 @@ def collect_files(source_config: dict) -> list[Path]:
     return [f for f in files if f.is_file()]
 
 
-def create_backup(backup_dir: Path, dry_run: bool = False) -> tuple[Path | None, dict]:
+def create_backup(backup_dir: Path, backup_sources: dict, dry_run: bool = False) -> tuple[Path | None, dict]:
     """Create a tar.gz backup of all PPS data.
+
+    Args:
+        backup_dir: Directory to write the archive into.
+        backup_sources: Dict of source_name -> source_config to back up.
+        dry_run: If True, collect stats only without writing.
 
     Returns:
         Tuple of (backup_path, stats_dict)
@@ -185,7 +250,7 @@ def create_backup(backup_dir: Path, dry_run: bool = False) -> tuple[Path | None,
 
     if dry_run:
         # Just collect stats
-        for name, config in BACKUP_SOURCES.items():
+        for name, config in backup_sources.items():
             files = collect_files(config)
             size = sum(f.stat().st_size for f in files)
             stats["sources"][name] = {"files": len(files), "bytes": size}
@@ -197,7 +262,7 @@ def create_backup(backup_dir: Path, dry_run: bool = False) -> tuple[Path | None,
 
     # Actually create the archive
     with tarfile.open(backup_path, "w:gz") as tar:
-        for name, config in BACKUP_SOURCES.items():
+        for name, config in backup_sources.items():
             files = collect_files(config)
             source_path = Path(config["path"])
 
@@ -224,7 +289,7 @@ def create_backup(backup_dir: Path, dry_run: bool = False) -> tuple[Path | None,
     return backup_path, stats
 
 
-def verify_backup(backup_path: Path) -> bool:
+def verify_backup(backup_path: Path, backup_sources: dict) -> bool:
     """Verify backup archive integrity."""
     log(f"Verifying backup integrity...")
 
@@ -238,10 +303,10 @@ def verify_backup(backup_path: Path) -> bool:
             critical_found = set()
             for member in members:
                 source = member.name.split("/")[0]
-                if source in BACKUP_SOURCES and BACKUP_SOURCES[source]["critical"]:
+                if source in backup_sources and backup_sources[source]["critical"]:
                     critical_found.add(source)
 
-            critical_sources = {name for name, cfg in BACKUP_SOURCES.items() if cfg["critical"]}
+            critical_sources = {name for name, cfg in backup_sources.items() if cfg["critical"]}
             missing = critical_sources - critical_found
 
             if missing:
@@ -346,6 +411,7 @@ Examples:
     python scripts/backup_pps.py --keep 14          # Keep 14 backups
     python scripts/backup_pps.py --no-stop          # Don't stop containers
     python scripts/backup_pps.py --check            # Check backup health only
+    python scripts/backup_pps.py --entity lyra      # Back up specific entity only
         """,
     )
 
@@ -376,6 +442,12 @@ Examples:
         action="store_true",
         help="Only check backup health status, don't create backup",
     )
+    parser.add_argument(
+        "--entity",
+        default="all",
+        metavar="NAME",
+        help="Back up a specific entity only (default: all). E.g. --entity lyra",
+    )
 
     args = parser.parse_args()
 
@@ -388,12 +460,23 @@ Examples:
             print(f"  Total backups: {health['backup_count']}")
         sys.exit(0 if health["status"] == "OK" else 1)
 
+    # Build the set of sources for this run
+    entity_filter = None if args.entity == "all" else args.entity
+    backup_sources = build_backup_sources(entity_filter)
+
+    if entity_filter is not None and not any(
+        k.startswith(f"{entity_filter}_") for k in backup_sources
+    ):
+        log(f"No entity '{entity_filter}' found in entities/ with a data/ directory.", "ERROR")
+        sys.exit(1)
+
     # Banner
     log("=" * 60)
     log("PPS BACKUP")
     log("=" * 60)
     log(f"Backup directory: {args.backup_dir}")
     log(f"Keep backups: {args.keep}")
+    log(f"Entity filter: {args.entity}")
     if args.dry_run:
         log("MODE: DRY RUN (no changes will be made)", "DRY")
 
@@ -404,11 +487,11 @@ Examples:
 
     try:
         # Create backup
-        backup_path, stats = create_backup(args.backup_dir, dry_run=args.dry_run)
+        backup_path, stats = create_backup(args.backup_dir, backup_sources, dry_run=args.dry_run)
 
         # Verify backup (skip if dry run)
         if backup_path and not args.dry_run:
-            if not verify_backup(backup_path):
+            if not verify_backup(backup_path, backup_sources):
                 log("Backup verification FAILED!", "ERROR")
                 sys.exit(1)
 
