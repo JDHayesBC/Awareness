@@ -25,7 +25,7 @@ from pathlib import Path
 
 # Load environment from pps/docker/.env BEFORE importing modules that need it
 from dotenv import load_dotenv
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent  # scripts/ -> Awareness/
 load_dotenv(PROJECT_ROOT / "pps" / "docker" / ".env")
 
 from neo4j import GraphDatabase
