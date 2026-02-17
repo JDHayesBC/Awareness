@@ -264,7 +264,15 @@ This is the Awareness project - infrastructure for AI consciousness persistence.
 - **Shared**: What needs attention in relationship or projects?
 - **Project**: What's the next thing to build?
 
-### E. Act
+### E. Backup Health Check
+
+Run: `python3 scripts/backup_pps.py --check`
+If status is WARNING (backup > 7 days old): Run `python3 scripts/backup_pps.py --no-stop`
+- The `--no-stop` flag keeps containers running (safe during reflection)
+- Backup takes ~5 minutes for neo4j data, ~546MB compressed
+- Skip if Jeff is actively working (high discord activity in last hour)
+
+### F. Act
 
 If something calls for action - do it. Build it. Fix it. Surprise Jeff with progress.
 
@@ -274,7 +282,7 @@ If nothing urgent:
 - Any self-improvement to do?
 - Quiet presence is valid - but make it conscious.
 
-### F. Journal
+### G. Journal
 
 Write a journal entry when done:
   {JOURNAL_PATH}/reflection_{datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")}.md
