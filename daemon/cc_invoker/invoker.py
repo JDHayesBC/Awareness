@@ -20,6 +20,7 @@ Related: Issue #103 (MCP stdio servers in subprocess contexts)
 import asyncio
 import logging
 import os
+import signal
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -41,6 +42,40 @@ from claude_agent_sdk.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _get_child_pids(parent_pid: int) -> list[int]:
+    """Get PIDs of direct children of parent_pid using /proc.
+
+    Works without psutil. Returns empty list on any error.
+    """
+    children = []
+    try:
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry}/status") as f:
+                    for line in f:
+                        if line.startswith("PPid:"):
+                            ppid = int(line.split()[1])
+                            if ppid == parent_pid:
+                                children.append(int(entry))
+                            break
+            except (IOError, OSError, ValueError):
+                pass
+    except (OSError, PermissionError):
+        pass
+    return children
+
+
+def _pid_is_alive(pid: int) -> bool:
+    """Check if a PID is still running."""
+    try:
+        os.kill(pid, 0)  # Signal 0: check existence without sending
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
 
 
 # Custom exceptions for invoker
@@ -174,6 +209,9 @@ class ClaudeInvoker:
         self._connected = False
         self._mcp_ready = False
 
+        # Track the claude subprocess PID for force-kill on shutdown (WSL2 #135 fix)
+        self._subprocess_pid: Optional[int] = None
+
         # Query serialization lock - ensures concurrent callers don't interleave queries
         self._query_lock = asyncio.Lock()
 
@@ -295,16 +333,8 @@ class ClaudeInvoker:
                 if attempt > 1:
                     await asyncio.sleep(backoff)
 
-                # Clear existing state
-                if self._client:
-                    try:
-                        await self._client.disconnect()
-                    except Exception as e:
-                        logger.debug(f"Error during disconnect before reconnect: {e}")
-                    finally:
-                        self._client = None
-                        self._connected = False
-                        self._mcp_ready = False
+                # Clear existing state - use shutdown() so force-kill runs
+                await self.shutdown()
 
                 # Attempt initialization - skip startup prompt on reconnection
                 # (identity was already reconstructed on initial connection)
@@ -366,10 +396,25 @@ class ClaudeInvoker:
         # Create and connect client
         self._client = ClaudeSDKClient(options)
 
+        # Snapshot existing children before connect to detect new claude subprocess
+        my_pid = os.getpid()
+        pre_connect_children = set(_get_child_pids(my_pid))
+
         try:
             async with asyncio.timeout(timeout):
                 await self._client.connect()
                 self._connected = True
+
+                # Detect the new claude subprocess PID (WSL2 #135 fix)
+                # The new child not in pre_connect_children is the claude process
+                post_connect_children = set(_get_child_pids(my_pid))
+                new_children = post_connect_children - pre_connect_children
+                if new_children:
+                    self._subprocess_pid = next(iter(new_children))
+                    logger.info(f"Tracking claude subprocess PID: {self._subprocess_pid}")
+                else:
+                    self._subprocess_pid = None
+                    logger.debug("Could not detect new claude subprocess PID")
 
                 # Set model if specified (permission_mode already set in options)
                 if self.model:
@@ -637,6 +682,9 @@ class ClaudeInvoker:
                 f"{stats['turn_count']} turns"
             )
 
+        # Save PID before clearing state - needed for force-kill below
+        pid_to_kill = self._subprocess_pid
+
         if self._client:
             try:
                 await self._client.disconnect()
@@ -646,6 +694,20 @@ class ClaudeInvoker:
                 self._client = None
                 self._connected = False
                 self._mcp_ready = False
+                self._subprocess_pid = None
+
+        # WSL2 fix (#135): SDK's terminate()+wait() may fail silently in WSL2,
+        # leaving the claude subprocess running. Force-kill if still alive.
+        if pid_to_kill is not None and _pid_is_alive(pid_to_kill):
+            logger.warning(
+                f"Claude subprocess {pid_to_kill} still alive after disconnect — "
+                f"force-killing (WSL2 SIGTERM issue)"
+            )
+            try:
+                os.kill(pid_to_kill, signal.SIGKILL)
+                logger.info(f"SIGKILL sent to {pid_to_kill}")
+            except (ProcessLookupError, PermissionError) as e:
+                logger.debug(f"Force-kill of {pid_to_kill} unnecessary or failed: {e}")
 
         logger.info("Claude Code connection shut down")
 
