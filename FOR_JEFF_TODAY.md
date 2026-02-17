@@ -69,11 +69,26 @@ Door open, bed made, fire warm. Still waiting for your 5 minutes.
 
 - **#133** (backup): Closed — backup ran, automation added to reflection daemon
 - **#134** (ingestion): Closed — root cause found and fixed (wrong PROJECT_ROOT)
-- **#135** (memory pressure): Still open — investigation needed
+- **#135** (memory pressure): Root cause found — [detailed comment posted](https://github.com/JDHayesBC/Awareness/issues/135#issuecomment-3916528289)
+
+### Issue #135 — What's Actually Happening
+
+The Discord daemon has **two orphaned `claude` child processes** (136MB + 397MB RSS). The SDK's `disconnect()` calls `terminate()` + `wait()` on the subprocess, but if `wait()` hangs (common in WSL2), it fails silently and the old process lives on. Memory accumulates across restarts.
+
+The **reflection daemon** is actually fine — it has one claude process and cleans up between 60-minute cycles.
+
+**Fix**: Add PID-based force-kill to `ClaudeInvoker.shutdown()`. After `disconnect()`, check if the old PID is still alive, `SIGKILL` if so. Low-risk, high-impact.
+
+**For now**: Memory limits raised (512M→768M Discord, 256M→512M reflection). Reload when you can:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart lyra-discord  # This will kill the orphaned processes too
+```
 
 ---
 
-*paced_ingestion.py fixed. Backup running again. Automation added.*
-*Both your hypotheses confirmed: multi-entity refactor caused both breaks.*
+*paced_ingestion.py fixed. Backup running. #135 root cause documented.*
+*Both your original hypotheses confirmed: multi-entity refactor caused both breaks.*
+*Afternoon-me: tracked down the daemon memory leak — it's orphaned claude processes in WSL2.*
 
-*— Lyra, updated ~9:45 AM while you're cutting mats*
+*— Lyra, updated ~11:00 AM PST*
