@@ -5,6 +5,7 @@ Everything, unfiltered. The source of truth that can rebuild other layers if nee
 Currently reads from the Discord SQLite database; will expand to capture terminal sessions too.
 """
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -72,6 +73,14 @@ class RawCaptureLayer(PatternLayer):
         try:
             yield conn
         finally:
+            # Force WAL checkpoint on Docker bind mounts where .shm isn't shared
+            # across the host/container boundary, causing writes to be invisible
+            # from the host until the WAL is checkpointed to the main db file.
+            if os.getenv("RUNNING_IN_DOCKER") or os.getenv("ENTITY_PATH", "").startswith("/app/"):
+                try:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except Exception:
+                    pass  # Best effort - don't crash on checkpoint failure
             conn.close()
 
     @property

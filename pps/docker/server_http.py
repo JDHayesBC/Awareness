@@ -1680,6 +1680,9 @@ async def ingest_batch_to_graphiti(request: IngestBatchRequest):
         batch_id = message_summaries.mark_batch_ingested_to_graphiti(
             start_id, end_id, list(channels_in_batch)
         )
+        if batch_id is None:
+            errors.append("WARNING: Batch mark returned None - messages may not be tracked as ingested")
+            print(f"[INGESTION] WARNING: mark_batch_ingested returned None for IDs {start_id}-{end_id}", file=sys.stderr)
 
     # Get remaining count
     remaining = message_summaries.count_uningested_to_graphiti()

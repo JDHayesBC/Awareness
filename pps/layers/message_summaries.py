@@ -73,6 +73,14 @@ class MessageSummariesLayer(PatternLayer):
         try:
             yield conn
         finally:
+            # Force WAL checkpoint on Docker bind mounts where .shm isn't shared
+            # across the host/container boundary, causing writes to be invisible
+            # from the host until the WAL is checkpointed to the main db file.
+            if os.getenv("RUNNING_IN_DOCKER") or os.getenv("ENTITY_PATH", "").startswith("/app/"):
+                try:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except Exception:
+                    pass  # Best effort - don't crash on checkpoint failure
             conn.close()
 
     def _ensure_tables(self):
