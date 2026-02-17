@@ -662,7 +662,7 @@ class MessageSummariesLayer(PatternLayer):
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # Get time span from first and last messages
+                # Get time span - handle both single-message and multi-message batches
                 cursor.execute('''
                     SELECT created_at FROM messages
                     WHERE id IN (?, ?)
@@ -670,11 +670,16 @@ class MessageSummariesLayer(PatternLayer):
                 ''', (start_id, end_id))
 
                 timestamps = cursor.fetchall()
-                if len(timestamps) != 2:
+                if len(timestamps) == 0:
                     return None
-
-                time_span_start = timestamps[0]['created_at']
-                time_span_end = timestamps[1]['created_at']
+                elif len(timestamps) == 1:
+                    # Single message batch (start_id == end_id)
+                    time_span_start = timestamps[0]['created_at']
+                    time_span_end = timestamps[0]['created_at']
+                else:
+                    # Multi-message batch
+                    time_span_start = timestamps[0]['created_at']
+                    time_span_end = timestamps[-1]['created_at']
 
                 # Get actual message count in range
                 cursor.execute('''

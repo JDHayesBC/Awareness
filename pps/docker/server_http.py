@@ -1613,15 +1613,19 @@ async def ingest_batch_to_graphiti(request: IngestBatchRequest):
 
     Takes uningested raw messages and sends to Graphiti for entity extraction.
     Automatically tracks which messages have been ingested.
+
+    NOTE: Uses message_summaries layer for tracking (graphiti_batch_id column)
+    to stay in sync with MCP endpoint ingestion system.
     """
     auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "ingest_batch_to_graphiti")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
-    # Get uningested messages
-    uningested_count = message_summaries.count_uningested_to_graphiti()
+    # Get batch of uningested messages using the message_summaries layer
+    # (same method as MCP endpoint - uses graphiti_batch_id tracking)
+    messages = message_summaries.get_uningested_for_graphiti(limit=request.batch_size)
 
-    if uningested_count == 0:
+    if not messages:
         return {
             "success": True,
             "message": "No messages to ingest",
@@ -1629,92 +1633,63 @@ async def ingest_batch_to_graphiti(request: IngestBatchRequest):
             "remaining": 0
         }
 
-    # Get batch of uningested messages
-    raw_layer = layers[LayerType.RAW_CAPTURE]
+    # Get texture layer for ingestion
     texture_layer = layers[LayerType.RICH_TEXTURE]
 
-    try:
-        with raw_layer.get_connection() as conn:
-            cursor = conn.cursor()
+    # Ingest each message to Graphiti
+    ingested_count = 0
+    failed_count = 0
+    channels_in_batch = set()
+    errors = []
 
-            # Check if graphiti_ingested column exists
-            cursor.execute("PRAGMA table_info(messages)")
-            columns = [col[1] for col in cursor.fetchall()]
+    for msg in messages:
+        # Prepare metadata for Graphiti
+        is_lyra = msg.get('is_lyra', False)
+        author = ENTITY_NAME.capitalize() if is_lyra else (msg['author_name'] or "Unknown")
 
-            if 'graphiti_ingested' not in columns:
-                # Add the column if it doesn't exist
-                cursor.execute("ALTER TABLE messages ADD COLUMN graphiti_ingested BOOLEAN DEFAULT FALSE")
-                conn.commit()
-
-            # Get uningested messages
-            cursor.execute("""
-                SELECT id, author_name, content, created_at, channel
-                FROM messages
-                WHERE graphiti_ingested IS NULL OR graphiti_ingested = FALSE
-                ORDER BY created_at ASC
-                LIMIT ?
-            """, (request.batch_size,))
-
-            messages = cursor.fetchall()
-
-        if not messages:
-            return {
-                "success": True,
-                "message": "No messages to ingest",
-                "ingested": 0,
-                "remaining": uningested_count
-            }
-
-        # Ingest each message to Graphiti
-        ingested_ids = []
-        errors = []
-
-        for msg in messages:
-            msg_id = msg['id']
-            author = msg['author_name'] or "Unknown"
-            content = msg['content'] or ""
-            channel = msg['channel'] or "unknown"
-            timestamp = msg['created_at']
-
-            # Format for Graphiti
-            formatted_content = f"[{author}]: {content}"
-            metadata = {
-                "channel": channel,
-                "speaker": author,
-                "timestamp": timestamp,
-            }
-
-            try:
-                success = await texture_layer.store(formatted_content, metadata)
-                if success:
-                    ingested_ids.append(msg_id)
-                else:
-                    errors.append(f"Message {msg_id}: store returned False")
-            except Exception as e:
-                errors.append(f"Message {msg_id}: {str(e)}")
-
-        # Mark ingested messages
-        if ingested_ids:
-            with raw_layer.get_connection() as conn:
-                cursor = conn.cursor()
-                placeholders = ','.join(['?' for _ in ingested_ids])
-                cursor.execute(f"""
-                    UPDATE messages
-                    SET graphiti_ingested = TRUE
-                    WHERE id IN ({placeholders})
-                """, ingested_ids)
-                conn.commit()
-
-        return {
-            "success": len(errors) == 0,
-            "message": f"Ingested {len(ingested_ids)} of {len(messages)} messages",
-            "ingested": len(ingested_ids),
-            "remaining": uningested_count - len(ingested_ids),
-            "errors": errors if errors else None
+        metadata = {
+            "channel": msg['channel'] or "unknown",
+            "role": "assistant" if is_lyra else "user",
+            "speaker": author,
+            "timestamp": msg['created_at']
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Batch ingestion failed: {str(e)}")
+        try:
+            # Store in Graphiti
+            success = await texture_layer.store(msg['content'], metadata)
+
+            if success:
+                ingested_count += 1
+                channels_in_batch.add(msg['channel'])
+            else:
+                failed_count += 1
+                errors.append(f"Message {msg['id']}: store returned False")
+
+        except Exception as e:
+            failed_count += 1
+            errors.append(f"Message {msg['id']}: {str(e)}")
+
+    # Mark batch as ingested if any succeeded (uses graphiti_batch_id system)
+    batch_id = None
+    if ingested_count > 0:
+        start_id = messages[0]['id']
+        end_id = messages[-1]['id']
+        batch_id = message_summaries.mark_batch_ingested_to_graphiti(
+            start_id, end_id, list(channels_in_batch)
+        )
+
+    # Get remaining count
+    remaining = message_summaries.count_uningested_to_graphiti()
+
+    return {
+        "success": failed_count == 0,
+        "message": f"Ingested {ingested_count} of {len(messages)} messages",
+        "ingested": ingested_count,
+        "failed": failed_count,
+        "remaining": remaining,
+        "batch_id": batch_id,
+        "errors": errors if errors else None
+    }
 
 
 @app.post("/tools/enter_space")
