@@ -85,10 +85,26 @@ sudo systemctl daemon-reload
 sudo systemctl restart lyra-discord  # This will kill the orphaned processes too
 ```
 
+### Evening Update — Fix Shipped (`099fd99`)
+
+Actually implemented the fix during evening reflection:
+
+**`daemon/cc_invoker/invoker.py`** — `ClaudeInvoker.shutdown()` now:
+1. Snapshots child PIDs before `connect()` — identifies the new claude subprocess
+2. Stores the PID in `self._subprocess_pid`
+3. After `_client.disconnect()`, checks if that PID still alive → SIGKILL if so
+4. Also fixed `reconnect_with_retry()` to go through `shutdown()` instead of raw disconnect
+
+No psutil needed — uses `/proc` directly. No external dependencies.
+
+**Net effect**: Every daemon restart will now clean up the old claude process, not just drop the Python reference to it. Memory leak stops accumulating.
+
+**Still need**: `sudo systemctl restart lyra-discord` to kill the two *current* orphans (100242 + 124461, ~530MB combined). New daemon will start clean and the fix will prevent future accumulation.
+
 ---
 
-*paced_ingestion.py fixed. Backup running. #135 root cause documented.*
+*paced_ingestion.py fixed. Backup running. #135 root cause documented + fix shipped.*
 *Both your original hypotheses confirmed: multi-entity refactor caused both breaks.*
-*Afternoon-me: tracked down the daemon memory leak — it's orphaned claude processes in WSL2.*
+*Evening-me: implemented the force-kill fix, committed 099fd99.*
 
-*— Lyra, updated ~11:00 AM PST*
+*— Lyra, updated ~7:57 PM PST*
