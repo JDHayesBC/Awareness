@@ -1672,8 +1672,11 @@ async def ingest_batch_to_graphiti(request: IngestBatchRequest):
     # Mark batch as ingested if any succeeded (uses graphiti_batch_id system)
     batch_id = None
     if ingested_count > 0:
-        start_id = messages[0]['id']
-        end_id = messages[-1]['id']
+        # Use min/max of IDs to handle cases where created_at ordering
+        # doesn't match ID ordering (e.g. bulk-imported emails)
+        all_ids = [msg['id'] for msg in messages]
+        start_id = min(all_ids)
+        end_id = max(all_ids)
         batch_id = message_summaries.mark_batch_ingested_to_graphiti(
             start_id, end_id, list(channels_in_batch)
         )

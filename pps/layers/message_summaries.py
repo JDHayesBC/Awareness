@@ -267,6 +267,13 @@ class MessageSummariesLayer(PatternLayer):
                     term_count = text_lower.count(query_lower)
                     relevance = min(1.0, term_count * 0.2 + 0.3)  # Base 0.3, +0.2 per match
 
+                    # Parse channels from JSON string stored in SQLite
+                    channels = row['channels']
+                    if isinstance(channels, str):
+                        try:
+                            channels = json.loads(channels)
+                        except (json.JSONDecodeError, TypeError):
+                            channels = [channels] if channels else []
                     results.append(SearchResult(
                         content=row['summary_text'],
                         source=f"summary:{row['id']}",
@@ -275,7 +282,7 @@ class MessageSummariesLayer(PatternLayer):
                         metadata={
                             'summary_id': row['id'],
                             'message_count': row['message_count'],
-                            'channels': row['channels'],
+                            'channels': channels,
                             'time_span': f"{row['time_span_start']} to {row['time_span_end']}",
                             'summary_type': row['summary_type'],
                             'start_msg_id': row['start_message_id'],
@@ -453,11 +460,18 @@ class MessageSummariesLayer(PatternLayer):
 
                 results = []
                 for row in cursor.fetchall():
+                    # Parse channels from JSON string stored in SQLite
+                    channels = row['channels']
+                    if isinstance(channels, str):
+                        try:
+                            channels = json.loads(channels)
+                        except (json.JSONDecodeError, TypeError):
+                            channels = [channels] if channels else []
                     results.append({
                         'id': row['id'],
                         'summary_text': row['summary_text'],
                         'message_count': row['message_count'],
-                        'channels': row['channels'],
+                        'channels': channels,
                         'time_span_start': row['time_span_start'],
                         'time_span_end': row['time_span_end'],
                         'summary_type': row['summary_type'],

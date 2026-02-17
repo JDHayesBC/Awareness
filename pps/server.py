@@ -1316,7 +1316,14 @@ async def call_tool_impl(name: str, arguments: dict[str, Any]) -> list[TextConte
                     summaries_text = "\n---\n[summaries] (compressed history)\n"
                     for s in recent_summaries:
                         date = s.get('created_at', '?')[:10]
-                        channels = ', '.join(s.get('channels', ['?']))
+                        raw_channels = s.get('channels', ['?'])
+                        # Defensive: parse JSON string if not already a list (belt-and-suspenders)
+                        if isinstance(raw_channels, str):
+                            try:
+                                raw_channels = json.loads(raw_channels)
+                            except Exception:
+                                raw_channels = [raw_channels]
+                        channels = ', '.join(raw_channels) if raw_channels else '?'
                         text = s.get('summary_text', '')
                         # Truncate long summaries for startup (full available via get_recent_summaries)
                         if len(text) > 500:
@@ -1923,8 +1930,11 @@ Create a concise summary that captures what actually happened and what was accom
 
         # Mark batch as ingested if any succeeded
         if ingested_count > 0:
-            start_id = messages[0]['id']
-            end_id = messages[-1]['id']
+            # Use min/max of IDs to handle cases where created_at ordering
+            # doesn't match ID ordering (e.g. bulk-imported emails)
+            all_ids = [msg['id'] for msg in messages]
+            start_id = min(all_ids)
+            end_id = max(all_ids)
             batch_id = message_summaries.mark_batch_ingested_to_graphiti(
                 start_id, end_id, list(channels_in_batch)
             )
