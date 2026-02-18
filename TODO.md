@@ -55,7 +55,7 @@
 |-------------|--------|---------|
 | **Agent Orchestration** | **Live** | Hook-based context injection + friction learning. PreToolUse injects entity context into sub-agents, PostToolUse monitors pressure. 8 friction lessons seeded. Commit `8c044b9`. See `work/nexus-orchestration-research/STATUS.md`. |
 | **Forestry Octet** | **Built, first run complete** | 8 skills: prescribe/canopy/deadwood/coppice/undergrowth/greenwood/grove/mycelium. Canopy + Deadwood ran successfully Feb 18. 13 SUSPECT items identified. See `docs/SUSPECT_ARCHIVE.md`. |
-| **MCP Server Consolidation** | Prescribed | stdio→HTTP migration. `INTENDED_TOPOLOGY.md` written. 5-phase pipeline designed. Needs Jeff review + agent pipeline run. [#112](https://github.com/JDHayesBC/Awareness/issues/112). |
+| **MCP Server Consolidation** | **Phase 1-3 complete** | `server.py` converted to thin HTTP proxy (commit `2f4adec`). All logic consolidated in `server_http.py`. 3 missing tools ported. Remaining: Phase 4 (daemon migration to HTTP client), schema dedup tech debt (~1000 lines of redundant schemas in proxy). [#112](https://github.com/JDHayesBC/Awareness/issues/112). |
 | **cc_invoker SDK Agent** | Active | Persistent Claude Code wrapper using SDK agent. See `daemon/cc_invoker/TODO.md`. |
 | **Daemon Memory Pressure** | Addressed | Memory-based restart in cc_invoker, thresholds tuned, systemd limits raised. Stays open until #112 reduces baseline. [#135](https://github.com/JDHayesBC/Awareness/issues/135). |
 | **CC OpenAI Wrapper** | Blocked | OpenAI-compatible wrapper for ClaudeInvoker ([#117](https://github.com/JDHayesBC/Awareness/issues/117)). Graphiti Docker ignores `OPENAI_BASE_URL` (upstream #1116). See [#118](https://github.com/JDHayesBC/Awareness/issues/118). |

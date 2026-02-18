@@ -77,12 +77,14 @@ entities/<name>/
 
 | Client | Currently Uses | Target |
 |--------|---------------|--------|
-| Claude Code (terminal) | stdio MCP → `server.py` | HTTP MCP → `server_http.py` |
+| Claude Code (terminal) | stdio MCP → `server.py` (thin proxy) → HTTP `server_http.py` | **Done** — logic consolidated in `server_http.py` |
 | Discord daemon | stdio subprocess spawn | HTTP client → localhost:8201 |
 | Reflection daemon | stdio subprocess spawn | HTTP client → localhost:8201 |
 | Haven | HTTP | HTTP (already there) |
 | Hooks | HTTP | HTTP (already there) |
 | Observatory/Web | HTTP | HTTP (already there) |
+
+**Note (Feb 18, 2026):** `server.py` was converted from a 1523-line full MCP server to a ~150-line thin HTTP proxy (commit `2f4adec`). It still speaks stdio MCP to Claude Code but forwards all calls to `server_http.py`. All business logic now lives in one place. Remaining tech debt: the proxy still declares all ~40 tool schemas redundantly (~1000 lines) instead of auto-fetching them from the HTTP server.
 
 ### Why HTTP Wins
 
@@ -245,7 +247,7 @@ Agents automatically receive relevant friction lessons via the hook system. Less
 
 | Component | Status | Successor |
 |-----------|--------|-----------|
-| `pps/server.py` (stdio) | Pioneer completing | `server_http.py` |
+| `pps/server.py` (stdio) | **Thin proxy** — logic migrated to `server_http.py`, schema dedup remaining | `server_http.py` |
 | `daemon/lyra_daemon_legacy.py` | Deprecated | `daemon/lyra_daemon.py` |
 | `daemon/lyra_discord.py` | Deprecated | `daemon/lyra_daemon.py` |
 
