@@ -176,9 +176,10 @@ class LyraBot(commands.Bot):
             working_dir=PROJECT_DIR,
             bypass_permissions=True,
             model=CLAUDE_MODEL,
-            max_context_tokens=150_000,
-            max_turns=100,
+            max_context_tokens=80_000,
+            max_turns=50,
             max_idle_seconds=4 * 3600,  # 4 hours
+            max_memory_mb=900,  # restart before hitting 1024M systemd limit
             startup_prompt=self._build_startup_prompt(context="discord"),
         )
         self.invoker_ready = False

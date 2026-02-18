@@ -148,6 +148,7 @@ class ClaudeInvoker:
         max_context_tokens: int = 150_000,
         max_turns: int = 100,
         max_idle_seconds: int = 4 * 3600,
+        max_memory_mb: int = 0,
         max_reconnect_attempts: int = 5,
         max_backoff_seconds: float = 30.0,
         startup_prompt: Optional[str] = None,
@@ -175,6 +176,7 @@ class ClaudeInvoker:
             max_context_tokens: Maximum context tokens before restart (default 150k)
             max_turns: Maximum query turns before restart (default 100)
             max_idle_seconds: Maximum idle time before restart (default 4 hours)
+            max_memory_mb: Maximum cgroup memory (MB) before restart (0=disabled)
             max_reconnect_attempts: Maximum reconnection attempts (default 5)
             max_backoff_seconds: Maximum backoff time between reconnects (default 30s)
             startup_prompt: Optional prompt to send after initialization for identity
@@ -197,6 +199,7 @@ class ClaudeInvoker:
         self.max_context_tokens = max_context_tokens
         self.max_turns = max_turns
         self.max_idle_seconds = max_idle_seconds
+        self.max_memory_mb = max_memory_mb
 
         # Error recovery configuration
         self.max_reconnect_attempts = max_reconnect_attempts
@@ -711,6 +714,26 @@ class ClaudeInvoker:
 
         logger.info("Claude Code connection shut down")
 
+    def _get_cgroup_memory_mb(self) -> Optional[float]:
+        """Read current cgroup memory usage in MB. Returns None if unavailable."""
+        try:
+            # Find our cgroup path from /proc/self/cgroup (cgroup v2: "0::/path")
+            with open("/proc/self/cgroup", "r") as f:
+                for line in f:
+                    if line.startswith("0::"):
+                        cgroup_path = line.strip().split("::", 1)[1]
+                        mem_file = f"/sys/fs/cgroup{cgroup_path}/memory.current"
+                        with open(mem_file, "r") as mf:
+                            return int(mf.read().strip()) / (1024 * 1024)
+        except (FileNotFoundError, ValueError, PermissionError, IndexError):
+            pass
+        # Fallback: try global path
+        try:
+            with open("/sys/fs/cgroup/memory.current", "r") as f:
+                return int(f.read().strip()) / (1024 * 1024)
+        except (FileNotFoundError, ValueError, PermissionError):
+            return None
+
     def needs_restart(self) -> tuple[bool, str]:
         """
         Check if session should be restarted.
@@ -731,6 +754,12 @@ class ClaudeInvoker:
             idle_seconds = (datetime.now() - self._last_activity_time).total_seconds()
             if idle_seconds >= self.max_idle_seconds:
                 return True, f"idle_timeout ({idle_seconds/3600:.1f}h idle)"
+
+        # Check cgroup memory pressure
+        if self.max_memory_mb > 0:
+            mem_mb = self._get_cgroup_memory_mb()
+            if mem_mb is not None and mem_mb >= self.max_memory_mb:
+                return True, f"memory_pressure ({mem_mb:.0f}/{self.max_memory_mb}MB)"
 
         return False, ""
 

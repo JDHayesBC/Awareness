@@ -87,6 +87,7 @@ class LyraReflectionDaemon:
             max_context_tokens=100_000,  # Lower for reflection
             max_turns=50,
             max_idle_seconds=15 * 60,  # 15 min idle ok
+            max_memory_mb=400,  # safety net before hitting 512M systemd limit
             # No startup_prompt - reflection builds its own each time
         )
         self.invoker_ready = False

@@ -28,7 +28,7 @@ KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30
 
-MemoryMax=768M
+MemoryMax=1024M
 MemorySwapMax=512M
 CPUQuota=50%
 
