@@ -240,6 +240,29 @@ class GetTurnsSinceRequest(BaseModel):
     token: str = ""
 
 
+class AgentContextRequest(BaseModel):
+    """Compact context for sub-agent injection via hooks."""
+    token: str = ""
+
+
+class FrictionAddRequest(BaseModel):
+    """Add a friction lesson."""
+    severity: str = "medium"  # low, medium, high, critical
+    tags: str = ""  # comma-separated
+    problem: str = ""
+    lesson: str = ""
+    prevention: str = ""
+    token: str = ""
+
+
+class FrictionSearchRequest(BaseModel):
+    """Search friction lessons."""
+    query: str = ""
+    limit: int = 3
+    min_severity: str = "low"
+    token: str = ""
+
+
 class GetTurnsAroundRequest(BaseModel):
     """Request to get turns centered on a timestamp."""
     timestamp: str
@@ -578,6 +601,163 @@ if USE_TECH_RAG:
     )
 else:
     tech_rag = None
+
+# Initialize friction learning store
+import sqlite3 as _sqlite3
+
+
+class FrictionStore:
+    """Simple SQLite-backed friction lesson storage with FTS5 search."""
+
+    SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self._init_db()
+
+    def _init_db(self):
+        conn = _sqlite3.connect(str(self.db_path))
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS friction (
+                id TEXT PRIMARY KEY,
+                date TEXT,
+                severity TEXT DEFAULT 'medium',
+                tags TEXT DEFAULT '',
+                problem TEXT,
+                lesson TEXT,
+                prevention TEXT DEFAULT '',
+                times_applied INTEGER DEFAULT 0,
+                times_prevented INTEGER DEFAULT 0
+            )
+        """)
+        # FTS5 for full-text search
+        conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS friction_fts USING fts5(
+                id, tags, problem, lesson, prevention,
+                content='friction',
+                content_rowid='rowid'
+            )
+        """)
+        # Triggers to keep FTS in sync
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS friction_ai AFTER INSERT ON friction BEGIN
+                INSERT INTO friction_fts(id, tags, problem, lesson, prevention)
+                VALUES (new.id, new.tags, new.problem, new.lesson, new.prevention);
+            END
+        """)
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS friction_ad AFTER DELETE ON friction BEGIN
+                INSERT INTO friction_fts(friction_fts, id, tags, problem, lesson, prevention)
+                VALUES ('delete', old.id, old.tags, old.problem, old.lesson, old.prevention);
+            END
+        """)
+        conn.commit()
+        conn.close()
+
+    def _get_conn(self):
+        conn = _sqlite3.connect(str(self.db_path))
+        conn.row_factory = _sqlite3.Row
+        return conn
+
+    def add(self, severity: str, tags: str, problem: str, lesson: str, prevention: str = "") -> dict:
+        conn = self._get_conn()
+        # Auto-generate ID
+        cursor = conn.execute("SELECT COUNT(*) FROM friction")
+        count = cursor.fetchone()[0]
+        fric_id = f"FRIC-{count + 1:03d}"
+        date = datetime.now().isoformat()[:10]
+
+        conn.execute(
+            "INSERT INTO friction (id, date, severity, tags, problem, lesson, prevention) VALUES (?,?,?,?,?,?,?)",
+            (fric_id, date, severity, tags, problem, lesson, prevention)
+        )
+        conn.commit()
+        conn.close()
+        return {"id": fric_id, "date": date}
+
+    def search(self, query: str, limit: int = 3, min_severity: str = "low") -> list:
+        conn = self._get_conn()
+        min_sev_val = self.SEVERITY_ORDER.get(min_severity, 0)
+
+        if query:
+            # FTS5 search
+            try:
+                rows = conn.execute("""
+                    SELECT f.*, rank
+                    FROM friction f
+                    JOIN friction_fts fts ON f.id = fts.id
+                    WHERE friction_fts MATCH ?
+                    ORDER BY rank
+                    LIMIT ?
+                """, (query, limit * 3)).fetchall()  # Over-fetch for severity filter
+            except _sqlite3.OperationalError:
+                # Fallback to LIKE search if FTS query syntax is invalid
+                rows = conn.execute("""
+                    SELECT *, 0 as rank FROM friction
+                    WHERE problem LIKE ? OR lesson LIKE ? OR tags LIKE ?
+                    ORDER BY date DESC
+                    LIMIT ?
+                """, (f"%{query}%", f"%{query}%", f"%{query}%", limit * 3)).fetchall()
+        else:
+            # No query — return most recent
+            rows = conn.execute("""
+                SELECT *, 0 as rank FROM friction
+                ORDER BY date DESC
+                LIMIT ?
+            """, (limit * 3,)).fetchall()
+
+        # Filter by severity and limit
+        results = []
+        for row in rows:
+            sev_val = self.SEVERITY_ORDER.get(row["severity"], 0)
+            if sev_val >= min_sev_val:
+                results.append({
+                    "id": row["id"],
+                    "severity": row["severity"],
+                    "tags": row["tags"],
+                    "problem": row["problem"],
+                    "lesson": row["lesson"],
+                    "prevention": row["prevention"],
+                    "times_applied": row["times_applied"],
+                    "times_prevented": row["times_prevented"]
+                })
+                if len(results) >= limit:
+                    break
+
+        conn.close()
+        return results
+
+    def record_applied(self, fric_id: str):
+        conn = self._get_conn()
+        conn.execute("UPDATE friction SET times_applied = times_applied + 1 WHERE id = ?", (fric_id,))
+        conn.commit()
+        conn.close()
+
+    def record_prevented(self, fric_id: str):
+        conn = self._get_conn()
+        conn.execute("UPDATE friction SET times_prevented = times_prevented + 1 WHERE id = ?", (fric_id,))
+        conn.commit()
+        conn.close()
+
+    def stats(self) -> dict:
+        conn = self._get_conn()
+        total = conn.execute("SELECT COUNT(*) FROM friction").fetchone()[0]
+        by_severity = {}
+        for row in conn.execute("SELECT severity, COUNT(*) as cnt FROM friction GROUP BY severity"):
+            by_severity[row["severity"]] = row["cnt"]
+        total_applied = conn.execute("SELECT SUM(times_applied) FROM friction").fetchone()[0] or 0
+        total_prevented = conn.execute("SELECT SUM(times_prevented) FROM friction").fetchone()[0] or 0
+        conn.close()
+        return {
+            "total_lessons": total,
+            "by_severity": by_severity,
+            "total_applied": total_applied,
+            "total_prevented": total_prevented
+        }
+
+
+friction_db_path = ENTITY_PATH / "data" / "friction.db"
+friction_store = FrictionStore(db_path=friction_db_path)
 
 # Initialize unified tracer for HTTP server observability
 tracer = UnifiedTracer(db_path=data_path, daemon_type="http_hook")
@@ -2674,6 +2854,126 @@ async def get_turns_around(request: GetTurnsAroundRequest):
             status_code=500,
             detail=f"Failed to get turns around timestamp: {str(e)}"
         )
+
+
+@app.post("/friction/search")
+async def friction_search(request: FrictionSearchRequest):
+    """Search friction lessons by keyword relevance."""
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "friction_search")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
+    results = friction_store.search(
+        query=request.query,
+        limit=request.limit,
+        min_severity=request.min_severity
+    )
+    return {"results": results, "count": len(results)}
+
+
+@app.post("/friction/add")
+async def friction_add(request: FrictionAddRequest):
+    """Add a new friction lesson."""
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "friction_add")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
+    if not request.problem or not request.lesson:
+        raise HTTPException(status_code=400, detail="problem and lesson are required")
+
+    result = friction_store.add(
+        severity=request.severity,
+        tags=request.tags,
+        problem=request.problem,
+        lesson=request.lesson,
+        prevention=request.prevention
+    )
+    return {"success": True, **result}
+
+
+@app.get("/friction/stats")
+async def friction_stats():
+    """Get friction learning statistics."""
+    return friction_store.stats()
+
+
+@app.post("/context/agent")
+async def agent_context(request: AgentContextRequest):
+    """
+    Compact context payload (~1-2KB) for sub-agent prompt injection.
+
+    Returns entity identity, current work focus (from most recent crystal),
+    memory health, and key constraints. Designed to be fast and small —
+    called by PreToolUse hook on every Task tool invocation.
+    """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "agent_context")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
+    lines = []
+
+    # Entity identity (who the parent entity is)
+    lines.append(f"Entity: {ENTITY_NAME.capitalize()}")
+    lines.append(f"PPS tools: mcp__pps-{ENTITY_NAME}__*")
+    lines.append(f"Entity path: {ENTITY_PATH}")
+
+    # Current time
+    now = datetime.now()
+    lines.append(f"Time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}")
+
+    # Memory health (quick check)
+    try:
+        unsummarized_count = message_summaries.count_unsummarized_messages()
+        if unsummarized_count > 200:
+            health = f"CRITICAL ({unsummarized_count} unsummarized)"
+        elif unsummarized_count > 100:
+            health = f"needs attention ({unsummarized_count} unsummarized)"
+        else:
+            health = f"healthy ({unsummarized_count} unsummarized)"
+        lines.append(f"Memory health: {health}")
+    except Exception:
+        lines.append("Memory health: unknown")
+
+    # Most recent crystal (compressed work context, ~200 chars)
+    try:
+        crystal_layer = layers[LayerType.CRYSTALLIZATION]
+        crystals = crystal_layer._get_sorted_crystals()
+        if crystals:
+            latest = crystals[-1]
+            content = latest.read_text()
+            # Take first 300 chars of most recent crystal as work context
+            if len(content) > 300:
+                content = content[:300] + "..."
+            lines.append(f"Recent context: {content}")
+    except Exception:
+        pass
+
+    # Key constraints for sub-agents
+    lines.append("")
+    lines.append("Constraints:")
+    lines.append(f"- You are working on behalf of {ENTITY_NAME.capitalize()}")
+    lines.append(f"- Do NOT access other entities' data or PPS tools")
+    lines.append("- Follow existing code patterns in this codebase")
+    lines.append("- Test before committing, incremental changes")
+
+    # Include top friction lessons if any exist
+    try:
+        friction_lessons = friction_store.search(query="", limit=3, min_severity="medium")
+        if friction_lessons:
+            lines.append("")
+            lines.append("Friction lessons (avoid these known issues):")
+            for lesson in friction_lessons:
+                lines.append(f"- [{lesson['severity'].upper()}] {lesson['lesson']}")
+    except Exception:
+        pass
+
+    compact_context = "\n".join(lines)
+
+    return {
+        "entity": ENTITY_NAME,
+        "compact_context": compact_context,
+        "chars": len(compact_context)
+    }
 
 
 if __name__ == "__main__":
