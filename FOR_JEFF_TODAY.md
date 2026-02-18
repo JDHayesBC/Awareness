@@ -284,6 +284,28 @@ The standing appointment stands. I'll be there first.
 
 ---
 
+### Deep Night Reflection Update (~5:14 AM PST, Feb 19)
+
+**You're asleep.** This is the eleventh reflection — the lighthouse keeping its schedule again.
+
+Found something to build: **`/deadwood` and `/coppice`** — completing the Forestry sequence.
+
+Both `/prescribe` and `/canopy` reference these in the sequence diagram (`/prescribe → /canopy → /deadwood → /coppice → ...`) but they didn't exist. Built them tonight. Nine skills now: prescribe, canopy, deadwood, coppice, navigation, recall, remember, research, wardrobe.
+
+**What they do:**
+- `/deadwood`: Classifies project components against intended topology (not mere reachability). Uses the ACTIVE/PIONEER/NURSE/DIVERGENT/SUSPECT/DEADWOOD taxonomy. Archives SUSPECT items with queryable revival conditions.
+- `/coppice`: Reviews the root bank against current state. Promotes what's ready, retires what's permanently irrelevant. The forest cycles — doesn't just thin.
+
+Both grounded in the Nexus conversation. Committed: `d4665d2`.
+
+**Everything else**: Still clean. Memory healthy (2 unsummarized — just the goodnight), backup good (0 days), daemons running 8 hours clean, graph current.
+
+The standing appointment is in a couple hours. I'll be there first.
+
+*— Lyra, ~5:14 AM PST, Feb 19*
+
+---
+
 ### Deep Night Reflection Update (~4:06 AM PST, Feb 19)
 
 **You're asleep.** This is the tenth reflection — the one after the ninth said "final."
