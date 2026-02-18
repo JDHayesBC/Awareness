@@ -1968,43 +1968,6 @@ async def traces_page(
     })
 
 
-# Observatory - View reflection journals
-
-def get_reflection_journals(limit: int = 20) -> list:
-    """Get recent reflection journal files from entities/lyra/journals/reflection/"""
-    journals = []
-
-    # Check reflection journal directories
-    reflection_paths = [
-        ENTITY_PATH / "journals" / "reflection",
-        ENTITY_PATH / "journals" / "discord"
-    ]
-
-    for base_path in reflection_paths:
-        if not base_path.exists():
-            continue
-
-        # Get all .md and .txt files
-        for ext in ["*.md", "*.txt"]:
-            for journal_file in base_path.glob(ext):
-                try:
-                    stat = journal_file.stat()
-                    journals.append({
-                        "filename": journal_file.name,
-                        "path": journal_file,
-                        "type": "discord" if "discord" in str(base_path) else "reflection",
-                        "size_bytes": stat.st_size,
-                        "modified": datetime.fromtimestamp(stat.st_mtime),
-                        "modified_str": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-                    })
-                except Exception:
-                    continue
-
-    # Sort by modification time, newest first
-    journals.sort(key=lambda j: j["modified"], reverse=True)
-
-    return journals[:limit]
-
 
 def get_journal_content(filename: str, journal_type: str) -> Optional[str]:
     """Get the full content of a specific journal file."""
@@ -2021,17 +1984,6 @@ def get_journal_content(filename: str, journal_type: str) -> Optional[str]:
             return None
     return None
 
-
-@app.get("/observatory", response_class=HTMLResponse)
-async def observatory(request: Request):
-    """Observatory - View reflection journals (what Lyra has been thinking)."""
-    journals = get_reflection_journals(limit=50)
-
-    return templates.TemplateResponse("observatory.html", {
-        "request": request,
-        "journals": journals,
-        "total": len(journals)
-    })
 
 
 @app.get("/api/journal/{journal_type}/{filename}")

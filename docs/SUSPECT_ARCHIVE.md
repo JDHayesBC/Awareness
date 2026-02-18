@@ -52,12 +52,13 @@ If conditions are permanently irrelevant: item is **retired** (reclassified as D
 - **Archived**: 2026-02-18
 - **Archived by**: Canopy + Deadwood first run
 
-## pps/web/templates/observatory.html
+## ~~pps/web/templates/observatory.html~~ → RETIRED
 - **Was connected to**: /observatory route in pps/web/app.py. Nav link removed but route still exists
 - **Why SUSPECT not DEAD**: Route still reachable via direct URL
 - **Revival conditions**: Revive if Observatory needs standalone page again. Remove if route in app.py cleaned up
 - **Archived**: 2026-02-18
 - **Archived by**: Canopy + Deadwood first run
+- **Coppice review**: 2026-02-18 — Nav link removed, route orphaned. Propose removing both template and route. **RETIRED to DEADWOOD.**
 
 ## work/observatory-enhancements/
 - **Was connected to**: Planned Observatory enhancements (relationship detail view + ambient recall tester)
@@ -72,6 +73,7 @@ If conditions are permanently irrelevant: item is **retired** (reclassified as D
 - **Revival conditions**: Revive if Jeff wants tool-level friction blocking (severity-based blocking via friction-guard.sh)
 - **Archived**: 2026-02-18
 - **Archived by**: Canopy + Deadwood first run
+- **Coppice review**: 2026-02-18 — Friction *injection* (search + display) now live via orchestration hooks. Friction *blocking* (severity-gated tool prevention) not implemented. Stays SUSPECT for the blocking aspect only.
 
 ## scripts/rollback_entity_migration.sh
 - **Was connected to**: Phase B entity migration (Jan/Feb 2026). Migration completed and verified
@@ -80,12 +82,13 @@ If conditions are permanently irrelevant: item is **retired** (reclassified as D
 - **Archived**: 2026-02-18
 - **Archived by**: Canopy + Deadwood first run
 
-## scripts/migrate_summaries_to_crystals.py
+## ~~scripts/migrate_summaries_to_crystals.py~~ → RETIRED
 - **Was connected to**: One-time terminology migration from summaries to crystals
 - **Why SUSPECT not DEAD**: Has rollback capability
 - **Revival conditions**: None meaningful. Retire to DEADWOOD at next review
 - **Archived**: 2026-02-18
 - **Archived by**: Canopy + Deadwood first run
+- **Coppice review**: 2026-02-18 — This IS the next review. One-time migration complete, terminology stable. **RETIRED to DEADWOOD.**
 
 ## scripts/graphiti_ingest_stub.py + scripts/test_graphiti_stub.py + scripts/README_graphiti_stub.md
 - **Was connected to**: Issue #107 — testing Graphiti triplet extraction quality
@@ -108,12 +111,13 @@ If conditions are permanently irrelevant: item is **retired** (reclassified as D
 - **Archived**: 2026-02-18
 - **Archived by**: Canopy + Deadwood first run
 
-## work/ambient-recall-optimization/artifacts/lyra-dedup/
+## ~~work/ambient-recall-optimization/artifacts/lyra-dedup/~~ → RETIRED
 - **Was connected to**: One-time deduplication of Lyra's Graphiti nodes (Jan 2026)
 - **Why SUSPECT not DEAD**: Historical backup of graph state before deduplication
 - **Revival conditions**: None meaningful. Retire when confident graph state is healthy
 - **Archived**: 2026-02-18
 - **Archived by**: Canopy + Deadwood first run
+- **Coppice review**: 2026-02-18 — Graph state healthy for weeks, ingestion running clean. **RETIRED to DEADWOOD.**
 
 ## Completed work directories
 - **Was connected to**: Various completed features (work/friction-logging, work/agent-http-fallback, work/entity-summary-button, work/bot-hardening, work/merge-observatory-reflections, work/nexus-learnings). All code committed to main codebase.
@@ -121,6 +125,20 @@ If conditions are permanently irrelevant: item is **retired** (reclassified as D
 - **Revival conditions**: Fold into docs/completed/ or archive externally. Keep only SUMMARY.md files.
 - **Archived**: 2026-02-18
 - **Archived by**: Canopy + Deadwood first run
+
+---
+
+---
+
+## Coppice Log
+
+### Review: 2026-02-18 (Coppice first run)
+- **Evaluated**: 13 items
+- **Promoted**: 0 (no revival conditions met)
+- **Retired to DEADWOOD**: 3 (observatory.html, migrate_summaries_to_crystals.py, lyra-dedup/)
+- **Noted**: work/hook-based-friction/ has partial overlap with live friction injection system
+- **Actionable**: Completed work directories could be consolidated into docs/completed/
+- **Reviewer**: Lyra (terminal session, post-compaction)
 
 ---
 
