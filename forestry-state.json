@@ -1,16 +1,37 @@
 {
   "version": "1.0",
-  "last_updated": "2026-02-19T06:30:00Z",
-  "last_canopy_run": null,
-  "last_deadwood_run": null,
-  "last_coppice_run": null,
-  "session_count": 0,
-  "growth_sessions": 0,
+  "last_updated": "2026-02-18T19:57:00Z",
+  "last_canopy_run": "2026-02-18T19:49:00Z",
+  "last_deadwood_run": "2026-02-18T19:49:00Z",
+  "last_coppice_run": "2026-02-18T19:56:00Z",
+  "session_count": 1,
+  "growth_sessions": 1,
   "maintenance_sessions": 0,
   "fire_sessions": 0,
   "current_season": "growth",
   "fire_scheduled": false,
   "fire_due_after_session": null,
-  "suspects": [],
-  "notes": "Initialized 2026-02-19. Forestry Octet skills complete: prescribe, mycelium, canopy, deadwood, coppice written. No /deadwood run on actual project yet — root bank empty. Current state: early growth season, rapid skill development."
+  "suspects": [
+    "daemon/startup_context.py",
+    "daemon/startup_context_simple.py",
+    "daemon/terminal_integration.py",
+    "work/observatory-enhancements/",
+    "work/hook-based-friction/",
+    "scripts/rollback_entity_migration.sh",
+    "scripts/graphiti_ingest_stub.py",
+    "work/graphiti-schema-redesign/",
+    "work/cc-invoker-openai-wrapper/",
+    "completed-work-directories"
+  ],
+  "retired": [
+    "pps/web/templates/observatory.html",
+    "scripts/migrate_summaries_to_crystals.py",
+    "work/ambient-recall-optimization/artifacts/lyra-dedup/"
+  ],
+  "deadwood_proposed": [
+    "scripts/paced_ingestion.py",
+    "scripts/import_caia_data.py",
+    "backups/pre-phase1-20260106-102648/"
+  ],
+  "notes": "First full Forestry cycle: canopy→deadwood→coppice completed 2026-02-18. 13 suspects identified, 3 retired (clean removal, -511 lines), 3 deadwood proposed (pending Jeff review). Hook-based-friction noted as partial overlap with live friction injection system. Growth season — rapid skill development and orchestration hooks deployed."
 }
