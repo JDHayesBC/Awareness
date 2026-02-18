@@ -536,9 +536,15 @@ class RichTextureLayerV2(PatternLayer):
         else:
             timestamp = raw_timestamp
 
-        # Try direct graphiti_core mode first
-        if self._use_direct_mode:
+        # Try direct graphiti_core mode first.
+        # _use_direct_mode starts as None (uninitialized). We must not skip calling
+        # _get_graphiti_client() when None — that's what triggers lazy import and
+        # sets _use_direct_mode based on whether graphiti_core is actually available.
+        # Bug: the old `if self._use_direct_mode:` check treated None as False, so
+        # it always fell through to HTTP (which returns 202 instantly, fake success).
+        if self._use_direct_mode is not False:
             client = await self._get_graphiti_client()
+            # _get_graphiti_client() sets _use_direct_mode = True or False as side effect.
             if client:
                 return await self._store_direct(
                     content=content,
@@ -546,10 +552,10 @@ class RichTextureLayerV2(PatternLayer):
                     speaker=speaker,
                     timestamp=timestamp,
                 )
-            # Client init failed - return False, don't silently use HTTP
+            # graphiti_core available but client creation failed: don't silently use HTTP
             return False
 
-        # HTTP API mode (only used when direct mode is not configured)
+        # HTTP API mode (only used when graphiti_core is not available)
         return await self._store_http(content, channel, role)
 
     async def _store_direct(
