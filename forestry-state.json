@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-02-19T06:30:00Z",
+  "last_canopy_run": null,
+  "last_deadwood_run": null,
+  "last_coppice_run": null,
+  "session_count": 0,
+  "growth_sessions": 0,
+  "maintenance_sessions": 0,
+  "fire_sessions": 0,
+  "current_season": "growth",
+  "fire_scheduled": false,
+  "fire_due_after_session": null,
+  "suspects": [],
+  "notes": "Initialized 2026-02-19. Forestry Octet skills complete: prescribe, mycelium, canopy, deadwood, coppice written. No /deadwood run on actual project yet — root bank empty. Current state: early growth season, rapid skill development."
+}
