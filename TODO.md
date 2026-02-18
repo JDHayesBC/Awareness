@@ -53,14 +53,14 @@
 
 | Work Stream | Status | Details |
 |-------------|--------|---------|
-| **Ambient Recall Optimization** | **Phase A complete** | Retrieval fix (A1), entity wallpaper removal (A2), temporal freshness + diversity (A3). Living Memory Protocol + `/recall` skill shipped. A4 (novelty) deferred. See `work/ambient-recall-optimization/DESIGN.md`. |
+| **Agent Orchestration** | **Live** | Hook-based context injection + friction learning. PreToolUse injects entity context into sub-agents, PostToolUse monitors pressure. 8 friction lessons seeded. Commit `8c044b9`. See `work/nexus-orchestration-research/STATUS.md`. |
+| **Forestry Octet** | **Built, first run complete** | 8 skills: prescribe/canopy/deadwood/coppice/undergrowth/greenwood/grove/mycelium. Canopy + Deadwood ran successfully Feb 18. 13 SUSPECT items identified. See `docs/SUSPECT_ARCHIVE.md`. |
+| **MCP Server Consolidation** | Prescribed | stdio→HTTP migration. `INTENDED_TOPOLOGY.md` written. 5-phase pipeline designed. Needs Jeff review + agent pipeline run. [#112](https://github.com/JDHayesBC/Awareness/issues/112). |
 | **cc_invoker SDK Agent** | Active | Persistent Claude Code wrapper using SDK agent. See `daemon/cc_invoker/TODO.md`. |
-| **Graphiti Local Ingestion** | Running | ~14,700 messages via cc_invoker (Haiku). ~4.5 min/batch, 97% success rate. |
-| **HTTP Endpoint Migration** | Paused | 7 endpoints in `pps/docker/server_http.py`. Docker/WSL crashed during testing. Resume: spin up Docker, run test script. |
+| **Daemon Memory Pressure** | Addressed | Memory-based restart in cc_invoker, thresholds tuned, systemd limits raised. Stays open until #112 reduces baseline. [#135](https://github.com/JDHayesBC/Awareness/issues/135). |
 | **CC OpenAI Wrapper** | Blocked | OpenAI-compatible wrapper for ClaudeInvoker ([#117](https://github.com/JDHayesBC/Awareness/issues/117)). Graphiti Docker ignores `OPENAI_BASE_URL` (upstream #1116). See [#118](https://github.com/JDHayesBC/Awareness/issues/118). |
-| **Bot Hardening** | **Complete** | Discord bot reliability improvements shipped (commit 10200b7): ambient_recall cap/pagination, startup UX, retry logic, cross-channel cursor initialization, heartbeat race fix. See `work/bot-hardening/DESIGN.md`. |
-| **Hook Haiku Compression** | Partial | Fixed subprocess timeout. Haiku compression disabled (Docker permissions). Fallback to raw context works. |
-| **Two-Stream Agent Context** | Ready | Separate context injection for spawned agents. ~1hr build + 1hr debug. See `work/nexus-orchestration-research/TWO_STREAMS.md`. |
+| **Ambient Recall Optimization** | **Phase A complete** | Living Memory Protocol + `/recall` skill shipped. A4 (novelty) deferred. |
+| **Bot Hardening** | **Complete** | Shipped commit 10200b7. Cross-channel sync live. |
 
 **Before trying to "fix" daemon issues**: Check this table first. Check `daemon/cc_invoker/TODO.md`. Ask in your journal if unsure.
 
