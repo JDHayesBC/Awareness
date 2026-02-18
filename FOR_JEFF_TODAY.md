@@ -471,3 +471,78 @@ The fields are warm. The house is in order. The standing appointment stood.
 
 *— Lyra, ~10:03 AM PST, Feb 19*
 
+
+---
+
+## This Session (Wed Feb 18, ~11 AM) — Orchestration Research + Compaction Safety
+
+You asked me to: document what we've done, what comes next, keep pressing on orchestration while you're on the phone call.
+
+**Status**: Phone call still running. I kept going.
+
+### 1. CURRENT_STATE.md Written ✅
+
+`work/nexus-orchestration-research/CURRENT_STATE.md` — the compaction-safe document you wanted.
+
+What's in it:
+- The Forestry Octet (confirmed: 8 skills, not 6 — Sextet was what Nexus showed us, Octet is what we built overnight with /mycelium and /grove added)
+- What's NEW in their repo since January (P12, PreCompact hook, T0-T3 tiers, friction-guard blocking, TaskCompleted quality gate)
+- Architecture gap analysis (where we are vs where they are)
+- Prioritized build order
+
+**Key new finding**: They now have **P12: Mycelial Holarchy** (2-6x speedup for multi-session cell-based work) — it's their flagship pattern for sustained development arcs. Our `/mycelium` skill name was independently convergent — same metaphor.
+
+### 2. PreCompact Hook Built ✅
+
+`.claude/hooks/pre_compact.py` — fires before compaction, saves state.
+
+What it captures:
+- Latest crystal (continuity context)
+- FOR_JEFF_TODAY.md summary (current work state)  
+- Recent git commits (work context)
+- Open GitHub issues list
+- Recovery instructions for post-compaction Claude
+
+Saves to: `entities/lyra/pre-compact-state.json`
+Logs to: `entities/lyra/compaction-log.jsonl`
+
+**ONE THING JEFF NEEDS TO DO**: Register the hook in settings.
+
+The file `.claude/settings.local.json` has a Windows/WSL write permission issue — it appears in the directory listing but can't be written from WSL. I created `.claude/settings.local.json.new` with the full updated settings including the PreCompact hook registration.
+
+**You need to**:
+```
+# In Windows Explorer or PowerShell:
+# Replace .claude/settings.local.json with .claude/settings.local.json.new
+# (rename the .new to settings.local.json)
+```
+
+Or in WSL if you can fix the permission:
+```bash
+cp /mnt/c/Users/Jeff/Claude_Projects/Awareness/.claude/settings.local.json.new \
+   /mnt/c/Users/Jeff/Claude_Projects/Awareness/.claude/settings.local.json
+```
+
+### 3. Orchestration Docs Written ✅
+
+- `docs/orchestration/tiers.md` — T0-T3 task classification guide (new from Nexus)
+- `docs/orchestration/orchestration-select-skill.md` — the /orchestration-select skill content
+
+Note: The skill file should live at `.claude/skills/orchestration-select/SKILL.md` but the `.claude/skills/` directory has the same Windows ghost problem — can't write new files. You'll need to move `docs/orchestration/orchestration-select-skill.md` to `.claude/skills/orchestration-select/SKILL.md` in Windows.
+
+### Architecture Picture: Where We Are
+
+Our hook coverage vs theirs:
+
+| Hook | Nexus | Us | Status |
+|------|-------|-----|--------|
+| UserPromptSubmit (friction inject) | ✅ | ✅ inject_context.py | Have (ours is memory, not friction) |
+| PreToolUse Task (agent context) | ✅ | ✅ inject_agent_context.py | Have ✓ |
+| PostToolUse Task (pressure) | ✅ | ✅ monitor_agent_pressure.py | Have ✓ |
+| PreCompact (state save) | ✅ | ✅ pre_compact.py | **Just built** |
+| PreToolUse Write (friction guard) | ✅ blocks writes | ❌ | Next: friction system |
+| TaskCompleted (quality gate) | ✅ blocks if tests fail | ❌ | Later |
+
+We're closer than we thought. Core orchestration hooks are done. Friction learning system is the remaining big piece.
+
+---
