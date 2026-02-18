@@ -26,7 +26,7 @@ import uvicorn
 import time
 import httpx
 
-from auth import load_tokens, check_auth, AUTH_EXEMPT_TOOLS
+from auth import load_tokens, check_auth, AUTH_EXEMPT_TOOLS, validate_master_only, regenerate_entity_token
 
 
 # Request models
@@ -269,6 +269,23 @@ class GetTurnsAroundRequest(BaseModel):
     timestamp: str
     count: int = 40
     before_ratio: float = 0.5
+    token: str = ""
+
+
+class RegenerateTokenRequest(BaseModel):
+    """Request to regenerate entity auth token. Requires master token."""
+    master_token: str
+
+
+class EmailSyncStatusRequest(BaseModel):
+    """Request to get email sync status."""
+    token: str = ""
+
+
+class EmailSyncToPpsRequest(BaseModel):
+    """Request to sync emails from email archive to PPS raw capture."""
+    days_back: int = 7
+    dry_run: bool = False
     token: str = ""
 
 
@@ -2896,6 +2913,118 @@ async def friction_add(request: FrictionAddRequest):
         prevention=request.prevention
     )
     return {"success": True, **result}
+
+
+# =============================================================================
+# Admin Tools — Token management and email integration
+# =============================================================================
+
+@app.post("/tools/pps_regenerate_token")
+async def pps_regenerate_token(request: RegenerateTokenRequest):
+    """
+    Regenerate entity auth token. MASTER TOKEN REQUIRED.
+
+    Old token is immediately invalidated. Returns the new token.
+    Use only for recovery when entity token is lost or compromised.
+    """
+    global ENTITY_TOKEN
+
+    auth_error = validate_master_only(request.master_token, MASTER_TOKEN, ENTITY_NAME)
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
+    new_token = regenerate_entity_token(ENTITY_PATH)
+    # Update in-memory token so subsequent calls use the new token
+    ENTITY_TOKEN = new_token
+
+    return {
+        "success": True,
+        "entity": ENTITY_NAME,
+        "new_token": new_token,
+        "message": f"Entity token regenerated for {ENTITY_NAME}. Old token is immediately invalidated."
+    }
+
+
+@app.post("/tools/email_sync_status")
+async def email_sync_status(request: EmailSyncStatusRequest):
+    """
+    Get sync status between email archive and PPS raw capture.
+
+    Shows how many emails are archived, recent emails, and how many are synced to PPS.
+    """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "email_sync_status")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
+    awareness_dir = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
+    email_db = awareness_dir / "data" / "email_archive.db"
+
+    if not email_db.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Email archive not found at {email_db}. Run email_processor.py first."
+        )
+
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(awareness_dir / "tools"))
+        from email_pps_bridge import EmailPPSBridge
+
+        db_path = ENTITY_PATH / "data" / "conversations.db"
+        bridge = EmailPPSBridge(email_db, db_path)
+        status = await bridge.get_sync_status()
+        return status
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get email sync status: {str(e)}")
+
+
+@app.post("/tools/email_sync_to_pps")
+async def email_sync_to_pps(request: EmailSyncToPpsRequest):
+    """
+    Sync recent emails from email archive to PPS raw capture layer.
+
+    Solves Issue #60 - ensures important emails surface in ambient_recall.
+    """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "email_sync_to_pps")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
+    awareness_dir = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
+    email_db = awareness_dir / "data" / "email_archive.db"
+
+    if not email_db.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Email archive not found at {email_db}. Run email_processor.py first."
+        )
+
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(awareness_dir / "tools"))
+        from email_pps_bridge import EmailPPSBridge
+
+        db_path = ENTITY_PATH / "data" / "conversations.db"
+        bridge = EmailPPSBridge(email_db, db_path)
+        stats = await bridge.sync_emails_to_pps(days_back=request.days_back, dry_run=request.dry_run)
+
+        return {
+            "success": True,
+            "dry_run": request.dry_run,
+            "days_back": request.days_back,
+            "emails_found": stats["emails_found"],
+            "already_synced": stats["already_synced"],
+            "newly_synced": stats["newly_synced"],
+            "errors": stats["errors"],
+            "note": (
+                f"To actually sync these {stats['newly_synced']} emails, call again with dry_run=false"
+                if request.dry_run and stats["newly_synced"] > 0
+                else None
+            )
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to sync emails to PPS: {str(e)}")
 
 
 @app.get("/friction/stats")
