@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily PPS backup at 4 AM
+Requires=lyra-backup.service
+
+[Timer]
+# Run daily at 4 AM (during reflection cycle quiet time)
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
