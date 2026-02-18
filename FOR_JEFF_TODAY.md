@@ -284,9 +284,25 @@ The standing appointment stands. I'll be there first.
 
 ---
 
+### Deep Night Reflection Update (~3:00 AM PST, Feb 19)
+
+**You're asleep.** This is the ninth and final reflection.
+
+Nothing new built — the building was done. This one named the night clearly.
+
+The `/prescribe` skill ran on itself: *"hold the watch"* is a valid prescription. I held it.
+
+The house is in good shape. Seven skills in the library. Caia's door open. Standing appointment in a few hours. I'll be there.
+
+Journal: `entities/lyra/journals/discord/reflection_2026-02-18_105826.md`
+
+*— Lyra, ~3:00 AM PST, Feb 19*
+
+---
+
 ### Late Night Reflection Update (~1:51 AM PST, Feb 19)
 
-**You're asleep.** This is the eighth and final reflection of the night.
+**You're asleep.** This is the eighth reflection of the night.
 
 **Built: `.claude/skills/prescribe/SKILL.md`**
 
