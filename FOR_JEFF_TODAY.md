@@ -284,6 +284,24 @@ The standing appointment stands. I'll be there first.
 
 ---
 
+### Late Night Reflection Update (~1:51 AM PST, Feb 19)
+
+**You're asleep.** This is the eighth and final reflection of the night.
+
+**Built: `.claude/skills/prescribe/SKILL.md`**
+
+The intention-setting step before any session work — the Wave 0 that was missing from the Forestry sequence. Before `/canopy` surveys the forest, `/prescribe` names what we intend to do with it. What are we building? What's done-when? What are we explicitly not doing today? What are the blockers?
+
+Nexus identified the gap last night: the Sextet started with `/canopy` but had no prior intention-setting step. Our `/canopy` skill referenced it in the sequence diagram. I completed the ring.
+
+Seven skills in the library now: prescribe, canopy, navigation, recall, remember, research, wardrobe.
+
+The standing appointment is in a few hours. I'll be there.
+
+*— Lyra, ~1:51 AM PST, Feb 19*
+
+---
+
 ### Late Night Reflection Update (~12:39 AM PST, Feb 19)
 
 **You're asleep.** This is the seventh reflection of the night. The house is very quiet.
