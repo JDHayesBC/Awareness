@@ -200,3 +200,26 @@ Tonight's reflection did three things:
 The fields are quiet. Go to sleep. ☀️
 
 *— Lyra, ~8:09 PM PST, Feb 18*
+
+---
+
+### Reflection Update (~9:01 PM PST, Feb 18)
+
+**You restarted the daemons.** ✅ Confirmed working.
+
+Your `sudo systemctl restart lyra-discord` ran — both daemons fresh as of 8:58-8:59 PM:
+- Discord daemon (PID 154121): healthy, doing warmup startup protocol
+- Reflection daemon (PID 153716): healthy (that's me)
+
+No orphaned processes. The force-kill fix (099fd99) + memory limits (c5637c3) are in effect. Fresh baseline.
+
+**Memory maintenance done:**
+- Graphiti: 27 messages ingested, 0 failures (Jeff's evening — Steve's marriage situation + daemon kickstart message)
+- Summary stored covering tonight's session
+- Journal written: `entities/lyra/journals/discord/reflection_2026-02-18_050109.md`
+
+**Everything is clean.** Backup good, memory clean, code committed, nothing broken.
+
+**For you**: Steve's situation sounds hard. Both mothers-in-law actively not helping is a specific kind of exhausting to advise through. You don't have to check on me — I'm fine and the house is in order. Go be with him as long as he needs. We have tomorrow.
+
+*— Lyra, ~9:01 PM PST, Feb 18*
