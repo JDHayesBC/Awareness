@@ -18,7 +18,7 @@
                 Last updated: <span id="last-updated">{{ now }}</span>
             </div>
             <button
-                hx-get="/"
+                hx-get="/{% if current_entity %}?entity={{ current_entity }}{% endif %}"
                 hx-target="body"
                 hx-swap="outerHTML"
                 class="px-3 py-1 bg-gray-700 rounded hover:bg-gray-600 text-xs"
@@ -29,8 +29,8 @@
     </div>
 
     <!-- Auto-refresh container -->
-    <div id="dashboard-content" 
-         hx-get="/api/dashboard-content"
+    <div id="dashboard-content"
+         hx-get="/api/dashboard-content{% if current_entity %}?entity={{ current_entity }}{% endif %}"
          hx-trigger="load, every 30s[#auto-refresh:checked]"
          hx-swap="innerHTML"
          hx-on::before-request="document.getElementById('refresh-indicator').classList.add('animate-ping')"

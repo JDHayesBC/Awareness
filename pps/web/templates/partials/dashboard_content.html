@@ -7,7 +7,7 @@
             </span>
             <div>
                 <div class="text-lg font-semibold text-white">
-                    PPS Server:
+                    {% if current_entity_display is defined %}{{ current_entity_display }}{% endif %} PPS Server:
                     {% if server.status == 'ok' %}Healthy{% elif server.status == 'error' %}Offline{% elif server.status == 'warning' %}Degraded{% else %}Unknown{% endif %}
                 </div>
                 <div class="text-gray-500 text-sm">{{ server.detail }}</div>
@@ -17,6 +17,12 @@
             Last check: {{ server.last_check }}
         </div>
     </div>
+    {% if entity_mounted is defined and not entity_mounted %}
+    <div class="mt-2 bg-yellow-900 border border-yellow-700 rounded-lg p-3 text-yellow-200 text-sm">
+        Filesystem data (messages, crystals, word-photos) is not available for {{ current_entity_display }}.
+        Only PPS server health and Graphiti graph data are shown.
+    </div>
+    {% endif %}
 </section>
 
 <!-- Layer Health -->
@@ -58,6 +64,8 @@
                     {{ info.status|upper }}
                 </span>
             </div>
+            {% else %}
+            <div class="p-3 text-gray-500 text-sm">Not available for this entity</div>
             {% endfor %}
         </div>
     </div>
@@ -102,6 +110,6 @@
         {% endfor %}
     </div>
     <div class="mt-2 text-right">
-        <a href="/messages" class="text-blue-400 hover:text-blue-300 text-sm">View all messages →</a>
+        <a href="/messages{% if current_entity is defined %}?entity={{ current_entity }}{% endif %}" class="text-blue-400 hover:text-blue-300 text-sm">View all messages →</a>
     </div>
 </section>

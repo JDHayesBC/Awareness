@@ -24,35 +24,53 @@
     <nav class="bg-gray-800 border-b border-gray-700">
         <div class="max-w-7xl mx-auto px-4">
             <div class="flex justify-between h-16">
-                <div class="flex items-center">
-                    <span class="text-xl font-bold text-blue-400">PPS Observatory</span>
-                </div>
                 <div class="flex items-center space-x-4">
-                    <a href="/" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/' %}bg-gray-700{% endif %}">
+                    <span class="text-xl font-bold text-blue-400">PPS Observatory</span>
+                    <!-- Entity Selector -->
+                    {% if available_entities is defined and available_entities %}
+                    <div class="flex items-center space-x-1 ml-4">
+                        <span class="text-gray-500 text-xs">Entity:</span>
+                        {% for ent in available_entities %}
+                        <a href="{{ request.url.path }}?entity={{ ent.name }}"
+                           class="px-2 py-1 rounded text-xs font-medium border transition-colors
+                                  {% if current_entity == ent.name %}
+                                  bg-blue-600 border-blue-500 text-white
+                                  {% else %}
+                                  bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600
+                                  {% endif %}">
+                            {{ ent.display_name }}
+                        </a>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="flex items-center space-x-1">
+                    {% set eq = "?entity=" + current_entity if current_entity is defined and current_entity else "" %}
+                    <a href="/{{ eq }}" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/' %}bg-gray-700{% endif %}">
                         Dashboard
                     </a>
-                    <a href="/graph" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/graph' %}bg-gray-700{% endif %}">
+                    <a href="/graph{{ eq }}" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/graph' %}bg-gray-700{% endif %}">
                         Graph
                     </a>
-                    <a href="/messages" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/messages' %}bg-gray-700{% endif %}">
+                    <a href="/messages{{ eq }}" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/messages' %}bg-gray-700{% endif %}">
                         Messages
                     </a>
-                    <a href="/photos" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/photos' %}bg-gray-700{% endif %}">
+                    <a href="/photos{{ eq }}" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/photos' %}bg-gray-700{% endif %}">
                         Word-Photos
                     </a>
-                    <a href="/crystals" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/crystals' %}bg-gray-700{% endif %}">
+                    <a href="/crystals{{ eq }}" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/crystals' %}bg-gray-700{% endif %}">
                         Crystals
                     </a>
-                    <a href="/memory" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/memory' %}bg-gray-700{% endif %}">
+                    <a href="/memory{{ eq }}" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/memory' %}bg-gray-700{% endif %}">
                         Ambient Recall
                     </a>
-                    <a href="/traces" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/traces' %}bg-gray-700{% endif %}">
+                    <a href="/traces{{ eq }}" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/traces' %}bg-gray-700{% endif %}">
                         Traces
                     </a>
-                    <a href="/reflections" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/reflections' %}bg-gray-700{% endif %}">
+                    <a href="/reflections{{ eq }}" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/reflections' %}bg-gray-700{% endif %}">
                         Reflections
                     </a>
-                    <a href="/discord" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/discord' %}bg-gray-700{% endif %}">
+                    <a href="/discord{{ eq }}" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/discord' %}bg-gray-700{% endif %}">
                         Discord
                     </a>
                 </div>

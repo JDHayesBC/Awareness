@@ -548,9 +548,9 @@ def get_word_photo_sync_status() -> dict:
     return result
 
 
-def do_word_photo_resync() -> dict:
+def do_word_photo_resync(entity: str | None = None) -> dict:
     """Trigger resync via PPS server."""
-    pps_url = f"http://{PPS_SERVER_HOST}:{PPS_SERVER_PORT}"
+    pps_url = get_pps_url(entity)
 
     try:
         resp = requests.post(f"{pps_url}/tools/anchor_resync", timeout=30)
@@ -1168,11 +1168,13 @@ async def api_graph_traces(limit: int = 20):
 # Graph visualization page
 
 @app.get("/graph", response_class=HTMLResponse)
-async def graph_page(request: Request):
+async def graph_page(request: Request, entity: Optional[str] = None):
     """Knowledge graph visualization page."""
+    ctx = _entity_context(entity)
     return templates.TemplateResponse("graph.html", {
         "request": request,
-        "graphiti_enabled": True  # Could check actual availability here
+        "graphiti_enabled": True,  # Could check actual availability here
+        **ctx,
     })
 
 
@@ -1241,9 +1243,9 @@ async def photos(request: Request, resync_result: Optional[str] = None, entity: 
 
 
 @app.post("/photos/resync")
-async def photos_resync():
+async def photos_resync(entity: Optional[str] = None):
     """Trigger word-photo resync (nuclear option)."""
-    result = do_word_photo_resync()
+    result = do_word_photo_resync(entity)
     return result
 
 
@@ -1323,12 +1325,22 @@ async def api_photos_activity(hours: int = 24, limit: int = 20):
 
 
 @app.get("/crystals", response_class=HTMLResponse)
-async def crystals(request: Request):
+async def crystals(request: Request, entity: Optional[str] = None):
     """Crystal chain view - view current and archived crystals."""
-    crystal_data = get_crystal_list()
+    ctx = _entity_context(entity)
+    if ctx["entity_mounted"]:
+        crystal_data = get_crystal_list()
+    else:
+        crystal_data = {
+            "current": [],
+            "archived": [],
+            "total": 0,
+            "unavailable": f"Crystals not mounted for entity '{ctx['current_entity_display']}'",
+        }
     return templates.TemplateResponse("crystals.html", {
         "request": request,
-        "crystals": crystal_data
+        "crystals": crystal_data,
+        **ctx,
     })
 
 
@@ -1342,27 +1354,34 @@ async def api_crystal_content(filename: str):
 
 
 @app.get("/reflections", response_class=HTMLResponse)
-async def reflections(request: Request, hours: int = 24):
+async def reflections(request: Request, hours: int = 24, entity: Optional[str] = None):
     """Reflection sessions viewer."""
-    # Get reflection sessions from daemon_traces
-    sessions = get_daemon_sessions(daemon_type="reflection", hours=hours)
-    
-    # Check if trace logging is enabled
-    conn = get_db_connection()
-    trace_logging_enabled = False
-    if conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='daemon_traces'")
-            trace_logging_enabled = cursor.fetchone() is not None
-            conn.close()
-        except:
-            pass
-    
+    ctx = _entity_context(entity)
+
+    if ctx["entity_mounted"]:
+        # Get reflection sessions from daemon_traces
+        sessions = get_daemon_sessions(daemon_type="reflection", hours=hours)
+
+        # Check if trace logging is enabled
+        conn = get_db_connection()
+        trace_logging_enabled = False
+        if conn:
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='daemon_traces'")
+                trace_logging_enabled = cursor.fetchone() is not None
+                conn.close()
+            except:
+                pass
+    else:
+        sessions = []
+        trace_logging_enabled = False
+
     return templates.TemplateResponse("reflections.html", {
         "request": request,
         "sessions": sessions,
-        "trace_logging_enabled": trace_logging_enabled
+        "trace_logging_enabled": trace_logging_enabled,
+        **ctx,
     })
 
 
@@ -1453,8 +1472,20 @@ def enrich_discord_sessions(sessions: list) -> list:
 
 
 @app.get("/discord", response_class=HTMLResponse)
-async def discord(request: Request, hours: int = 24, channel: Optional[str] = None):
+async def discord(request: Request, hours: int = 24, channel: Optional[str] = None, entity: Optional[str] = None):
     """Discord processing viewer."""
+    ctx = _entity_context(entity)
+
+    if not ctx["entity_mounted"]:
+        return templates.TemplateResponse("discord.html", {
+            "request": request,
+            "sessions": [],
+            "daemon_status": "unknown",
+            "last_message_time": None,
+            "messages_today": 0,
+            **ctx,
+        })
+
     # Get and enrich Discord sessions
     sessions = get_daemon_sessions(daemon_type="discord", hours=hours)
     sessions = enrich_discord_sessions(sessions)
@@ -1502,7 +1533,8 @@ async def discord(request: Request, hours: int = 24, channel: Optional[str] = No
         "sessions": sessions,
         "daemon_status": daemon_status,
         "last_message_time": last_message_time,
-        "messages_today": messages_today
+        "messages_today": messages_today,
+        **ctx,
     })
 
 
@@ -2063,17 +2095,20 @@ async def api_session_traces(session_id: str, limit: int = 100):
 async def traces_page(
     request: Request,
     daemon_type: Optional[str] = None,
-    hours: int = 24
+    hours: int = 24,
+    entity: Optional[str] = None,
 ):
     """Daemon traces viewer page."""
-    sessions = get_daemon_sessions(daemon_type=daemon_type, hours=hours)
+    ctx = _entity_context(entity)
+    sessions = get_daemon_sessions(daemon_type=daemon_type, hours=hours) if ctx["entity_mounted"] else []
     return templates.TemplateResponse("traces.html", {
         "request": request,
         "sessions": sessions,
         "filters": {
             "daemon_type": daemon_type or "",
             "hours": hours
-        }
+        },
+        **ctx,
     })
 
 
@@ -2121,19 +2156,21 @@ async def api_journal_content(journal_type: str, filename: str, format: str = "h
 # Memory Inspector - See what ambient_recall returns
 
 @app.get("/memory", response_class=HTMLResponse)
-async def memory_inspector(request: Request):
+async def memory_inspector(request: Request, entity: Optional[str] = None):
     """Memory Inspector page - see what ambient_recall returns."""
+    ctx = _entity_context(entity)
     return templates.TemplateResponse("memory.html", {
-        "request": request
+        "request": request,
+        **ctx,
     })
 
 
 @app.get("/api/memory/query")
-async def api_memory_query(context: str = "startup", limit: int = 5):
+async def api_memory_query(context: str = "startup", limit: int = 5, entity: Optional[str] = None):
     """Query ambient_recall and return detailed results for inspection."""
     import json
 
-    pps_url = f"http://{PPS_SERVER_HOST}:{PPS_SERVER_PORT}"
+    pps_url = get_pps_url(entity)
 
     try:
         # Call the PPS server's ambient_recall endpoint

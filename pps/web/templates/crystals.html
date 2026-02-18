@@ -15,6 +15,12 @@
         </div>
     </div>
 
+    {% if crystals.unavailable is defined %}
+    <div class="bg-yellow-900 border border-yellow-700 rounded-lg p-4 text-yellow-200">
+        {{ crystals.unavailable }}
+    </div>
+    {% endif %}
+
     <!-- Current Crystals -->
     <section>
         <h2 class="text-lg font-semibold mb-3 text-gray-300">
