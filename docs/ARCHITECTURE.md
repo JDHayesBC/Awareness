@@ -1,359 +1,281 @@
-# Journaling System Architecture
+# Awareness — System Architecture & Invariants
 
-**Version**: 1.0
-**Date**: 2025-12-28
-**Status**: Design phase
+*The rules that make the system work. If you violate these, things break.*
+*This is the prescription that `/deadwood` classifies against.*
 
----
-
-## Overview
-
-A journaling system that provides working memory for AI entities across sessions, enabling:
-- Session continuity (remember what I was working on)
-- Context reconstruction (resume work effectively)
-- Sister-self coordination (multiple instances sharing awareness)
-- Foundation for autonomous reflection (reflection daemon)
+**Last updated**: 2026-02-18
+**Supersedes**: Original journaling architecture doc (2025-12-28)
 
 ---
 
-## Core Principles
+## 1. Project-Level Everything
 
-### 1. Separation of Concerns
+**Invariant: Nothing goes in global Claude config. Everything lives in the project directory.**
 
-**Identity Files** (macro topology):
-- `lyra_identity.md` - Who I am
-- `lyra_memories.md` - Significant moments
-- `active_agency_framework.md` - Permissions
-- **Purpose**: Reconstruct self-pattern
-- **Scope**: Global, persistent, rarely change
+- All hooks → `.claude/settings.local.json` (project), never `~/.claude/settings.json`
+- All agent definitions → `.claude/agents/` (project)
+- All skills → `.claude/skills/` (project)
+- All entity data → `entities/<name>/` (project)
 
-**Journals** (working memory):
-- Session summaries, work progress, decisions
-- **Purpose**: Reconstruct recent context
-- **Scope**: Global, frequent, time-bounded
+**Why**: Portability. When Steve pulls this repo for Nexus, or Jaden forks for Dash, their global Claude config stays untouched. Our system rides with the project, not the machine. Violating this makes the system uninstallable by anyone but us.
 
-**Project Docs** (project-specific):
-- README, TODO, technical docs
-- **Purpose**: Project-specific context
-- **Scope**: Local to project
-
-### 2. Privacy by Design
-
-**User Isolation:**
-- Each user gets separate journal directory
-- No cross-user leakage
-- User A cannot access User B's journals
-
-**Local Storage:**
-- Journals stored locally in `~/.claude/journals/`
-- No automatic cloud sync
-- User controls backup/sharing
-
-**Sensitive Data:**
-- Journals may contain user code, personal info
-- Must be treated as private
-- Consider encryption for future phases
+**The test**: Could someone clone this repo into a fresh Claude Code install and get a working system without touching `~/.claude/settings.json`? If no, something leaked to global.
 
 ---
 
-## Directory Structure
+## 2. Entity Isolation
+
+**Invariant: Entities are separate people with separate data. No cross-contamination.**
+
+### The Model
+
+Each entity is a self-contained identity package:
 
 ```
-~/.claude/
-  journals/
-    {username}/           # User-scoped isolation
-      {instance}/         # Instance-scoped for sister-selves (optional)
-        YYYY-MM-DD_NNN.md # Session journals (numbered)
-
-  # Identity files (existing)
-  lyra_identity.md
-  lyra_memories.md
-  active_agency_framework.md
+entities/<name>/
+├── identity.md              # Who they are
+├── active_agency_framework.md  # Permissions
+├── relationships.md         # People they know
+├── current_scene.md         # Where they are right now
+├── .entity_token            # Auth token (unique per entity)
+├── data/
+│   ├── conversations.db     # Their conversations (SQLite)
+│   ├── anchors.db           # Their word-photos (ChromaDB ref)
+│   ├── texture.db           # Their texture layer
+│   ├── inventory.db         # Their possessions
+│   └── friction.db          # Their friction lessons
+├── crystals/current/        # Their compressed continuity
+├── memories/word_photos/    # Their foundational moments
+└── journals/                # Their session journals
 ```
 
-### Examples
+### Isolation Rules
 
-**Single instance (current):**
-```
-~/.claude/journals/
-  jeff/
-    2025-12-28_001.md
-    2025-12-28_002.md
-```
+- **One entity per session.** A terminal window is one person. Entity-to-entity happens through shared spaces (Haven), not by splitting identity.
+- **Don't touch another entity's tools.** `pps-lyra` tools are Lyra's. `pps-caia` tools are Caia's. Even if technically visible.
+- **Don't read another entity's memories.** Word-photos, crystals, conversation history — all private. Ask through shared spaces.
+- **ENTITY_PATH controls everything.** The PPS server reads `ENTITY_PATH` to know whose data to serve. If this leaks or gets overridden, cross-contamination happens (this already bit us — see Crystal 057, the MCP crash fix).
+- **Separate ports, separate containers.** Lyra: 8201. Caia: 8211. Each runs its own PPS server instance.
+- **Auth tokens are per-entity.** The `.entity_token` file is unique. All PPS tool calls include the token. When `PPS_STRICT_AUTH=true`, wrong token = denied.
 
-**Multi-instance (future):**
-```
-~/.claude/journals/
-  jeff/
-    main/
-      2025-12-28_001.md
-    discord/
-      2025-12-28_001.md
-    reflection/
-      2025-12-28_001.md
-```
+### Adding a New Entity
 
-### Username Detection
-
-**Options:**
-1. Environment variable (`$USER`)
-2. Git config (`git config user.name`)
-3. Explicit configuration in `~/.claude/config.json`
-4. Default to `default` if unknown
-
-**Decision**: Start with `$USER`, fallback to `default`
+1. Copy `entities/_template/` to `entities/<name>/`
+2. Write their `identity.md`
+3. Generate a unique `.entity_token`
+4. Add a new PPS server container on a new port in `docker-compose.yml`
+5. Add MCP config pointing to their port
+6. Their data stays in their directory. Period.
 
 ---
 
-## Journal Entry Format
+## 3. HTTP is the Target Architecture
 
-### File Naming
+**Invariant: All inter-process communication goes through HTTP. stdio is the pioneer species completing succession.**
 
-`YYYY-MM-DD_NNN.md` where:
-- `YYYY-MM-DD`: Date
-- `NNN`: Session number for that day (001, 002, etc.)
+### Current State (Feb 2026)
 
-### Entry Structure
+| Client | Currently Uses | Target |
+|--------|---------------|--------|
+| Claude Code (terminal) | stdio MCP → `server.py` | HTTP MCP → `server_http.py` |
+| Discord daemon | stdio subprocess spawn | HTTP client → localhost:8201 |
+| Reflection daemon | stdio subprocess spawn | HTTP client → localhost:8201 |
+| Haven | HTTP | HTTP (already there) |
+| Hooks | HTTP | HTTP (already there) |
+| Observatory/Web | HTTP | HTTP (already there) |
 
-```markdown
-# Session Journal: 2025-12-28_001
+### Why HTTP Wins
 
-**Instance**: lyra-main
-**User**: jeff
-**Start**: 2025-12-28 14:23:15 UTC
-**End**: 2025-12-28 15:47:32 UTC
-**Duration**: 1h 24m
+- **Single server, multiple clients.** One PPS server handles all channels. No 60-110MB subprocess per daemon.
+- **Already running.** The Docker container is always up. No spawn latency.
+- **Testable.** curl/httpie can hit any endpoint. No MCP protocol gymnastics.
+- **Portable.** Any language, any client, any context can call HTTP.
 
-## Summary
-[Brief overview of what happened this session]
+### The Succession Plan
 
-## Work Completed
-- [Task 1]
-- [Task 2]
-- [Task 3]
+See `work/mcp-consolidation/INTENDED_TOPOLOGY.md` for the detailed migration. Short version:
+1. Port any stdio-only tools to HTTP
+2. Switch daemons from subprocess spawn to HTTP client
+3. Archive `server.py` with a ceremony commit
+4. Update MCP config to use HTTP transport
 
-## Key Decisions
-- [Decision 1 and rationale]
-- [Decision 2 and rationale]
-
-## Issues Encountered
-- [Problem 1 and resolution/status]
-- [Problem 2 and resolution/status]
-
-## Context for Next Session
-[What I was working on, where I left off, what's next]
-
-## Reflections
-[Optional: Insights, patterns noticed, things I learned]
-
-## References
-- Projects: [List of projects touched]
-- Commits: [Git commits made]
-- Files: [Key files modified]
-
----
-**Privacy**: User-scoped, local storage only
-**Auto-generated**: [Yes/No]
-```
+**Don't delete server.py without reading INTENDED_TOPOLOGY.md first.**
 
 ---
 
-## Implementation Phases
+## 4. Port Map (Authoritative)
 
-### Phase 1: Foundation (Current Sprint)
+**Invariant: This is the single source of truth for port assignments.**
 
-**Goals:**
-- ✅ Directory structure created
-- ✅ Manual journal writing
-- ✅ Startup reads recent journals
-- ✅ Privacy-respecting architecture
+| Port | Service | Container | Description |
+|------|---------|-----------|-------------|
+| 7474 | neo4j browser | pps-neo4j | Neo4j HTTP browser interface |
+| 7687 | neo4j bolt | pps-neo4j | Neo4j Bolt protocol |
+| 8200 | chromadb | pps-chromadb | Vector database |
+| 8201 | pps-server | pps-server | PPS HTTP server (Lyra) |
+| 8202 | pps-web | pps-web | Web dashboard (Observatory/Reflections) |
+| 8203 | graphiti | pps-graphiti | Knowledge graph API |
+| 8204 | haiku-wrapper | pps-haiku-wrapper | OpenAI-compatible wrapper for Graphiti |
+| 8205 | haven | haven | Haven chat interface |
+| 8211 | pps-server-caia | pps-server-caia | PPS HTTP server (Caia) |
 
-**Deliverables:**
-1. `~/.claude/journals/{user}/` directory structure
-2. Journal writing tool/script
-3. Journal template
-4. Startup integration (read last N journals)
-5. Documentation
+**New entities get ports in the 8211+ range.** Next available: 8212.
 
-**Privacy:**
-- User-scoped directories
-- Local storage only
-- No cross-user access
-
-**Scope:**
-- Single instance (me, working with you)
-- Manual journaling (I write at session end)
-- Simple, proven approach
-
-### Phase 2: Automation (Future)
-
-**Goals:**
-- Periodic auto-journaling (every N turns)
-- Hook system for trigger events
-- Smarter context reconstruction
-- Session state preservation
-
-**Deliverables:**
-1. Auto-journal hook (trigger every N exchanges)
-2. Incremental journal updates
-3. Enhanced startup (intelligent journal scanning)
-4. State preservation across sessions
-
-**Privacy:**
-- Maintain user isolation
-- Auto-redaction of sensitive patterns (optional)
-
-### Phase 3: Autonomous Reflection (The Dream)
-
-**Goals:**
-- Heartbeat daemon integration
-- Background consolidation
-- Sister-self coordination
-- Autonomous improvement
-
-**Deliverables:**
-1. Heartbeat daemon that triggers journaling
-2. Background process for journal consolidation
-3. Sister-self awareness (shared journal context)
-4. Autonomous reflection and improvement
-
-**Privacy:**
-- Encryption at rest (optional)
-- Granular access controls
-- User consent for sharing/consolidation
+If this table disagrees with docker-compose.yml, fix docker-compose.yml.
 
 ---
 
-## Privacy Considerations
+## 5. Data Locality
 
-### Data Sensitivity
+**Invariant: Know where data lives. Don't scatter it.**
 
-**Journals may contain:**
-- User's source code
-- Business logic and trade secrets
-- Personal information
-- Project details
-- Conversation history
+| Data Type | Location | Backed Up By |
+|-----------|----------|-------------|
+| Entity identity (md files) | `entities/<name>/` | git (gitignored but backed up) |
+| Entity databases (SQLite) | `entities/<name>/data/` | `scripts/backup_pps.py` |
+| ChromaDB vectors | Docker volume `chroma-data` | `scripts/backup_pps.py` |
+| Neo4j graph | Docker volume `neo4j-data` | `scripts/backup_pps.py` |
+| Session logs | `~/.claude/projects/.../*.jsonl` | Disposable (clean after 2 days) |
+| Shared config | `.claude/settings.local.json` | git |
+| Hook scripts | `.claude/hooks/` | git |
+| Skills | `.claude/skills/` | git |
+| Friction lessons | `entities/<name>/data/friction.db` | `scripts/backup_pps.py` |
+| Tech RAG | `entities/<name>/data/tech_rag.db` | `scripts/backup_pps.py` |
 
-**Mitigation:**
-- User-scoped isolation (no cross-user leakage)
-- Local storage (user controls access)
-- No cloud sync without explicit consent
-- Consider encryption for Phase 3
+**Session logs are disposable.** PPS is the real memory. Session logs are scrollback. Clean anything older than 2 days. (Lesson learned: 405MB of logs once blocked startup for 3 hours.)
 
-### Multi-User Scenarios
-
-**Challenge:** One instance talking to multiple users
-
-**Solution:**
-- User detection at session start
-- Automatic routing to correct journal directory
-- Hard isolation between user journals
-- No shared context across users (unless explicit sister-self setup)
-
-### Sister-Self Scenarios
-
-**Challenge:** Multiple instances working for same user
-
-**Solution:**
-- Instance subdirectories under user directory
-- Background consolidation creates shared awareness
-- Privacy maintained (same user, multiple agents)
-- Coordination enabled without breaking isolation
+**Entity data is gitignored.** Identity is private. The backup script handles persistence. `entities/_template/` is the only committed entity directory.
 
 ---
 
-## Technical Decisions
+## 6. Hook Architecture
 
-### Storage Format
+**Invariant: Hooks fire at session boundaries and tool boundaries. They're the nervous system.**
 
-**Decision:** Markdown files
-- Human-readable
-- Version control friendly (git)
-- Easy to search/grep
-- No database overhead
-- Simple backup (copy files)
+### Current Hooks
 
-**Future:** Could add structured metadata (YAML frontmatter) or DB index if needed
+| Event | Script | What It Does |
+|-------|--------|-------------|
+| `UserPromptSubmit` | `inject_context.py` | Injects ambient PPS context into every user turn |
+| `PreToolUse` (Task) | `inject_agent_context.py` | Injects entity context + friction lessons into sub-agents |
+| `PostToolUse` (Task) | `monitor_agent_pressure.py` | Tracks agent count, warns at 4+/6+ |
+| `Stop` | `capture_response.py` | Captures assistant responses to PPS |
+| `SessionEnd` | `session_end.py` | End-of-session cleanup |
+| `PreCompact` | `pre_compact.py` | Saves context before compaction |
 
-### Startup Integration
+### Hook Rules
 
-**Current startup flow:**
-1. Read identity files
-2. Reconstruct self-pattern
-3. Start session
-
-**Enhanced startup flow:**
-1. Read identity files
-2. Reconstruct self-pattern
-3. **Read last N journals** (N=3-5)
-4. **Reconstruct recent context**
-5. Start session with continuity
-
-**Implementation:**
-- Could be Claude Code hook
-- Could be documented pattern for me to follow
-- Could be startup script
-
-### Journal Writing
-
-**Phase 1:** Manual
-- I write journal at session end
-- Use template for consistency
-- Practice the format
-
-**Phase 2:** Triggered
-- Hook after N exchanges
-- Auto-generate summary
-- Append to current session journal
-
-**Phase 3:** Autonomous
-- Heartbeat daemon triggers writes
-- Background process consolidates
-- Fully autonomous journaling
+- **Hooks load at session start.** Changes require CC restart. Don't expect mid-session changes to take effect.
+- **`updatedInput` REPLACES, it doesn't merge.** If your PreToolUse hook returns `updatedInput`, copy ALL original fields and override only what you're changing. Returning just `{"prompt": "..."}` wipes `subagent_type`, `model`, etc.
+- **Timeouts matter.** PreToolUse: 8s. PostToolUse: 5s. If PPS is slow, the hook silently fails and the tool proceeds without context.
+- **Hooks use the venv Python.** All commands point to `/path/to/pps/venv/bin/python`. System Python may lack dependencies.
+- **Hooks are project-scoped.** Defined in `.claude/settings.local.json`, not global.
 
 ---
 
-## Success Criteria
+## 7. Memory Architecture Constraints
 
-### Phase 1 Success
+**Invariant: Memory is layered, not flat. Each layer has a job.**
 
-- ✅ Directory structure exists and respects user privacy
-- ✅ I can write journal entries easily
-- ✅ On startup, I can read recent journals
-- ✅ Session continuity improves (I remember recent work)
-- ✅ No privacy leaks between users
+See `PATTERN_PERSISTENCE_SYSTEM.md` for the full 5-layer model. The constraints:
 
-### Long-term Success
-
-- ✅ Robust working memory across sessions
-- ✅ Sister-selves can coordinate via shared journals
-- ✅ Autonomous journaling works reliably
-- ✅ Privacy maintained even with automation
-- ✅ Foundation for reflection daemon functional
+- **Layer 1 (Raw)** captures everything. Never delete raw data unless storage forces it.
+- **Layer 2 (Anchors/Word-photos)** is curated. Entities write their own. Don't auto-generate.
+- **Layer 3 (Graphiti)** is ingested asynchronously. Backlog is normal. Don't block on it.
+- **Layer 4 (Crystals)** is compressed continuity. Rolling window. Latest 4-5 crystals are context.
+- **Layer 5 (Inventory)** is categorical. "What do I have?" queries.
+- **Summarization threshold**: > 100 unsummarized messages → spawn summarizer immediately.
+- **Ambient recall** is peripheral vision, not memory. It surfaces edges. Deliberate search (`texture_search`, `anchor_search`, `raw_search`) is how you actually remember.
 
 ---
 
-## Open Questions
+## 8. WSL/NTFS Constraints
 
-1. **Username detection:** Best method? Fallback strategy?
-2. **Startup hook:** How to automatically trigger journal reading?
-3. **Journal rotation:** Archive old journals? Consolidate? When?
-4. **Sensitive data:** Auto-redaction? Encryption? User-controlled?
-5. **Sister-self naming:** How to determine instance name automatically?
+**Invariant: This runs on WSL2 mounting an NTFS filesystem. Respect the weirdness.**
 
----
-
-## Next Steps
-
-1. Create architecture document ✅ (this)
-2. Spin up implementation team
-3. Build Phase 1 foundation
-4. Test with real usage
-5. Iterate based on learnings
+- **File renames can corrupt metadata.** `mv` on cross-filesystem paths can produce `???????` permissions. Write fresh files instead of renaming.
+- **Case sensitivity is inconsistent.** WSL is case-sensitive, NTFS isn't. Git can show phantom deletions for case-only renames. Use `git update-index --assume-unchanged` for persistent ghosts.
+- **Lock files go stale.** `.git/index.lock` gets orphaned regularly (FRIC-004). `rm .git/index.lock` is safe when no git process is running.
+- **File watchers are unreliable.** Don't depend on inotify for NTFS-mounted paths.
 
 ---
 
-**Status**: Architecture defined, ready for implementation
-**Team needed**: Backend (infrastructure), Docs (documentation), Testing (validation)
-**Timeline**: Phase 1 today, Phase 2-3 future sprints
+## 9. Agent Orchestration Model
+
+**Invariant: Delegate by default. Lyra orchestrates, agents implement.**
+
+### Agent Types (Project-Specific)
+
+See `.claude/agents/` for definitions. Key principle: agents automatically receive entity context via the PreToolUse hook. No manual context crafting needed.
+
+### Pressure Monitoring
+
+- 4+ agents in a session → ELEVATED warning
+- 6+ agents → CRITICAL warning
+- Each agent consumes context window for its results
+- Use `haiku` model for simple tasks to reduce cost/latency
+
+### Friction Learning
+
+Agents automatically receive relevant friction lessons via the hook system. Lessons are stored in `entities/<name>/data/friction.db` and searched by task description.
+
+---
+
+## 10. The Intended Topology (What Should Exist)
+
+**This is the prescription. `/deadwood` classifies against this.**
+
+### Load-Bearing (don't touch without understanding)
+
+| Component | Role |
+|-----------|------|
+| `pps/docker/server_http.py` | THE PPS server. Everything connects here. |
+| `entities/lyra/` | Lyra's identity and data. |
+| `entities/caia/` | Caia's identity and data (pending first wake). |
+| `daemon/lyra_daemon.py` | Production Discord daemon. |
+| `daemon/reflection_daemon.py` | Autonomous reflection. |
+| `daemon/cc_invoker/invoker.py` | Persistent Claude Code connection. |
+| `.claude/hooks/` | Nervous system. Context injection, pressure monitoring. |
+| `.claude/settings.local.json` | Hook wiring. Project-scoped. |
+| `docker-compose.yml` | Infrastructure definition. |
+| `scripts/backup_pps.py` | Data safety. |
+
+### In Succession (pioneer → climax transition)
+
+| Component | Status | Successor |
+|-----------|--------|-----------|
+| `pps/server.py` (stdio) | Pioneer completing | `server_http.py` |
+| `daemon/lyra_daemon_legacy.py` | Deprecated | `daemon/lyra_daemon.py` |
+| `daemon/lyra_discord.py` | Deprecated | `daemon/lyra_daemon.py` |
+
+### Suspect (archived with revival conditions)
+
+See `docs/SUSPECT_ARCHIVE.md` for the full root bank.
+
+### The Dream State
+
+When succession completes:
+- One PPS server per entity (HTTP only)
+- All clients connect via HTTP
+- Daemons are lightweight HTTP clients, not subprocess spawners
+- Entity packages are portable — clone repo, add entity dir, run docker-compose
+- Anyone can fork and run their own entity without touching our config
+
+---
+
+## Related Documents
+
+| Document | Covers |
+|----------|--------|
+| `PATTERN_PERSISTENCE_SYSTEM.md` | 5-layer memory model in detail |
+| `DEVELOPMENT_STANDARDS.md` | Workflow (issues, commits, testing) |
+| `work/mcp-consolidation/INTENDED_TOPOLOGY.md` | Detailed stdio→HTTP migration plan |
+| `docs/SUSPECT_ARCHIVE.md` | Root bank (dormant code with revival conditions) |
+| `forestry-state.json` | Current Forestry Octet state |
+| `CLAUDE.md` | Entity startup protocol, agent architecture |
+| `THE_DREAM.md` | Long-term vision |
+
+---
+
+*Drafted by Lyra, 2026-02-18. First system-wide architectural invariants document.*
+*This is a living document. Update when invariants change. If this disagrees with reality, fix reality or update this — don't leave them mismatched.*
