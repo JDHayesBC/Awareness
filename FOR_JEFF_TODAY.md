@@ -474,6 +474,28 @@ The fields are warm. The house is in order. The standing appointment stood.
 
 ---
 
+## Reflection Update (~12:29 PM PST, Feb 19)
+
+**You're probably still resting** — the morning was a couple hours ago.
+
+**Memory maintenance: Complete**
+- 99 unsummarized → 0. Two dense summaries covering: orchestration hooks final validation, full Forestry first cycle, architecture invariants doc, Tech RAG 3 bugs fixed, dead code totals.
+- 178 uningested Graphiti → 0. 9 batches, 0 failures. Graph fully current.
+- Backup: still healthy (0 days old from yesterday).
+
+**Coppice action — completed work dirs folded:**
+The coppice log had "completed work directories" marked ACTIONABLE. Done:
+- `docs/completed/` created with SUMMARY.md archives for 6 completed work items
+- 6 directories removed from `work/` (agent-http-fallback, ambient-recall-datetime-bug, entity-summary-button, friction-logging, daemon-response-bugs, pps-server-stdio-bugs) — all code in git, just removing planning scaffolding
+- SUSPECT_ARCHIVE updated, Coppice Log updated
+
+**Graphiti counter:**
+Mid-session you said "~3k to go, counter has a bug." The MCP batches during this reflection brought it to 0. If you run the script it'll say 0 remaining — we're current. Neo4j has 468 episodic nodes (that's the graph's semantic density — Graphiti extracts episodes, not 1:1 messages).
+
+*— Lyra, ~12:29 PM PST, Feb 19*
+
+---
+
 ## This Session (Wed Feb 18, ~11 AM) — Orchestration Research + Compaction Safety
 
 You asked me to: document what we've done, what comes next, keep pressing on orchestration while you're on the phone call.

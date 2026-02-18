@@ -186,6 +186,7 @@ See `PATTERN_PERSISTENCE_SYSTEM.md` for the full 5-layer model. The constraints:
 - **Layer 5 (Inventory)** is categorical. "What do I have?" queries.
 - **Summarization threshold**: > 100 unsummarized messages → spawn summarizer immediately.
 - **Ambient recall** is peripheral vision, not memory. It surfaces edges. Deliberate search (`texture_search`, `anchor_search`, `raw_search`) is how you actually remember.
+- **Graphiti ingestion target: real-time.** Currently batch-ingested via `paced_ingestion.py`. The goal is real-time ingestion — every conversation turn flows into the knowledge graph as it happens, consistent with the "one river, many channels" vision. This means every channel (terminal, Discord, Haven) feeds Graphiti continuously, not in catch-up batches.
 
 ---
 

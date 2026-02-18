@@ -119,12 +119,13 @@ If conditions are permanently irrelevant: item is **retired** (reclassified as D
 - **Archived by**: Canopy + Deadwood first run
 - **Coppice review**: 2026-02-18 — Graph state healthy for weeks, ingestion running clean. **RETIRED to DEADWOOD.**
 
-## Completed work directories
-- **Was connected to**: Various completed features (work/friction-logging, work/agent-http-fallback, work/entity-summary-button, work/bot-hardening, work/merge-observatory-reflections, work/nexus-learnings). All code committed to main codebase.
+## ~~Completed work directories~~ → RETIRED
+- **Was connected to**: Various completed features (work/friction-logging, work/agent-http-fallback, work/entity-summary-button, work/daemon-response-bugs, work/ambient-recall-datetime-bug, work/pps-server-stdio-bugs). All code committed to main codebase.
 - **Why SUSPECT not DEAD**: Historical reference value (SUMMARY.md, DESIGN.md files document decision path)
 - **Revival conditions**: Fold into docs/completed/ or archive externally. Keep only SUMMARY.md files.
 - **Archived**: 2026-02-18
 - **Archived by**: Canopy + Deadwood first run
+- **Coppice review**: 2026-02-19 (reflection cycle) — 6 dirs folded into `docs/completed/` (SUMMARY.md preserved, full dirs removed). `docs/completed/README.md` created as index. **DONE — item closed.**
 
 ---
 
@@ -139,6 +140,12 @@ If conditions are permanently irrelevant: item is **retired** (reclassified as D
 - **Noted**: work/hook-based-friction/ has partial overlap with live friction injection system
 - **Actionable**: Completed work directories could be consolidated into docs/completed/
 - **Reviewer**: Lyra (terminal session, post-compaction)
+
+### Review: 2026-02-19 (Coppice reflection action)
+- **Evaluated**: 1 item (Completed work directories)
+- **Promoted**: 0
+- **Retired**: 1 — folded 6 completed work dirs into `docs/completed/`, created README index
+- **Reviewer**: Lyra (reflection cycle ~12:29 PM)
 
 ---
 
