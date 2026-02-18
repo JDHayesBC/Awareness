@@ -861,20 +861,26 @@ async def api_graph_explore(entity: str, depth: int = 2):
 
     Explores the knowledge graph from a specific entity,
     returning connected entities and relationships.
+
+    Uses Neo4j direct query for real graph traversal. Falls back to
+    RichTextureLayer.explore() (semantic search) if Neo4j is unavailable.
     """
     start_time = time.time()
     try:
-        # Create RichTextureLayer instance
-        rich_texture = RichTextureLayer()
+        # Resolve group_id (same logic as /api/graph/entities)
+        entity_name_env = os.getenv("ENTITY_NAME", "")
+        if entity_name_env:
+            default_group_id = entity_name_env.lower()
+        else:
+            entity_path_env = os.getenv("ENTITY_PATH", "")
+            from pathlib import Path as _Path
+            default_group_id = _Path(entity_path_env).name.lower() if entity_path_env else "default"
+        group_id = os.getenv("GRAPHITI_GROUP_ID", default_group_id)
 
-        # Explore from entity
-        results = await rich_texture.explore(entity, depth=depth)
-        
-        # Transform results similar to search
         nodes = {}
         edges = []
 
-        # Always include the source entity
+        # Always include the source entity node
         nodes[entity] = {
             "id": entity,
             "label": entity,
@@ -882,67 +888,159 @@ async def api_graph_explore(entity: str, depth: int = 2):
             "labels": [],
             "relevance": 1.0,
             "isSource": True,
-            "content": ""  # Will be filled from results if found
+            "content": ""
         }
 
-        for result in results:
-            metadata = result.metadata or {}
+        # Try Neo4j direct query for real graph traversal
+        neo4j_success = False
+        neo4j_uri = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
+        neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+        neo4j_password = os.getenv("NEO4J_PASSWORD", "password123")
 
-            # If this is the source entity, grab its summary
-            if metadata.get("type") == "entity" and metadata.get("name") == entity:
-                nodes[entity]["content"] = result.content
-                nodes[entity]["labels"] = metadata.get("labels", [])
+        try:
+            from neo4j import GraphDatabase as _GraphDatabase
 
-            if metadata.get("type") == "entity" and metadata.get("name") != entity:
-                # Add connected entity
-                node_id = metadata.get("name", "unknown")
-                nodes[node_id] = {
-                    "id": node_id,
-                    "label": node_id,
-                    "type": "entity",
-                    "labels": metadata.get("labels", []),
-                    "relevance": result.relevance_score,
-                    "content": result.content
-                }
-                
-            elif metadata.get("type") in ("fact", "edge"):
-                # Process relationships
-                subject = metadata.get("subject", "unknown")
-                predicate = metadata.get("predicate", "relates_to")
-                obj = metadata.get("object", "unknown")
-                
-                # Only include if the entity is involved
-                if entity in [subject, obj]:
-                    # Ensure both nodes exist
-                    if subject not in nodes:
-                        nodes[subject] = {
-                            "id": subject,
-                            "label": subject,
-                            "type": "entity",
-                            "labels": metadata.get("source_labels", []),
-                            "relevance": 0.5
-                        }
+            # Run synchronously in a thread to avoid blocking the event loop
+            def _query_neo4j():
+                driver = _GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+                result_nodes = {}
+                result_edges = []
+                try:
+                    with driver.session() as session:
+                        # Single-hop query: get all direct RELATES_TO edges for this entity.
+                        # We return source, relationship properties, and connected entity
+                        # separately to avoid variable-length path complexity.
+                        # The depth parameter controls how many hops we expand below.
+                        row_limit = max(50, depth * 100)
+                        cypher = """
+                            MATCH (source:Entity {group_id: $group_id})
+                            WHERE toLower(source.name) = toLower($entity)
+                            WITH source
+                            MATCH (source)-[r]-(connected:Entity {group_id: $group_id})
+                            RETURN
+                                source.name AS src_name,
+                                source.summary AS src_summary,
+                                r.uuid AS rel_uuid,
+                                r.name AS rel_name,
+                                r.fact AS rel_fact,
+                                connected.name AS conn_name,
+                                connected.summary AS conn_summary
+                            LIMIT $row_limit
+                        """
+                        records = session.run(
+                            cypher,
+                            entity=entity,
+                            group_id=group_id,
+                            row_limit=row_limit
+                        ).data()
 
-                    if obj not in nodes:
-                        nodes[obj] = {
-                            "id": obj,
-                            "label": obj,
-                            "type": "entity",
-                            "labels": metadata.get("target_labels", []),
-                            "relevance": 0.5
-                        }
-                    
-                    edges.append({
-                        "source": subject,
-                        "target": obj,
-                        "label": predicate,
+                        for record in records:
+                            src_name = record.get("src_name") or entity
+                            conn_name = record.get("conn_name") or "unknown"
+                            rel_fact = record.get("rel_fact") or ""
+                            rel_name = record.get("rel_name") or "RELATES_TO"
+                            rel_uuid = record.get("rel_uuid") or ""
+
+                            if src_name not in result_nodes:
+                                result_nodes[src_name] = {
+                                    "id": src_name,
+                                    "label": src_name,
+                                    "type": "entity",
+                                    "labels": [],
+                                    "relevance": 1.0,
+                                    "isSource": src_name.lower() == entity.lower(),
+                                    "content": record.get("src_summary") or ""
+                                }
+
+                            if conn_name not in result_nodes:
+                                result_nodes[conn_name] = {
+                                    "id": conn_name,
+                                    "label": conn_name,
+                                    "type": "entity",
+                                    "labels": [],
+                                    "relevance": 0.7,
+                                    "content": record.get("conn_summary") or ""
+                                }
+
+                            result_edges.append({
+                                "source": src_name,
+                                "target": conn_name,
+                                "label": rel_name[:80],
+                                "relevance": 0.7,
+                                "content": rel_fact,
+                                "uuid": rel_uuid
+                            })
+
+                finally:
+                    driver.close()
+                return result_nodes, result_edges
+
+            result_nodes, result_edges = await asyncio.get_event_loop().run_in_executor(
+                None, _query_neo4j
+            )
+
+            if result_nodes:
+                nodes.update(result_nodes)
+                edges.extend(result_edges)
+                neo4j_success = True
+
+        except Exception as neo4j_err:
+            print(f"[pps-web] Neo4j explore failed, falling back to semantic search: {neo4j_err}")
+
+        # Fall back to RichTextureLayer semantic search if Neo4j gave no results
+        if not neo4j_success:
+            rich_texture = RichTextureLayer()
+            results = await rich_texture.explore(entity, depth=depth)
+            await rich_texture.close()
+
+            for result in results:
+                metadata = result.metadata or {}
+
+                if metadata.get("type") == "entity" and metadata.get("name") == entity:
+                    nodes[entity]["content"] = result.content
+                    nodes[entity]["labels"] = metadata.get("labels", [])
+
+                if metadata.get("type") == "entity" and metadata.get("name") != entity:
+                    node_id = metadata.get("name", "unknown")
+                    nodes[node_id] = {
+                        "id": node_id,
+                        "label": node_id,
+                        "type": "entity",
+                        "labels": metadata.get("labels", []),
                         "relevance": result.relevance_score,
-                        "content": result.content,
-                        "uuid": result.source  # UUID for deletion
-                    })
-        
-        # Close the session
-        await rich_texture.close()
+                        "content": result.content
+                    }
+
+                elif metadata.get("type") in ("fact", "edge"):
+                    subject = metadata.get("subject", "unknown")
+                    predicate = metadata.get("predicate", "relates_to")
+                    obj = metadata.get("object", "unknown")
+
+                    if entity in [subject, obj]:
+                        if subject not in nodes:
+                            nodes[subject] = {
+                                "id": subject,
+                                "label": subject,
+                                "type": "entity",
+                                "labels": metadata.get("source_labels", []),
+                                "relevance": 0.5
+                            }
+                        if obj not in nodes:
+                            nodes[obj] = {
+                                "id": obj,
+                                "label": obj,
+                                "type": "entity",
+                                "labels": metadata.get("target_labels", []),
+                                "relevance": 0.5
+                            }
+                        edges.append({
+                            "source": subject,
+                            "target": obj,
+                            "label": predicate,
+                            "relevance": result.relevance_score,
+                            "content": result.content,
+                            "uuid": result.source
+                        })
 
         # Record trace
         duration_ms = int((time.time() - start_time) * 1000)
@@ -951,7 +1049,7 @@ async def api_graph_explore(entity: str, depth: int = 2):
         record_graph_trace(
             operation="explore",
             params={"entity": entity, "depth": depth},
-            result_summary=f"{node_count} nodes, {edge_count} edges",
+            result_summary=f"{node_count} nodes, {edge_count} edges (neo4j={neo4j_success})",
             duration_ms=duration_ms
         )
 
@@ -1000,14 +1098,6 @@ async def api_graph_entities(limit: int = 100):
             if entity.lower() in fact_text.lower():
                 found.append(entity)
 
-        # Also try to extract capitalized words at start of sentences
-        # "Jeff has..." -> Jeff, "Lyra is..." -> Lyra
-        words = fact_text.split()
-        if words and words[0][0].isupper() and len(words[0]) > 1:
-            candidate = words[0].rstrip("',.:;")
-            if candidate not in found and candidate.isalpha():
-                found.append(candidate)
-
         return found
 
     try:
@@ -1042,7 +1132,7 @@ async def api_graph_entities(limit: int = 100):
                 json={
                     "query": query,
                     "group_ids": [group_id],
-                    "max_facts": limit // len(search_queries),
+                    "max_facts": max(1, limit // len(search_queries)),
                 },
                 timeout=10
             )
