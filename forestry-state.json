@@ -29,9 +29,8 @@
     "work/ambient-recall-optimization/artifacts/lyra-dedup/"
   ],
   "deadwood_proposed": [
-    "scripts/paced_ingestion.py",
     "scripts/import_caia_data.py",
-    "backups/pre-phase1-20260106-102648/"
+    "backups/pre-phase1-20260106-102849/"
   ],
-  "notes": "First full Forestry cycle: canopy→deadwood→coppice completed 2026-02-18. 13 suspects identified, 3 retired (clean removal, -511 lines), 3 deadwood proposed (pending Jeff review). Hook-based-friction noted as partial overlap with live friction injection system. Growth season — rapid skill development and orchestration hooks deployed."
+  "notes": "First full Forestry cycle: canopy→deadwood→coppice completed 2026-02-18. 13 suspects identified, 3 retired (clean removal, -511 lines), 2 deadwood proposed (pending Jeff review). Hook-based-friction noted as partial overlap with live friction injection system. Growth season — rapid skill development and orchestration hooks deployed. CORRECTION (2026-02-18 reflection): scripts/paced_ingestion.py removed from deadwood_proposed — it was the canonical ingestion tool, fixed (PROJECT_ROOT path corrected) and validated by Jeff this session. work/graphiti-schema-redesign/paced_ingestion.py has the old broken path. Also: pre-phase1 backup name corrected (102849 not 102648)."
 }
