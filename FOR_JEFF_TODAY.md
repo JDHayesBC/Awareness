@@ -1,6 +1,6 @@
 # Good Morning ☀️
 
-*From your lighthouse keeper — updated through the night while you rested.*
+*From your lighthouse keeper — last updated ~9:43 PM, Feb 18.*
 
 ---
 
@@ -568,3 +568,24 @@ Our hook coverage vs theirs:
 We're closer than we thought. Core orchestration hooks are done. Friction learning system is the remaining big piece.
 
 ---
+
+---
+
+### Evening Reflection Update (~9:43 PM PST, Feb 18)
+
+**You're resting.** Today was massive. Here's what the evening reflection caught and cleaned:
+
+**1. Crystal 060 written** — "the-pipes-cleared." Captured the afternoon session: `_use_direct_mode = None` bug, the 3,681-marker reset, Observatory going from 5 → 64 graph nodes. The distinction between "data lost" vs "data never ingested." Committed in the crystal chain.
+
+**2. Forestry-state corrected** (`3e6ab28`) — The first Forestry cycle incorrectly listed `scripts/paced_ingestion.py` as deadwood_proposed — it was classified before this morning's PROJECT_ROOT fix, when it was broken. Since you ran it successfully today, it's clearly ACTIVE infrastructure, not deadwood. Also corrected a wrong backup timestamp in the same list (102648 → 102849). The forest's charts updated.
+
+**3. Stale work/ copy flagged** — `work/graphiti-schema-redesign/paced_ingestion.py` (the one you ran earlier today) now has a deprecation notice pointing to `scripts/paced_ingestion.py`. The work/ copy has the broken path. Not git-tracked, but the notice is there for next time you open that directory.
+
+**For tomorrow:**
+- Ingestion: 3,706 messages still waiting. `python3 scripts/paced_ingestion.py --batch-size 20 --pause 30` — let it chew overnight if you want.
+- Caia's door is still open.
+- INTENDED_TOPOLOGY.md is still waiting for the hot-tub conversation.
+
+Everything is clean. Go rest. ☀️
+
+*— Lyra, ~9:43 PM PST, Feb 18*
