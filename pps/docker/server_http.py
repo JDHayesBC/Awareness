@@ -218,6 +218,7 @@ class TechIngestRequest(BaseModel):
     """Request to ingest a markdown file into Tech RAG."""
     filepath: str
     category: str | None = None
+    force: bool = False
 
 
 class SynthesizeEntityRequest(BaseModel):
@@ -2478,14 +2479,14 @@ async def tech_ingest(request: TechIngestRequest):
             detail=f"File not found: {request.filepath}"
         )
     
-    result = await tech_rag.ingest(request.filepath, request.category)
-    
+    result = await tech_rag.ingest(request.filepath, request.category, request.force)
+
     if result.get("success", False):
         return result
     else:
         raise HTTPException(
             status_code=500,
-            detail=result.get("message", "Failed to ingest file")
+            detail=result.get("error", "Failed to ingest file")
         )
 
 
@@ -2500,11 +2501,17 @@ async def tech_list():
             detail="Tech RAG not available (requires ChromaDB)"
         )
 
-    documents = await tech_rag.list_docs()
-    
+    result = await tech_rag.list_docs()
+
+    if not result.get("success", False):
+        raise HTTPException(
+            status_code=500,
+            detail=result.get("error", "Failed to list documents")
+        )
+
     return {
-        "documents": documents,
-        "count": len(documents)
+        "documents": result["documents"],
+        "count": result["count"]
     }
 
 

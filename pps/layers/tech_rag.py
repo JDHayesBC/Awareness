@@ -144,13 +144,14 @@ class TechRAGLayer(PatternLayer):
 
         return chunks
 
-    async def ingest(self, filepath: str, category: Optional[str] = None) -> dict:
+    async def ingest(self, filepath: str, category: Optional[str] = None, force: bool = False) -> dict:
         """
         Ingest a markdown file into the tech RAG.
 
         Args:
             filepath: Path to the markdown file
             category: Optional category tag (e.g., "architecture", "api", "guide")
+            force: If True, re-index even if content hash hasn't changed
 
         Returns:
             Dict with ingestion stats
@@ -178,16 +179,15 @@ class TechRAGLayer(PatternLayer):
             if existing and existing['ids']:
                 # Check if content changed
                 old_hash = existing['metadatas'][0].get('content_hash', '') if existing['metadatas'] else ''
-                if old_hash == content_hash:
+                if old_hash == content_hash and not force:
                     return {
                         "success": True,
                         "action": "unchanged",
                         "doc_id": doc_id,
                         "message": "Document already indexed with same content"
                     }
-                else:
-                    # Delete old chunks before re-indexing
-                    collection.delete(where={"doc_id": doc_id})
+                # Delete all old chunks before re-indexing (content changed or force=True)
+                collection.delete(where={"doc_id": doc_id})
 
             # Chunk the document
             chunks = self._chunk_document(content, doc_id)
