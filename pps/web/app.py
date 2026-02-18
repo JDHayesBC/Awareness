@@ -40,11 +40,79 @@ CHROMA_PORT = int(os.getenv("CHROMA_PORT", 8000))
 PPS_SERVER_HOST = os.getenv("PPS_SERVER_HOST", "pps-server")
 PPS_SERVER_PORT = int(os.getenv("PPS_SERVER_PORT", 8000))
 
+# Entity name for the mounted entity (Lyra by default)
+MOUNTED_ENTITY_NAME = os.getenv("ENTITY_NAME", ENTITY_PATH.name).lower()
+
+# Multi-entity configuration: maps entity name -> PPS server base URL
+# The mounted entity uses the standard PPS_SERVER_HOST/PORT env vars.
+# Additional entities are configured via ENTITY_<NAME>_PPS_URL env vars.
+# Example: ENTITY_CAIA_PPS_URL=http://pps-server-caia:8000
+def _build_entity_registry() -> dict[str, dict]:
+    """Build registry of known entities with their PPS server URLs."""
+    registry = {}
+
+    # The mounted entity is always available
+    mounted_url = f"http://{PPS_SERVER_HOST}:{PPS_SERVER_PORT}"
+    registry[MOUNTED_ENTITY_NAME] = {
+        "name": MOUNTED_ENTITY_NAME,
+        "display_name": MOUNTED_ENTITY_NAME.capitalize(),
+        "pps_url": mounted_url,
+        "mounted": True,  # Filesystem data available
+    }
+
+    # Look for additional entities via env vars: ENTITY_<NAME>_PPS_URL
+    for key, value in os.environ.items():
+        if key.startswith("ENTITY_") and key.endswith("_PPS_URL"):
+            # ENTITY_CAIA_PPS_URL -> "caia"
+            entity_name = key[len("ENTITY_"):-len("_PPS_URL")].lower()
+            if entity_name and entity_name != MOUNTED_ENTITY_NAME:
+                registry[entity_name] = {
+                    "name": entity_name,
+                    "display_name": entity_name.capitalize(),
+                    "pps_url": value,
+                    "mounted": False,  # No filesystem access
+                }
+
+    # Fallback: if Caia's PPS URL is not configured but we know about her,
+    # try the standard Docker service name convention.
+    if "caia" not in registry:
+        caia_url = os.getenv("PPS_CAIA_URL", "http://pps-server-caia:8000")
+        registry["caia"] = {
+            "name": "caia",
+            "display_name": "Caia",
+            "pps_url": caia_url,
+            "mounted": False,
+        }
+
+    return registry
+
+ENTITY_REGISTRY = _build_entity_registry()
+DEFAULT_ENTITY = MOUNTED_ENTITY_NAME
+
+
+def get_entity_config(entity_name: str | None) -> dict:
+    """Get config for the requested entity, falling back to default."""
+    if entity_name and entity_name.lower() in ENTITY_REGISTRY:
+        return ENTITY_REGISTRY[entity_name.lower()]
+    return ENTITY_REGISTRY[DEFAULT_ENTITY]
+
+
+def get_pps_url(entity_name: str | None = None) -> str:
+    """Get the PPS server base URL for the given entity."""
+    return get_entity_config(entity_name)["pps_url"]
+
+
+def is_entity_mounted(entity_name: str | None = None) -> bool:
+    """Return True if the entity's filesystem data is accessible."""
+    return get_entity_config(entity_name)["mounted"]
+
+
 # Database now lives in entity directory (Issue #131 migration)
+# These paths are for the MOUNTED entity only.
 DB_PATH = ENTITY_PATH / "data" / "conversations.db"
 JOURNALS_PATH = CLAUDE_HOME / "journals"
 
-# Entity-specific paths (word-photos, crystals)
+# Entity-specific paths (word-photos, crystals) — mounted entity only
 WORD_PHOTOS_PATH = ENTITY_PATH / "memories" / "word_photos"
 CRYSTALS_PATH = ENTITY_PATH / "crystals" / "current"
 CRYSTALS_ARCHIVE_PATH = ENTITY_PATH / "crystals" / "archive"
@@ -90,9 +158,9 @@ def record_graph_trace(operation: str, params: dict, result_summary: str, durati
     graph_api_traces.appendleft(trace_entry)  # Add to front
 
 
-def get_server_health() -> dict:
+def get_server_health(entity: str | None = None) -> dict:
     """Check health of the PPS MCP server."""
-    pps_url = f"http://{PPS_SERVER_HOST}:{PPS_SERVER_PORT}"
+    pps_url = get_pps_url(entity)
 
     result = {
         "status": "unknown",
@@ -127,7 +195,7 @@ def get_server_health() -> dict:
     return result
 
 
-def get_layer_health() -> dict:
+def get_layer_health(entity: str | None = None) -> dict:
     """Get health status of all four PPS layers."""
     health = {
         "layer1": {"name": "Raw Capture", "status": "unknown", "detail": ""},
@@ -136,8 +204,8 @@ def get_layer_health() -> dict:
         "layer4": {"name": "Crystallization", "status": "unknown", "detail": ""},
     }
 
-    # Layer 1: SQLite
-    conn = get_db_connection()
+    # Layer 1: SQLite — only available for mounted entity
+    conn = get_db_connection() if is_entity_mounted(entity) else None
     if conn:
         try:
             cursor = conn.cursor()
@@ -150,8 +218,12 @@ def get_layer_health() -> dict:
             health["layer1"]["status"] = "error"
             health["layer1"]["detail"] = str(e)
     else:
-        health["layer1"]["status"] = "error"
-        health["layer1"]["detail"] = "Database not found"
+        if not is_entity_mounted(entity):
+            health["layer1"]["status"] = "warning"
+            health["layer1"]["detail"] = "Not mounted for this entity"
+        else:
+            health["layer1"]["status"] = "error"
+            health["layer1"]["detail"] = "Database not found"
 
     # Layer 2: ChromaDB
     try:
@@ -168,25 +240,25 @@ def get_layer_health() -> dict:
         health["layer2"]["status"] = "error"
         health["layer2"]["detail"] = str(e)[:50]
 
-    # Layer 3: Graphiti  
+    # Layer 3: Graphiti
     try:
         import requests
         import json
-        
+
         # Try direct HTTP check to Graphiti health endpoint
-        graphiti_host = os.getenv("GRAPHITI_HOST", "localhost") 
+        graphiti_host = os.getenv("GRAPHITI_HOST", "localhost")
         graphiti_port = int(os.getenv("GRAPHITI_PORT", "8203"))
         graphiti_url = f"http://{graphiti_host}:{graphiti_port}"
-        
+
         # Check Graphiti health
         resp = requests.get(f"{graphiti_url}/healthcheck", timeout=5)
         if resp.status_code == 200:
             health["layer3"]["status"] = "ok"
             health["layer3"]["detail"] = "Operational"
-            
-            # Try to get entity count for more detail
+
+            # Try to get entity count via the entity's PPS server
             try:
-                pps_server_url = "http://localhost:8201"
+                pps_server_url = get_pps_url(entity)
                 search_resp = requests.post(
                     f"{pps_server_url}/tools/texture_search",
                     json={"query": "test", "limit": 1},
@@ -215,9 +287,12 @@ def get_layer_health() -> dict:
         health["layer3"]["status"] = "error"
         health["layer3"]["detail"] = str(e)[:50]
 
-    # Layer 4: Crystals
+    # Layer 4: Crystals — only available for mounted entity
     try:
-        if CRYSTALS_PATH.exists():
+        if not is_entity_mounted(entity):
+            health["layer4"]["status"] = "warning"
+            health["layer4"]["detail"] = "Not mounted for this entity"
+        elif CRYSTALS_PATH.exists():
             crystals = list(CRYSTALS_PATH.glob("crystal_*.md"))
             health["layer4"]["status"] = "ok"
             health["layer4"]["detail"] = f"{len(crystals)} active"
@@ -596,24 +671,37 @@ def get_daemon_status() -> dict:
 
 # Routes
 
+def _entity_context(entity: str | None) -> dict:
+    """Build the entity selector context for templates."""
+    cfg = get_entity_config(entity)
+    return {
+        "current_entity": cfg["name"],
+        "current_entity_display": cfg["display_name"],
+        "entity_mounted": cfg["mounted"],
+        "available_entities": list(ENTITY_REGISTRY.values()),
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
+async def dashboard(request: Request, entity: Optional[str] = None):
     """Main dashboard view."""
+    ctx = _entity_context(entity)
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
-        "server": get_server_health(),
-        "layers": get_layer_health(),
-        "activity": get_recent_activity(10),
-        "channels": get_channel_stats(),
-        "daemons": get_daemon_status(),
-        "now": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "server": get_server_health(ctx["current_entity"]),
+        "layers": get_layer_health(ctx["current_entity"]),
+        "activity": get_recent_activity(10) if ctx["entity_mounted"] else [],
+        "channels": get_channel_stats() if ctx["entity_mounted"] else {},
+        "daemons": get_daemon_status() if ctx["entity_mounted"] else {},
+        "now": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        **ctx,
     })
 
 
 @app.get("/api/health")
-async def api_health():
+async def api_health(entity: Optional[str] = None):
     """API endpoint for layer health."""
-    return get_layer_health()
+    return get_layer_health(entity)
 
 
 @app.get("/api/activity")
@@ -623,23 +711,23 @@ async def api_activity(limit: int = 10):
 
 
 @app.get("/api/dashboard-content", response_class=HTMLResponse)
-async def api_dashboard_content(request: Request):
+async def api_dashboard_content(request: Request, entity: Optional[str] = None):
     """Dashboard content for auto-refresh."""
-    # Get all the data
-    server = get_server_health()
-    layers = get_layer_health()
-    activity = get_recent_activity(10)
-    channels = get_channel_stats()
-    daemons = get_daemon_status()
-    
-    # Render just the content part
+    ctx = _entity_context(entity)
+    server = get_server_health(ctx["current_entity"])
+    layers = get_layer_health(ctx["current_entity"])
+    activity = get_recent_activity(10) if ctx["entity_mounted"] else []
+    channels = get_channel_stats() if ctx["entity_mounted"] else {}
+    daemons = get_daemon_status() if ctx["entity_mounted"] else {}
+
     return templates.TemplateResponse("partials/dashboard_content.html", {
         "request": request,
         "server": server,
         "layers": layers,
         "activity": activity,
         "channels": channels,
-        "daemons": daemons
+        "daemons": daemons,
+        **ctx,
     })
 
 
@@ -1096,38 +1184,59 @@ async def messages(
     channel: Optional[str] = None,
     author: Optional[str] = None,
     search: Optional[str] = None,
-    page: int = 1
+    page: int = 1,
+    entity: Optional[str] = None,
 ):
     """Message browser with filters and search."""
-    message_data = get_messages(
-        channel=channel,
-        author=author,
-        search=search,
-        page=page,
-        per_page=25
-    )
+    ctx = _entity_context(entity)
+    if ctx["entity_mounted"]:
+        message_data = get_messages(
+            channel=channel,
+            author=author,
+            search=search,
+            page=page,
+            per_page=25
+        )
+        channels = get_unique_channels()
+        authors = get_unique_authors()
+    else:
+        message_data = {"messages": [], "total": 0, "page": 1, "per_page": 25, "pages": 0}
+        channels = []
+        authors = []
 
     return templates.TemplateResponse("messages.html", {
         "request": request,
         "data": message_data,
-        "channels": get_unique_channels(),
-        "authors": get_unique_authors(),
+        "channels": channels,
+        "authors": authors,
         "filters": {
             "channel": channel or "",
             "author": author or "",
             "search": search or ""
-        }
+        },
+        **ctx,
     })
 
 
 @app.get("/photos", response_class=HTMLResponse)
-async def photos(request: Request, resync_result: Optional[str] = None):
+async def photos(request: Request, resync_result: Optional[str] = None, entity: Optional[str] = None):
     """Word-photos sync status and management."""
-    sync_status = get_word_photo_sync_status()
+    ctx = _entity_context(entity)
+    if ctx["entity_mounted"]:
+        sync_status = get_word_photo_sync_status()
+    else:
+        sync_status = {
+            "disk_files": [],
+            "disk_count": 0,
+            "chroma_count": 0,
+            "synced": False,
+            "error": f"Word-photos not mounted for entity '{ctx['current_entity_display']}'",
+        }
     return templates.TemplateResponse("photos.html", {
         "request": request,
         "sync": sync_status,
-        "resync_result": resync_result
+        "resync_result": resync_result,
+        **ctx,
     })
 
 
