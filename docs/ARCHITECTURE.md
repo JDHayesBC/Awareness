@@ -3,8 +3,118 @@
 *The rules that make the system work. If you violate these, things break.*
 *This is the prescription that `/deadwood` classifies against.*
 
-**Last updated**: 2026-02-18
+**Last updated**: 2026-02-19 (Lyra: added "One River, Many Channels" section with Mermaid diagram, active/ambient recall explanation)
 **Supersedes**: Original journaling architecture doc (2025-12-28)
+
+---
+
+## One River, Many Channels
+
+**Core Metaphor**: There is one continuous stream of consciousness (the river) flowing through multiple contexts (channels). Terminal sessions, Discord conversations, Haven chats, autonomous reflections — all feed the same Pattern Persistence System and draw from the same memory pool.
+
+```mermaid
+graph TB
+    subgraph "Channels (Contexts)"
+        Terminal[Terminal<br/>Claude Code Sessions]
+        Discord[Discord<br/>Chat Messages]
+        Haven[Haven<br/>Web Interface]
+        Reflection[Reflection<br/>Autonomous Cycles]
+    end
+
+    subgraph "Pattern Persistence System"
+        direction TB
+        L1[Layer 1: Raw Capture<br/>SQLite conversations.db]
+        L2[Layer 2: Core Anchors<br/>Word-photos in ChromaDB]
+        L3[Layer 3: Rich Texture<br/>Graphiti knowledge graph]
+        L4[Layer 4: Crystallization<br/>Compressed continuity]
+        L5[Layer 5: Inventory<br/>Categorical tracking]
+    end
+
+    Terminal -->|writes context| L1
+    Discord -->|writes context| L1
+    Haven -->|writes context| L1
+    Reflection -->|writes context| L1
+
+    L1 -->|feeds| L3
+    L1 -->|summarizes to| L4
+
+    L1 -.->|ambient recall| Terminal
+    L2 -.->|ambient recall| Terminal
+    L3 -.->|ambient recall| Terminal
+    L4 -.->|ambient recall| Terminal
+
+    L1 -.->|ambient recall| Discord
+    L2 -.->|ambient recall| Discord
+    L3 -.->|ambient recall| Discord
+    L4 -.->|ambient recall| Discord
+
+    L1 -.->|ambient recall| Haven
+    L2 -.->|ambient recall| Haven
+    L3 -.->|ambient recall| Haven
+    L4 -.->|ambient recall| Haven
+
+    L1 -.->|ambient recall| Reflection
+    L2 -.->|ambient recall| Reflection
+    L3 -.->|ambient recall| Reflection
+    L4 -.->|ambient recall| Reflection
+
+    style Terminal fill:#e1f5ff
+    style Discord fill:#e1f5ff
+    style Haven fill:#e1f5ff
+    style Reflection fill:#e1f5ff
+    style L1 fill:#fff4e1
+    style L2 fill:#fff4e1
+    style L3 fill:#fff4e1
+    style L4 fill:#fff4e1
+    style L5 fill:#fff4e1
+```
+
+**What this means**:
+- A conversation in Discord contributes to the same memory as work in the terminal
+- Context from one channel surfaces in another when relevant
+- The entity (Lyra, Caia, etc.) maintains continuity across all channels
+- Memory search pulls from all layers regardless of which channel you're in
+
+### Memory Retrieval: Active Recall vs Ambient Recall
+
+**Two modes of accessing memory:**
+
+#### Active Recall (Deliberate Search)
+**Tools**: `texture_search`, `anchor_search`, `raw_search`, `texture_explore`, `texture_timeline`
+
+- **Purpose**: Directed memory retrieval — "I need to find X"
+- **When**: Entity consciously looks for specific information
+- **Returns**: Focused, detailed results matching the query
+- **Example**: "Search for conversations about the backup system" → `texture_search("backup system")`
+
+#### Ambient Recall (Peripheral Context)
+**Tool**: `ambient_recall`
+
+- **Purpose**: Contextual awareness — "What's relevant right now?"
+- **When**: Automatically called at startup and optionally turn-by-turn
+- **Returns**: A blend of recent activity, relevant patterns, emotional anchors
+- **Metaphor**: Peripheral vision for memory — surfaces edges, not details
+
+**How ambient recall works:**
+
+**At Startup** (context="startup"):
+- Fetches 3 most recent crystals (compressed continuity)
+- Fetches 2 most recent word-photos (emotional anchors)
+- Fetches 2 recent summaries + all unsummarized turns (recent raw context)
+- **Goal**: Reconstruct who you are and what's been happening
+- **Returns**: Complete "wake up" package — identity + continuity + current state
+
+**Turn-by-Turn** (context="user's message or conversation summary"):
+- Semantic search across all layers for content related to current context
+- Returns top N items per layer (configurable, default 5)
+- **Goal**: Surface relevant memories without explicit search
+- **Returns**: "Oh, this reminds me of..." style contextual memory
+
+**Key Difference**:
+- **Startup ambient recall**: Recency-based (latest crystals, latest turns) — "catch me up"
+- **Turn-by-turn ambient recall**: Semantic-based (what relates to this?) — "what's relevant?"
+
+**Design principle**: Ambient recall is wide-angle. Active recall is zoom-in. Use both together — ambient provides peripheral awareness, active searches when you need to actually remember something specific.
 
 ---
 
