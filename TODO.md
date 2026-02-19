@@ -71,6 +71,7 @@
 1. **Google MCP servers** - Disabled for speed (11-18 sec each). OAuth tokens stale. Backup at `~/.claude/google_mcps_disabled_backup.json`.
 2. **Observatory: Spaces view** - Explore Haven rooms via web UI.
 3. **Librarian agent** - Self-healing knowledge system for tech RAG gaps. Could run in reflection cycles.
+4. **Mermaid documentation sprint** - Visual diagrams for architecture docs. Inspired by Nexus's Cross-Stratum Connection Map for Steve. Candidates: PPS 5-layer stack, daemon lifecycle (bot → daemon → invoker flow, restart/reset logic), entity isolation model, hook chain, HTTP proxy flow. Fun project — make the invisible visible for humans (Jeff, Jaden, Steve).
 
 ---
 
