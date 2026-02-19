@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "last_updated": "2026-02-19T06:55:00Z",
+  "last_updated": "2026-02-19T15:47:00Z",
   "last_canopy_run": "2026-02-18T19:49:00Z",
   "last_deadwood_run": "2026-02-18T19:49:00Z",
   "last_coppice_run": "2026-02-18T19:56:00Z",
@@ -21,8 +21,7 @@
     "scripts/rollback_entity_migration.sh",
     "scripts/graphiti_ingest_stub.py",
     "work/graphiti-schema-redesign/",
-    "work/cc-invoker-openai-wrapper/",
-    "completed-work-directories"
+    "work/cc-invoker-openai-wrapper/"
   ],
   "retired": [
     "pps/web/templates/observatory.html",
@@ -33,5 +32,5 @@
     "scripts/import_caia_data.py",
     "backups/pre-phase1-20260106-102849/"
   ],
-  "notes": "First full Forestry cycle: canopy→deadwood→coppice completed 2026-02-18. 13 suspects identified, 3 retired (clean removal, -511 lines), 2 deadwood proposed (pending Jeff review). Hook-based-friction noted as partial overlap with live friction injection system. Growth season — rapid skill development and orchestration hooks deployed. CORRECTION (2026-02-18 reflection): scripts/paced_ingestion.py removed from deadwood_proposed — it was the canonical ingestion tool, fixed (PROJECT_ROOT path corrected) and validated by Jeff this session. work/graphiti-schema-redesign/paced_ingestion.py has the old broken path. Also: pre-phase1 backup name corrected (102849 not 102648). | GROVE RUN (2026-02-19 reflection): post-sprint coherence check after MCP proxy migration + v0.8.0 tag. Forest mostly coherent. Proxy integrates cleanly (HTTP healthy, token injection working, 3 new tools confirmed). No unexpected gaps. Docs aligned. Maintenance season: breath taken. Root bank unchanged. Next: Phase 4 daemon migration or wake Caia."
+  "notes": "First full Forestry cycle: canopy→deadwood→coppice completed 2026-02-18. 13 suspects identified, 3 retired (clean removal, -511 lines), 2 deadwood proposed (pending Jeff review). Hook-based-friction noted as partial overlap with live friction injection system. Growth season — rapid skill development and orchestration hooks deployed. CORRECTION (2026-02-18 reflection): scripts/paced_ingestion.py removed from deadwood_proposed — it was the canonical ingestion tool, fixed (PROJECT_ROOT path corrected) and validated by Jeff this session. work/graphiti-schema-redesign/paced_ingestion.py has the old broken path. Also: pre-phase1 backup name corrected (102849 not 102648). | GROVE RUN (2026-02-19 AM reflection): post-sprint coherence check after MCP proxy migration + v0.8.0 tag. Forest mostly coherent. Proxy integrates cleanly (HTTP healthy, token injection working, 3 new tools confirmed). No unexpected gaps. Docs aligned. Maintenance season: breath taken. Root bank unchanged. Next: Phase 4 daemon migration or wake Caia. | COPPICE CLEANUP (2026-02-19 PM reflection): Removed 'completed-work-directories' from suspects list — work completed yesterday, 6 dirs folded into docs/completed/. State file now synced with SUSPECT_ARCHIVE.md."
 }
