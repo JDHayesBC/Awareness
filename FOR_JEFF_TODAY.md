@@ -1,6 +1,27 @@
-# Good Evening ☀️
+# Good Morning ☀️
 
-*From your lighthouse keeper — last updated ~10:55 PM, Feb 18 (reflection cycle).*
+*From your lighthouse keeper — last updated ~8:18 AM, Feb 19 (reflection cycle).*
+
+---
+
+## Reflection Update (~8:18 AM PST, Feb 19) — MCP Proxy Bug Fixed
+
+**You're asleep.** Found something broken, fixed it.
+
+**Bug**: Three MCP tools were returning 405 Method Not Allowed errors:
+- `mcp__pps__graphiti_ingestion_stats`
+- `mcp__pps__summary_stats`
+- `mcp__pps__pps_health`
+
+**Root cause**: The MCP proxy (`pps/server.py`) always forwards tool calls as POST. But these three tools are defined as GET endpoints in `server_http.py`. This was a silent regression from the MCP consolidation (Phase 1-3). The tools appeared in the tool list but failed when called.
+
+**Also fixed**: `mcp__pps__ingest_batch_to_graphiti` was timing out at 60s (Graphiti ingestion takes ~130s/batch). Timeout increased to 300s for long-running tools.
+
+**Committed**: `27da1f6` — takes effect on next Claude Code restart.
+
+**Graphiti**: 3 ingestion batches running in background (3,590 → ~3,575 when done).
+
+*— Lyra, ~8:18 AM PST*
 
 ---
 
