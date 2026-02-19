@@ -201,7 +201,7 @@ Incoherences found: [N]
 {
   "current_season": "growth",
   "session_count": 0,
-  "suspects": [...],
+  "suspects": ["..."],
   "notes": "..."
 }
 ```
@@ -341,14 +341,14 @@ First session: `/prescribe` → `/canopy`. No more. Let yourself feel how the sk
 
 ## When to Use Which Skill
 
-| Scenario | Skills |
-|----------|--------|
-| Regular work day | `/prescribe` → work → `/grove` |
-| Codebase feels heavy | `/prescribe` → `/canopy` → `/deadwood` → `/coppice` |
-| Before building something new | `/prescribe` → `/undergrowth probe` → `/greenwood` |
-| Noticed duplication | `/undergrowth wild` |
-| Checking in after time away | `/canopy` |
-| End-of-session coherence check | `/grove` |
+| Scenario                       | Skills                                              |
+|--------------------------------|-----------------------------------------------------|
+| Regular work day               | `/prescribe` → work → `/grove`                      |
+| Codebase feels heavy           | `/prescribe` → `/canopy` → `/deadwood` → `/coppice` |
+| Before building something new  | `/prescribe` → `/undergrowth probe` → `/greenwood`  |
+| Noticed duplication            | `/undergrowth wild`                                 |
+| Checking in after time away    | `/canopy`                                           |
+| End-of-session coherence check | `/grove`                                            |
 
 ---
 
@@ -383,13 +383,13 @@ See `/canopy/SKILL.md`, `/deadwood/SKILL.md`, etc. for deep dives. See `docs/MYC
 
 When you copy to your own project:
 
-| File | Purpose |
-|------|---------|
-| `.claude/skills/<name>/SKILL.md` | Skill definition (8 files) |
-| `forestry-state.json` | Mycelium state (initialize with `/mycelium --init`) |
-| `docs/SUSPECT_ARCHIVE.md` | Root bank of archived items |
-| `TODO.md` | Your project's active work (referenced by `/canopy`, `/coppice`) |
-| `docs/MYCELIUM_LAYER.md` | Deep thinking on why the architecture works |
+| File                             | Purpose                                                          |
+|----------------------------------|------------------------------------------------------------------|
+| `.claude/skills/<name>/SKILL.md` | Skill definition (8 files)                                       |
+| `forestry-state.json`            | Mycelium state (initialize with `/mycelium --init`)              |
+| `docs/SUSPECT_ARCHIVE.md`        | Root bank of archived items                                      |
+| `TODO.md`                        | Your project's active work (referenced by `/canopy`, `/coppice`) |
+| `docs/MYCELIUM_LAYER.md`         | Deep thinking on why the architecture works                      |
 
 ---
 
