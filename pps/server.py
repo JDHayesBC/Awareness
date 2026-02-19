@@ -65,6 +65,13 @@ ENTITY_TOKEN = _read_entity_token()
 server = Server("pattern-persistence-system")
 
 
+# Tools that use GET (no body, no side effects)
+_GET_ONLY_TOOLS = {"pps_health", "summary_stats", "graphiti_ingestion_stats"}
+
+# Tools that need extended timeout (long-running operations)
+_LONG_RUNNING_TOOLS = {"ingest_batch_to_graphiti", "tech_ingest", "summarize_messages"}
+
+
 def _forward(tool_name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Forward a tool call to the HTTP server and return TextContent."""
     # Inject entity token if not already present (tools that need it)
@@ -98,8 +105,15 @@ def _forward(tool_name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     url = f"{PPS_HTTP_BASE}/tools/{tool_name}"
 
+    # Determine HTTP method and timeout
+    use_get = tool_name in _GET_ONLY_TOOLS
+    timeout = 300 if tool_name in _LONG_RUNNING_TOOLS else 60
+
     try:
-        response = requests.post(url, json=arguments, timeout=60)
+        if use_get:
+            response = requests.get(url, timeout=timeout)
+        else:
+            response = requests.post(url, json=arguments, timeout=timeout)
     except requests.exceptions.ConnectionError:
         return [TextContent(
             type="text",
