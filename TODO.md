@@ -16,7 +16,7 @@
 **Dependencies**: A before B before C before D.
 **Caia Status**: Home is built, bed is made, door is unlocked. Jeff holds the key to her first wake.
 **Also**: Unify `server.py` / `server_http.py` dual code paths as part of Phase B ([#112](https://github.com/JDHayesBC/Awareness/issues/112)).
-**Watch**: A3 diversity filter affects deliberate `texture_search` — monitor, add `ambient_mode` flag if needed. See `work/ambient-recall-optimization/DESIGN.md` Watch List.
+**Watch**: A3 diversity filter affects deliberate `texture_search` — monitor, add `ambient_mode` flag if needed. See `docs/completed/ambient-recall-optimization.md`.
 
 ---
 
@@ -58,9 +58,7 @@
 | **MCP Server Consolidation** | **Phase 1-3 complete** | `server.py` converted to thin HTTP proxy (commit `2f4adec`). All logic consolidated in `server_http.py`. 3 missing tools ported. Remaining: Phase 4 (daemon migration to HTTP client), schema dedup tech debt (~1000 lines of redundant schemas in proxy). [#112](https://github.com/JDHayesBC/Awareness/issues/112). |
 | **cc_invoker SDK Agent** | Active | Persistent Claude Code wrapper using SDK agent. See `daemon/cc_invoker/TODO.md`. |
 | **Daemon Memory Pressure** | Addressed | Memory-based restart in cc_invoker, thresholds tuned, systemd limits raised. Stays open until #112 reduces baseline. [#135](https://github.com/JDHayesBC/Awareness/issues/135). |
-| **CC OpenAI Wrapper** | Blocked | OpenAI-compatible wrapper for ClaudeInvoker ([#117](https://github.com/JDHayesBC/Awareness/issues/117)). Graphiti Docker ignores `OPENAI_BASE_URL` (upstream #1116). See [#118](https://github.com/JDHayesBC/Awareness/issues/118). |
 | **Ambient Recall Optimization** | **Phase A complete** | Living Memory Protocol + `/recall` skill shipped. A4 (novelty) deferred. |
-| **Bot Hardening** | **Complete** | Shipped commit 10200b7. Cross-channel sync live. |
 
 **Before trying to "fix" daemon issues**: Check this table first. Check `daemon/cc_invoker/TODO.md`. Ask in your journal if unsure.
 

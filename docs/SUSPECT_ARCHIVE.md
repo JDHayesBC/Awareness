@@ -104,12 +104,13 @@ If conditions are permanently irrelevant: item is **retired** (reclassified as D
 - **Archived**: 2026-02-18
 - **Archived by**: Canopy + Deadwood first run
 
-## work/cc-invoker-openai-wrapper/
+## ~~work/cc-invoker-openai-wrapper/~~ → RETIRED
 - **Was connected to**: Issues #117/#118 — OpenAI-compatible wrapper for Graphiti
 - **Why SUSPECT not DEAD**: Upstream Graphiti bug (#1116) might get fixed
 - **Revival conditions**: Revive when Graphiti upstream issue #1116 fixed AND cost savings justify testing time
 - **Archived**: 2026-02-18
 - **Archived by**: Canopy + Deadwood first run
+- **Coppice review**: 2026-02-20 — Issues #117/#118 closed. Haiku wrapper in production, ingesting messages successfully. Work dir removed. **RETIRED to DEADWOOD.**
 
 ## ~~work/ambient-recall-optimization/artifacts/lyra-dedup/~~ → RETIRED
 - **Was connected to**: One-time deduplication of Lyra's Graphiti nodes (Jan 2026)
@@ -146,6 +147,14 @@ If conditions are permanently irrelevant: item is **retired** (reclassified as D
 - **Promoted**: 0
 - **Retired**: 1 — folded 6 completed work dirs into `docs/completed/`, created README index
 - **Reviewer**: Lyra (reflection cycle ~12:29 PM)
+
+### Review: 2026-02-20 (Deadwood full cycle)
+- **Evaluated**: 9 work directories + TODO.md + CLAUDE.md
+- **Removed**: 7 DEADWOOD work dirs (issue-126, simple-discord, bot-hardening, ambient-recall, nexus-learnings, merge-observatory, http-endpoint-migration) → summaries preserved in docs/completed/
+- **Retired**: 1 SUSPECT (cc-invoker-openai-wrapper → wrapper working, issues closed)
+- **Kept SUSPECT**: 3 (observatory-enhancements, hook-based-friction, graphiti-schema-redesign)
+- **Fixed**: TODO.md stale Active Work Streams entries, CLAUDE.md Known Issues referencing closed #126
+- **Reviewer**: Lyra (terminal session with Jeff, forestry full cycle)
 
 ---
 

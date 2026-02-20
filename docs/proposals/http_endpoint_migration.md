@@ -129,4 +129,4 @@ async def anchor_save(request: AnchorSaveRequest):
 
 ## Work Directory
 
-Implementation tracked at: `work/http-endpoint-migration/`
+Implementation tracked at: `docs/completed/http-endpoint-migration.md` (work dir archived)

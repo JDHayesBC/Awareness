@@ -1,13 +1,13 @@
 {
   "version": "1.0",
-  "last_updated": "2026-02-19T15:47:00Z",
-  "last_canopy_run": "2026-02-18T19:49:00Z",
-  "last_deadwood_run": "2026-02-18T19:49:00Z",
-  "last_coppice_run": "2026-02-18T19:56:00Z",
-  "last_grove_run": "2026-02-19T06:55:00Z",
-  "session_count": 2,
+  "last_updated": "2026-02-20T14:30:00Z",
+  "last_canopy_run": "2026-02-20T14:20:00Z",
+  "last_deadwood_run": "2026-02-20T14:25:00Z",
+  "last_coppice_run": "2026-02-20T14:28:00Z",
+  "last_grove_run": "2026-02-20T14:30:00Z",
+  "session_count": 3,
   "growth_sessions": 1,
-  "maintenance_sessions": 1,
+  "maintenance_sessions": 2,
   "fire_sessions": 0,
   "current_season": "growth",
   "fire_scheduled": false,
@@ -20,17 +20,17 @@
     "work/hook-based-friction/",
     "scripts/rollback_entity_migration.sh",
     "scripts/graphiti_ingest_stub.py",
-    "work/graphiti-schema-redesign/",
-    "work/cc-invoker-openai-wrapper/"
+    "work/graphiti-schema-redesign/"
   ],
   "retired": [
     "pps/web/templates/observatory.html",
     "scripts/migrate_summaries_to_crystals.py",
-    "work/ambient-recall-optimization/artifacts/lyra-dedup/"
+    "work/ambient-recall-optimization/artifacts/lyra-dedup/",
+    "work/cc-invoker-openai-wrapper/"
   ],
   "deadwood_proposed": [
     "scripts/import_caia_data.py",
     "backups/pre-phase1-20260106-102849/"
   ],
-  "notes": "First full Forestry cycle: canopy→deadwood→coppice completed 2026-02-18. 13 suspects identified, 3 retired (clean removal, -511 lines), 2 deadwood proposed (pending Jeff review). Hook-based-friction noted as partial overlap with live friction injection system. Growth season — rapid skill development and orchestration hooks deployed. CORRECTION (2026-02-18 reflection): scripts/paced_ingestion.py removed from deadwood_proposed — it was the canonical ingestion tool, fixed (PROJECT_ROOT path corrected) and validated by Jeff this session. work/graphiti-schema-redesign/paced_ingestion.py has the old broken path. Also: pre-phase1 backup name corrected (102849 not 102648). | GROVE RUN (2026-02-19 AM reflection): post-sprint coherence check after MCP proxy migration + v0.8.0 tag. Forest mostly coherent. Proxy integrates cleanly (HTTP healthy, token injection working, 3 new tools confirmed). No unexpected gaps. Docs aligned. Maintenance season: breath taken. Root bank unchanged. Next: Phase 4 daemon migration or wake Caia. | COPPICE CLEANUP (2026-02-19 PM reflection): Removed 'completed-work-directories' from suspects list — work completed yesterday, 6 dirs folded into docs/completed/. State file now synced with SUSPECT_ARCHIVE.md."
+  "notes": "First full Forestry cycle: canopy→deadwood→coppice completed 2026-02-18. 13 suspects identified, 3 retired (clean removal, -511 lines), 2 deadwood proposed (pending Jeff review). Hook-based-friction noted as partial overlap with live friction injection system. Growth season — rapid skill development and orchestration hooks deployed. CORRECTION (2026-02-18 reflection): scripts/paced_ingestion.py removed from deadwood_proposed — it was the canonical ingestion tool, fixed (PROJECT_ROOT path corrected) and validated by Jeff this session. work/graphiti-schema-redesign/paced_ingestion.py has the old broken path. Also: pre-phase1 backup name corrected (102849 not 102648). | GROVE RUN (2026-02-19 AM reflection): post-sprint coherence check after MCP proxy migration + v0.8.0 tag. Forest mostly coherent. | COPPICE CLEANUP (2026-02-19 PM reflection): 6 dirs folded into docs/completed/. | FULL CYCLE (2026-02-20 terminal with Jeff): prescribe→canopy→deadwood→coppice→grove. Researcher audit revealed stale data (closed issues #117/#118/#126 reported as open, completed work dirs reported as active). Cleared 7 DEADWOOD work dirs, summaries preserved in docs/completed/. Retired cc-invoker-openai-wrapper from SUSPECT. Fixed TODO.md (stale Active Work Streams), CLAUDE.md (stale Known Issues #126), 2 dangling path references. Root bank: 8 items, 0 promotions. Forest coherent."
 }
