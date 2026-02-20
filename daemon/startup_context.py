@@ -7,6 +7,7 @@ about recent activity when MCP tools aren't available.
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from datetime import datetime
 from conversation import ConversationManager
