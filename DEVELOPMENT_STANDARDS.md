@@ -208,8 +208,8 @@ bash scripts/pps_verify_deployment.sh <container-name> <source-file>
 ```
 
 **Examples**:
-- Changes to `pps/docker/server_http.py` → rebuild `pps-server`
-- Changes to `pps/docker/web_app.py` → rebuild `pps-web`
+- Changes to `pps/docker/server_http.py` → rebuild `pps-lyra`
+- Changes to `pps/docker/web_app.py` → rebuild `observatory`
 - Changes to daemon code (not Dockerized) → skip rebuild, test directly
 
 **Critical Principle**: Never mark integration tests as "passed" without verifying deployed code matches source code.

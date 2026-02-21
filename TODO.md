@@ -40,12 +40,13 @@
 | 7474 | neo4j | Neo4j HTTP browser |
 | 7687 | neo4j | Neo4j Bolt protocol |
 | 8200 | chromadb | Vector database |
-| 8201 | pps-server | PPS MCP/HTTP server (Lyra) |
-| 8202 | pps-web | Web dashboard (Observatory) |
+| 8201 | pps-lyra | PPS MCP/HTTP server (Lyra) |
+| 8202 | observatory | Web dashboard (Observatory) |
 | 8203 | graphiti | Knowledge graph API |
 | 8204 | pps-haiku-wrapper | OpenAI-compatible wrapper |
 | 8205 | haven | Haven chat interface |
-| 8211 | pps-server-caia | PPS MCP/HTTP server (Caia) |
+| 8206 | rag-engine | RAG service (JINA embeddings, ChromaDB, search/rerank) |
+| 8211 | pps-caia | PPS MCP/HTTP server (Caia) |
 
 ---
 

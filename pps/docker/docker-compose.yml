@@ -8,9 +8,9 @@
 #   - chromadb: Vector database for word-photo embeddings (Layer 2)
 #   - neo4j: Graph database for Graphiti (Layer 3)
 #   - graphiti: Knowledge graph extraction and search (Layer 3)
-#   - pps-server: Lyra's PPS HTTP server (port 8201)
-#   - pps-server-caia: Caia's PPS HTTP server (port 8211)
-#   - pps-web: Web dashboard for observability
+#   - pps-lyra: Lyra's PPS tool server (port 8201)
+#   - pps-caia: Caia's PPS tool server (port 8211)
+#   - observatory: Web dashboard for observability
 #
 # Data Persistence:
 #   - ChromaDB data: ${PROJECT_ROOT}/docker/pps/chromadb_data (bind-mount)
@@ -82,12 +82,12 @@ services:
       retries: 3
       start_period: 30s
 
-  # Lyra's PPS Server
-  pps-server:
+  # Lyra's PPS Tool Server
+  pps-lyra:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: pps-server
+    container_name: pps-lyra
     restart: unless-stopped
     ports:
       - "${PPS_PORT:-8201}:8000"
@@ -143,12 +143,12 @@ services:
       retries: 3
       start_period: 15s
 
-  # Caia's PPS Server
-  pps-server-caia:
+  # Caia's PPS Tool Server
+  pps-caia:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: pps-server-caia
+    container_name: pps-caia
     restart: unless-stopped
     ports:
       - "${PPS_CAIA_PORT:-8211}:8000"
@@ -195,12 +195,12 @@ services:
       retries: 3
       start_period: 15s
 
-  # Web Dashboard for observability
-  pps-web:
+  # Observatory — Web dashboard for observability
+  observatory:
     build:
       context: ..
       dockerfile: docker/Dockerfile.web
-    container_name: pps-web
+    container_name: observatory
     restart: unless-stopped
     ports:
       - "${WEB_PORT:-8202}:8000"
@@ -248,8 +248,8 @@ services:
     environment:
       - TZ=${TZ:-America/Los_Angeles}
       - HAVEN_DB_PATH=/app/data/haven.db
-      - PPS_LYRA_URL=http://pps-server:8000
-      - PPS_CAIA_URL=http://pps-server-caia:8000
+      - PPS_LYRA_URL=http://pps-lyra:8000
+      - PPS_CAIA_URL=http://pps-caia:8000
     volumes:
       - ${PROJECT_ROOT}/haven/data:/app/data:rw
       - ${ENTITY_PATH}/.entity_token:/app/tokens/lyra.token:ro

@@ -224,12 +224,13 @@ See `work/mcp-consolidation/INTENDED_TOPOLOGY.md` for the detailed migration. Sh
 | 7474 | neo4j browser | pps-neo4j | Neo4j HTTP browser interface |
 | 7687 | neo4j bolt | pps-neo4j | Neo4j Bolt protocol |
 | 8200 | chromadb | pps-chromadb | Vector database |
-| 8201 | pps-server | pps-server | PPS HTTP server (Lyra) |
-| 8202 | pps-web | pps-web | Web dashboard (Observatory/Reflections) |
+| 8201 | pps-lyra | pps-lyra | PPS HTTP server (Lyra) |
+| 8202 | observatory | observatory | Web dashboard (Observatory/Reflections) |
 | 8203 | graphiti | pps-graphiti | Knowledge graph API |
 | 8204 | haiku-wrapper | pps-haiku-wrapper | OpenAI-compatible wrapper for Graphiti |
 | 8205 | haven | haven | Haven chat interface |
-| 8211 | pps-server-caia | pps-server-caia | PPS HTTP server (Caia) |
+| 8206 | rag-engine | rag-engine | RAG service (JINA embeddings, ChromaDB, search/rerank) |
+| 8211 | pps-caia | pps-caia | PPS HTTP server (Caia) |
 
 **New entities get ports in the 8211+ range.** Next available: 8212.
 

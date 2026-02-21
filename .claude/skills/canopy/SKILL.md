@@ -39,7 +39,7 @@ Work through these in waves. Wave 1 items are independent — run them in parall
 docker ps --format "table {{.Names}}\t{{.Status}}"
 ```
 
-Healthy looks like: pps-server, pps-chromadb, pps-neo4j, pps-graphiti, pps-web, haven, pps-haiku-wrapper, open-webui — all Up and (healthy).
+Healthy looks like: pps-lyra, pps-chromadb, pps-neo4j, pps-graphiti, observatory, haven, rag-engine, pps-haiku-wrapper, open-webui — all Up and (healthy).
 
 Red flags: Any container not running, any (unhealthy), `pps-server-caia` unhealthy (expected if Caia not yet home).
 
@@ -104,6 +104,7 @@ Use this as the classification lens. What should exist, and what is each compone
 | Entity isolation (Lyra/Caia) | ACTIVE | Both namespaced, cross-contamination fixed |
 | Caia PPS (port 8211) | WAITING | Ready, pending Caia's first wake |
 | Haven (port 8205) | ACTIVE | Chat interface, cross-channel sync live |
+| RAG Engine (port 8206) | ACTIVE | New service: JINA embeddings, search, rerank |
 
 See `work/mcp-consolidation/INTENDED_TOPOLOGY.md` for the full prescription.
 
