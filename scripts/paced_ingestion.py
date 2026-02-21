@@ -271,6 +271,8 @@ async def run_ingestion(
         failed_ids = []
         channels = set()
 
+        error_categories: dict[str, int] = {}
+
         for msg in messages:
             metadata = {
                 "channel": msg['channel'],
@@ -291,10 +293,21 @@ async def run_ingestion(
                 else:
                     fail_count += 1
                     failed_ids.append(msg['id'])
-                    log(f"  ✗ store() returned False for msg {msg['id']}")
+                    # Get error context from the layer
+                    err = layer.get_last_error()
+                    if err:
+                        cat = err["category"]
+                        error_categories[cat] = error_categories.get(cat, 0) + 1
+                        log(f"  ✗ store() returned False for msg {msg['id']} [{cat}]: {err['message'][:120]}")
+                        if not err["is_transient"]:
+                            log(f"    Advice: {err['advice']}")
+                    else:
+                        error_categories["unknown"] = error_categories.get("unknown", 0) + 1
+                        log(f"  ✗ store() returned False for msg {msg['id']} (no error context)")
             except Exception as e:
                 fail_count += 1
                 failed_ids.append(msg['id'])
+                error_categories["exception"] = error_categories.get("exception", 0) + 1
                 log(f"  ✗ Exception on msg {msg['id']}: {e}")
 
         total_errors += fail_count
@@ -324,6 +337,16 @@ async def run_ingestion(
                 log(f"")
                 log(f"*** HALTING: Batch error rate {batch_error_rate:.0%} >= threshold {error_rate_halt:.0%} ***")
                 log(f"*** {fail_count}/{len(messages)} messages failed in this batch ***")
+                if error_categories:
+                    dist = ", ".join(f"{k}: {v}" for k, v in sorted(error_categories.items()))
+                    log(f"*** Error breakdown: {dist} ***")
+                    # Detect transient vs permanent for advice
+                    has_quota = "quota_exceeded" in error_categories or "auth_failure" in error_categories
+                    has_transient = "rate_limit" in error_categories or "network_timeout" in error_categories
+                    if has_quota:
+                        log(f"*** PERMANENT ERROR: Check OPENAI_API_KEY credits in pps/docker/.env ***")
+                    elif has_transient:
+                        log(f"*** TRANSIENT: Retry with --pause 120 or higher ***")
                 log(f"*** Diagnose before continuing. Failed IDs: {failed_ids} ***")
                 halted = True
                 break
@@ -332,6 +355,9 @@ async def run_ingestion(
         if max_errors > 0 and total_errors >= max_errors:
             log(f"")
             log(f"*** HALTING: Reached {total_errors} total errors (limit: {max_errors}) ***")
+            if error_categories:
+                dist = ", ".join(f"{k}: {v}" for k, v in sorted(error_categories.items()))
+                log(f"*** Error breakdown: {dist} ***")
             log(f"*** Diagnose before continuing ***")
             halted = True
             break

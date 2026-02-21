@@ -22,6 +22,7 @@ from . import PatternLayer, LayerType, SearchResult, LayerHealth
 from .rich_texture_entities import ENTITY_TYPES, EXCLUDED_ENTITY_TYPES
 from .rich_texture_edge_types import EDGE_TYPES, EDGE_TYPE_MAP
 from .extraction_context import build_extraction_instructions, get_speaker_from_content
+from .error_utils import categorize_graphiti_error
 
 # Lazy import system for graphiti_core (defers 30s import until first actual use)
 # Module-level names are set to None until _lazy_import_graphiti() is called
@@ -174,16 +175,15 @@ class RichTextureLayerV2(PatternLayer):
         self.llm_model = os.environ.get("GRAPHITI_LLM_MODEL", "qwen/qwen3-32b")
         self.llm_small_model = os.environ.get("GRAPHITI_LLM_SMALL_MODEL")  # defaults to same as main model
 
-        # Embedding configuration - can be local, OpenAI, or Jina
+        # Embedding configuration - openai or local
         # GRAPHITI_EMBEDDING_PROVIDER:
-        #   "jina"   - Jina AI embeddings (jina-embeddings-v3, 1024 dim)
-        #              Requires JINA_API_KEY. OpenAI-compatible API at api.jina.ai.
-        #              Recommended: matches existing graph data, free tier available.
         #   "openai" - OpenAI embeddings (requires OPENAI_API_KEY with quota)
+        #              Use text-embedding-3-small at 1024-dim to match existing graph.
         #   "local"  - Local model via LLM_BASE_URL (requires fresh graph)
+        # DO NOT use "jina" - Jina vector space is incompatible with existing OpenAI graph data.
         self.embedding_provider = os.environ.get("GRAPHITI_EMBEDDING_PROVIDER", "openai")
-        self.embedding_model = os.environ.get("GRAPHITI_EMBEDDING_MODEL", "text-embedding-3-large")
-        self.embedding_dim = int(os.environ.get("GRAPHITI_EMBEDDING_DIM", "3072"))  # text-embedding-3-large
+        self.embedding_model = os.environ.get("GRAPHITI_EMBEDDING_MODEL", "text-embedding-3-small")
+        self.embedding_dim = int(os.environ.get("GRAPHITI_EMBEDDING_DIM", "1024"))  # text-embedding-3-small
 
         # Clients (lazy initialized)
         self._graphiti_client: Optional[Graphiti] = None
@@ -206,20 +206,23 @@ class RichTextureLayerV2(PatternLayer):
         self._entity_uuid_cache_time: Optional[datetime] = None
         self._entity_uuid_cache_ttl = timedelta(hours=1)
 
+        # Last error context (set when store() returns False)
+        # Use get_last_error() to retrieve after a failed store() call.
+        self._last_error: Optional[dict] = None
+
 
     async def _get_graphiti_client(self) -> Optional[Graphiti]:
         """
         Get or create graphiti_core client.
 
-        Supports four embedding modes (GRAPHITI_EMBEDDING_PROVIDER):
-        1. "jina"   - Jina AI embeddings via OpenAI-compatible API (recommended)
-                      Uses JINA_API_KEY + https://api.jina.ai/v1, dim=1024
-        2. "openai" - OpenAI embeddings (requires OPENAI_API_KEY with quota)
-        3. "local"  - Local model via GRAPHITI_LLM_BASE_URL (requires fresh graph)
-        4. default  - Falls back to OpenAI (graphiti_core default)
+        Supports two embedding modes (GRAPHITI_EMBEDDING_PROVIDER):
+        1. "openai" - OpenAI embeddings (requires OPENAI_API_KEY with quota)
+                      Use text-embedding-3-small at 1024-dim to match existing graph.
+        2. "local"  - Local model via GRAPHITI_LLM_BASE_URL (requires fresh graph)
+        3. default  - Falls back to OpenAI (graphiti_core default)
 
-        Jina mode is recommended: free tier, OpenAI-compatible API, 1024-dim embeddings
-        matching the existing graph data.
+        NOTE: Do not add Jina support. Jina vector space is incompatible with
+        the existing 17,000+ message graph which uses OpenAI embeddings.
         """
         # Trigger lazy import if not yet done
         _lazy_import_graphiti()
@@ -251,22 +254,8 @@ class RichTextureLayerV2(PatternLayer):
                     )
                     llm_client = OpenAIGenericClient(config=llm_config)
 
-                # Configure embedder (Jina, local, or OpenAI)
-                if self.embedding_provider == "jina":
-                    # Jina AI embeddings via OpenAI-compatible API
-                    # Recommended: matches existing 1024-dim graph data, free tier available
-                    jina_api_key = os.environ.get("JINA_API_KEY", "")
-                    jina_model = self.embedding_model if self.embedding_model != "text-embedding-3-large" else "jina-embeddings-v3"
-                    jina_dim = self.embedding_dim if self.embedding_dim != 3072 else 1024
-                    print(f"  Embedding: {jina_model} (Jina AI, dim={jina_dim})")
-                    embedder_config = OpenAIEmbedderConfig(
-                        api_key=jina_api_key,
-                        embedding_model=jina_model,
-                        embedding_dim=jina_dim,
-                        base_url="https://api.jina.ai/v1",
-                    )
-                    embedder = OpenAIEmbedder(config=embedder_config)
-                elif self.embedding_provider == "local" and self.llm_base_url:
+                # Configure embedder (local or OpenAI)
+                if self.embedding_provider == "local" and self.llm_base_url:
                     print(f"  Embedding: {self.embedding_model} (local)")
                     embedder_config = OpenAIEmbedderConfig(
                         api_key="local",
@@ -333,6 +322,22 @@ class RichTextureLayerV2(PatternLayer):
         if self._http_session and not self._http_session.closed:
             await self._http_session.close()
             self._http_session = None
+
+    def get_last_error(self) -> Optional[dict]:
+        """
+        Return the last error context from a failed store() call, or None.
+
+        Returns a dict with:
+            category (str): rate_limit | quota_exceeded | auth_failure |
+                            network_timeout | neo4j_error | unknown
+            message (str): Raw exception message
+            is_transient (bool): True if retry may succeed
+            advice (str): Suggested remediation
+            timestamp (str): ISO8601 time of failure
+
+        Reset to None on each successful store() call.
+        """
+        return self._last_error
 
     def set_context(
         self,
@@ -617,10 +622,19 @@ class RichTextureLayerV2(PatternLayer):
                 custom_extraction_instructions=extraction_instructions,
             )
 
+            self._last_error = None  # Clear error on success
             return result is not None
 
         except Exception as e:
-            print(f"Direct store failed: {e}")
+            error_info = categorize_graphiti_error(e)
+            self._last_error = {
+                "category": error_info["category"],
+                "message": str(e),
+                "is_transient": error_info["is_transient"],
+                "advice": error_info["advice"],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            print(f"Direct store failed [{error_info['category']}]: {e}")
             return False
 
     async def _store_http(self, content: str, channel: str, role: str) -> bool:
