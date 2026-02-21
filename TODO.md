@@ -50,6 +50,22 @@
 
 ---
 
+## Graphiti Ingestion Recovery (PRIORITY)
+
+*Ingestion has been broken since ~Feb 20. ~5,300 messages waiting. Every day adds more.*
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 1 | **Repair Jina-contaminated records** | **DONE** | 2,320 messages unmarked, 112 bad batches deleted. Script: `scripts/repair_jina_records.py` |
+| 2 | **Fix Haiku wrapper structured output** | **DONE** (2026-02-21) | Implemented `tool_use` with forced `tool_choice` for schema enforcement in `pps/docker/cc_openai_wrapper.py`. Wrapper now converts `json_schema` response_format to Anthropic tool definitions, guaranteeing field names match Graphiti schemas. Tested with real ingestion - working correctly. Deployed to production (port 8204). See `work/haiku-wrapper-tool-use/DESIGN.md`. Fixes [#139](https://github.com/JDHayesBC/Awareness/issues/139). |
+| 3 | **Audit all scripts for correct venv** | **TODO** | `paced_ingestion.py` and others use `#!/usr/bin/env python3` (system Python) instead of the project venv at `pps/venv/`. Rule: ONE venv, always. Find all live scripts, fix shebangs or activation. |
+| 4 | **Catch up ingestion backlog** | **READY** | Task #2 complete - ingestion now working. Run `paced_ingestion.py --batch-size 50 --pause 60`. ~3,607 messages at ~50/batch = ~72 batches. |
+| 5 | **Wire realtime terminal ingestion hooks** | **BLOCKED on #4** | Discord already does realtime ingestion. Terminal needs the same — PostToolUse hook or similar. Prevents future backlogs. |
+
+**Research report**: Full diagnosis saved in researcher output. Key finding: graphiti_core sends proper `json_schema` response_format, but the Haiku wrapper at `cc_openai_wrapper.py:607-614` downgrades it to a text prompt hint. Fix is to use Anthropic `tool_use` with forced `tool_choice` for schema enforcement.
+
+---
+
 ## Active Work Streams
 
 | Work Stream | Status | Details |

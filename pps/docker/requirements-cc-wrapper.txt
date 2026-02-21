@@ -8,5 +8,8 @@ pydantic>=2.0.0
 # Claude Agent SDK (for ClaudeInvoker)
 claude-agent-sdk>=0.1.0
 
+# Anthropic SDK (for direct API calls with json_schema tool use)
+anthropic>=0.39.0
+
 # Memory monitoring (for detecting leaks)
 psutil>=5.9.0

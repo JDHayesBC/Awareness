@@ -283,6 +283,7 @@ services:
     environment:
       - WRAPPER_MODEL=${WRAPPER_MODEL:-haiku}
       - WRAPPER_VERBOSE=${WRAPPER_VERBOSE:-0}  # Set to 1 to log full prompts/responses
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}  # For json_schema tool-use enforcement
     networks:
       - default
     healthcheck:

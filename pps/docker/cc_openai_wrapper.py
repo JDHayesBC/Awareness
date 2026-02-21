@@ -52,6 +52,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
+import anthropic
 
 try:
     import psutil
@@ -523,6 +524,26 @@ async def health_check():
     return response
 
 
+def json_schema_to_anthropic_tool(schema_name: str, schema: dict) -> dict:
+    """Convert OpenAI JSON schema to Anthropic tool definition.
+
+    Anthropic's tool use API accepts JSON Schema directly in the input_schema field.
+    This allows us to enforce structured output by forcing tool use.
+
+    Args:
+        schema_name: Name of the schema (used as tool name)
+        schema: JSON Schema object (OpenAI format)
+
+    Returns:
+        Anthropic tool definition dict
+    """
+    return {
+        "name": schema_name,
+        "description": schema.get("description", f"Generate structured output matching {schema_name}"),
+        "input_schema": schema
+    }
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResponse:
     """
@@ -579,12 +600,153 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
     # NOW track as active query - restart checks are done
     _active_queries += 1
     _no_active_queries.clear()
-    
+
     try:
-        # Build prompt from OpenAI messages
-        wants_json = request.response_format and request.response_format.get("type") in (
-            "json_object", "json_schema"
+        # Check if request needs json_schema enforcement via tool use
+        use_json_schema_tool = (
+            request.response_format
+            and request.response_format.get("type") == "json_schema"
         )
+
+        if use_json_schema_tool:
+            # JSON schema enforcement via Anthropic tool use
+            # This path bypasses ClaudeInvoker and calls Anthropic API directly
+            schema_info = request.response_format.get("json_schema", {})
+            schema_name = schema_info.get("name", "structured_output")
+            schema = schema_info.get("schema")
+
+            if not schema:
+                _total_errors += 1
+                raise HTTPException(
+                    status_code=400,
+                    detail="json_schema response_format requires a schema"
+                )
+
+            # Convert OpenAI messages to Anthropic format
+            anthropic_messages = []
+            system_content = []
+
+            for msg in request.messages:
+                if msg.role == "system":
+                    system_content.append(msg.content)
+                elif msg.role in ("user", "assistant"):
+                    anthropic_messages.append({
+                        "role": msg.role,
+                        "content": msg.content
+                    })
+
+            # Create tool definition from schema
+            tool = json_schema_to_anthropic_tool(schema_name, schema)
+
+            # Call Anthropic API directly with forced tool use
+            try:
+                # Initialize Anthropic client (use API key from environment)
+                client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+                # Get model from environment or use haiku
+                # Map short names to full model IDs
+                anthropic_model = os.getenv("WRAPPER_MODEL", "haiku")
+                model_max_tokens = 4096  # Default for most models
+
+                if anthropic_model == "haiku":
+                    anthropic_model = "claude-3-haiku-20240307"
+                    model_max_tokens = 4096
+                elif anthropic_model == "sonnet":
+                    anthropic_model = "claude-sonnet-4-5-20250929"
+                    model_max_tokens = 8192
+                elif anthropic_model == "opus":
+                    anthropic_model = "claude-opus-4-5-20251101"
+                    model_max_tokens = 8192
+
+                # Cap max_tokens to model's limit
+                requested_tokens = request.max_tokens or 4096
+                max_tokens = min(requested_tokens, model_max_tokens)
+
+                query_start = time.monotonic()
+
+                print(f"[TOOL-USE] Calling Anthropic API with forced tool: {schema_name}", flush=True)
+                if requested_tokens > model_max_tokens:
+                    print(f"[TOOL-USE] Capping max_tokens from {requested_tokens} to {max_tokens} (model limit)", flush=True)
+
+                # Call Anthropic with forced tool use
+                response = client.messages.create(
+                    model=anthropic_model,
+                    max_tokens=max_tokens,
+                    system="\n\n".join(system_content) if system_content else None,
+                    messages=anthropic_messages,
+                    tools=[tool],
+                    tool_choice={"type": "tool", "name": schema_name}
+                )
+
+                # Extract tool_use block
+                tool_use_block = None
+                for block in response.content:
+                    if hasattr(block, 'type') and block.type == "tool_use":
+                        tool_use_block = block
+                        break
+
+                if not tool_use_block:
+                    _total_errors += 1
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Anthropic did not return expected tool_use block"
+                    )
+
+                # Extract the structured output (guaranteed to match schema)
+                response_text = json.dumps(tool_use_block.input)
+
+                query_elapsed = time.monotonic() - query_start
+
+                # Log success
+                print(
+                    f"[TOOL-USE] Success in {query_elapsed:.1f}s | "
+                    f"schema={schema_name} | "
+                    f"input_tokens={response.usage.input_tokens} | "
+                    f"output_tokens={response.usage.output_tokens}",
+                    flush=True
+                )
+
+                # Verbose logging
+                if VERBOSE:
+                    print("=" * 80, flush=True)
+                    print("[VERBOSE] TOOL-USE RESPONSE:", flush=True)
+                    print("-" * 40, flush=True)
+                    print(response_text, flush=True)
+                    print("-" * 40, flush=True)
+                    print("=" * 80, flush=True)
+
+                # Build OpenAI-compatible response
+                return ChatCompletionResponse(
+                    id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
+                    created=int(time.time()),
+                    model=request.model,
+                    choices=[
+                        Choice(
+                            index=0,
+                            message=ChatMessage(
+                                role="assistant",
+                                content=response_text
+                            ),
+                            finish_reason="stop"
+                        )
+                    ],
+                    usage=Usage(
+                        prompt_tokens=response.usage.input_tokens,
+                        completion_tokens=response.usage.output_tokens,
+                        total_tokens=response.usage.input_tokens + response.usage.output_tokens
+                    )
+                )
+
+            except anthropic.APIError as e:
+                _total_errors += 1
+                print(f"[TOOL-USE] Anthropic API error: {e}", flush=True)
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Anthropic API error: {e}"
+                )
+
+        # Regular path (non-json_schema or json_object)
+        wants_json = request.response_format and request.response_format.get("type") == "json_object"
 
         prompt_parts = []
         for msg in request.messages:
@@ -595,24 +757,13 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
             elif msg.role == "assistant":
                 prompt_parts.append(f"Assistant: {msg.content}")
 
-        # When caller requests JSON output, tell Claude explicitly
+        # When caller requests JSON output (json_object mode), tell Claude explicitly
         if wants_json:
             json_instruction = (
                 "IMPORTANT: Respond with raw JSON only. "
                 "No markdown formatting, no code fences, no explanation. "
                 "Just the JSON object."
             )
-
-            # If a JSON schema is provided, include it so Claude uses exact field names
-            if request.response_format.get("type") == "json_schema":
-                schema_info = request.response_format.get("json_schema", {})
-                schema = schema_info.get("schema")
-                if schema:
-                    json_instruction += (
-                        f"\n\nYour response MUST conform to this JSON schema:\n"
-                        f"{json.dumps(schema, indent=2)}"
-                    )
-
             prompt_parts.append(json_instruction)
 
         combined_prompt = "\n\n".join(prompt_parts)
