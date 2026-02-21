@@ -334,6 +334,9 @@ ENTITY_NAME = os.getenv("ENTITY_NAME", ENTITY_PATH.name)
 # Haven chat integration — poll for unread messages during ambient_recall
 HAVEN_URL = os.getenv("HAVEN_URL", "")  # e.g. http://haven:8000 or http://localhost:8205
 
+# RAG engine — proxies tech_search/ingest/list/delete instead of talking to ChromaDB directly
+RAG_ENGINE_URL = os.getenv("RAG_ENGINE_URL", "http://rag-engine:8000")
+
 # Load authentication tokens
 ENTITY_TOKEN, MASTER_TOKEN = load_tokens(ENTITY_PATH)
 
@@ -2443,32 +2446,37 @@ async def tech_search(request: TechSearchRequest):
     Use for finding architecture info, API docs, design decisions.
     Family knowledge - searchable by any entity.
     """
-    if tech_rag is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Tech RAG not available (requires ChromaDB)"
-        )
-    
     if not request.query:
         raise HTTPException(status_code=400, detail="query required")
-    
-    results = await tech_rag.search(request.query, request.limit, request.category)
-    
-    if not results:
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{RAG_ENGINE_URL}/api/repos/tech-docs/search",
+                json={"query": request.query, "limit": request.limit},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail=f"RAG engine unavailable: {exc}")
+
+    raw_results = data.get("results", [])
+
+    if not raw_results:
         return {
             "results": [],
             "message": "No results found in Tech RAG."
         }
-    
+
     return {
         "results": [
             {
-                "content": r.content,
-                "source": r.source,
-                "relevance_score": r.relevance_score,
-                "metadata": r.metadata
+                "content": r.get("chunk_text", ""),
+                "source": r.get("source", ""),
+                "relevance_score": r.get("score", 0.0),
+                "metadata": r.get("metadata", {}),
             }
-            for r in results
+            for r in raw_results
         ]
     }
 
@@ -2480,31 +2488,38 @@ async def tech_ingest(request: TechIngestRequest):
     Automatically chunks for better retrieval.
     Use to index architecture docs, guides, design documents.
     """
-    if tech_rag is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Tech RAG not available (requires ChromaDB)"
-        )
-    
     if not request.filepath:
         raise HTTPException(status_code=400, detail="filepath required")
-    
-    # Check if file exists
-    if not Path(request.filepath).exists():
+
+    filepath = Path(request.filepath)
+    if not filepath.exists():
         raise HTTPException(
             status_code=404,
             detail=f"File not found: {request.filepath}"
         )
-    
-    result = await tech_rag.ingest(request.filepath, request.category, request.force)
 
-    if result.get("success", False):
-        return result
-    else:
-        raise HTTPException(
-            status_code=500,
-            detail=result.get("error", "Failed to ingest file")
-        )
+    text = filepath.read_text(encoding="utf-8")
+    metadata: dict = {"source_file": str(filepath)}
+    if request.category:
+        metadata["category"] = request.category
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{RAG_ENGINE_URL}/api/repos/tech-docs/ingest",
+                json={"text": text, "metadata": metadata},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail=f"RAG engine unavailable: {exc}")
+
+    return {
+        "success": True,
+        "filepath": str(filepath),
+        "chunks_created": data.get("chunks_created", data.get("chunk_count", None)),
+        "message": data.get("message", "File ingested successfully"),
+    }
 
 
 @app.get("/tools/tech_list")
@@ -2512,23 +2527,18 @@ async def tech_list():
     """
     List all documents indexed in the Tech RAG.
     """
-    if tech_rag is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Tech RAG not available (requires ChromaDB)"
-        )
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(f"{RAG_ENGINE_URL}/api/repos/tech-docs/documents")
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail=f"RAG engine unavailable: {exc}")
 
-    result = await tech_rag.list_docs()
-
-    if not result.get("success", False):
-        raise HTTPException(
-            status_code=500,
-            detail=result.get("error", "Failed to list documents")
-        )
-
+    documents = data if isinstance(data, list) else data.get("documents", [])
     return {
-        "documents": result["documents"],
-        "count": result["count"]
+        "documents": documents,
+        "count": len(documents),
     }
 
 
@@ -2537,24 +2547,24 @@ async def tech_delete(doc_id: str):
     """
     Delete a document from the Tech RAG by doc_id.
     """
-    if tech_rag is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Tech RAG not available (requires ChromaDB)"
-        )
-    
     if not doc_id:
         raise HTTPException(status_code=400, detail="doc_id required")
-    
-    result = await tech_rag.delete_document(doc_id)
-    
-    if result.get("success", False):
-        return result
-    else:
-        raise HTTPException(
-            status_code=500,
-            detail=result.get("message", "Failed to delete document")
-        )
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.delete(
+                f"{RAG_ENGINE_URL}/api/repos/tech-docs/documents/{doc_id}"
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail=f"RAG engine unavailable: {exc}")
+
+    return {
+        "success": True,
+        "doc_id": doc_id,
+        "message": data.get("message", "Document deleted successfully"),
+    }
 
 
 

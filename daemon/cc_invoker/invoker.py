@@ -34,6 +34,11 @@ from claude_agent_sdk import (
     ClaudeSDKError,
     ProcessError,
 )
+try:
+    from claude_agent_sdk._errors import MessageParseError as _MessageParseError
+except ImportError:
+    # Older SDK versions may not have this; fall back to a base class
+    _MessageParseError = ClaudeSDKError
 from claude_agent_sdk.types import (
     AssistantMessage,
     ResultMessage,
@@ -523,7 +528,19 @@ class ClaudeInvoker:
                 msg_count = 0
                 text_block_count = 0
                 tool_block_count = 0
-                async for msg in self._client.receive_response():
+                # Use iterator protocol directly so we can skip unparseable
+                # messages (e.g. rate_limit_event) without aborting the loop.
+                _response_iter = self._client.receive_response().__aiter__()
+                while True:
+                    try:
+                        msg = await _response_iter.__anext__()
+                    except StopAsyncIteration:
+                        break
+                    except _MessageParseError as e:
+                        # Unknown message types from the SDK (e.g. rate_limit_event)
+                        # are informational and can be safely skipped.
+                        logger.debug(f"Skipping unparseable SDK message: {e}")
+                        continue
                     msg_count += 1
                     msg_type = type(msg).__name__
                     if isinstance(msg, AssistantMessage):

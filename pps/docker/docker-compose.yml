@@ -128,6 +128,8 @@ services:
       - PPS_MASTER_TOKEN=${PPS_MASTER_TOKEN:-}
       # Haven chat integration (real-time sync)
       - HAVEN_URL=http://haven:8000
+      # RAG engine for tech docs search
+      - RAG_ENGINE_URL=http://rag-engine:8000
     volumes:
       # Mount entity directory (identity files, crystals, word-photos, AND databases)
       - ${ENTITY_PATH}:/app/entity:rw
@@ -181,6 +183,8 @@ services:
       - PPS_MASTER_TOKEN=${PPS_MASTER_TOKEN:-}
       # Haven chat integration (real-time sync)
       - HAVEN_URL=http://haven:8000
+      # RAG engine for tech docs search
+      - RAG_ENGINE_URL=http://rag-engine:8000
     volumes:
       # Mount Caia's entity directory (CAIA_ENTITY_PATH must be set in .env)
       - ${CAIA_ENTITY_PATH}:/app/entity:rw
