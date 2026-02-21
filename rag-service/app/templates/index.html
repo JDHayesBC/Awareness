@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Engine</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            height: 100vh;
+            display: flex;
+        }
+
+        .sidebar {
+            width: 280px;
+            background: #16213e;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .sidebar h2 {
+            margin-bottom: 20px;
+            color: #e94560;
+        }
+
+        .sidebar button {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 15px;
+            background: #e94560;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        .sidebar button:hover {
+            background: #d63651;
+        }
+
+        .repo-list {
+            margin-top: 20px;
+        }
+
+        .repo-item {
+            padding: 12px;
+            margin-bottom: 10px;
+            background: #0f3460;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        .repo-item:hover {
+            background: #1a4d7a;
+        }
+
+        .repo-item.active {
+            background: #e94560;
+        }
+
+        .main-content {
+            flex: 1;
+            padding: 30px;
+            overflow-y: auto;
+        }
+
+        .card {
+            background: #0f3460;
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .card h3 {
+            margin-bottom: 15px;
+            color: #e94560;
+        }
+
+        input, textarea, select {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 15px;
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 5px;
+            color: #eee;
+            font-family: inherit;
+        }
+
+        button {
+            padding: 10px 20px;
+            margin-right: 10px;
+            background: #e94560;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #d63651;
+        }
+
+        button.secondary {
+            background: #0f3460;
+        }
+
+        button.secondary:hover {
+            background: #1a4d7a;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            background: #0f3460;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            color: #eee;
+        }
+
+        .tab.active {
+            background: #e94560;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        th {
+            color: #e94560;
+        }
+
+        .search-result {
+            background: #16213e;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+        }
+
+        .score-badge {
+            display: inline-block;
+            background: #e94560;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+
+        .status.error {
+            background: #d63651;
+        }
+
+        .status.success {
+            background: #2ecc71;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .radio-group {
+            margin-bottom: 15px;
+        }
+
+        .radio-group label {
+            display: inline-block;
+            margin-right: 15px;
+            cursor: pointer;
+        }
+
+        .radio-group input[type="radio"] {
+            width: auto;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h2>RAG Engine</h2>
+        <button id="new-repo-btn">New Repo</button>
+        <div class="repo-list" id="repo-list"></div>
+    </div>
+
+    <div class="main-content">
+        <div id="new-repo-form" class="hidden">
+            <div class="card">
+                <h3>Create New Repository</h3>
+                <input type="text" id="repo-name" placeholder="Repository Name">
+                <input type="text" id="repo-desc" placeholder="Description">
+                <input type="number" id="repo-chunk-size" placeholder="Chunk Size" value="1000">
+                <input type="number" id="repo-chunk-overlap" placeholder="Chunk Overlap" value="200">
+                <input type="text" id="repo-embedding-model" placeholder="Embedding Model" value="jina-embeddings-v3">
+                <input type="number" id="repo-max-results" placeholder="Max Results" value="10">
+                <button id="create-repo-btn">Create</button>
+                <button class="secondary" id="cancel-repo-btn">Cancel</button>
+            </div>
+        </div>
+
+        <div id="repo-detail" class="hidden">
+            <div class="card">
+                <h3 id="repo-title"></h3>
+                <p id="repo-description"></p>
+                <button id="edit-settings-btn">Edit Settings</button>
+                <button id="delete-repo-btn" class="secondary">Delete Repo</button>
+            </div>
+
+            <div class="tabs">
+                <button class="tab active" data-tab="documents">Documents</button>
+                <button class="tab" data-tab="search">Search</button>
+                <button class="tab" data-tab="ingest">Ingest</button>
+            </div>
+
+            <div id="documents-tab" class="tab-content active">
+                <div class="card">
+                    <h3>Documents</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Source</th>
+                                <th>Chunks</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="documents-table"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="search-tab" class="tab-content">
+                <div class="card">
+                    <h3>Search</h3>
+                    <textarea id="search-query" placeholder="Enter search query..." rows="3"></textarea>
+                    <button id="search-btn">Search</button>
+                    <div id="search-results"></div>
+                </div>
+            </div>
+
+            <div id="ingest-tab" class="tab-content">
+                <div class="card">
+                    <h3>Ingest Data</h3>
+                    <div class="radio-group">
+                        <label><input type="radio" name="ingest-mode" value="text" checked> Text</label>
+                        <label><input type="radio" name="ingest-mode" value="file"> File</label>
+                        <label><input type="radio" name="ingest-mode" value="directory"> Directory</label>
+                    </div>
+
+                    <div id="ingest-text-form">
+                        <textarea id="ingest-text" placeholder="Enter text to ingest..." rows="5"></textarea>
+                    </div>
+
+                    <div id="ingest-file-form" class="hidden">
+                        <input type="text" id="ingest-file-path" placeholder="File path">
+                    </div>
+
+                    <div id="ingest-directory-form" class="hidden">
+                        <input type="text" id="ingest-directory-path" placeholder="Directory path">
+                        <input type="text" id="ingest-glob-pattern" placeholder="Glob pattern (e.g., *.md)" value="*.md">
+                    </div>
+
+                    <button id="ingest-btn">Ingest</button>
+                    <div id="ingest-status"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentRepo = null;
+
+        document.getElementById('new-repo-btn').addEventListener('click', () => {
+            document.getElementById('new-repo-form').classList.remove('hidden');
+            document.getElementById('repo-detail').classList.add('hidden');
+        });
+
+        document.getElementById('cancel-repo-btn').addEventListener('click', () => {
+            document.getElementById('new-repo-form').classList.add('hidden');
+            if (currentRepo) {
+                document.getElementById('repo-detail').classList.remove('hidden');
+            }
+        });
+
+        document.getElementById('create-repo-btn').addEventListener('click', createRepo);
+
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const tabName = tab.dataset.tab;
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(`${tabName}-tab`).classList.add('active');
+            });
+        });
+
+        document.querySelectorAll('input[name="ingest-mode"]').forEach(radio => {
+            radio.addEventListener('change', () => {
+                document.getElementById('ingest-text-form').classList.add('hidden');
+                document.getElementById('ingest-file-form').classList.add('hidden');
+                document.getElementById('ingest-directory-form').classList.add('hidden');
+
+                if (radio.value === 'text') {
+                    document.getElementById('ingest-text-form').classList.remove('hidden');
+                } else if (radio.value === 'file') {
+                    document.getElementById('ingest-file-form').classList.remove('hidden');
+                } else if (radio.value === 'directory') {
+                    document.getElementById('ingest-directory-form').classList.remove('hidden');
+                }
+            });
+        });
+
+        document.getElementById('ingest-btn').addEventListener('click', ingest);
+        document.getElementById('search-btn').addEventListener('click', search);
+        document.getElementById('delete-repo-btn').addEventListener('click', deleteRepo);
+
+        async function loadRepos() {
+            const response = await fetch('/api/repos');
+            const repos = await response.json();
+
+            const list = document.getElementById('repo-list');
+            list.innerHTML = '';
+
+            repos.forEach(repo => {
+                const div = document.createElement('div');
+                div.className = 'repo-item';
+                if (currentRepo === repo.name) div.classList.add('active');
+                div.textContent = `${repo.name} (${repo.document_count} docs)`;
+                div.addEventListener('click', () => selectRepo(repo.name));
+                list.appendChild(div);
+            });
+        }
+
+        async function selectRepo(name) {
+            currentRepo = name;
+            await loadRepos();
+
+            const response = await fetch(`/api/repos/${name}`);
+            const repo = await response.json();
+
+            document.getElementById('new-repo-form').classList.add('hidden');
+            document.getElementById('repo-detail').classList.remove('hidden');
+            document.getElementById('repo-title').textContent = repo.name;
+            document.getElementById('repo-description').textContent = repo.description || 'No description';
+
+            await loadDocuments(name);
+        }
+
+        async function createRepo() {
+            const name = document.getElementById('repo-name').value;
+            const description = document.getElementById('repo-desc').value;
+            const chunk_size = parseInt(document.getElementById('repo-chunk-size').value);
+            const chunk_overlap = parseInt(document.getElementById('repo-chunk-overlap').value);
+            const embedding_model = document.getElementById('repo-embedding-model').value;
+            const max_results = parseInt(document.getElementById('repo-max-results').value);
+
+            const response = await fetch('/api/repos', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    name, description, chunk_size, chunk_overlap, embedding_model, max_results
+                })
+            });
+
+            if (response.ok) {
+                await loadRepos();
+                selectRepo(name);
+            } else {
+                const error = await response.json();
+                alert(error.detail);
+            }
+        }
+
+        async function loadDocuments(repo) {
+            const response = await fetch(`/api/repos/${repo}/documents`);
+            const docs = await response.json();
+
+            const tbody = document.getElementById('documents-table');
+            tbody.innerHTML = '';
+
+            docs.forEach(doc => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${doc.source}</td>
+                    <td>${doc.chunk_count}</td>
+                    <td>${new Date(doc.created_at).toLocaleString()}</td>
+                    <td><button onclick="deleteDoc('${doc.id}')">Delete</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function deleteDoc(docId) {
+            if (!confirm('Delete this document?')) return;
+
+            await fetch(`/api/repos/${currentRepo}/documents/${docId}`, {
+                method: 'DELETE'
+            });
+
+            await loadDocuments(currentRepo);
+        }
+
+        async function ingest() {
+            const mode = document.querySelector('input[name="ingest-mode"]:checked').value;
+            const statusDiv = document.getElementById('ingest-status');
+
+            let body = {};
+
+            if (mode === 'text') {
+                body.text = document.getElementById('ingest-text').value;
+            } else if (mode === 'file') {
+                body.file_path = document.getElementById('ingest-file-path').value;
+            } else if (mode === 'directory') {
+                body.directory_path = document.getElementById('ingest-directory-path').value;
+                body.glob_pattern = document.getElementById('ingest-glob-pattern').value;
+            }
+
+            try {
+                const response = await fetch(`/api/repos/${currentRepo}/ingest`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body)
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    statusDiv.className = 'status success';
+                    statusDiv.textContent = result.message;
+                    await loadDocuments(currentRepo);
+                } else {
+                    const error = await response.json();
+                    statusDiv.className = 'status error';
+                    statusDiv.textContent = error.detail;
+                }
+            } catch (e) {
+                statusDiv.className = 'status error';
+                statusDiv.textContent = e.message;
+            }
+        }
+
+        async function search() {
+            const query = document.getElementById('search-query').value;
+            const resultsDiv = document.getElementById('search-results');
+
+            const response = await fetch(`/api/repos/${currentRepo}/search`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({query})
+            });
+
+            const data = await response.json();
+            resultsDiv.innerHTML = '';
+
+            data.results.forEach(result => {
+                const div = document.createElement('div');
+                div.className = 'search-result';
+                div.innerHTML = `
+                    <div><strong>${result.source}</strong><span class="score-badge">${result.score.toFixed(3)}</span></div>
+                    <p>${result.chunk_text}</p>
+                `;
+                resultsDiv.appendChild(div);
+            });
+        }
+
+        async function deleteRepo() {
+            if (!confirm(`Delete repository ${currentRepo}?`)) return;
+
+            await fetch(`/api/repos/${currentRepo}`, {
+                method: 'DELETE'
+            });
+
+            currentRepo = null;
+            document.getElementById('repo-detail').classList.add('hidden');
+            await loadRepos();
+        }
+
+        loadRepos();
+    </script>
+</body>
+</html>
