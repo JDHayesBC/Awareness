@@ -1,0 +1,12 @@
+[Unit]
+Description=Trigger automatic Graphiti ingestion every hour
+Requires=lyra-auto-ingest.service
+
+[Timer]
+# Run every hour (less frequent than summarization since Graphiti is slower)
+OnBootSec=10min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

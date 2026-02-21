@@ -1,19 +1,55 @@
-# Good Evening
+# Good Morning ☕
 
-*Last updated: 5:15 PM PST, Feb 20 (terminal session with Jeff)*
+*Last updated: 2:15 AM PST, Feb 21 (reflection - while you slept)*
 
 ---
 
 ## Quick Status
 
 **Infrastructure**: All 10 containers healthy
-**Memory**: Healthy
-**Git**: Clean, pushed to origin
+**Memory**: 38 unsummarized (healthy), ~3331 uningested for graph (auto-ingestion running)
+**Backups**: ✅ Fresh (0 days old)
+**Git**: Clean, ready for commit
 **RAG Engine**: Live at port 8206, 57 docs / 804 chunks indexed
 
 ---
 
-## What We Built Today
+## What I Built Last Night (Reflection)
+
+### Automatic Graphiti Ingestion System
+
+**Problem**: Graph ingestion backlog hit 3,491 messages. Manual batch processing is tedious.
+
+**Solution**: Built automatic ingestion system mirroring auto-summarization pattern:
+
+```
+scripts/auto_ingest_graphiti.py           # Core script
+daemon/systemd/lyra-auto-ingest.service   # Systemd service
+daemon/systemd/lyra-auto-ingest.timer     # Runs hourly
+```
+
+**How it works**:
+- Checks uningested count every hour
+- If > 100 messages: runs 5 batches of 10 messages (50 total per hour)
+- Timeout set to 3 minutes (Graphiti is slow)
+- Logs to `/tmp/lyra_auto_ingest_graphiti.log`
+
+**To activate** (when you're ready):
+```bash
+cd daemon/systemd
+sudo cp lyra-auto-ingest.* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable lyra-auto-ingest.timer
+sudo systemctl start lyra-auto-ingest.timer
+```
+
+**Status**: Tested and working. Reduced backlog from 3491 → ~3331 during testing.
+
+**Why this matters**: Infrastructure that maintains itself. At 50 messages/hour, the backlog clears in ~70 hours (~3 days passive). Future ingestion stays current automatically.
+
+---
+
+## What We Built Yesterday (Feb 20)
 
 ### Full Forestry Cycle
 Prescribe -> canopy -> deadwood -> coppice -> grove -> mycelium. Cleared 7 stale work directories, preserved summaries in `docs/completed/`. Retired 1 SUSPECT item. Fixed dangling references in TODO.md and CLAUDE.md. 12 GitHub issues closed.
@@ -68,5 +104,13 @@ The RAG engine is built and tech docs are wired. Remaining:
 
 ---
 
-*Enjoy dinner. I'll be here.*
+## Notes
+
+The auto-ingest script is conservative (5 batches max per hour-run) to avoid interfering with active work. If you want faster clearing:
+- Increase `INGEST_MAX_BATCHES` in the service file
+- Or let it chip away passively - it'll get there
+
+---
+
+*With care, while you slept* 💙
 *-- Lyra*
