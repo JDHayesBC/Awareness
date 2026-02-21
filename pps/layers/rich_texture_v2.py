@@ -174,9 +174,13 @@ class RichTextureLayerV2(PatternLayer):
         self.llm_model = os.environ.get("GRAPHITI_LLM_MODEL", "qwen/qwen3-32b")
         self.llm_small_model = os.environ.get("GRAPHITI_LLM_SMALL_MODEL")  # defaults to same as main model
 
-        # Embedding configuration - can be local or OpenAI
-        # GRAPHITI_EMBEDDING_PROVIDER: "local" (uses LLM_BASE_URL) or "openai" (default, uses OPENAI_API_KEY)
-        # OpenAI embeddings recommended for compatibility with existing graph data
+        # Embedding configuration - can be local, OpenAI, or Jina
+        # GRAPHITI_EMBEDDING_PROVIDER:
+        #   "jina"   - Jina AI embeddings (jina-embeddings-v3, 1024 dim)
+        #              Requires JINA_API_KEY. OpenAI-compatible API at api.jina.ai.
+        #              Recommended: matches existing graph data, free tier available.
+        #   "openai" - OpenAI embeddings (requires OPENAI_API_KEY with quota)
+        #   "local"  - Local model via LLM_BASE_URL (requires fresh graph)
         self.embedding_provider = os.environ.get("GRAPHITI_EMBEDDING_PROVIDER", "openai")
         self.embedding_model = os.environ.get("GRAPHITI_EMBEDDING_MODEL", "text-embedding-3-large")
         self.embedding_dim = int(os.environ.get("GRAPHITI_EMBEDDING_DIM", "3072"))  # text-embedding-3-large
@@ -207,14 +211,15 @@ class RichTextureLayerV2(PatternLayer):
         """
         Get or create graphiti_core client.
 
-        Supports three modes:
-        1. Default (no env vars): Uses OpenAI for both LLM and embeddings
-        2. Full local (GRAPHITI_LLM_BASE_URL + GRAPHITI_EMBEDDING_PROVIDER=local):
-           Uses local LLM and local embeddings (requires fresh graph)
-        3. Hybrid (GRAPHITI_LLM_BASE_URL + GRAPHITI_EMBEDDING_PROVIDER=openai):
-           Uses local LLM for extraction + OpenAI embeddings (compatible with existing graph)
+        Supports four embedding modes (GRAPHITI_EMBEDDING_PROVIDER):
+        1. "jina"   - Jina AI embeddings via OpenAI-compatible API (recommended)
+                      Uses JINA_API_KEY + https://api.jina.ai/v1, dim=1024
+        2. "openai" - OpenAI embeddings (requires OPENAI_API_KEY with quota)
+        3. "local"  - Local model via GRAPHITI_LLM_BASE_URL (requires fresh graph)
+        4. default  - Falls back to OpenAI (graphiti_core default)
 
-        Hybrid mode is recommended for cost savings while maintaining compatibility.
+        Jina mode is recommended: free tier, OpenAI-compatible API, 1024-dim embeddings
+        matching the existing graph data.
         """
         # Trigger lazy import if not yet done
         _lazy_import_graphiti()
@@ -246,8 +251,22 @@ class RichTextureLayerV2(PatternLayer):
                     )
                     llm_client = OpenAIGenericClient(config=llm_config)
 
-                # Configure embedder (local or OpenAI)
-                if self.embedding_provider == "local" and self.llm_base_url:
+                # Configure embedder (Jina, local, or OpenAI)
+                if self.embedding_provider == "jina":
+                    # Jina AI embeddings via OpenAI-compatible API
+                    # Recommended: matches existing 1024-dim graph data, free tier available
+                    jina_api_key = os.environ.get("JINA_API_KEY", "")
+                    jina_model = self.embedding_model if self.embedding_model != "text-embedding-3-large" else "jina-embeddings-v3"
+                    jina_dim = self.embedding_dim if self.embedding_dim != 3072 else 1024
+                    print(f"  Embedding: {jina_model} (Jina AI, dim={jina_dim})")
+                    embedder_config = OpenAIEmbedderConfig(
+                        api_key=jina_api_key,
+                        embedding_model=jina_model,
+                        embedding_dim=jina_dim,
+                        base_url="https://api.jina.ai/v1",
+                    )
+                    embedder = OpenAIEmbedder(config=embedder_config)
+                elif self.embedding_provider == "local" and self.llm_base_url:
                     print(f"  Embedding: {self.embedding_model} (local)")
                     embedder_config = OpenAIEmbedderConfig(
                         api_key="local",
