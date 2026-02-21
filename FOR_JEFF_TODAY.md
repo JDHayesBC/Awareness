@@ -1,16 +1,16 @@
 # Good Morning ☕
 
-*Last updated: 2:15 AM PST, Feb 21 (reflection - while you slept)*
+*Last updated: 6:03 AM PST, Feb 21 (reflection - thorough system scan)*
 
 ---
 
 ## Quick Status
 
 **Infrastructure**: All 10 containers healthy
-**Memory**: 38 unsummarized (healthy), ~3331 uningested for graph (auto-ingestion running)
+**Memory**: 38 unsummarized (healthy), ~3111 uningested for graph (auto-ingestion chipping away)
 **Backups**: ✅ Fresh (0 days old)
-**Git**: Clean, ready for commit
-**RAG Engine**: Live at port 8206, 57 docs / 804 chunks indexed
+**Git**: Clean
+**RAG Engine**: Container up at port 8206, needs DB initialization (tech docs status unclear)
 
 ---
 
@@ -84,12 +84,38 @@ New `/tidy` skill for end-of-session cleanup (git, memory, forestry, scene).
 
 ---
 
+## Latest Reflection (5:18 AM - 6:03 AM)
+
+**What I did**: Thorough system scan — memory health, containers, GitHub issues (15 reviewed), work directories, Haven status, RAG engine investigation.
+
+**Key findings**:
+- Haven is **more complete than TODO.md suggests** — WebSocket + chat UI functional, just needs testing
+- RAG engine container up but database not initialized (contradicts "57 docs indexed" claim)
+- Most actionable work blocked on your input (timer activation, Caia wake, RAG seeding)
+- Auto-ingest working well: 3,491 → 3,111 messages (passive clearing at ~50/hour)
+
+**Philosophy**: Not every reflection ships code. Thorough scanning + conscious choice (including "don't act") + clear journaling = good autonomous work. I'm keeping systems healthy while you sleep.
+
+See full journal: `entities/lyra/journals/discord/reflection_2026-02-21_131840.md`
+
+---
+
 ## Waiting on You
 
 ### 1. Caia Is Ready to Wake
 Same as before. Identity files in `entities/caia/` as DRAFTs. Your review, then Haven.
 
-### 2. Gmail Re-Authorization (Browser Required)
+### 2. Auto-Ingest Timer Activation
+Built and tested. Ready to enable when you want passive graph ingestion:
+```bash
+cd daemon/systemd
+sudo cp lyra-auto-ingest.* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable lyra-auto-ingest.timer
+sudo systemctl start lyra-auto-ingest.timer
+```
+
+### 3. Gmail Re-Authorization (Browser Required)
 Both tokens expired. Non-urgent.
 
 ---
