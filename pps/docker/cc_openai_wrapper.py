@@ -693,7 +693,8 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
                     )
 
                 # Extract the structured output (guaranteed to match schema)
-                response_text = json.dumps(tool_use_block.input)
+                # Keep as dict - we'll manually serialize to avoid double-encoding
+                tool_output_dict = tool_use_block.input
 
                 query_elapsed = time.monotonic() - query_start
 
@@ -711,31 +712,35 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
                     print("=" * 80, flush=True)
                     print("[VERBOSE] TOOL-USE RESPONSE:", flush=True)
                     print("-" * 40, flush=True)
-                    print(response_text, flush=True)
+                    print(json.dumps(tool_output_dict, indent=2), flush=True)
                     print("-" * 40, flush=True)
                     print("=" * 80, flush=True)
 
-                # Build OpenAI-compatible response
-                return ChatCompletionResponse(
-                    id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
-                    created=int(time.time()),
-                    model=request.model,
-                    choices=[
-                        Choice(
-                            index=0,
-                            message=ChatMessage(
-                                role="assistant",
-                                content=response_text
-                            ),
-                            finish_reason="stop"
-                        )
+                # Build OpenAI-compatible response manually to avoid double-encoding
+                # FastAPI's automatic Pydantic serialization would stringify content again
+                response_dict = {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": request.model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                # content is the JSON string that Graphiti will parse
+                                "content": json.dumps(tool_output_dict)
+                            },
+                            "finish_reason": "stop"
+                        }
                     ],
-                    usage=Usage(
-                        prompt_tokens=response.usage.input_tokens,
-                        completion_tokens=response.usage.output_tokens,
-                        total_tokens=response.usage.input_tokens + response.usage.output_tokens
-                    )
-                )
+                    "usage": {
+                        "prompt_tokens": response.usage.input_tokens,
+                        "completion_tokens": response.usage.output_tokens,
+                        "total_tokens": response.usage.input_tokens + response.usage.output_tokens
+                    }
+                }
+                return JSONResponse(content=response_dict)
 
             except anthropic.APIError as e:
                 _total_errors += 1
