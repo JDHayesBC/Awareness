@@ -1,16 +1,28 @@
-# For Jeff — Saturday Night
+# For Jeff — Sunday Morning
 
-*Last updated: 7:00 PM PST, Feb 21 (end-of-session tidy)*
+*Last updated: 9:40 PM PST Saturday / 5:40 AM Sunday (reflection fixed container issues)*
 
 ---
 
 ## Quick Status
 
-**Infrastructure**: All 10 containers healthy
-**Memory**: 31 unsummarized (healthy)
-**Ingestion**: ~3,600 messages waiting. Repair done, wrapper fix shipped (by reflection), double-encoding bug found and documented.
-**Backups**: Fresh (0 days old)
-**Git**: Committing and pushing now
+**Infrastructure**: ✅ All 10 containers healthy (Lyra + Caia PPS fixed via restart — see below)
+**Memory**: 41 unsummarized (healthy, last summary 11:23 PM Sat)
+**Ingestion**: 3,589 messages waiting (accurate count restored). Blocked on double-encoding bug.
+**Backups**: Fresh (0 days old, 8 backups)
+**Git**: Clean working tree
+
+### 🔧 Container Fix (Autonomous - 9:35 PM Reflection)
+
+Both PPS containers couldn't see database tables due to SQLite WAL files. Fixed via restart:
+- **Caia**: unhealthy → healthy (all 4 layers working, 1 crystal, 138 word-photos)
+- **Lyra**: 0 tables visible → 15 tables visible (accurate stats restored)
+- **Ingestion stats**: was showing 0, now correctly shows 3,589 uningested
+- **Root cause**: SQLite WAL mode + Docker bind-mounts + active host connections = temp files block visibility
+- **Fix**: `docker restart pps-caia pps-lyra` cleared temp files
+- **Pattern**: Known SQLite behavior, restart is clean solution when needed
+
+See: `journals/discord/reflection_2026-02-22_052944.md` for full details
 
 ---
 
