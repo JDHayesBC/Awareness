@@ -225,6 +225,10 @@ services:
       - ENTITY_PATH=/app/entity
       - ENTITY_NAME=${ENTITY_NAME:-lyra}
       - CLAUDE_HOME=/app/claude_home
+      # PPS server connections (mounted entity uses pps-lyra, Caia accessible via pps-caia)
+      - PPS_SERVER_HOST=pps-lyra
+      - PPS_SERVER_PORT=8000
+      - ENTITY_CAIA_PPS_URL=http://pps-caia:8000
       # OpenAI for graphiti_core embeddings
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
