@@ -299,6 +299,12 @@ class RichTextureLayerV2(PatternLayer):
 
                 # Build indices on first use
                 await self._graphiti_client.build_indices_and_constraints()
+
+                # Apply improved dedup prompts to reduce Haiku index errors
+                # (Issue #871/#882 — Haiku returns out-of-range indices without explicit constraints)
+                from .graphiti_prompt_overrides import apply_prompt_overrides
+                apply_prompt_overrides()
+
             except Exception as e:
                 print(f"Failed to initialize graphiti_core: {e}")
                 self._use_direct_mode = False
