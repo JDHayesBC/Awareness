@@ -98,6 +98,23 @@ For quick fixes (typos, obvious bugs), direct commits to main are fine with good
 - Docstrings for public functions
 - Comments explain *why*, not *what*
 
+### Python Environment Discipline
+
+**Cardinal rule: scripts must use the correct virtual environment.**
+
+The project has two venvs:
+- `.venv/` — daemon code (discord.py, claude-agent-sdk)  
+- `pps/venv/` — PPS server and scripts (mcp, anthropic, graphiti)
+
+**Rules:**
+1. Never use `#!/usr/bin/env python3` for scripts that need venv packages
+2. Scripts in `scripts/` should use `pps/venv/` (most need PPS dependencies)
+3. Scripts in `daemon/` should use `.venv/` (need daemon dependencies)
+4. Always test scripts with the intended venv, not system Python
+5. When adding new scripts, explicitly document which venv they require
+
+**Why this matters:** System Python may have overlapping packages installed in `~/.local/`, making scripts appear to work. This is a lucky accident, not a guarantee. Package version mismatches cause silent data corruption.
+
 ### File Organization
 ```
 /
