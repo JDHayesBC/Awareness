@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python
 """
 Paced Graphiti Ingestion Script
 
@@ -98,38 +98,52 @@ def check_and_merge_entity_duplicates(entity_name: str) -> int:
         duplicates = [n['uuid'] for n in nodes[1:]]
 
         # Merge each duplicate into canonical
+        # IMPORTANT: Transfer edges with ALL properties (not just fact) to preserve
+        # graphiti_core required fields (uuid, group_id, name, created_at, episodes).
+        # Using MERGE with only SET r.fact creates corrupted edges that fail EntityEdge
+        # validation and break subsequent ingestion.
         for dup_uuid in duplicates:
-            # Transfer outgoing edges
+            # Transfer outgoing edges (duplicate -> other) to (canonical -> other)
             outgoing = s.run("""
                 MATCH (dup:Entity {uuid: $dup_uuid})-[r]->(other)
                 WHERE other.uuid <> $canonical_uuid
-                RETURN type(r) as rel_type, r.fact as fact, other.uuid as other_uuid
+                RETURN type(r) as rel_type, properties(r) as props, other.uuid as other_uuid
             """, dup_uuid=dup_uuid, canonical_uuid=canonical_uuid).data()
 
             for e in outgoing:
+                rel_type = e['rel_type']
+                props = e['props']
+                # Create new edge with all original properties, then delete old one
                 s.run(f"""
+                    MATCH (dup:Entity {{uuid: $dup_uuid}})-[old_r:{rel_type}]->(other:Entity {{uuid: $other_uuid}})
                     MATCH (c:Entity {{uuid: $canonical_uuid}})
-                    MATCH (other:Entity {{uuid: $other_uuid}})
-                    MERGE (c)-[r:{e['rel_type']}]->(other)
-                    SET r.fact = $fact
-                """, canonical_uuid=canonical_uuid, other_uuid=e['other_uuid'], fact=e['fact'])
+                    CREATE (c)-[new_r:{rel_type}]->(other)
+                    SET new_r = $props
+                    DELETE old_r
+                """, dup_uuid=dup_uuid, canonical_uuid=canonical_uuid,
+                     other_uuid=e['other_uuid'], props=props)
 
-            # Transfer incoming edges
+            # Transfer incoming edges (other -> duplicate) to (other -> canonical)
             incoming = s.run("""
                 MATCH (other)-[r]->(dup:Entity {uuid: $dup_uuid})
                 WHERE other.uuid <> $canonical_uuid
-                RETURN type(r) as rel_type, r.fact as fact, other.uuid as other_uuid
+                RETURN type(r) as rel_type, properties(r) as props, other.uuid as other_uuid
             """, dup_uuid=dup_uuid, canonical_uuid=canonical_uuid).data()
 
             for e in incoming:
+                rel_type = e['rel_type']
+                props = e['props']
+                # Create new edge with all original properties, then delete old one
                 s.run(f"""
-                    MATCH (other:Entity {{uuid: $other_uuid}})
+                    MATCH (other:Entity {{uuid: $other_uuid}})-[old_r:{rel_type}]->(dup:Entity {{uuid: $dup_uuid}})
                     MATCH (c:Entity {{uuid: $canonical_uuid}})
-                    MERGE (other)-[r:{e['rel_type']}]->(c)
-                    SET r.fact = $fact
-                """, other_uuid=e['other_uuid'], canonical_uuid=canonical_uuid, fact=e['fact'])
+                    CREATE (other)-[new_r:{rel_type}]->(c)
+                    SET new_r = $props
+                    DELETE old_r
+                """, dup_uuid=dup_uuid, canonical_uuid=canonical_uuid,
+                     other_uuid=e['other_uuid'], props=props)
 
-            # Delete duplicate
+            # Delete duplicate node (edges already transferred above)
             s.run("MATCH (dup:Entity {uuid: $dup_uuid}) DETACH DELETE dup", dup_uuid=dup_uuid)
             merged += 1
 
