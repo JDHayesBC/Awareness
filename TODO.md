@@ -60,7 +60,7 @@
 | 2 | **Fix Haiku wrapper structured output** | **✅ DONE** | Double-encoding fix (`8083ffd`), tool_use schema enforcement (`091806f`), schema deref + output recovery (`64c446c`), persistent client + hardening (`477265d`), broadened fix detection + DIAG logging (`048879e`). |
 | 3 | **Venv audit** | **✅ DONE** | Audit complete, rule documented in DEVELOPMENT_STANDARDS.md. Three venvs found, shebangs unfixed. Issue #144. |
 | 4 | **Ingestion tracking redesign** | **✅ DONE** | Per-row status columns (graphiti_status, graphiti_error, graphiti_attempted_at). Range-based marking replaced with per-ID marking. Failed messages tracked with error reason. Issue #145, commit `048879e`. |
-| 5 | **Catch up ingestion backlog** | **🔄 IN PROGRESS** | ~3,597 pending. Testing with new tracking before bulk run. |
+| 5 | **Catch up ingestion backlog** | **⏸️ BLOCKED** | ~4,252 pending. Test batch (2026-02-22 reflection) found wrapper issue: `_fix_tool_output()` only handles `edges` field, but Haiku also returns string-encoded JSON for `extracted_entities`, `duplicate_facts`. Needs generalization to ALL list fields before bulk run. See reflection journal 2026-02-22_210826. |
 | 6 | **Graph curation run** | **TODO** | Known issues: duplicates from invalid dedup index bug, Jeff/Brandi entity overlap (first-person references confused source attribution). Graph quality is good (observatory summaries were solid) — curate, don't rebuild. |
 | 7 | **Wire realtime terminal ingestion hooks** | **TODO** (unblocked) | Discord already does realtime ingestion. Terminal needs the same. Prevents future backlogs. |
 
