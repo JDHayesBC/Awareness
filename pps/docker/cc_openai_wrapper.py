@@ -140,6 +140,9 @@ class ChatCompletionResponse(BaseModel):
 
 invoker: Optional[ClaudeInvoker] = None
 
+# Persistent Anthropic client for json_schema requests (avoids 137k+ instantiations)
+_anthropic_client: Optional[anthropic.Anthropic] = None
+
 # Zero-downtime restart coordination
 _ready_event: asyncio.Event = None  # Initialized in lifespan (needs running loop)
 _restart_lock: asyncio.Lock = None
@@ -408,13 +411,21 @@ async def initialize_invoker():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle."""
-    global _ready_event, _restart_lock, _no_active_queries
+    global _ready_event, _restart_lock, _no_active_queries, _anthropic_client
 
     # Initialize async primitives (need running event loop)
     _ready_event = asyncio.Event()
     _restart_lock = asyncio.Lock()
     _no_active_queries = asyncio.Event()
     _no_active_queries.set()  # Initially no queries, so event is set
+
+    # Initialize persistent Anthropic client for json_schema requests
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if api_key:
+        _anthropic_client = anthropic.Anthropic(api_key=api_key)
+        print("[INIT] Persistent Anthropic client created", flush=True)
+    else:
+        print("[INIT] WARNING: No ANTHROPIC_API_KEY set, json_schema path will fail", flush=True)
 
     # Startup
     await initialize_invoker()
@@ -533,28 +544,36 @@ def _deref_json_schema(schema: dict) -> dict:
 
     Only handles the simple case: $ref pointing to #/$defs/<Name>.
     """
-    defs = schema.get("$defs", {})
-    if not defs:
-        return schema  # No $defs, nothing to inline
+    try:
+        defs = schema.get("$defs", {})
+        if not defs:
+            return schema  # No $defs, nothing to inline
 
-    def resolve(node: Any) -> Any:
-        if isinstance(node, dict):
-            if "$ref" in node and len(node) == 1:
-                # Pure $ref — inline the definition
-                ref = node["$ref"]
-                if ref.startswith("#/$defs/"):
-                    def_name = ref[len("#/$defs/"):]
-                    if def_name in defs:
-                        return resolve(defs[def_name])
-                return node  # Unknown $ref, leave as-is
+        # graphiti_core schemas are acyclic, but guard against pathological input
+        def resolve(node: Any, seen: frozenset = frozenset()) -> Any:
+            if isinstance(node, dict):
+                if "$ref" in node and len(node) == 1:
+                    # Pure $ref — inline the definition
+                    ref = node["$ref"]
+                    if ref.startswith("#/$defs/"):
+                        def_name = ref[len("#/$defs/"):]
+                        if def_name in defs and def_name not in seen:
+                            return resolve(defs[def_name], seen | {def_name})
+                        elif def_name in seen:
+                            # Circular ref detected — return as-is to break the cycle
+                            return node
+                    return node  # Unknown $ref, leave as-is
+                else:
+                    return {k: resolve(v, seen) for k, v in node.items() if k != "$defs"}
+            elif isinstance(node, list):
+                return [resolve(item, seen) for item in node]
             else:
-                return {k: resolve(v) for k, v in node.items() if k != "$defs"}
-        elif isinstance(node, list):
-            return [resolve(item) for item in node]
-        else:
-            return node
+                return node
 
-    return resolve(schema)
+        return resolve(schema)
+    except Exception as e:
+        print(f"[TOOL-USE] WARNING: schema deref failed: {e}", flush=True)
+        return schema
 
 
 def _fix_tool_output(schema_name: str, output: Any) -> Any:
@@ -573,88 +592,92 @@ def _fix_tool_output(schema_name: str, output: Any) -> Any:
     Returns:
         Fixed output dict, or original if no fix needed
     """
-    if not isinstance(output, dict):
-        return output
+    try:
+        if not isinstance(output, dict):
+            return output
 
-    # Fix 1: Any list field that came back as a string — parse it
-    # Haiku sometimes returns list fields as JSON-encoded strings instead of native arrays.
-    # Additionally, Haiku may generate slightly malformed JSON (e.g., unquoted string values)
-    # so we try standard parsing first, then a lenient fallback.
-    fixed = {}
-    made_fix = False
-    for key, value in output.items():
-        if isinstance(value, str) and value.strip().startswith("["):
-            try:
-                parsed = json.loads(value)
-                if isinstance(parsed, list):
-                    fixed[key] = parsed
-                    made_fix = True
-                    print(
-                        f"[TOOL-USE] Fixed string-encoded list in field '{key}' "
-                        f"for schema {schema_name}",
-                        flush=True,
-                    )
-                    continue
-            except (json.JSONDecodeError, ValueError) as parse_err:
-                # Standard parsing failed — Haiku may have generated malformed JSON
-                # (e.g., unquoted string values like "relation_type": WEARS instead of "WEARS")
-                # Try to fix common patterns: quote bare identifiers after colons
-                print(
-                    f"[TOOL-USE] String field '{key}' is not valid JSON ({parse_err}), "
-                    f"attempting lenient repair for schema {schema_name}",
-                    flush=True,
-                )
+        # Fix 1: Any list field that came back as a string — parse it
+        # Haiku sometimes returns list fields as JSON-encoded strings instead of native arrays.
+        # Additionally, Haiku may generate slightly malformed JSON (e.g., unquoted string values)
+        # so we try standard parsing first, then a lenient fallback.
+        fixed = {}
+        made_fix = False
+        for key, value in output.items():
+            if isinstance(value, str) and value.strip().startswith("["):
                 try:
-                    # Fix unquoted string values: ": IDENTIFIER," -> ": \"IDENTIFIER\","
-                    repaired = re.sub(
-                        r':\s*([A-Z_][A-Z_0-9]*)([,\n\r}])',
-                        r': "\1"\2',
-                        value
-                    )
-                    parsed = json.loads(repaired)
+                    parsed = json.loads(value)
                     if isinstance(parsed, list):
                         fixed[key] = parsed
                         made_fix = True
                         print(
-                            f"[TOOL-USE] Repaired and fixed string-encoded list in field '{key}' "
+                            f"[TOOL-USE] Fixed string-encoded list in field '{key}' "
                             f"for schema {schema_name}",
                             flush=True,
                         )
                         continue
-                except (json.JSONDecodeError, ValueError):
+                except (json.JSONDecodeError, ValueError) as parse_err:
+                    # Standard parsing failed — Haiku may have generated malformed JSON
+                    # (e.g., unquoted string values like "relation_type": WEARS instead of "WEARS")
+                    # Try to fix common patterns: quote bare identifiers after colons
                     print(
-                        f"[TOOL-USE] Could not repair field '{key}' for schema {schema_name}, "
-                        f"leaving as-is",
+                        f"[TOOL-USE] String field '{key}' is not valid JSON ({parse_err}), "
+                        f"attempting lenient repair for schema {schema_name}",
                         flush=True,
                     )
-        fixed[key] = value
+                    try:
+                        # Fix unquoted string values: ": IDENTIFIER," -> ": \"IDENTIFIER\","
+                        repaired = re.sub(
+                            r':\s*([A-Z_][A-Z_0-9]*)([,\n\r}])',
+                            r': "\1"\2',
+                            value
+                        )
+                        parsed = json.loads(repaired)
+                        if isinstance(parsed, list):
+                            fixed[key] = parsed
+                            made_fix = True
+                            print(
+                                f"[TOOL-USE] Repaired and fixed string-encoded list in field '{key}' "
+                                f"for schema {schema_name}",
+                                flush=True,
+                            )
+                            continue
+                    except (json.JSONDecodeError, ValueError):
+                        print(
+                            f"[TOOL-USE] Could not repair field '{key}' for schema {schema_name}, "
+                            f"leaving as-is",
+                            flush=True,
+                        )
+            fixed[key] = value
 
-    if made_fix:
-        output = fixed
+        if made_fix:
+            output = fixed
 
-    # Fix 2: Detect $defs-as-output pattern
-    # Pattern: output has "defs" key but missing the expected array field
-    # Example: {"defs": {"Edge": {...single edge object...}}} instead of {"edges": [{...}]}
-    if "defs" in output and isinstance(output["defs"], dict):
-        defs_val = output["defs"]
-        # If each defs value looks like a single object (not a list), treat as single-item list
-        # Try to find what the real top-level key should be by checking for "edges", "entity_resolutions", etc.
-        # Look for the most complete object in defs values
-        candidates = []
-        for def_name, def_val in defs_val.items():
-            if isinstance(def_val, dict) and len(def_val) > 1:
-                candidates.append((def_name.lower() + "s", [def_val]))  # pluralize for key name
-        if candidates:
-            # Use the first candidate as recovery
-            recovery_key, recovery_val = candidates[0]
-            print(
-                f"[TOOL-USE] Recovered defs-as-output: wrapping {candidates[0][0]} "
-                f"for schema {schema_name}",
-                flush=True,
-            )
-            return {recovery_key: recovery_val}
+        # Fix 2: Detect $defs-as-output pattern
+        # Pattern: output has "defs" key but missing the expected array field
+        # Example: {"defs": {"Edge": {...single edge object...}}} instead of {"edges": [{...}]}
+        if "defs" in output and isinstance(output["defs"], dict):
+            defs_val = output["defs"]
+            # If each defs value looks like a single object (not a list), treat as single-item list
+            # Try to find what the real top-level key should be by checking for "edges", "entity_resolutions", etc.
+            # Look for the most complete object in defs values
+            candidates = []
+            for def_name, def_val in defs_val.items():
+                if isinstance(def_val, dict) and len(def_val) > 1:
+                    candidates.append((def_name.lower() + "s", [def_val]))  # pluralize for key name
+            if candidates:
+                # Use the first candidate as recovery
+                recovery_key, recovery_val = candidates[0]
+                print(
+                    f"[TOOL-USE] Recovered defs-as-output: wrapping {candidates[0][0]} "
+                    f"for schema {schema_name}",
+                    flush=True,
+                )
+                return {recovery_key: recovery_val}
 
-    return output
+        return output
+    except Exception as e:
+        print(f"[TOOL-USE] WARNING: output fix failed: {e}", flush=True)
+        return output
 
 
 def json_schema_to_anthropic_tool(schema_name: str, schema: dict) -> dict:
@@ -780,8 +803,13 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
 
             # Call Anthropic API directly with forced tool use
             try:
-                # Initialize Anthropic client (use API key from environment)
-                client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+                # Use persistent Anthropic client
+                if _anthropic_client is None:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Anthropic client not initialized (missing ANTHROPIC_API_KEY)"
+                    )
+                client = _anthropic_client
 
                 # Get model from environment or use haiku
                 # Map short names to full model IDs

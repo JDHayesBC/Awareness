@@ -375,7 +375,7 @@ def main():
 
     # Determine proxy URL
     if args.no_proxy:
-        proxy_url = "http://localhost:8204"
+        proxy_url = "http://localhost:8204/v1"
         log("Running WITHOUT proxy — connecting directly to haiku wrapper at port 8204")
     else:
         proxy_url = f"http://localhost:{args.proxy_port}/v1"
