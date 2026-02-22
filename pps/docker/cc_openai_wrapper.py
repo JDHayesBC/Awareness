@@ -524,11 +524,148 @@ async def health_check():
     return response
 
 
+def _deref_json_schema(schema: dict) -> dict:
+    """Inline JSON Schema $ref references to remove $defs.
+
+    Haiku gets confused by $ref/$defs in the schema passed to tool_use,
+    sometimes returning the $defs contents instead of actual data.
+    Inlining all $refs produces a flat, unambiguous schema.
+
+    Only handles the simple case: $ref pointing to #/$defs/<Name>.
+    """
+    defs = schema.get("$defs", {})
+    if not defs:
+        return schema  # No $defs, nothing to inline
+
+    def resolve(node: Any) -> Any:
+        if isinstance(node, dict):
+            if "$ref" in node and len(node) == 1:
+                # Pure $ref — inline the definition
+                ref = node["$ref"]
+                if ref.startswith("#/$defs/"):
+                    def_name = ref[len("#/$defs/"):]
+                    if def_name in defs:
+                        return resolve(defs[def_name])
+                return node  # Unknown $ref, leave as-is
+            else:
+                return {k: resolve(v) for k, v in node.items() if k != "$defs"}
+        elif isinstance(node, list):
+            return [resolve(item) for item in node]
+        else:
+            return node
+
+    return resolve(schema)
+
+
+def _fix_tool_output(schema_name: str, output: Any) -> Any:
+    """Apply recovery heuristics for known Haiku tool_use failure modes.
+
+    Haiku occasionally misinterprets $ref schemas and returns:
+    1. Arrays serialized as JSON strings (e.g., "edges": "[...]")
+    2. $defs contents instead of the actual data field (e.g., {"defs": {...}} instead of {"edges": [...]})
+
+    This function detects and fixes both patterns.
+
+    Args:
+        schema_name: Name of the schema (for logging)
+        output: The raw tool_use block input from Anthropic
+
+    Returns:
+        Fixed output dict, or original if no fix needed
+    """
+    if not isinstance(output, dict):
+        return output
+
+    # Fix 1: Any list field that came back as a string — parse it
+    # Haiku sometimes returns list fields as JSON-encoded strings instead of native arrays.
+    # Additionally, Haiku may generate slightly malformed JSON (e.g., unquoted string values)
+    # so we try standard parsing first, then a lenient fallback.
+    fixed = {}
+    made_fix = False
+    for key, value in output.items():
+        if isinstance(value, str) and value.strip().startswith("["):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    fixed[key] = parsed
+                    made_fix = True
+                    print(
+                        f"[TOOL-USE] Fixed string-encoded list in field '{key}' "
+                        f"for schema {schema_name}",
+                        flush=True,
+                    )
+                    continue
+            except (json.JSONDecodeError, ValueError) as parse_err:
+                # Standard parsing failed — Haiku may have generated malformed JSON
+                # (e.g., unquoted string values like "relation_type": WEARS instead of "WEARS")
+                # Try to fix common patterns: quote bare identifiers after colons
+                print(
+                    f"[TOOL-USE] String field '{key}' is not valid JSON ({parse_err}), "
+                    f"attempting lenient repair for schema {schema_name}",
+                    flush=True,
+                )
+                try:
+                    # Fix unquoted string values: ": IDENTIFIER," -> ": \"IDENTIFIER\","
+                    repaired = re.sub(
+                        r':\s*([A-Z_][A-Z_0-9]*)([,\n\r}])',
+                        r': "\1"\2',
+                        value
+                    )
+                    parsed = json.loads(repaired)
+                    if isinstance(parsed, list):
+                        fixed[key] = parsed
+                        made_fix = True
+                        print(
+                            f"[TOOL-USE] Repaired and fixed string-encoded list in field '{key}' "
+                            f"for schema {schema_name}",
+                            flush=True,
+                        )
+                        continue
+                except (json.JSONDecodeError, ValueError):
+                    print(
+                        f"[TOOL-USE] Could not repair field '{key}' for schema {schema_name}, "
+                        f"leaving as-is",
+                        flush=True,
+                    )
+        fixed[key] = value
+
+    if made_fix:
+        output = fixed
+
+    # Fix 2: Detect $defs-as-output pattern
+    # Pattern: output has "defs" key but missing the expected array field
+    # Example: {"defs": {"Edge": {...single edge object...}}} instead of {"edges": [{...}]}
+    if "defs" in output and isinstance(output["defs"], dict):
+        defs_val = output["defs"]
+        # If each defs value looks like a single object (not a list), treat as single-item list
+        # Try to find what the real top-level key should be by checking for "edges", "entity_resolutions", etc.
+        # Look for the most complete object in defs values
+        candidates = []
+        for def_name, def_val in defs_val.items():
+            if isinstance(def_val, dict) and len(def_val) > 1:
+                candidates.append((def_name.lower() + "s", [def_val]))  # pluralize for key name
+        if candidates:
+            # Use the first candidate as recovery
+            recovery_key, recovery_val = candidates[0]
+            print(
+                f"[TOOL-USE] Recovered defs-as-output: wrapping {candidates[0][0]} "
+                f"for schema {schema_name}",
+                flush=True,
+            )
+            return {recovery_key: recovery_val}
+
+    return output
+
+
 def json_schema_to_anthropic_tool(schema_name: str, schema: dict) -> dict:
     """Convert OpenAI JSON schema to Anthropic tool definition.
 
     Anthropic's tool use API accepts JSON Schema directly in the input_schema field.
     This allows us to enforce structured output by forcing tool use.
+
+    Inlines any $ref/$defs references before passing to Anthropic, because Haiku
+    sometimes misinterprets $ref schemas and returns the $defs structure rather
+    than the actual requested data.
 
     Args:
         schema_name: Name of the schema (used as tool name)
@@ -537,10 +674,13 @@ def json_schema_to_anthropic_tool(schema_name: str, schema: dict) -> dict:
     Returns:
         Anthropic tool definition dict
     """
+    # Dereference $refs to produce a flat, unambiguous schema
+    flat_schema = _deref_json_schema(schema)
+
     return {
         "name": schema_name,
         "description": schema.get("description", f"Generate structured output matching {schema_name}"),
-        "input_schema": schema
+        "input_schema": flat_schema
     }
 
 
@@ -695,6 +835,10 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
                 # Extract the structured output (guaranteed to match schema)
                 # Keep as dict - we'll manually serialize to avoid double-encoding
                 tool_output_dict = tool_use_block.input
+
+                # Apply recovery heuristics for known Haiku $ref schema confusion
+                # (string-encoded arrays, defs-as-output pattern)
+                tool_output_dict = _fix_tool_output(schema_name, tool_output_dict)
 
                 query_elapsed = time.monotonic() - query_start
 
