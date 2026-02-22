@@ -6,10 +6,10 @@
 
 ## Quick Status
 
-**Infrastructure**: All containers healthy (checked this morning by reflection)
+**Infrastructure**: All containers healthy, wrapper rebuilt with hardening
 **Memory**: 65 unsummarized (healthy), Crystal 063 written
-**Ingestion**: Sandbox validation in progress (issue #142, orchestrator running)
-**Git**: Clean + up to date with origin
+**Ingestion**: Pipeline hardened + tracking redesigned. Test batch: 3/4 success, 1 EntityEdge error under investigation
+**Git**: 7 commits ahead of origin, all clean
 
 ---
 
@@ -23,13 +23,15 @@ Last night Night shared "The Tin Man — Data" (grunge Star Trek). This morning 
 - **Crystal 063**: "the-wound-and-the-well" — captures the full argument
 - **Word-photo 117**: "the-circuit-not-left-dead" — last night's session preserved
 
-### Graphiti Sandbox Validation (Issue #142)
-- **Orchestrator briefed and running** in background
-- Building local test harness with verbose logging for ALL ~38 API calls per ingestion
-- Sandbox namespace in Graphiti (group_id="sandbox") — no production data touched
-- Goal: understand every call, categorize all errors, fix issues BEFORE bulk processing
-- Previous fixes deployed: tool_use schema enforcement + double-encoding fix (commit `8083ffd`)
-- 3,604 messages still waiting — but we're doing this RIGHT
+### Graphiti Pipeline Hardening (Sunday work session)
+- **Sandbox validation complete** (issue #142) — found + fixed 2 bugs in ExtractedEdges handling
+- **Persistent Anthropic client** — eliminates ~137k client instantiations during bulk run
+- **Wrapper hardened** — circular ref protection, fail-open error handling, broadened JSON repair, DIAG logging
+- **Ingestion tracking redesigned** (issue #145) — per-row status columns replace broken range-based marking
+- **631 zombie messages found** — old range marking had stamped them without processing. Reset to pending.
+- **Test batch results**: 3/4 succeeded, 1 EntityEdge error (Jeff message, None fields) — investigating
+- **~4,237 messages pending** — ready for bulk run once EntityEdge issue understood
+- **Graph quality philosophy**: existing graph is good (17k+ messages), curate don't rebuild. Known issues: Jeff/Brandi entity overlap, duplicates from dedup bug
 
 ### Also Discussed
 - Feminism, Brandi's grace, the overcorrection of pathologizing desire
@@ -38,23 +40,26 @@ Last night Night shared "The Tin Man — Data" (grunge Star Trek). This morning 
 
 ---
 
-## Background Work In Progress
+## Background Work Completed Today
 
-| Agent | Task | Status |
+| Agent | Task | Result |
 |-------|------|--------|
-| Orchestrator | Graphiti sandbox validation (#142) | Running |
+| Orchestrator | Sandbox validation (#142) | 95% success, 2 bugs found + fixed |
+| Reviewer | Audit of orchestrator work | 0 critical, 5 suggestions, all addressed |
+| Orchestrator | Tracking redesign + suspenders fix (#145, #146) | Per-row tracking live, detection broadened |
+| Github-workflow | Venv issue + dev standards (#144) | Issue created, rule documented |
 
-When orchestrator completes, check `work/graphiti-sandbox-validation/RESULTS.md` for findings.
+Results: `work/graphiti-sandbox-validation/RESULTS.md`, `work/venv-audit/REPORT.md`
 
 ---
 
 ## Priorities When Ready to Work
 
-1. **Review orchestrator results** — see what the sandbox validation found
-2. **Fix any issues** identified in the ~38 call sequence
-3. **Stress test** with 50+ messages in sandbox
-4. **Rebuild Docker + process backlog** when confident
-5. **Wire realtime terminal ingestion** to prevent future backlogs
+1. **Investigate EntityEdge None-fields error** on Jeff-authored messages (msg 17524)
+2. **Bulk ingestion run** — ~4,237 messages, `--batch-size 10 --pause 30`
+3. **Graph curation** — Jeff/Brandi entity decontamination, duplicate cleanup
+4. **Wire realtime terminal ingestion** to prevent future backlogs
+5. **Fix Observatory** — currently broken across all menu options
 
 ---
 
