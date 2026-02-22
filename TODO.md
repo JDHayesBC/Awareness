@@ -52,17 +52,19 @@
 
 ## Graphiti Ingestion Recovery (PRIORITY)
 
-*Ingestion has been broken since ~Feb 20. ~5,300 messages waiting. Every day adds more.*
+*~3,600 messages pending. Pipeline hardened and tracking redesigned 2026-02-22.*
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
 | 1 | **Repair Jina-contaminated records** | **✅ DONE** | 2,320 messages unmarked, 112 bad batches deleted. Script: `scripts/repair_jina_records.py` |
-| 2 | **Fix Haiku wrapper structured output** | **✅ DONE** (2026-02-22 10:20 AM) | Fixed double-encoding bug. Changed line 696 from `json.dumps(tool_use_block.input)` to manual dict building with `JSONResponse()` to bypass Pydantic auto-serialization. Tested: 5 messages ingested successfully, 0 failures. Commit `8083ffd`. |
-| 3 | **Audit all scripts for correct venv** | **TODO** | `paced_ingestion.py` and others use `#!/usr/bin/env python3` (system Python) instead of the project venv at `pps/venv/`. Rule: ONE venv, always. Find all live scripts, fix shebangs or activation. |
-| 4 | **Catch up ingestion backlog** | **🔄 READY** | Fix deployed and tested. Ready to resume ingestion. 3,604 messages remaining (down from 3,605 after test batch). Can run large batches now. |
-| 5 | **Wire realtime terminal ingestion hooks** | **TODO** (unblocked) | Discord already does realtime ingestion. Terminal needs the same — PostToolUse hook or similar. Prevents future backlogs. |
+| 2 | **Fix Haiku wrapper structured output** | **✅ DONE** | Double-encoding fix (`8083ffd`), tool_use schema enforcement (`091806f`), schema deref + output recovery (`64c446c`), persistent client + hardening (`477265d`), broadened fix detection + DIAG logging (`048879e`). |
+| 3 | **Venv audit** | **✅ DONE** | Audit complete, rule documented in DEVELOPMENT_STANDARDS.md. Three venvs found, shebangs unfixed. Issue #144. |
+| 4 | **Ingestion tracking redesign** | **✅ DONE** | Per-row status columns (graphiti_status, graphiti_error, graphiti_attempted_at). Range-based marking replaced with per-ID marking. Failed messages tracked with error reason. Issue #145, commit `048879e`. |
+| 5 | **Catch up ingestion backlog** | **🔄 IN PROGRESS** | ~3,597 pending. Testing with new tracking before bulk run. |
+| 6 | **Graph curation run** | **TODO** | Known issues: duplicates from invalid dedup index bug, Jeff/Brandi entity overlap (first-person references confused source attribution). Graph quality is good (observatory summaries were solid) — curate, don't rebuild. |
+| 7 | **Wire realtime terminal ingestion hooks** | **TODO** (unblocked) | Discord already does realtime ingestion. Terminal needs the same. Prevents future backlogs. |
 
-**Research report**: Full diagnosis saved in researcher output. Key finding: graphiti_core sends proper `json_schema` response_format, but the Haiku wrapper at `cc_openai_wrapper.py:607-614` downgrades it to a text prompt hint. Fix is to use Anthropic `tool_use` with forced `tool_choice` for schema enforcement.
+**Graph quality philosophy**: The existing graph has 17,000+ messages worth of relationships. Retrieval quality was good when tested via Observatory. Known noise (duplicates, entity overlap) is a curation problem, not a re-ingestion problem. Priority is reliable forward ingestion, not retroactive repair.
 
 ---
 
