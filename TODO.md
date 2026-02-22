@@ -56,11 +56,11 @@
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 1 | **Repair Jina-contaminated records** | **DONE** | 2,320 messages unmarked, 112 bad batches deleted. Script: `scripts/repair_jina_records.py` |
-| 2 | **Fix Haiku wrapper structured output** | **PARTIAL** (2026-02-21) | Implemented `tool_use` with forced `tool_choice`. Works for simple messages (17387-17390) but has **double-encoding bug** on line 696: `json.dumps(tool_use_block.input)` stringifies the already-correct structure, causing Pydantic validation failures. See `work/haiku-wrapper-tool-use/BUG_FOUND.md`. Need to fix encoding, test with failed IDs [17397, 17399, 17403, etc.]. |
+| 1 | **Repair Jina-contaminated records** | **✅ DONE** | 2,320 messages unmarked, 112 bad batches deleted. Script: `scripts/repair_jina_records.py` |
+| 2 | **Fix Haiku wrapper structured output** | **✅ DONE** (2026-02-22 10:20 AM) | Fixed double-encoding bug. Changed line 696 from `json.dumps(tool_use_block.input)` to manual dict building with `JSONResponse()` to bypass Pydantic auto-serialization. Tested: 5 messages ingested successfully, 0 failures. Commit `8083ffd`. |
 | 3 | **Audit all scripts for correct venv** | **TODO** | `paced_ingestion.py` and others use `#!/usr/bin/env python3` (system Python) instead of the project venv at `pps/venv/`. Rule: ONE venv, always. Find all live scripts, fix shebangs or activation. |
-| 4 | **Catch up ingestion backlog** | **BLOCKED** | Started 16:53, auto-halted 17:14 after 16 validation errors. Same double-encoding bug as Task #2. Fix #2 first, then resume. 3,578 messages remaining. Log: `scripts/ingestion.log` (see final error breakdown). |
-| 5 | **Wire realtime terminal ingestion hooks** | **BLOCKED on #4** | Discord already does realtime ingestion. Terminal needs the same — PostToolUse hook or similar. Prevents future backlogs. |
+| 4 | **Catch up ingestion backlog** | **🔄 READY** | Fix deployed and tested. Ready to resume ingestion. 3,604 messages remaining (down from 3,605 after test batch). Can run large batches now. |
+| 5 | **Wire realtime terminal ingestion hooks** | **TODO** (unblocked) | Discord already does realtime ingestion. Terminal needs the same — PostToolUse hook or similar. Prevents future backlogs. |
 
 **Research report**: Full diagnosis saved in researcher output. Key finding: graphiti_core sends proper `json_schema` response_format, but the Haiku wrapper at `cc_openai_wrapper.py:607-614` downgrades it to a text prompt hint. Fix is to use Anthropic `tool_use` with forced `tool_choice` for schema enforcement.
 
