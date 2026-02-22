@@ -576,14 +576,53 @@ def _deref_json_schema(schema: dict) -> dict:
         return schema
 
 
+def _try_repair_json(value: str) -> Any:
+    """Attempt to parse a JSON string, with fallback repair heuristics.
+
+    Tries standard json.loads first, then applies several repair patterns
+    for known Haiku malformation modes.
+
+    Returns the parsed value on success, or raises ValueError on failure.
+    """
+    # Pass 1: standard parse
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Pass 2: quote bare UPPER_CASE identifiers after colons
+    # e.g.  "relation_type": WEARS,  ->  "relation_type": "WEARS",
+    repaired = re.sub(
+        r':\s*([A-Z_][A-Z_0-9]*)([,\n\r\]}])',
+        r': "\1"\2',
+        value,
+    )
+    try:
+        return json.loads(repaired)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Pass 3: remove trailing commas before ] or }
+    repaired2 = re.sub(r',\s*([\]}])', r'\1', repaired)
+    try:
+        return json.loads(repaired2)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    raise ValueError(f"All repair passes failed for value starting with: {value[:80]!r}")
+
+
 def _fix_tool_output(schema_name: str, output: Any) -> Any:
     """Apply recovery heuristics for known Haiku tool_use failure modes.
 
     Haiku occasionally misinterprets $ref schemas and returns:
-    1. Arrays serialized as JSON strings (e.g., "edges": "[...]")
+    1. Arrays or objects serialized as JSON strings (e.g., "edges": "[...]")
     2. $defs contents instead of the actual data field (e.g., {"defs": {...}} instead of {"edges": [...]})
 
     This function detects and fixes both patterns.
+
+    Diagnostic logging is always emitted for any string field > 10 chars so that
+    future failures leave a clear trail of what Haiku actually returned (Issue #146).
 
     Args:
         schema_name: Name of the schema (for logging)
@@ -596,57 +635,55 @@ def _fix_tool_output(schema_name: str, output: Any) -> Any:
         if not isinstance(output, dict):
             return output
 
-        # Fix 1: Any list field that came back as a string — parse it
-        # Haiku sometimes returns list fields as JSON-encoded strings instead of native arrays.
-        # Additionally, Haiku may generate slightly malformed JSON (e.g., unquoted string values)
-        # so we try standard parsing first, then a lenient fallback.
+        # Fix 1: Any field that came back as a string but should be structured data.
+        # Haiku sometimes returns list/object fields as JSON-encoded strings.
+        # Detection: strings starting with "[" or "{" (after strip), or any string > 10 chars
+        # that parses as JSON (catches edge cases like missing whitespace before "[").
         fixed = {}
         made_fix = False
         for key, value in output.items():
-            if isinstance(value, str) and value.strip().startswith("["):
-                try:
-                    parsed = json.loads(value)
-                    if isinstance(parsed, list):
-                        fixed[key] = parsed
-                        made_fix = True
-                        print(
-                            f"[TOOL-USE] Fixed string-encoded list in field '{key}' "
-                            f"for schema {schema_name}",
-                            flush=True,
-                        )
-                        continue
-                except (json.JSONDecodeError, ValueError) as parse_err:
-                    # Standard parsing failed — Haiku may have generated malformed JSON
-                    # (e.g., unquoted string values like "relation_type": WEARS instead of "WEARS")
-                    # Try to fix common patterns: quote bare identifiers after colons
-                    print(
-                        f"[TOOL-USE] String field '{key}' is not valid JSON ({parse_err}), "
-                        f"attempting lenient repair for schema {schema_name}",
-                        flush=True,
-                    )
+            # Diagnostic: always log type and preview for non-trivial string fields (Issue #146)
+            if isinstance(value, str) and len(value) > 10:
+                stripped = value.strip()
+                looks_like_json = stripped.startswith("[") or stripped.startswith("{")
+                print(
+                    f"[TOOL-USE] DIAG schema={schema_name} field={key!r} "
+                    f"type={type(value).__name__} len={len(value)} "
+                    f"starts={stripped[:40]!r} looks_like_json={looks_like_json}",
+                    flush=True,
+                )
+
+            if isinstance(value, str):
+                stripped = value.strip()
+                # Attempt parse if it looks like JSON (array or object) OR is long enough to
+                # be a serialized structure that might not have obvious prefix markers.
+                should_try = (
+                    stripped.startswith("[")
+                    or stripped.startswith("{")
+                    or len(stripped) > 10
+                )
+                if should_try:
                     try:
-                        # Fix unquoted string values: ": IDENTIFIER," -> ": \"IDENTIFIER\","
-                        repaired = re.sub(
-                            r':\s*([A-Z_][A-Z_0-9]*)([,\n\r}])',
-                            r': "\1"\2',
-                            value
-                        )
-                        parsed = json.loads(repaired)
-                        if isinstance(parsed, list):
+                        parsed = _try_repair_json(value)
+                        if isinstance(parsed, (list, dict)):
                             fixed[key] = parsed
                             made_fix = True
                             print(
-                                f"[TOOL-USE] Repaired and fixed string-encoded list in field '{key}' "
+                                f"[TOOL-USE] Fixed string-encoded JSON in field '{key}' "
+                                f"(parsed as {type(parsed).__name__}) "
                                 f"for schema {schema_name}",
                                 flush=True,
                             )
                             continue
-                    except (json.JSONDecodeError, ValueError):
-                        print(
-                            f"[TOOL-USE] Could not repair field '{key}' for schema {schema_name}, "
-                            f"leaving as-is",
-                            flush=True,
-                        )
+                        # Parsed but it's a scalar (e.g. a plain string "hello") — leave as-is
+                    except ValueError as repair_err:
+                        if stripped.startswith("[") or stripped.startswith("{"):
+                            # It looked like JSON but we couldn't parse it — worth logging
+                            print(
+                                f"[TOOL-USE] Could not parse/repair JSON-shaped field '{key}' "
+                                f"for schema {schema_name}: {repair_err}",
+                                flush=True,
+                            )
             fixed[key] = value
 
         if made_fix:

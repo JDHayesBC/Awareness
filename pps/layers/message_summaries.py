@@ -142,9 +142,30 @@ class MessageSummariesLayer(PatternLayer):
                 if 'graphiti_batch_id' not in columns:
                     cursor.execute('ALTER TABLE messages ADD COLUMN graphiti_batch_id INTEGER REFERENCES graphiti_batches(id)')
 
+                # Add per-row ingestion status columns (Issue #145)
+                if 'graphiti_status' not in columns:
+                    cursor.execute("ALTER TABLE messages ADD COLUMN graphiti_status TEXT DEFAULT 'pending'")
+                if 'graphiti_error' not in columns:
+                    cursor.execute('ALTER TABLE messages ADD COLUMN graphiti_error TEXT')
+                if 'graphiti_attempted_at' not in columns:
+                    cursor.execute('ALTER TABLE messages ADD COLUMN graphiti_attempted_at TEXT')
+
+                # One-time migration: mark existing ingested rows.
+                # When the column is first added with DEFAULT 'pending', rows that already
+                # had graphiti_batch_id set get 'pending' — fix those to 'ingested'.
+                # We use graphiti_attempted_at IS NULL as a sentinel: if that's null AND
+                # graphiti_batch_id IS NOT NULL, the row was ingested before per-row tracking.
+                cursor.execute("""
+                    UPDATE messages SET graphiti_status = 'ingested'
+                    WHERE graphiti_batch_id IS NOT NULL
+                      AND graphiti_attempted_at IS NULL
+                      AND graphiti_status = 'pending'
+                """)
+
                 # Create indexes for Graphiti batch tracking
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_messages_graphiti_batch ON messages(graphiti_batch_id)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_graphiti_batches_created_at ON graphiti_batches(created_at)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_messages_graphiti_status ON messages(graphiti_status)')
 
                 conn.commit()
 

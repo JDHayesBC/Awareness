@@ -102,7 +102,10 @@ def reset_by_date(cur: sqlite3.Cursor, since_date: str) -> tuple[int, int]:
     """Clear markers for messages in batches created on or after since_date."""
     cur.execute(
         """UPDATE messages
-           SET graphiti_batch_id = NULL, graphiti_ingested = FALSE
+           SET graphiti_batch_id = NULL,
+               graphiti_status = 'pending',
+               graphiti_error = NULL,
+               graphiti_attempted_at = NULL
            WHERE graphiti_batch_id IN (
                SELECT id FROM graphiti_batches WHERE created_at >= ?
            )""",
@@ -123,7 +126,10 @@ def reset_by_message_id(cur: sqlite3.Cursor, since_message_id: int) -> tuple[int
     """Clear markers for messages with id >= since_message_id."""
     cur.execute(
         """UPDATE messages
-           SET graphiti_batch_id = NULL, graphiti_ingested = FALSE
+           SET graphiti_batch_id = NULL,
+               graphiti_status = 'pending',
+               graphiti_error = NULL,
+               graphiti_attempted_at = NULL
            WHERE id >= ? AND graphiti_batch_id IS NOT NULL""",
         (since_message_id,)
     )
@@ -141,8 +147,12 @@ def reset_by_message_id(cur: sqlite3.Cursor, since_message_id: int) -> tuple[int
 def reset_all(cur: sqlite3.Cursor) -> tuple[int, int]:
     """Clear all ingestion markers."""
     cur.execute(
-        "UPDATE messages SET graphiti_batch_id = NULL, graphiti_ingested = FALSE "
-        "WHERE graphiti_batch_id IS NOT NULL"
+        """UPDATE messages
+           SET graphiti_batch_id = NULL,
+               graphiti_status = 'pending',
+               graphiti_error = NULL,
+               graphiti_attempted_at = NULL
+           WHERE graphiti_batch_id IS NOT NULL"""
     )
     updated = cur.rowcount
 

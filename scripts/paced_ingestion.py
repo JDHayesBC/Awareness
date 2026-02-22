@@ -154,7 +154,7 @@ async def get_uningested_messages(db_path: str, limit: int) -> list[dict]:
     cur.execute("""
         SELECT id, channel, author_name, content, is_lyra, created_at
         FROM messages
-        WHERE graphiti_batch_id IS NULL
+        WHERE (graphiti_status IS NULL OR graphiti_status = 'pending')
         ORDER BY id ASC
         LIMIT ?
     """, (limit,))
@@ -164,18 +164,35 @@ async def get_uningested_messages(db_path: str, limit: int) -> list[dict]:
     return messages
 
 
-def mark_batch_ingested(db_path: str, messages: list[dict], channels: list[str]) -> int:
-    """Mark a batch of messages as ingested."""
+def mark_batch_ingested(
+    db_path: str,
+    all_messages: list[dict],
+    succeeded: list[dict],
+    failed: list[tuple[int, str]],
+    channels: list[str],
+) -> int:
+    """Mark a batch of messages as ingested, with per-row status.
+
+    Args:
+        db_path: Path to the SQLite database.
+        all_messages: Full batch (used for batch record audit trail).
+        succeeded: Message dicts that were successfully ingested.
+        failed: List of (message_id, error_reason) for failed messages.
+        channels: Channel names seen in this batch.
+
+    Returns:
+        The batch record ID.
+    """
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
 
-    start_id = messages[0]['id']
-    end_id = messages[-1]['id']
-    message_count = len(messages)
-    time_span_start = messages[0]['created_at']
-    time_span_end = messages[-1]['created_at']
+    start_id = all_messages[0]['id']
+    end_id = all_messages[-1]['id']
+    message_count = len(all_messages)
+    time_span_start = all_messages[0]['created_at']
+    time_span_end = all_messages[-1]['created_at']
 
-    # Create batch record with all required fields
+    # Create batch record (audit trail — covers all attempted messages)
     cur.execute("""
         INSERT INTO graphiti_batches
         (start_message_id, end_message_id, message_count, channels, time_span_start, time_span_end, created_at)
@@ -184,31 +201,51 @@ def mark_batch_ingested(db_path: str, messages: list[dict], channels: list[str])
 
     batch_id = cur.lastrowid
 
-    # Update messages
-    cur.execute("""
-        UPDATE messages
-        SET graphiti_batch_id = ?
-        WHERE id >= ? AND id <= ?
-    """, (batch_id, start_id, end_id))
+    # Mark only successfully ingested messages
+    for msg in succeeded:
+        cur.execute("""
+            UPDATE messages
+            SET graphiti_batch_id = ?,
+                graphiti_status = 'ingested',
+                graphiti_attempted_at = datetime('now')
+            WHERE id = ?
+        """, (batch_id, msg['id']))
+
+    # Mark failed messages with error reason
+    for msg_id, error_reason in failed:
+        cur.execute("""
+            UPDATE messages
+            SET graphiti_status = 'failed',
+                graphiti_error = ?,
+                graphiti_attempted_at = datetime('now')
+            WHERE id = ?
+        """, (error_reason[:500] if error_reason else None, msg_id))
 
     conn.commit()
     conn.close()
     return batch_id
 
 
-def get_stats(db_path: str) -> tuple[int, int]:
-    """Get ingested and remaining counts."""
+def get_stats(db_path: str) -> tuple[int, int, int]:
+    """Get ingested, failed, and pending counts.
+
+    Returns:
+        (ingested, failed, pending) counts.
+    """
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
 
-    cur.execute("SELECT COUNT(*) FROM messages WHERE graphiti_batch_id IS NOT NULL")
+    cur.execute("SELECT COUNT(*) FROM messages WHERE graphiti_status = 'ingested'")
     ingested = cur.fetchone()[0]
 
-    cur.execute("SELECT COUNT(*) FROM messages WHERE graphiti_batch_id IS NULL")
-    remaining = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM messages WHERE graphiti_status = 'failed'")
+    failed = cur.fetchone()[0]
+
+    cur.execute("SELECT COUNT(*) FROM messages WHERE (graphiti_status IS NULL OR graphiti_status = 'pending')")
+    pending = cur.fetchone()[0]
 
     conn.close()
-    return ingested, remaining
+    return ingested, failed, pending
 
 
 async def run_ingestion(
@@ -240,8 +277,8 @@ async def run_ingestion(
     layer = RichTextureLayerV2()
     log("Graphiti layer initialized")
 
-    ingested_total, remaining = get_stats(db_path)
-    log(f"Starting state: {ingested_total} ingested, {remaining} remaining")
+    ingested_total, failed_total_prev, pending_total = get_stats(db_path)
+    log(f"Starting state: {ingested_total} ingested, {failed_total_prev} failed, {pending_total} pending")
     log("")
 
     batch_num = 0
@@ -268,7 +305,8 @@ async def run_ingestion(
         # Ingest each message
         success_count = 0
         fail_count = 0
-        failed_ids = []
+        succeeded_msgs: list[dict] = []
+        failed_msgs: list[tuple[int, str]] = []  # (id, error_reason)
         channels = set()
 
         error_categories: dict[str, int] = {}
@@ -289,44 +327,49 @@ async def run_ingestion(
                 success = await layer.store(formatted_content, metadata)
                 if success:
                     success_count += 1
+                    succeeded_msgs.append(msg)
                     channels.add(msg['channel'])
                 else:
                     fail_count += 1
-                    failed_ids.append(msg['id'])
                     # Get error context from the layer
                     err = layer.get_last_error()
                     if err:
                         cat = err["category"]
+                        error_reason = f"[{cat}] {err['message']}"
                         error_categories[cat] = error_categories.get(cat, 0) + 1
                         log(f"  ✗ store() returned False for msg {msg['id']} [{cat}]: {err['message'][:120]}")
                         if not err["is_transient"]:
                             log(f"    Advice: {err['advice']}")
                     else:
+                        error_reason = "store() returned False (no error context)"
                         error_categories["unknown"] = error_categories.get("unknown", 0) + 1
                         log(f"  ✗ store() returned False for msg {msg['id']} (no error context)")
+                    failed_msgs.append((msg['id'], error_reason))
             except Exception as e:
                 fail_count += 1
-                failed_ids.append(msg['id'])
+                error_reason = f"exception: {e}"
+                failed_msgs.append((msg['id'], error_reason))
                 error_categories["exception"] = error_categories.get("exception", 0) + 1
                 log(f"  ✗ Exception on msg {msg['id']}: {e}")
 
         total_errors += fail_count
 
-        # Mark batch (only successful messages tracked)
-        if success_count > 0:
-            batch_id = mark_batch_ingested(
-                db_path,
-                messages,
-                list(channels)
-            )
+        # Always mark the batch — record successes and failures per-row
+        batch_id = mark_batch_ingested(
+            db_path,
+            messages,
+            succeeded_msgs,
+            failed_msgs,
+            list(channels)
+        )
 
         elapsed = (datetime.now() - start_time).total_seconds()
-        ingested_total, remaining = get_stats(db_path)
+        ingested_total, failed_total, pending_total = get_stats(db_path)
 
         log(f"  ✓ {success_count} ingested, {fail_count} failed in {elapsed:.1f}s")
-        if failed_ids:
-            log(f"  Failed message IDs: {failed_ids}")
-        log(f"  Progress: {ingested_total} total ingested, {remaining} remaining")
+        if failed_msgs:
+            log(f"  Failed message IDs: {[fid for fid, _ in failed_msgs]}")
+        log(f"  Progress: {ingested_total} ingested, {failed_total} failed, {pending_total} pending")
         log(f"  Cumulative errors: {total_errors}")
 
         # --- Error halt checks ---
@@ -347,7 +390,7 @@ async def run_ingestion(
                         log(f"*** PERMANENT ERROR: Check OPENAI_API_KEY credits in pps/docker/.env ***")
                     elif has_transient:
                         log(f"*** TRANSIENT: Retry with --pause 120 or higher ***")
-                log(f"*** Diagnose before continuing. Failed IDs: {failed_ids} ***")
+                log(f"*** Diagnose before continuing. Failed IDs: {[fid for fid, _ in failed_msgs]} ***")
                 halted = True
                 break
 
@@ -366,7 +409,7 @@ async def run_ingestion(
         entity_name = get_primary_entity_name()
         check_and_merge_entity_duplicates(entity_name)
 
-        if remaining == 0:
+        if pending_total == 0:
             log("All messages ingested!")
             break
 
@@ -377,13 +420,14 @@ async def run_ingestion(
     # Final stats
     log("")
     log("=== Final Stats ===")
-    ingested_total, remaining = get_stats(db_path)
+    ingested_total, failed_total, pending_total = get_stats(db_path)
     log(f"Total ingested: {ingested_total}")
-    log(f"Remaining: {remaining}")
+    log(f"Total failed:   {failed_total}")
+    log(f"Total pending:  {pending_total}")
     log(f"Total errors: {total_errors}")
     if halted:
         log(f"Status: HALTED (errors exceeded threshold)")
-    elif remaining == 0:
+    elif pending_total == 0:
         log(f"Status: COMPLETE")
     else:
         log(f"Status: STOPPED (batch limit reached)")
