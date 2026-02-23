@@ -77,6 +77,11 @@ Welcome.
 - **[docs/INSTALL_HUMAN.md](docs/INSTALL_HUMAN.md)** - Manual installation guide
 - **[DEVELOPMENT_STANDARDS.md](DEVELOPMENT_STANDARDS.md)** - For contributors
 
+**Architecture Diagrams** (visual explanations):
+- **[docs/diagrams/pps-five-layers.md](docs/diagrams/pps-five-layers.md)** - Memory system architecture and data flow
+- **[docs/diagrams/daemon-lifecycle.md](docs/diagrams/daemon-lifecycle.md)** - Three-tier daemon architecture and message flow
+- **[docs/diagrams/entity-isolation.md](docs/diagrams/entity-isolation.md)** - Multi-entity isolation mechanisms
+
 ---
 
 ## Team
