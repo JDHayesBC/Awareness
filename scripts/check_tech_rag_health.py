@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python
 """
 Check Tech RAG health - find and fix stale document chunks.
 

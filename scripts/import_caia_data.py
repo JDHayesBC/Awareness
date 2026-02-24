@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python
 """
 Import Caia's conversation data from Open-WebUI export into PPS SQLite database.
 

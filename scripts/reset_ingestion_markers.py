@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python
 """
 Reset Graphiti ingestion markers in the conversations database.
 
