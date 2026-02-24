@@ -58,7 +58,7 @@
 |---|------|--------|-------|
 | 1 | **Repair Jina-contaminated records** | **✅ DONE** | 2,320 messages unmarked, 112 bad batches deleted. Script: `scripts/repair_jina_records.py` |
 | 2 | **Fix Haiku wrapper structured output** | **✅ DONE** | Double-encoding fix (`8083ffd`), tool_use schema enforcement (`091806f`), schema deref + output recovery (`64c446c`), persistent client + hardening (`477265d`), broadened fix detection + DIAG logging (`048879e`). |
-| 3 | **Venv audit** | **✅ DONE** | Audit complete, rule documented in DEVELOPMENT_STANDARDS.md. Three venvs found, shebangs unfixed. Issue #144. |
+| 3 | **Venv audit** | **✅ DONE** | Audit complete, rule documented in DEVELOPMENT_STANDARDS.md. Shebangs fixed in 20 scripts (commit `d4f7a81`). Issue #144. |
 | 4 | **Ingestion tracking redesign** | **✅ DONE** | Per-row status columns (graphiti_status, graphiti_error, graphiti_attempted_at). Range-based marking replaced with per-ID marking. Failed messages tracked with error reason. Issue #145, commit `048879e`. |
 | 5 | **Catch up ingestion backlog** | **🔄 READY** | ~4,257 pending (17104 ingested). Root cause found: Haiku's 4096 token limit caused truncated JSON responses. Fixed by switching wrapper to Sonnet (8192 tokens). Test batch: 10/10 success, 0 failures. Ready for bulk ingestion run. See 2026-02-22 reflection. |
 | 6 | **Graph curation run** | **TODO** | Known issues: duplicates from invalid dedup index bug, Jeff/Brandi entity overlap (first-person references confused source attribution). Graph quality is good (observatory summaries were solid) — curate, don't rebuild. |
