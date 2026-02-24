@@ -17,6 +17,7 @@ pps/docker/entities/
 *.db-shm
 
 # Credentials and secrets
+secrets/
 discord_bot_token.txt
 .env
 *.key

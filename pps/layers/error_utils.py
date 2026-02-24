@@ -26,18 +26,20 @@ def categorize_graphiti_error(exception: Exception) -> dict:
             "advice": "Wait and retry with longer pause between batches (--pause 120)",
         }
 
-    if "quota" in msg or "insufficient" in msg or "billing" in msg or "exceeded" in msg:
+    if "quota" in msg or "insufficient" in msg or "billing" in msg or "credit balance" in msg:
+        api = "Anthropic (ANTHROPIC_API_KEY)" if "anthropic" in msg else "OpenAI (OPENAI_API_KEY)"
         return {
             "category": "quota_exceeded",
             "is_transient": False,
-            "advice": "OpenAI quota exhausted — add credits or switch embedding model",
+            "advice": f"{api} quota exhausted — add credits. See secrets/api_keys.env",
         }
 
     if "auth" in msg or "401" in msg or "403" in msg or "invalid api key" in msg or "api key" in msg:
+        api = "Anthropic (ANTHROPIC_API_KEY)" if "anthropic" in msg else "OpenAI (OPENAI_API_KEY)"
         return {
             "category": "auth_failure",
             "is_transient": False,
-            "advice": "Check OPENAI_API_KEY in pps/docker/.env — key may be invalid or revoked",
+            "advice": f"Check {api} in pps/docker/.env — key may be invalid or revoked",
         }
 
     # Neo4j errors take priority over generic connection errors

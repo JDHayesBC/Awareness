@@ -401,7 +401,8 @@ async def run_ingestion(
                     has_quota = "quota_exceeded" in error_categories or "auth_failure" in error_categories
                     has_transient = "rate_limit" in error_categories or "network_timeout" in error_categories
                     if has_quota:
-                        log(f"*** PERMANENT ERROR: Check OPENAI_API_KEY credits in pps/docker/.env ***")
+                        log(f"*** PERMANENT ERROR: API quota exhausted — check secrets/api_keys.env ***")
+                        log(f"*** Check error messages above for which API (OpenAI vs Anthropic) ***")
                     elif has_transient:
                         log(f"*** TRANSIENT: Retry with --pause 120 or higher ***")
                 log(f"*** Diagnose before continuing. Failed IDs: {[fid for fid, _ in failed_msgs]} ***")

@@ -377,6 +377,33 @@ When succession completes:
 
 ---
 
+## 11. Secrets Management
+
+**Invariant: One master key file. Individual .env files consume from it.**
+
+### Master Key File
+
+`secrets/api_keys.env` — single source of truth for all API keys. Gitignored via `secrets/` rule. Each key has a comment documenting what it's for, which account owns it, and when it was last rotated.
+
+### Key Consumers
+
+| Key | Master File Field | Consumed By |
+|-----|------------------|-------------|
+| OpenAI | `OPENAI_API_KEY` | `pps/docker/.env` (Graphiti embeddings) |
+| Jina | `JINA_API_KEY` | `pps/docker/.env` (RAG engine) |
+| Anthropic | `ANTHROPIC_API_KEY` | `pps/docker/.env` (Graphiti entity extraction) |
+| Discord | `DISCORD_BOT_TOKEN` | `daemon/.env` (Discord daemon) |
+| Neo4j | `NEO4J_PASSWORD` | `pps/docker/.env` (graph database) |
+
+### Key Rotation Procedure
+
+1. Update the key in `secrets/api_keys.env` (with rotation date comment)
+2. Propagate to each consuming `.env` file
+3. Restart affected containers: `cd pps/docker && docker compose up -d`
+4. Verify: `docker exec <container> env | grep <KEY_NAME>`
+
+---
+
 ## Related Documents
 
 | Document | Covers |

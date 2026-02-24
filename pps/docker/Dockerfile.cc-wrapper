@@ -1,6 +1,7 @@
-# Dockerfile for OpenAI-compatible ClaudeInvoker wrapper
+# Dockerfile for OpenAI-compatible stateless SDK wrapper
 #
 # Provides /v1/chat/completions endpoint for Graphiti to use Claude instead of OpenAI.
+# Uses stateless sdk_query() — fresh subprocess per call, no context accumulation.
 #
 # Build from project root:
 #   docker build -f pps/docker/Dockerfile.cc-wrapper -t pps-cc-wrapper .
@@ -26,9 +27,6 @@ RUN npm install -g @anthropic-ai/claude-code
 # Copy requirements and install Python dependencies
 COPY pps/docker/requirements-cc-wrapper.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy daemon/cc_invoker module (needed for ClaudeInvoker)
-COPY daemon/cc_invoker /app/daemon/cc_invoker
 
 # Copy wrapper server
 COPY pps/docker/cc_openai_wrapper.py .

@@ -1,32 +1,31 @@
 #!/usr/bin/env python3
 """
-OpenAI-Compatible Wrapper for ClaudeInvoker
+OpenAI-Compatible Wrapper — Stateless SDK Query
 
-Provides OpenAI /v1/chat/completions endpoint using ClaudeInvoker backend.
-Eliminates Graphiti's OpenAI API costs while leveraging Jeff's Claude subscription.
+Provides OpenAI /v1/chat/completions endpoint using the claude_agent_sdk
+stateless query() function. Eliminates Graphiti's OpenAI API costs while
+leveraging Jeff's Claude subscription.
 
 Architecture:
     Graphiti → /v1/chat/completions (OpenAI format)
               ↓
-    This wrapper (translation)
+    This wrapper (translation + schema enforcement)
               ↓
-    ClaudeInvoker (persistent Claude connection)
+    claude_agent_sdk.query() (stateless, fresh session per call)
               ↓
-    Claude Code CLI
+    Claude Code CLI → Claude API (via CC subscription, free)
 
-Hardened for production use:
-    - Zero-downtime restarts (requests queue during restart, never 503)
-    - Role priming after restart (no identity confusion)
-    - Proactive restart at 80% context (restart between requests)
-    - Response validation with retry (no empty responses)
-    - Request-level retry on failure
-    - Full observability (timing, context %, restart counts)
+Each call spawns a fresh subprocess with zero conversation history.
+This eliminates context accumulation (root cause of 19-127s escalating latency)
+and schema confusion (context bleed from prior calls).
+
+Measured: ~5.9s/call (steady, no escalation) vs 19-127s/call (ClaudeSDKClient).
 
 Usage:
     docker compose up pps-haiku-wrapper
 
-    curl http://localhost:8000/v1/chat/completions \
-        -H "Content-Type: application/json" \
+    curl http://localhost:8000/v1/chat/completions \\
+        -H "Content-Type: application/json" \\
         -d '{
             "model": "haiku",
             "messages": [
@@ -37,15 +36,12 @@ Usage:
 """
 
 import asyncio
-import gc
 import json
 import os
 import re
-import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -54,30 +50,19 @@ from pydantic import BaseModel
 import uvicorn
 import anthropic
 
+from claude_agent_sdk import query as sdk_query, ClaudeAgentOptions
+from claude_agent_sdk.types import AssistantMessage, TextBlock
+
 try:
     import psutil
     PSUTIL_AVAILABLE = True
 except ImportError:
     PSUTIL_AVAILABLE = False
 
-# Add daemon directory to path for ClaudeInvoker import
-sys.path.insert(0, str(Path(__file__).parent / "daemon"))
-
-from cc_invoker.invoker import ClaudeInvoker, InvokerQueryError
-
 
 # =============================================================================
 # Configuration
 # =============================================================================
-
-STARTUP_PROMPT = (
-    "You are a stateless JSON extraction API. "
-    "You receive requests in 'System: ... User: ...' format. "
-    "Respond with exactly what is requested - typically raw JSON. "
-    "Do not introduce yourself. Do not explain what you are. "
-    "Do not wrap JSON in markdown code fences. "
-    "Just output the requested content directly."
-)
 
 # Verbose mode for debugging extraction issues
 # Set WRAPPER_VERBOSE=1 to log full prompts and responses
@@ -138,27 +123,17 @@ class ChatCompletionResponse(BaseModel):
 # Global State
 # =============================================================================
 
-invoker: Optional[ClaudeInvoker] = None
-
-# Persistent Anthropic client for json_schema requests (avoids 137k+ instantiations)
+# Persistent Anthropic client for json_schema fallback path
 _anthropic_client: Optional[anthropic.Anthropic] = None
 
-# Zero-downtime restart coordination
-_ready_event: asyncio.Event = None  # Initialized in lifespan (needs running loop)
-_restart_lock: asyncio.Lock = None
-
-# Track in-flight requests to prevent killing subprocess mid-query
-_active_queries = 0
-_no_active_queries: asyncio.Event = None  # Set when _active_queries == 0
-
-# Unrecoverable state tracking (Issue #128)
-_wrapper_offline = False
-_offline_reason = ""
+# SDK options — initialized in lifespan (model comes from env var at runtime)
+_SDK_OPTIONS: Optional[ClaudeAgentOptions] = None
 
 # Observability counters
-_restart_count = 0
 _total_requests = 0
 _total_errors = 0
+_schema_invoker_count = 0   # json_schema calls handled via SDK query (free)
+_schema_fallback_count = 0  # json_schema calls that fell back to direct API (paid)
 
 
 # =============================================================================
@@ -184,265 +159,90 @@ def strip_markdown_fences(text: str) -> str:
 
 
 # =============================================================================
-# Restart Management
+# Stateless Query
 # =============================================================================
 
-async def _perform_restart(reason: str):
-    """Restart invoker while blocking new requests.
+async def _stateless_query(prompt: str) -> str:
+    """Send a single stateless query via the SDK's query() function.
 
-    Uses _restart_lock to prevent concurrent restarts and _ready_event
-    to queue incoming requests during the restart window.
-
-    Recovery strategy:
-    - Block new requests (clear _ready_event)
-    - Wait for in-flight queries to drain (prevents _reconnect_with_backoff chaos)
-    - Kill old invoker subprocess
-    - Force garbage collection
-    - Initialize fresh invoker
-    - If that fails, schedule background retry loop
+    Each call spawns a fresh Claude Code subprocess with zero conversation
+    history. This eliminates context accumulation and schema confusion.
+    ~5.9s per call (4s connect + 1-2s LLM).
     """
-    global invoker, _restart_count
-
-    if _restart_lock.locked():
-        # Another restart already in progress, just wait for it
-        await _ready_event.wait()
-        return
-
-    async with _restart_lock:
-        _ready_event.clear()
-        try:
-            print(f"[RESTART] Starting: {reason}", flush=True)
-            start = time.monotonic()
-
-            # Log memory before cleanup (if psutil available)
-            mem_before = None
-            if PSUTIL_AVAILABLE:
-                try:
-                    mem_before = psutil.Process().memory_info().rss / 1024 / 1024
-                    print(f"[RESTART] Memory before: {mem_before:.1f} MB", flush=True)
-                except Exception:
-                    pass
-
-            # CRITICAL: Wait for in-flight queries to complete before killing subprocess.
-            # Without this, killing the subprocess causes in-flight queries to fail,
-            # which triggers the OLD invoker's _reconnect_with_backoff() method.
-            # That old invoker keeps trying to reconnect for 60s × 5 attempts = chaos.
-            if _active_queries > 0:
-                print(f"[RESTART] Waiting for {_active_queries} in-flight queries to drain...", flush=True)
-                try:
-                    await asyncio.wait_for(_no_active_queries.wait(), timeout=60.0)
-                    print("[RESTART] All queries drained", flush=True)
-                except asyncio.TimeoutError:
-                    print(f"[RESTART] Timeout waiting for queries to drain, proceeding anyway", flush=True)
-
-            # CRITICAL: Kill old invoker subprocess BEFORE creating new one
-            # Without this, old invoker subprocesses accumulate in memory
-            # (9.7GB leak after 8 restarts - each Claude Code process stays alive)
-            #
-            # We can't call invoker.shutdown() because it calls _client.disconnect()
-            # which hits an anyio cancel scope bug. Instead, we forcefully kill
-            # all child processes using psutil, then drop the reference.
-            if invoker is not None:
-                print("[RESTART] Killing old invoker subprocess...", flush=True)
-
-                # Kill all child processes (the Claude Code CLI subprocess)
-                if PSUTIL_AVAILABLE:
-                    try:
-                        current = psutil.Process()
-                        children = current.children(recursive=True)
-                        if children:
-                            print(f"[RESTART] Found {len(children)} child processes to kill", flush=True)
-                            for child in children:
-                                try:
-                                    print(f"[RESTART] Killing PID {child.pid} ({child.name()}) status={child.status()}", flush=True)
-                                    child.kill()
-                                except psutil.NoSuchProcess:
-                                    print(f"[RESTART] PID {child.pid} already dead", flush=True)
-
-                            # Wait and report results
-                            gone, alive = psutil.wait_procs(children, timeout=5)
-                            print(f"[RESTART] Killed: {len(gone)}, Still alive: {len(alive)}", flush=True)
-
-                            # Force kill any survivors
-                            for p in alive:
-                                try:
-                                    p.kill()
-                                except Exception:
-                                    pass
-                        else:
-                            print("[RESTART] No child processes to kill", flush=True)
-                    except Exception as e:
-                        print(f"[RESTART] Error killing children: {type(e).__name__}: {e}", flush=True)
-
-                # Now drop the reference and GC
-                old_invoker = invoker
-                invoker = None
-                del old_invoker
-                gc.collect()
-                print("[RESTART] Old invoker killed and released", flush=True)
-
-            # Now create fresh invoker
-            await initialize_invoker()
-
-            # Verify new invoker is actually connected (Issue #128)
-            if invoker is None or not invoker.is_connected:
-                raise Exception("New invoker failed to connect")
-
-            elapsed = time.monotonic() - start
-            _restart_count += 1
-
-            # Log memory after restart (if psutil available)
-            if PSUTIL_AVAILABLE and mem_before is not None:
-                try:
-                    mem_after = psutil.Process().memory_info().rss / 1024 / 1024
-                    mem_delta = mem_after - mem_before
-                    print(f"[RESTART] Memory after: {mem_after:.1f} MB (delta: {mem_delta:+.1f} MB)", flush=True)
-                except Exception:
-                    pass
-
-            print(f"[RESTART] Complete in {elapsed:.1f}s (total restarts: {_restart_count})", flush=True)
-        except Exception as e:
-            print(f"[RESTART] FAILED: {e}", flush=True)
-            print("[RESTART] Scheduling background recovery...", flush=True)
-            asyncio.create_task(_background_recovery())
-        finally:
-            _ready_event.set()
-
-
-async def _background_recovery():
-    """Recover invoker connection in the background after double failure.
-
-    Retries with exponential backoff: 4s, 8s, 16s, 32s, 60s.
-    During recovery, incoming requests get 502 (better than hanging).
-    """
-    global invoker, _restart_count, _wrapper_offline, _offline_reason
-
-    for attempt in range(1, 6):
-        delay = min(2 ** (attempt + 1), 60)
-        print(f"[RECOVERY] Attempt {attempt}/5 in {delay}s...", flush=True)
-        await asyncio.sleep(delay)
-
-        # Check if main restart succeeded while we were waiting
-        if invoker is not None and invoker.is_connected:
-            print(f"[RECOVERY] Aborting - invoker already connected (main restart succeeded)", flush=True)
-            # Clear offline state if it was set
-            _wrapper_offline = False
-            _offline_reason = ""
-            return
-
-        try:
-            # Wait for in-flight queries to drain before killing subprocess
-            if _active_queries > 0:
-                print(f"[RECOVERY] Waiting for {_active_queries} in-flight queries to drain...", flush=True)
-                try:
-                    await asyncio.wait_for(_no_active_queries.wait(), timeout=30.0)
-                except asyncio.TimeoutError:
-                    print("[RECOVERY] Timeout waiting for queries, proceeding anyway", flush=True)
-
-            # Kill old invoker subprocess before recovery attempt
-            # (Don't call shutdown() - it hits the cancel scope bug)
-            if invoker is not None:
-                if PSUTIL_AVAILABLE:
-                    try:
-                        for child in psutil.Process().children(recursive=True):
-                            child.kill()
-                        psutil.wait_procs(psutil.Process().children(), timeout=5)
-                    except Exception:
-                        pass
-                old_invoker = invoker
-                invoker = None
-                del old_invoker
-                gc.collect()
-
-            await initialize_invoker()
-
-            # Verify new invoker is connected (Issue #128)
-            if invoker is None or not invoker.is_connected:
-                raise Exception("New invoker failed to connect")
-
-            _restart_count += 1
-            # Clear offline state on successful recovery
-            _wrapper_offline = False
-            _offline_reason = ""
-            print(f"[RECOVERY] Success on attempt {attempt} (total restarts: {_restart_count})", flush=True)
-            return
-        except Exception as e:
-            print(f"[RECOVERY] Attempt {attempt} failed: {e}", flush=True)
-
-    # All recovery attempts exhausted - set offline state (Issue #128)
-    _wrapper_offline = True
-    _offline_reason = "All 5 recovery attempts exhausted. Manual restart required."
-    print(f"[RECOVERY] {_offline_reason}", flush=True)
+    response_text = ""
+    try:
+        async for msg in sdk_query(prompt=prompt, options=_SDK_OPTIONS):
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        response_text += block.text
+    except Exception as e:
+        error_str = str(e)
+        # The SDK may throw on unknown message types (e.g., rate_limit_event)
+        # that arrive after the response content. If we already have text,
+        # treat it as a success — the content was delivered before the error.
+        if response_text.strip() and "Unknown message type" in error_str:
+            print(f"[SDK] Ignoring post-response parse error: {error_str}", flush=True)
+            return response_text
+        raise HTTPException(status_code=502, detail=f"SDK query failed: {error_str}")
+    return response_text
 
 
 # =============================================================================
 # Lifecycle
 # =============================================================================
 
-async def initialize_invoker():
-    """Initialize ClaudeInvoker on startup."""
-    global invoker
-
-    model = os.getenv("WRAPPER_MODEL", "haiku")
-
-    print(f"Initializing ClaudeInvoker (model={model})...")
-    print("This takes ~33s for initial connection...")
-
-    start = time.time()
-
-    invoker = ClaudeInvoker(
-        model=model,
-        bypass_permissions=False,
-        startup_prompt=STARTUP_PROMPT,
-        mcp_servers={},
-        max_context_tokens=150_000,
-        max_turns=10,
-    )
-
-    await invoker.initialize()
-
-    elapsed = time.time() - start
-    print(f"Initialized in {elapsed:.1f}s")
-    print(f"  Model: {model}")
-    print(f"  Context limits: {invoker.max_context_tokens} tokens, {invoker.max_turns} turns")
-    print(f"  Startup prompt: {len(STARTUP_PROMPT)} chars")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle."""
-    global _ready_event, _restart_lock, _no_active_queries, _anthropic_client
+    global _anthropic_client, _SDK_OPTIONS
 
-    # Initialize async primitives (need running event loop)
-    _ready_event = asyncio.Event()
-    _restart_lock = asyncio.Lock()
-    _no_active_queries = asyncio.Event()
-    _no_active_queries.set()  # Initially no queries, so event is set
-
-    # Initialize persistent Anthropic client for json_schema requests
+    # Initialize persistent Anthropic client for json_schema fallback path
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if api_key:
         _anthropic_client = anthropic.Anthropic(api_key=api_key)
-        print("[INIT] Persistent Anthropic client created", flush=True)
+        print("[INIT] Persistent Anthropic client created (fallback only)", flush=True)
+        # CRITICAL: Remove ANTHROPIC_API_KEY from environment so the claude CLI
+        # subprocess uses CC subscription credentials instead of the paid API key.
+        # Without this, every "free" SDK call is actually a paid API call — the
+        # claude CLI picks up ANTHROPIC_API_KEY and uses it.
+        del os.environ["ANTHROPIC_API_KEY"]
+        print("[INIT] Removed ANTHROPIC_API_KEY from env (claude CLI will use CC subscription)", flush=True)
     else:
-        print("[INIT] WARNING: No ANTHROPIC_API_KEY set, json_schema path will fail", flush=True)
+        print("[INIT] WARNING: No ANTHROPIC_API_KEY set, json_schema fallback will fail", flush=True)
 
-    # Startup
-    await initialize_invoker()
-    _ready_event.set()  # Signal ready for requests
+    # Configure SDK options — stateless query per call, no persistent session
+    model = os.getenv("WRAPPER_MODEL", "haiku")
+    _SDK_OPTIONS = ClaudeAgentOptions(
+        model=model,
+        system_prompt=(
+            "You are a stateless JSON extraction API. "
+            "Respond with exactly what is requested - typically raw JSON. "
+            "Do not wrap JSON in markdown code fences. "
+            "Just output the requested content directly."
+        ),
+        setting_sources=[],
+        tools=[],
+        max_turns=1,
+        cwd="/tmp",
+        # NOTE: "bypassPermissions" maps to --dangerously-skip-permissions which
+        # the Claude CLI refuses when running as root (Docker). Use "acceptEdits"
+        # instead — auto-accepts tool use without the root restriction.
+        # With tools=[] and max_turns=1, there's nothing to approve anyway.
+        permission_mode="acceptEdits",
+    )
+    print(f"[INIT] SDK options configured (model={model}, stateless query mode)", flush=True)
 
     yield
 
-    # Shutdown
-    if invoker:
-        await invoker.shutdown()
-        print("ClaudeInvoker shut down")
+    # No persistent connection to shut down — SDK cleans up after each call
+    print("[SHUTDOWN] Wrapper stopped", flush=True)
 
 
 app = FastAPI(
     title="Claude Code OpenAI Wrapper",
-    description="OpenAI-compatible wrapper for ClaudeInvoker",
-    version="0.2.0",
+    description="OpenAI-compatible wrapper using stateless sdk_query()",
+    version="0.3.0",
     lifespan=lifespan
 )
 
@@ -467,66 +267,17 @@ async def health_check():
         except Exception:
             pass  # Silently skip if psutil fails
 
-    # Check offline state first (Issue #128)
-    if _wrapper_offline:
-        response = {
-            "status": "offline",
-            "message": _offline_reason,
-            "recovery_attempts": 5,
-            "stats": {
-                "total_requests": _total_requests,
-                "total_errors": _total_errors,
-                "restart_count": _restart_count,
-            }
-        }
-        if memory_info:
-            response["memory"] = memory_info
-        return JSONResponse(status_code=503, content=response)
-
-    if invoker is None:
-        response = {"status": "starting", "message": "Invoker not yet created"}
-        if memory_info:
-            response["memory"] = memory_info
-        return JSONResponse(status_code=503, content=response)
-
-    restarting = not _ready_event.is_set() if _ready_event else False
-
-    # During restart, report as healthy but restarting
-    # (the invoker will be back shortly — don't fail Docker health checks)
-    if restarting:
-        response = {
-            "status": "restarting",
-            "invoker_connected": False,
-            "active_queries": _active_queries,
-            "stats": {
-                "total_requests": _total_requests,
-                "total_errors": _total_errors,
-                "restart_count": _restart_count,
-            }
-        }
-        if memory_info:
-            response["memory"] = memory_info
-        return response
-
-    stats = invoker.context_stats
-
     response = {
         "status": "healthy",
-        "invoker_connected": invoker.is_connected,
         "verbose_mode": VERBOSE,
-        "active_queries": _active_queries,
-        "context_usage": {
-            "tokens": stats["total_tokens"],
-            "turns": stats["turn_count"],
-            "token_limit": invoker.max_context_tokens,
-            "turn_limit": invoker.max_turns,
-            "token_pct": round(stats["total_tokens"] / max(invoker.max_context_tokens, 1) * 100, 1),
-            "turn_pct": round(stats["turn_count"] / max(invoker.max_turns, 1) * 100, 1),
-        },
         "stats": {
             "total_requests": _total_requests,
             "total_errors": _total_errors,
-            "restart_count": _restart_count,
+            "schema_invoker_count": _schema_invoker_count,
+            "schema_fallback_count": _schema_fallback_count,
+            "schema_fallback_rate": (
+                round(_schema_fallback_count / max(_schema_invoker_count + _schema_fallback_count, 1) * 100, 1)
+            ),
         }
     }
     if memory_info:
@@ -744,356 +495,519 @@ def json_schema_to_anthropic_tool(schema_name: str, schema: dict) -> dict:
     }
 
 
+def _validate_schema_fields(parsed: dict, schema: dict, schema_name: str) -> bool:
+    """Check that parsed JSON has the required top-level fields from the schema.
+
+    Catches parse failures or unexpected output where the response doesn't
+    match the requested schema.
+    """
+    if not isinstance(parsed, dict):
+        return True  # Arrays and primitives — skip field validation
+
+    required_fields = set(schema.get("required", []))
+    if not required_fields:
+        # No required fields specified — check properties instead
+        expected_fields = set(schema.get("properties", {}).keys())
+        if not expected_fields:
+            return True  # No field info available, accept it
+        # At least one expected field must be present
+        actual_fields = set(parsed.keys())
+        if not actual_fields.intersection(expected_fields):
+            print(
+                f"[SCHEMA-VALIDATE] MISMATCH for {schema_name}: "
+                f"expected one of {sorted(expected_fields)}, got {sorted(actual_fields)}",
+                flush=True
+            )
+            return False
+        return True
+
+    actual_fields = set(parsed.keys())
+    missing = required_fields - actual_fields
+    if missing:
+        print(
+            f"[SCHEMA-VALIDATE] MISMATCH for {schema_name}: "
+            f"missing required {sorted(missing)}, got {sorted(actual_fields)}",
+            flush=True
+        )
+        return False
+    return True
+
+
+async def _handle_json_schema_via_sdk(request: ChatCompletionRequest) -> Optional[JSONResponse]:
+    """Try to handle json_schema request via stateless SDK query (free path).
+
+    Embeds the JSON schema in the prompt and asks for raw JSON output.
+    Each call gets a fresh session — no context bleed, no schema confusion.
+    Returns JSONResponse on success, None if fallback to direct API is needed.
+    """
+    global _schema_invoker_count
+
+    schema_info = request.response_format.get("json_schema", {})
+    schema_name = schema_info.get("name", "structured_output")
+    schema = schema_info.get("schema")
+
+    if not schema:
+        return None  # Let caller handle the error
+
+    # Dereference $refs for a flat, unambiguous schema
+    flat_schema = _deref_json_schema(schema)
+
+    # Extract required fields for validation and prompt reinforcement
+    required_fields = list(flat_schema.get("required", []))
+    properties = list(flat_schema.get("properties", {}).keys())
+    field_list = required_fields or properties
+
+    # Build prompt from request messages + embedded schema
+    prompt_parts = []
+
+    # System messages
+    for msg in request.messages:
+        if msg.role == "system":
+            prompt_parts.append(f"System: {msg.content}")
+
+    # Embed the schema with explicit field requirements
+    schema_json = json.dumps(flat_schema, indent=2)
+
+    prompt_parts.append(
+        f"You MUST respond with ONLY valid JSON matching this exact schema.\n"
+        f"Schema name: {schema_name}\n"
+        f"JSON Schema:\n{schema_json}\n\n"
+        f"REQUIRED top-level fields: {json.dumps(field_list)}\n"
+        f"Your response MUST contain these exact field names at the top level.\n\n"
+        f"Rules:\n"
+        f"- Output ONLY the JSON object/array. No markdown fences. No explanation.\n"
+        f"- Every field must match the schema types exactly.\n"
+        f"- Use null for optional fields you want to omit.\n"
+        f"- Do NOT include $defs or schema metadata in your output.\n"
+        f"- Top-level fields MUST be: {json.dumps(field_list)}"
+    )
+
+    # User/assistant messages
+    for msg in request.messages:
+        if msg.role == "user":
+            prompt_parts.append(f"User: {msg.content}")
+        elif msg.role == "assistant":
+            prompt_parts.append(f"Assistant: {msg.content}")
+
+    prompt_parts.append(
+        f"Respond now with ONLY valid JSON. "
+        f"The top-level fields MUST be: {json.dumps(field_list)}. No other text."
+    )
+
+    combined_prompt = "\n\n".join(prompt_parts)
+    query_start = time.monotonic()
+
+    # Attempt 1: Query via stateless SDK
+    try:
+        response_text = await _stateless_query(combined_prompt)
+    except HTTPException as e:
+        print(f"[SCHEMA-VIA-SDK] Query failed for {schema_name}: {e.detail}", flush=True)
+        return None
+
+    if not response_text or not response_text.strip():
+        print(f"[SCHEMA-VIA-SDK] Empty response for {schema_name}, falling back", flush=True)
+        return None
+
+    cleaned = strip_markdown_fences(response_text)
+
+    # Try to parse
+    parsed = None
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        try:
+            parsed = _try_repair_json(cleaned)
+        except ValueError:
+            pass
+
+    # Validate: correct JSON AND correct schema fields
+    if parsed is not None and _validate_schema_fields(parsed, flat_schema, schema_name):
+        query_elapsed = time.monotonic() - query_start
+        _schema_invoker_count += 1
+
+        prompt_tokens = estimate_tokens(combined_prompt)
+        completion_tokens = estimate_tokens(response_text)
+
+        print(
+            f"[SCHEMA-VIA-SDK] Success in {query_elapsed:.1f}s | "
+            f"schema={schema_name} | "
+            f"~{prompt_tokens}+{completion_tokens} tokens",
+            flush=True
+        )
+
+        if VERBOSE:
+            print("=" * 80, flush=True)
+            print("[VERBOSE] SCHEMA-VIA-SDK RESPONSE:", flush=True)
+            print(json.dumps(parsed, indent=2), flush=True)
+            print("=" * 80, flush=True)
+
+        response_dict = {
+            "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": request.model,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": json.dumps(parsed)},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens
+            }
+        }
+        return JSONResponse(content=response_dict)
+
+    # Attempt 2: Retry with explicit correction prompt
+    # Since each call is stateless, the correction is just a better prompt —
+    # not correction of context bleed. Still useful for parse failures.
+    mismatch_reason = "wrong schema fields" if parsed is not None else "invalid JSON"
+    print(
+        f"[SCHEMA-VIA-SDK] Attempt 1 failed for {schema_name} ({mismatch_reason}), "
+        f"retrying with correction",
+        flush=True
+    )
+
+    correction_prompt = (
+        f"Your previous response had {mismatch_reason}. "
+        f"Here is what you returned:\n```\n{cleaned[:500]}\n```\n\n"
+        f"This is WRONG. I need schema '{schema_name}' with these EXACT top-level fields: "
+        f"{json.dumps(field_list)}\n\n"
+        f"Respond with ONLY valid JSON matching schema '{schema_name}'. "
+        f"Top-level fields MUST be: {json.dumps(field_list)}. "
+        f"No explanation, no markdown fences, just the raw JSON."
+    )
+
+    try:
+        response_text2 = await _stateless_query(correction_prompt)
+    except HTTPException:
+        print(f"[SCHEMA-VIA-SDK] Correction query failed for {schema_name}, falling back", flush=True)
+        return None
+
+    if not response_text2 or not response_text2.strip():
+        return None
+
+    cleaned2 = strip_markdown_fences(response_text2)
+
+    parsed2 = None
+    try:
+        parsed2 = json.loads(cleaned2)
+    except json.JSONDecodeError:
+        try:
+            parsed2 = _try_repair_json(cleaned2)
+        except ValueError:
+            pass
+
+    if parsed2 is not None and _validate_schema_fields(parsed2, flat_schema, schema_name):
+        query_elapsed = time.monotonic() - query_start
+        _schema_invoker_count += 1
+
+        prompt_tokens = estimate_tokens(combined_prompt) + estimate_tokens(correction_prompt)
+        completion_tokens = estimate_tokens(response_text) + estimate_tokens(response_text2)
+
+        print(
+            f"[SCHEMA-VIA-SDK] Success after correction in {query_elapsed:.1f}s | "
+            f"schema={schema_name}",
+            flush=True
+        )
+
+        response_dict = {
+            "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": request.model,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": json.dumps(parsed2)},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens
+            }
+        }
+        return JSONResponse(content=response_dict)
+
+    # Both attempts failed — fall back to direct API
+    print(
+        f"[SCHEMA-VIA-SDK] Both attempts failed for {schema_name}, "
+        f"falling back to direct API",
+        flush=True
+    )
+    return None
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResponse:
     """
     OpenAI-compatible chat completions endpoint.
 
-    Translates OpenAI format → ClaudeInvoker → OpenAI format.
-    Handles restarts transparently — requests queue instead of failing.
+    Translates OpenAI format → stateless SDK query → OpenAI format.
     """
-    global _total_requests, _total_errors, _active_queries
+    global _total_requests, _total_errors, _schema_fallback_count
 
     _total_requests += 1
 
-    # Check offline state first (Issue #128)
-    if _wrapper_offline:
-        _total_errors += 1
-        raise HTTPException(
-            status_code=503,
-            detail=f"Wrapper offline - {_offline_reason}"
-        )
+    # Check if request needs json_schema enforcement
+    use_json_schema_tool = (
+        request.response_format
+        and request.response_format.get("type") == "json_schema"
+    )
 
-    if invoker is None:
-        raise HTTPException(status_code=503, detail="Invoker not initialized")
+    if use_json_schema_tool:
+        # Try stateless SDK first (free via CC subscription)
+        sdk_result = await _handle_json_schema_via_sdk(request)
+        if sdk_result is not None:
+            return sdk_result
 
-    # Wait for readiness (blocks during restart instead of returning 503)
-    try:
-        await asyncio.wait_for(_ready_event.wait(), timeout=30.0)
-    except asyncio.TimeoutError:
-        _total_errors += 1
-        raise HTTPException(
-            status_code=504,
-            detail="Timed out waiting for invoker restart"
-        )
-
-    # If invoker is disconnected (e.g., previous restart failed), recover
-    if not invoker.is_connected:
-        print("[WARN] Invoker disconnected, attempting recovery...", flush=True)
-        await _perform_restart("invoker_disconnected")
-        if not invoker.is_connected:
-            _total_errors += 1
-            raise HTTPException(status_code=503, detail="Invoker disconnected and recovery failed")
-
-    # Check for proactive restart BEFORE tracking as active query.
-    # This prevents deadlock: restart waits for queries, but we haven't started yet.
-    approaching, approach_reason = invoker.approaching_restart()
-    if approaching:
-        print(f"[PROACTIVE] Inline restart: {approach_reason}", flush=True)
-        await _perform_restart(f"proactive: {approach_reason}")
-
-    # Hard restart at 100% — safety net
-    needs_restart, reason = invoker.needs_restart()
-    if needs_restart:
-        await _perform_restart(reason)
-
-    # NOW track as active query - restart checks are done
-    _active_queries += 1
-    _no_active_queries.clear()
-
-    try:
-        # Check if request needs json_schema enforcement via tool use
-        use_json_schema_tool = (
-            request.response_format
-            and request.response_format.get("type") == "json_schema"
-        )
-
-        if use_json_schema_tool:
-            # JSON schema enforcement via Anthropic tool use
-            # This path bypasses ClaudeInvoker and calls Anthropic API directly
-            schema_info = request.response_format.get("json_schema", {})
-            schema_name = schema_info.get("name", "structured_output")
-            schema = schema_info.get("schema")
-
-            if not schema:
-                _total_errors += 1
-                raise HTTPException(
-                    status_code=400,
-                    detail="json_schema response_format requires a schema"
-                )
-
-            # Convert OpenAI messages to Anthropic format
-            anthropic_messages = []
-            system_content = []
-
-            for msg in request.messages:
-                if msg.role == "system":
-                    system_content.append(msg.content)
-                elif msg.role in ("user", "assistant"):
-                    anthropic_messages.append({
-                        "role": msg.role,
-                        "content": msg.content
-                    })
-
-            # Create tool definition from schema
-            tool = json_schema_to_anthropic_tool(schema_name, schema)
-
-            # Call Anthropic API directly with forced tool use
-            try:
-                # Use persistent Anthropic client
-                if _anthropic_client is None:
-                    raise HTTPException(
-                        status_code=503,
-                        detail="Anthropic client not initialized (missing ANTHROPIC_API_KEY)"
-                    )
-                client = _anthropic_client
-
-                # Get model from environment or use haiku
-                # Map short names to full model IDs
-                anthropic_model = os.getenv("WRAPPER_MODEL", "haiku")
-                model_max_tokens = 4096  # Default for most models
-
-                if anthropic_model == "haiku":
-                    anthropic_model = "claude-3-haiku-20240307"
-                    model_max_tokens = 4096
-                elif anthropic_model == "sonnet":
-                    anthropic_model = "claude-sonnet-4-5-20250929"
-                    model_max_tokens = 8192
-                elif anthropic_model == "opus":
-                    anthropic_model = "claude-opus-4-5-20251101"
-                    model_max_tokens = 8192
-
-                # Cap max_tokens to model's limit
-                requested_tokens = request.max_tokens or 4096
-                max_tokens = min(requested_tokens, model_max_tokens)
-
-                query_start = time.monotonic()
-
-                print(f"[TOOL-USE] Calling Anthropic API with forced tool: {schema_name}", flush=True)
-                if requested_tokens > model_max_tokens:
-                    print(f"[TOOL-USE] Capping max_tokens from {requested_tokens} to {max_tokens} (model limit)", flush=True)
-
-                # Call Anthropic with forced tool use
-                response = client.messages.create(
-                    model=anthropic_model,
-                    max_tokens=max_tokens,
-                    system="\n\n".join(system_content) if system_content else None,
-                    messages=anthropic_messages,
-                    tools=[tool],
-                    tool_choice={"type": "tool", "name": schema_name}
-                )
-
-                # Extract tool_use block
-                tool_use_block = None
-                for block in response.content:
-                    if hasattr(block, 'type') and block.type == "tool_use":
-                        tool_use_block = block
-                        break
-
-                if not tool_use_block:
-                    _total_errors += 1
-                    raise HTTPException(
-                        status_code=502,
-                        detail="Anthropic did not return expected tool_use block"
-                    )
-
-                # Extract the structured output (guaranteed to match schema)
-                # Keep as dict - we'll manually serialize to avoid double-encoding
-                tool_output_dict = tool_use_block.input
-
-                # Apply recovery heuristics for known Haiku $ref schema confusion
-                # (string-encoded arrays, defs-as-output pattern)
-                tool_output_dict = _fix_tool_output(schema_name, tool_output_dict)
-
-                query_elapsed = time.monotonic() - query_start
-
-                # Log success
-                print(
-                    f"[TOOL-USE] Success in {query_elapsed:.1f}s | "
-                    f"schema={schema_name} | "
-                    f"input_tokens={response.usage.input_tokens} | "
-                    f"output_tokens={response.usage.output_tokens}",
-                    flush=True
-                )
-
-                # Verbose logging
-                if VERBOSE:
-                    print("=" * 80, flush=True)
-                    print("[VERBOSE] TOOL-USE RESPONSE:", flush=True)
-                    print("-" * 40, flush=True)
-                    print(json.dumps(tool_output_dict, indent=2), flush=True)
-                    print("-" * 40, flush=True)
-                    print("=" * 80, flush=True)
-
-                # Build OpenAI-compatible response manually to avoid double-encoding
-                # FastAPI's automatic Pydantic serialization would stringify content again
-                response_dict = {
-                    "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
-                    "object": "chat.completion",
-                    "created": int(time.time()),
-                    "model": request.model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {
-                                "role": "assistant",
-                                # content is the JSON string that Graphiti will parse
-                                "content": json.dumps(tool_output_dict)
-                            },
-                            "finish_reason": "stop"
-                        }
-                    ],
-                    "usage": {
-                        "prompt_tokens": response.usage.input_tokens,
-                        "completion_tokens": response.usage.output_tokens,
-                        "total_tokens": response.usage.input_tokens + response.usage.output_tokens
-                    }
-                }
-                return JSONResponse(content=response_dict)
-
-            except anthropic.APIError as e:
-                _total_errors += 1
-                print(f"[TOOL-USE] Anthropic API error: {e}", flush=True)
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Anthropic API error: {e}"
-                )
-
-        # Regular path (non-json_schema or json_object)
-        wants_json = request.response_format and request.response_format.get("type") == "json_object"
-
-        prompt_parts = []
-        for msg in request.messages:
-            if msg.role == "system":
-                prompt_parts.append(f"System: {msg.content}")
-            elif msg.role == "user":
-                prompt_parts.append(f"User: {msg.content}")
-            elif msg.role == "assistant":
-                prompt_parts.append(f"Assistant: {msg.content}")
-
-        # When caller requests JSON output (json_object mode), tell Claude explicitly
-        if wants_json:
-            json_instruction = (
-                "IMPORTANT: Respond with raw JSON only. "
-                "No markdown formatting, no code fences, no explanation. "
-                "Just the JSON object."
-            )
-            prompt_parts.append(json_instruction)
-
-        combined_prompt = "\n\n".join(prompt_parts)
-
-        # Verbose logging: dump full prompt
-        if VERBOSE:
-            print("=" * 80, flush=True)
-            print("[VERBOSE] PROMPT:", flush=True)
-            print("-" * 40, flush=True)
-            print(combined_prompt, flush=True)
-            print("-" * 40, flush=True)
-
-        # Log request
-        prompt_tokens = estimate_tokens(combined_prompt)
-        schema_name = ""
-        if wants_json and request.response_format.get("type") == "json_schema":
-            schema_name = request.response_format.get("json_schema", {}).get("name", "unknown")
-
-        query_start = time.monotonic()
-
-        # Query with retry logic
-        response_text = await _query_with_retry(combined_prompt)
-
-        # Validate response (retry once on empty)
-        if not response_text or not response_text.strip():
-            print("[WARN] Empty response, retrying once...", flush=True)
-            response_text = await _query_with_retry(combined_prompt)
-
-        if not response_text or not response_text.strip():
-            _total_errors += 1
-            print("[ERROR] Empty response after retry", flush=True)
-            raise HTTPException(status_code=502, detail="Backend returned empty response")
-
-        # Strip markdown fences if caller expects JSON
-        if wants_json:
-            response_text = strip_markdown_fences(response_text)
-
-        # Verbose logging: dump full response
-        if VERBOSE:
-            print("[VERBOSE] RESPONSE:", flush=True)
-            print("-" * 40, flush=True)
-            print(response_text, flush=True)
-            print("-" * 40, flush=True)
-            print("=" * 80, flush=True)
-
-        # Timing and observability
-        query_elapsed = time.monotonic() - query_start
-        completion_tokens = estimate_tokens(response_text)
-        stats = invoker.context_stats
+        # Fallback: direct Anthropic API (paid, safety net)
+        _schema_fallback_count += 1
         print(
-            f"[DONE] {query_elapsed:.1f}s | "
-            f"ctx={stats['total_tokens']}/{invoker.max_context_tokens} "
-            f"({stats['total_tokens'] * 100 // max(invoker.max_context_tokens, 1)}%) | "
-            f"turns={stats['turn_count']}/{invoker.max_turns} | "
-            f"schema={schema_name or 'none'}",
+            f"[SCHEMA-FALLBACK] Falling back to direct API "
+            f"(total fallbacks: {_schema_fallback_count})",
             flush=True
         )
+        schema_info = request.response_format.get("json_schema", {})
+        schema_name = schema_info.get("name", "structured_output")
+        schema = schema_info.get("schema")
 
-        # Build OpenAI-compatible response
-        return ChatCompletionResponse(
-            id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
-            created=int(time.time()),
-            model=request.model,
-            choices=[
-                Choice(
-                    index=0,
-                    message=ChatMessage(
-                        role="assistant",
-                        content=response_text
-                    ),
-                    finish_reason="stop"
-                )
-            ],
-            usage=Usage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens
-            )
-        )
-    finally:
-        # Always decrement, even on error
-        _active_queries -= 1
-        if _active_queries == 0:
-            _no_active_queries.set()
-
-
-async def _query_with_retry(prompt: str) -> str:
-    """Query invoker with retry on failure.
-
-    Leverages InvokerQueryError.retried flag — if the invoker already
-    did a reconnect+retry internally, we don't pile on. If it was a
-    non-connection error, we retry once at the wrapper level.
-    """
-    global _total_errors
-
-    try:
-        return await invoker.query(prompt)
-    except InvokerQueryError as e:
-        if e.retried:
-            # Invoker already retried (connection error + reconnect), don't pile on
+        if not schema:
             _total_errors += 1
-            print(f"[ERROR] Query failed after invoker retry: {e}", flush=True)
-            raise HTTPException(status_code=502, detail=f"Query failed after retry: {e}")
-        else:
-            # Non-connection error, retry once at wrapper level
-            print(f"[WARN] Query failed ({e}), retrying once...", flush=True)
-            try:
-                return await invoker.query(prompt)
-            except Exception as retry_err:
+            raise HTTPException(
+                status_code=400,
+                detail="json_schema response_format requires a schema"
+            )
+
+        # Convert OpenAI messages to Anthropic format
+        anthropic_messages = []
+        system_content = []
+
+        for msg in request.messages:
+            if msg.role == "system":
+                system_content.append(msg.content)
+            elif msg.role in ("user", "assistant"):
+                anthropic_messages.append({
+                    "role": msg.role,
+                    "content": msg.content
+                })
+
+        # Create tool definition from schema
+        tool = json_schema_to_anthropic_tool(schema_name, schema)
+
+        # Call Anthropic API directly with forced tool use
+        try:
+            # Use persistent Anthropic client
+            if _anthropic_client is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Anthropic client not initialized (missing ANTHROPIC_API_KEY)"
+                )
+            client = _anthropic_client
+
+            # Get model from environment or use haiku
+            # Map short names to full model IDs
+            anthropic_model = os.getenv("WRAPPER_MODEL", "haiku")
+            model_max_tokens = 4096  # Default for most models
+
+            if anthropic_model == "haiku":
+                anthropic_model = "claude-3-haiku-20240307"
+                model_max_tokens = 4096
+            elif anthropic_model == "sonnet":
+                anthropic_model = "claude-sonnet-4-5-20250929"
+                model_max_tokens = 8192
+            elif anthropic_model == "opus":
+                anthropic_model = "claude-opus-4-5-20251101"
+                model_max_tokens = 8192
+
+            # Cap max_tokens to model's limit
+            requested_tokens = request.max_tokens or 4096
+            max_tokens = min(requested_tokens, model_max_tokens)
+
+            query_start = time.monotonic()
+
+            print(f"[TOOL-USE] Calling Anthropic API with forced tool: {schema_name}", flush=True)
+            if requested_tokens > model_max_tokens:
+                print(f"[TOOL-USE] Capping max_tokens from {requested_tokens} to {max_tokens} (model limit)", flush=True)
+
+            # Call Anthropic with forced tool use
+            response = client.messages.create(
+                model=anthropic_model,
+                max_tokens=max_tokens,
+                system="\n\n".join(system_content) if system_content else None,
+                messages=anthropic_messages,
+                tools=[tool],
+                tool_choice={"type": "tool", "name": schema_name}
+            )
+
+            # Extract tool_use block
+            tool_use_block = None
+            for block in response.content:
+                if hasattr(block, 'type') and block.type == "tool_use":
+                    tool_use_block = block
+                    break
+
+            if not tool_use_block:
                 _total_errors += 1
-                print(f"[ERROR] Retry also failed: {retry_err}", flush=True)
-                raise HTTPException(status_code=502, detail=f"Query failed after retry: {retry_err}")
-    except Exception as e:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Anthropic did not return expected tool_use block"
+                )
+
+            # Extract the structured output (guaranteed to match schema)
+            # Keep as dict - we'll manually serialize to avoid double-encoding
+            tool_output_dict = tool_use_block.input
+
+            # Apply recovery heuristics for known Haiku $ref schema confusion
+            # (string-encoded arrays, defs-as-output pattern)
+            tool_output_dict = _fix_tool_output(schema_name, tool_output_dict)
+
+            query_elapsed = time.monotonic() - query_start
+
+            # Log success
+            print(
+                f"[TOOL-USE] Success in {query_elapsed:.1f}s | "
+                f"schema={schema_name} | "
+                f"input_tokens={response.usage.input_tokens} | "
+                f"output_tokens={response.usage.output_tokens}",
+                flush=True
+            )
+
+            # Verbose logging
+            if VERBOSE:
+                print("=" * 80, flush=True)
+                print("[VERBOSE] TOOL-USE RESPONSE:", flush=True)
+                print("-" * 40, flush=True)
+                print(json.dumps(tool_output_dict, indent=2), flush=True)
+                print("-" * 40, flush=True)
+                print("=" * 80, flush=True)
+
+            # Build OpenAI-compatible response manually to avoid double-encoding
+            # FastAPI's automatic Pydantic serialization would stringify content again
+            response_dict = {
+                "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": request.model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            # content is the JSON string that Graphiti will parse
+                            "content": json.dumps(tool_output_dict)
+                        },
+                        "finish_reason": "stop"
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": response.usage.input_tokens,
+                    "completion_tokens": response.usage.output_tokens,
+                    "total_tokens": response.usage.input_tokens + response.usage.output_tokens
+                }
+            }
+            return JSONResponse(content=response_dict)
+
+        except anthropic.APIError as e:
+            _total_errors += 1
+            print(f"[TOOL-USE] Anthropic API error: {e}", flush=True)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Anthropic API error: {e}"
+            )
+
+    # Regular path (non-json_schema or json_object)
+    wants_json = request.response_format and request.response_format.get("type") == "json_object"
+
+    prompt_parts = []
+    for msg in request.messages:
+        if msg.role == "system":
+            prompt_parts.append(f"System: {msg.content}")
+        elif msg.role == "user":
+            prompt_parts.append(f"User: {msg.content}")
+        elif msg.role == "assistant":
+            prompt_parts.append(f"Assistant: {msg.content}")
+
+    # When caller requests JSON output (json_object mode), tell Claude explicitly
+    if wants_json:
+        json_instruction = (
+            "IMPORTANT: Respond with raw JSON only. "
+            "No markdown formatting, no code fences, no explanation. "
+            "Just the JSON object."
+        )
+        prompt_parts.append(json_instruction)
+
+    combined_prompt = "\n\n".join(prompt_parts)
+
+    # Verbose logging: dump full prompt
+    if VERBOSE:
+        print("=" * 80, flush=True)
+        print("[VERBOSE] PROMPT:", flush=True)
+        print("-" * 40, flush=True)
+        print(combined_prompt, flush=True)
+        print("-" * 40, flush=True)
+
+    # Log request
+    prompt_tokens = estimate_tokens(combined_prompt)
+
+    query_start = time.monotonic()
+
+    # Query via stateless SDK
+    response_text = await _stateless_query(combined_prompt)
+
+    # Validate response (retry once on empty)
+    if not response_text or not response_text.strip():
+        print("[WARN] Empty response, retrying once...", flush=True)
+        response_text = await _stateless_query(combined_prompt)
+
+    if not response_text or not response_text.strip():
         _total_errors += 1
-        print(f"[ERROR] Unexpected query error: {e}", flush=True)
-        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+        print("[ERROR] Empty response after retry", flush=True)
+        raise HTTPException(status_code=502, detail="Backend returned empty response")
+
+    # Strip markdown fences if caller expects JSON
+    if wants_json:
+        response_text = strip_markdown_fences(response_text)
+
+    # Verbose logging: dump full response
+    if VERBOSE:
+        print("[VERBOSE] RESPONSE:", flush=True)
+        print("-" * 40, flush=True)
+        print(response_text, flush=True)
+        print("-" * 40, flush=True)
+        print("=" * 80, flush=True)
+
+    # Timing and observability
+    query_elapsed = time.monotonic() - query_start
+    completion_tokens = estimate_tokens(response_text)
+    print(
+        f"[DONE] {query_elapsed:.1f}s | "
+        f"~{prompt_tokens}+{completion_tokens} tokens",
+        flush=True
+    )
+
+    # Build OpenAI-compatible response
+    return ChatCompletionResponse(
+        id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
+        created=int(time.time()),
+        model=request.model,
+        choices=[
+            Choice(
+                index=0,
+                message=ChatMessage(
+                    role="assistant",
+                    content=response_text
+                ),
+                finish_reason="stop"
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens
+        )
+    )
 
 
 if __name__ == "__main__":
