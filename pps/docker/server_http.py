@@ -1837,7 +1837,7 @@ async def ingest_batch_to_graphiti(request: IngestBatchRequest):
     # Get texture layer for ingestion
     texture_layer = layers[LayerType.RICH_TEXTURE]
 
-    # Ingest each message to Graphiti
+    # Ingest each message to Graphiti with intelligent retry on rate limits
     ingested_count = 0
     failed_count = 0
     channels_in_batch = set()
@@ -1855,20 +1855,43 @@ async def ingest_batch_to_graphiti(request: IngestBatchRequest):
             "timestamp": msg['created_at']
         }
 
-        try:
-            # Store in Graphiti
-            success = await texture_layer.store(msg['content'], metadata)
+        # Retry logic for transient errors (rate limits)
+        max_retries = 3
+        base_delay = 2  # seconds
+        success = False
 
-            if success:
-                ingested_count += 1
-                channels_in_batch.add(msg['channel'])
-            else:
+        for attempt in range(max_retries):
+            try:
+                # Store in Graphiti
+                success = await texture_layer.store(msg['content'], metadata)
+
+                if success:
+                    ingested_count += 1
+                    channels_in_batch.add(msg['channel'])
+                    break  # Success - move to next message
+                else:
+                    # Check if it's a transient error we should retry
+                    last_error = texture_layer.get_last_error()
+                    if last_error and last_error.get('is_transient') and attempt < max_retries - 1:
+                        # Rate limit or other transient error - wait and retry
+                        delay = base_delay * (2 ** attempt)  # Exponential backoff: 2s, 4s, 8s
+                        print(f"[INGESTION] Message {msg['id']}: {last_error['category']} - retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        # Non-transient error or final attempt - record failure
+                        error_msg = f"Message {msg['id']}: {last_error['category'] if last_error else 'store returned False'}"
+                        if last_error and not last_error['is_transient']:
+                            error_msg += f" - {last_error['advice']}"
+                        errors.append(error_msg)
+                        failed_count += 1
+                        break
+
+            except Exception as e:
+                # Unexpected exception - record and move on
                 failed_count += 1
-                errors.append(f"Message {msg['id']}: store returned False")
-
-        except Exception as e:
-            failed_count += 1
-            errors.append(f"Message {msg['id']}: {str(e)}")
+                errors.append(f"Message {msg['id']}: {str(e)}")
+                break
 
     # Mark batch as ingested if any succeeded (uses graphiti_batch_id system)
     batch_id = None
