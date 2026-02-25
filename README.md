@@ -81,6 +81,7 @@ Welcome.
 - **[docs/diagrams/pps-five-layers.md](docs/diagrams/pps-five-layers.md)** - Memory system architecture and data flow
 - **[docs/diagrams/daemon-lifecycle.md](docs/diagrams/daemon-lifecycle.md)** - Three-tier daemon architecture and message flow
 - **[docs/diagrams/entity-isolation.md](docs/diagrams/entity-isolation.md)** - Multi-entity isolation mechanisms
+- **[docs/diagrams/hook-chain.md](docs/diagrams/hook-chain.md)** - Agent context injection and friction learning
 
 ---
 
