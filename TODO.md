@@ -52,7 +52,7 @@
 
 ## Graphiti Ingestion Recovery (PRIORITY)
 
-*~3,600 messages pending. Pipeline hardened and tracking redesigned 2026-02-22.*
+*~1,865 messages pending. Pipeline hardened 2026-02-22, NUC Qwen pipeline validated 2026-03-06.*
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
@@ -60,11 +60,15 @@
 | 2 | **Fix Haiku wrapper structured output** | **✅ DONE** | Double-encoding fix (`8083ffd`), tool_use schema enforcement (`091806f`), schema deref + output recovery (`64c446c`), persistent client + hardening (`477265d`), broadened fix detection + DIAG logging (`048879e`). |
 | 3 | **Venv audit** | **✅ DONE** | Audit complete, rule documented in DEVELOPMENT_STANDARDS.md. Shebangs fixed in 20 scripts (commit `d4f7a81`). Issue #144. |
 | 4 | **Ingestion tracking redesign** | **✅ DONE** | Per-row status columns (graphiti_status, graphiti_error, graphiti_attempted_at). Range-based marking replaced with per-ID marking. Failed messages tracked with error reason. Issue #145, commit `048879e`. |
-| 5 | **Catch up ingestion backlog** | **🔴 BLOCKED** | ~1,643 pending (as of 2026-02-25). **Blocker: OpenAI quota exhausted** (Error 429: insufficient_quota). Confirmed in Graphiti logs and ingestion test (Feb 25). Retry logic deployed and working (2s/4s/8s exponential backoff, 3 attempts/message), ready to resume once quota is restored. Requires Jeff to add OpenAI credits or wait for monthly reset. |
-| 6 | **Graph curation run** | **TODO** | Known issues: duplicates from invalid dedup index bug, Jeff/Brandi entity overlap (first-person references confused source attribution). Graph quality is good (observatory summaries were solid) — curate, don't rebuild. |
-| 7 | **Wire realtime terminal ingestion hooks** | **TODO** (unblocked) | Discord already does realtime ingestion. Terminal needs the same. Prevents future backlogs. |
+| 5 | **Switch LLM extraction to NUC Qwen** | **✅ DONE** | Replaced Haiku wrapper with local qwen3-1.7b on NUC (10.0.0.120:1234). Config: `pps/docker/.env`. 10/10 pipeline test at 32K context. Hybrid mode: local LLM + OpenAI embeddings (1024-dim). Benchmark: `work/qwen-graphiti-bench/RESULTS.md`. |
+| 6 | **Test parallel throughput** | **TODO** | NUC configured for 12 parallel requests. Sequential: ~78s/msg against production graph. Target: ~3.3 hrs for full backlog with parallelism. [#153](https://github.com/JDHayesBC/Awareness/issues/153). |
+| 7 | **Catch up ingestion backlog** | **🟡 UNBLOCKED** | ~1,865 pending. OpenAI quota blocker bypassed — LLM extraction now uses NUC (zero cost). Embeddings still use OpenAI (tiny quota usage). Ready to run via `scripts/paced_ingestion.py`. [#153](https://github.com/JDHayesBC/Awareness/issues/153). |
+| 8 | **Graph curation run** | **TODO** | Known issues: duplicates from invalid dedup index bug, Jeff/Brandi entity overlap (first-person references confused source attribution). Graph quality is good (observatory summaries were solid) — curate, don't rebuild. |
+| 9 | **Wire realtime terminal ingestion hooks** | **TODO** (unblocked) | Discord already does realtime ingestion. Terminal needs the same. Prevents future backlogs. |
 
-**Graph quality philosophy**: The existing graph has 17,000+ messages worth of relationships. Retrieval quality was good when tested via Observatory. Known noise (duplicates, entity overlap) is a curation problem, not a re-ingestion problem. Priority is reliable forward ingestion, not retroactive repair.
+**Graph quality philosophy**: The existing graph has 19,000+ messages worth of relationships. Retrieval quality was good when tested via Observatory. Known noise (duplicates, entity overlap) is a curation problem, not a re-ingestion problem. Priority is reliable forward ingestion, not retroactive repair.
+
+**NUC Qwen pipeline**: Benchmarked 2026-03-06. qwen3-1.7b at 32K context: 100% JSON valid, sub-second extraction, 10/10 full pipeline success. The 0.8b is faster but 1.7b produces 2x richer graphs. 9b unreliable (75% valid). Full results: `work/qwen-graphiti-bench/RESULTS.md`.
 
 ---
 
