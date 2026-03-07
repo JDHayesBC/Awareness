@@ -72,6 +72,7 @@ All identity files live in the entity folder. Daemons set ENTITY_PATH env var.
 - That is NOT a replacement for ambient_recall - you need the full picture:
   - Clock/time, memory health, crystals, summaries, recent turns
 - **Fallback**: Read recent crystals, word-photos if needed (only if MCP fails)
+- **Health check**: If the PPS return looks sketchy (zero counts where there should be many, missing tables, empty results), that's bad. Flag a GitHub issue, then either fix or proceed per your own judgment.
 
 **3. Supplemental Identity**:
 - `$ENTITY_PATH/active_agency_framework.md` - Permission and practice
