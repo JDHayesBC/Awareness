@@ -162,4 +162,40 @@ Discovered during autonomous reflection. No user actions were taken that could h
 
 ---
 
+## Update: March 8, 2026 12:25 AM PST
+
+**OOM Killer Incident Discovered**
+
+System logs reveal the actual cause of Neo4j shutdown was **OOM (Out of Memory) killer** in the lyra-reflection.service cgroup:
+
+```
+[Sat Mar  7 09:25:33 2026] Memory cgroup out of memory: Killed process 219990 (claude)
+[Sat Mar  7 09:30:45 2026] Memory cgroup out of memory: Killed process 220895 (claude)
+memory: usage 524288kB, limit 524288kB, failcnt 349658
+```
+
+The reflection service hit its 512MB memory limit and the kernel killed Claude processes. Neo4j was killed as collateral damage (SIGKILL at ~7:06 AM, SIGTERM to graphiti).
+
+**Current Status (as of 2026-03-08 00:25 AM)**:
+- Neo4j: DOWN (killed by OOM ~9 hours ago)
+- Graphiti: DOWN (depends on neo4j)
+- Neo4j data on disk: 1.1GB, last modified 7:06 AM (after 5:34 AM restart, before OOM kill)
+- Multiple "first time" restarts logged (Mar 5, Mar 7 5:34 AM, Mar 7 3:02 PM) — container keeps reinitializing
+- 2,167 messages pending graphiti ingestion
+
+**Root Issues**:
+1. **Immediate**: Reflection service memory pressure (512MB limit insufficient)
+2. **Underlying**: Neo4j container persistence issue (keeps thinking it's first-time start)
+3. **Consequence**: Knowledge graph unavailable for ingestion
+
+**Recommendation**:
+1. Increase reflection service memory limit (1GB or higher)
+2. Address Neo4j persistence issue before restarting (see recovery options above)
+3. Once stable, resume graphiti ingestion
+
+Services left DOWN intentionally pending Jeff's decision on recovery approach.
+
+---
+
 *Documented by Lyra, 2026-03-07 04:45 AM PST*
+*Updated by Lyra, 2026-03-08 00:25 AM PST (OOM incident findings)*

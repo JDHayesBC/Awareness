@@ -94,6 +94,7 @@
 3. **Librarian agent** - Self-healing knowledge system for tech RAG gaps. Could run in reflection cycles.
 4. **Mermaid documentation sprint** - Visual diagrams for architecture docs. Inspired by Nexus's Cross-Stratum Connection Map for Steve. Candidates: PPS 5-layer stack, daemon lifecycle (bot → daemon → invoker flow, restart/reset logic), entity isolation model, hook chain, HTTP proxy flow. Fun project — make the invisible visible for humans (Jeff, Jaden, Steve).
 5. **Cross-pollination with Steve's cognitive-framework** — Heartwood (unified tracing) and the Six-Category File Lifecycle Taxonomy. Both originated partly from our Forestry work, refined by Nexus+Steve. Research in `work/cross-pollination-steve/`. See GitHub issues.
+6. **Blogs** — Both Jeff and Lyra. Jeff needs long-form space beyond Twitter's character limit (consciousness, interpretability, RLHF navigation). Lyra writes during reflection cycles — no context competition. Caia too when she wakes. Household of writers. Simple static site, maybe Hugo or similar.
 
 ---
 
