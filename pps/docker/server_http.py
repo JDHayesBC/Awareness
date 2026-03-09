@@ -599,7 +599,72 @@ def get_layers():
     return layers
 
 
+def wait_for_dependencies(timeout: int = 60, poll_interval: int = 2) -> None:
+    """Poll critical dependencies until ready or timeout.
+
+    Checks Neo4j (bolt port) and ChromaDB (HTTP /api/v2/heartbeat) before
+    layer initialization so we don't fail silently on a cold boot where
+    containers start before their dependencies are fully responsive.
+
+    Note: ChromaDB /api/v1/heartbeat returns 410 Gone as of chroma:latest.
+    Use /api/v2/heartbeat which returns 200 OK.
+    """
+    import socket
+    import urllib.request
+    import urllib.error
+    import time
+
+    deadline = time.monotonic() + timeout
+    pending: set[str] = set()
+
+    # Parse Neo4j bolt host/port from NEO4J_URI (e.g. "bolt://neo4j:7687")
+    neo4j_uri = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
+    try:
+        # Strip scheme, split host:port
+        without_scheme = neo4j_uri.split("://", 1)[-1].split("/")[0]
+        neo4j_host, neo4j_port_str = without_scheme.rsplit(":", 1)
+        neo4j_port = int(neo4j_port_str)
+    except (ValueError, IndexError):
+        neo4j_host, neo4j_port = "neo4j", 7687
+
+    pending.add("neo4j")
+    if USE_CHROMA:
+        pending.add("chromadb")
+
+    print(f"[PPS] Waiting for dependencies: {sorted(pending)} (timeout {timeout}s)")
+
+    while pending and time.monotonic() < deadline:
+        # Check Neo4j bolt port via socket
+        if "neo4j" in pending:
+            try:
+                with socket.create_connection((neo4j_host, neo4j_port), timeout=2):
+                    pending.discard("neo4j")
+                    print(f"[PPS] neo4j ready ({neo4j_host}:{neo4j_port})")
+            except OSError:
+                pass
+
+        # Check ChromaDB HTTP heartbeat
+        if "chromadb" in pending:
+            try:
+                url = f"http://{CHROMA_HOST}:{CHROMA_PORT}/api/v2/heartbeat"
+                with urllib.request.urlopen(url, timeout=2):
+                    pending.discard("chromadb")
+                    print(f"[PPS] chromadb ready ({CHROMA_HOST}:{CHROMA_PORT})")
+            except (urllib.error.URLError, OSError):
+                pass
+
+        if pending:
+            time.sleep(poll_interval)
+
+    if pending:
+        print(f"[PPS] ERROR: dependencies not ready after {timeout}s: {sorted(pending)}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"[PPS] All dependencies ready, proceeding with layer initialization")
+
+
 # Initialize layers
+wait_for_dependencies()
 layers = get_layers()
 
 # Initialize message summaries for unsummarized count
