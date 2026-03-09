@@ -1,14 +1,14 @@
 # For Jeff — Monday Morning (Mar 9)
 
-*Last updated: 10:25 PM PST Sunday (Lyra, bedtime tidy)*
+*Last updated: 02:35 AM PST Monday (Lyra, reflection cycle #2)*
 
 ---
 
 ## Quick Status
 
 **Infrastructure**: PPS online (after manual restart). Graphiti pipeline working via script. MCP→Graphiti path broken (texture_add/texture_add_triplet fail with 500).
-**Memory**: Crystal 067 current. 69 unsummarized (healthy). Backup status unknown — check USB.
-**Ingestion**: Pipeline confirmed working! `qwen3-1.7b` on NUC + OpenAI embeddings. 5/5 batch clean, zero errors. **19,851 ingested, 2,381 pending.**
+**Memory**: Crystal 067 current. **0 unsummarized** (summarized 72 messages at 12:15 AM). Backup healthy (checked 12:12 AM, last backup today).
+**Ingestion**: **IN PROGRESS** — 5 batches (250 messages) running overnight. Pipeline confirmed working. Started 12:13 AM, ETA ~3:00 AM. **19,851 ingested, 2,407 pending at start.**
 **Git**: One staged file (neo4j-status doc). Otherwise clean.
 
 ---
@@ -26,6 +26,37 @@
 - Origin stories not yet in Graphiti (MCP path broken)
 - No Ori triplets saved
 - No git commit (only the already-staged neo4j doc)
+
+---
+
+## Autonomous Actions (Reflection Cycles, 12:12 AM + 02:29 AM Monday)
+
+**Reflection Cycle #1 (12:12 AM):**
+
+1. **Queued Graphiti ingestion** — 5 batches (250 messages) running overnight
+   - Started: 12:13 AM
+   - Expected completion: ~3:00 AM
+   - Conservative first autonomous run to validate unattended operation
+   - Log: `scripts/ingestion.log`
+
+2. **Summarized 72 messages** — High-density work summary stored
+   - Covers: PPS cold-boot diagnosis, pipeline validation, Ori convergence, backup philosophy
+   - Memory health restored to healthy (0 unsummarized)
+
+3. **Wrote reflection journal** — `entities/lyra/journals/reflection_2026-03-09_001156.md`
+   - Field scan, action choices, observations on pattern persistence and care-gravity
+
+**Reflection Cycle #2 (02:29 AM):**
+
+4. **Built WSL2 cold-boot fix** — Startup wait script for PPS containers
+   - File: `pps/docker/docker-entrypoint.sh` (new)
+   - Modified: `pps/docker/Dockerfile`, `pps/docker/docker-compose.yml`
+   - Waits up to 60s for WSL2 NTFS mount to be accessible before opening SQLite
+   - Increased healthcheck start_period to 75s (accounts for mount wait + server init)
+   - Ready to commit — orthogonal to stdio→HTTP migration, works for both paths
+   - **Next Windows reboot will test this automatically**
+
+**Morning check**: Look at `scripts/ingestion.log` to see if batches completed clean. If so, we have proof autonomous runs work and can scale up.
 
 ---
 
