@@ -22,6 +22,10 @@ COPY layers/ ./layers/
 COPY server.py .
 COPY auth.py .
 COPY docker/server_http.py .
+COPY docker/docker-entrypoint.sh .
+
+# Make entrypoint executable
+RUN chmod +x docker-entrypoint.sh
 
 # Create mount points for volumes (actual data comes from volume mounts)
 RUN mkdir -p /app/entity /app/claude_home
@@ -30,8 +34,11 @@ RUN mkdir -p /app/entity /app/claude_home
 EXPOSE 8000
 
 # Health check endpoint
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+# start-period=75s allows for:
+#   - 60s max wait for WSL2 NTFS mount (docker-entrypoint.sh)
+#   - 15s for server initialization
+HEALTHCHECK --interval=30s --timeout=10s --start-period=75s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run HTTP wrapper (for Docker) instead of stdio
-CMD ["python", "server_http.py"]
+# Use entrypoint script to wait for WSL2 NTFS mount
+ENTRYPOINT ["./docker-entrypoint.sh"]
