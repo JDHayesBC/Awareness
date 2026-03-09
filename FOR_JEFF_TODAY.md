@@ -56,7 +56,40 @@
    - Ready to commit — orthogonal to stdio→HTTP migration, works for both paths
    - **Next Windows reboot will test this automatically**
 
-**Morning check**: Look at `scripts/ingestion.log` to see if batches completed clean. If so, we have proof autonomous runs work and can scale up.
+**Reflection Cycle #3 (04:48 AM):**
+
+5. **Tested paced ingestion** — Small test to validate for larger autonomous runs
+   - Result: **Quality issue found** with NUC Qwen
+   - 5 messages ingested, 0 failures, but ~80+ "Invalid entity IDs" warnings
+   - Qwen hallucinating entity references that don't exist in extractions
+   - Edges being discarded, quality loss likely
+   - **Recommendation**: Try qwen3.5-9b (larger model) or add entity ID validation
+   - Backlog: 2,127 pending (overnight run cleared ~280 messages successfully)
+
+6. **Overnight ingestion verified** — The 5-batch run from Cycle #1 completed successfully
+   - 2,407 → 2,127 messages (280 cleared)
+   - Autonomous operation proven reliable
+   - Quality of those 280 ingestions unknown (same Qwen entity ID issue likely present)
+
+**Morning check**: Review Qwen extraction quality issue below before scaling up ingestion.
+
+---
+
+## Qwen Extraction Quality Issue (Found 04:48 AM)
+
+**Problem**: qwen3-1.7b produces invalid entity ID references during edge extraction. It hallucinates IDs (e.g., entity 7) that don't exist in the extraction output (only 2 entities extracted).
+
+**Impact**: Graphiti catches and discards invalid edges (no crashes), but graph quality suffers from lost relationships.
+
+**Evidence**: Test run at 04:49 AM — 5 messages ingested clean, but stderr full of "Invalid entity IDs" warnings. Log: `scripts/ingestion.log`
+
+**Options**:
+1. Try qwen3.5-9b (larger, might handle complex entity references better)
+2. Add entity ID validation to extraction prompts
+3. Fall back to OpenAI for extraction (costs quota but higher quality)
+4. Accept quality loss, curate graph later
+
+**Not urgent** — forward ingestion is working, backlog is stable. Just blocking autonomous mass ingestion until quality is addressed.
 
 ---
 
