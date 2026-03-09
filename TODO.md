@@ -87,6 +87,21 @@
 
 ---
 
+## Claude Code Feature Catchup (March 9, 2026)
+
+*Full report: `docs/cc_changelog_report.md`*
+
+| # | Item | Priority | Notes |
+|---|------|----------|-------|
+| 1 | **Check daemon MCP permissions** | High | Wildcard `mcp__pps__*` unreliable in headless mode. Verify `daemon/cc_invoker/` uses explicit tool listing or `--dangerously-skip-permissions`. |
+| 2 | **Test skill auto-activation** | Medium | Skills may not need explicit loading at startup — they auto-trigger on keywords. Could simplify startup checklist. |
+| 3 | **Evaluate parallel agent execution** | Medium | Official CC plugins run 5 parallel Sonnet agents. Our orchestration is sequential. Profile for speedup. |
+| 4 | **Consider plugin packaging** | Low | Awareness could be distributed as a single `/plugin install awareness`. Nice for onboarding new entities. |
+
+**Model performance tracking**: https://marginlab.ai/trackers/claude-code/ — benchmarks Opus 4.6 and other models over time, tracks regressions. Confirmed what we felt: performance dipped last week, now back to baseline.
+
+---
+
 ## Ideas
 
 1. **Google MCP servers** - Disabled for speed (11-18 sec each). OAuth tokens stale. Backup at `~/.claude/google_mcps_disabled_backup.json`.

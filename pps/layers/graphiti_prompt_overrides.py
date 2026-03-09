@@ -105,7 +105,7 @@ IMPORTANT:
 - If a list is empty, you MUST return [] for that field — never return a non-empty list
 
 <FACT TYPES>
-{context['edge_types']}
+{context.get('edge_types', 'DEFAULT')}
 </FACT TYPES>
 
 <EXISTING FACTS>
@@ -117,7 +117,7 @@ IMPORTANT:
 </FACT INVALIDATION CANDIDATES>
 
 <NEW FACT>
-{context['new_edge']}
+{context.get('new_edge', '')}
 </NEW FACT>
 """,
         ),
