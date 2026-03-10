@@ -16,6 +16,7 @@ Usage:
     python scripts/restore_pps.py --latest --dry-run               # Preview latest restore
     python scripts/restore_pps.py --backup pps_backup_DATE.tar.gz  # Restore specific backup
     python scripts/restore_pps.py --backup /path/to/backup.tar.gz  # Restore from custom path
+    python scripts/restore_pps.py --latest --entity lyra           # Restore only lyra's data
 """
 
 import argparse
@@ -39,48 +40,77 @@ DEFAULT_BACKUP_DIR = "/mnt/c/Users/Jeff/awareness_backups"
 # Project root (where this script lives in scripts/)
 PROJECT_ROOT = Path(__file__).parent.parent
 
-# Restore destinations (must match BACKUP_SOURCES in backup_pps.py)
-RESTORE_DESTINATIONS = {
-    # SQLite databases (CRITICAL)
-    "sqlite": {
-        "path": PROJECT_ROOT / "entities" / "lyra" / "data",
-        "critical": True,
-        "description": "SQLite databases (conversations, inventory, email)",
-    },
-    # ChromaDB (rebuildable from word-photos on disk)
+# Docker compose location for stopping/starting PPS
+DOCKER_COMPOSE_DIR = PROJECT_ROOT / "pps" / "docker"
+
+# Shared infrastructure destinations (not entity-specific)
+SHARED_DESTINATIONS = {
     "chromadb": {
         "path": PROJECT_ROOT / "docker" / "pps" / "chromadb_data",
         "critical": False,
         "description": "ChromaDB vector database",
     },
-    # Neo4j/Graphiti (rebuildable from raw messages)
     "neo4j": {
         "path": PROJECT_ROOT / "docker" / "pps" / "neo4j_data",
         "critical": False,
         "description": "Neo4j graph database (Graphiti)",
     },
-    # Entity identity files (also in git, but belt & suspenders)
-    "entity_identity": {
-        "path": PROJECT_ROOT / "entities" / "lyra",
-        "critical": True,
-        "description": "Entity identity files",
-    },
-    # Crystals
-    "crystals": {
-        "path": PROJECT_ROOT / "entities" / "lyra" / "crystals",
-        "critical": True,
-        "description": "Crystals (memory artifacts)",
-    },
-    # Word photos
-    "word_photos": {
-        "path": PROJECT_ROOT / "entities" / "lyra" / "memories" / "word_photos",
-        "critical": True,
-        "description": "Word photos (semantic memories)",
-    },
 }
 
-# Docker compose location for stopping/starting PPS
-DOCKER_COMPOSE_DIR = PROJECT_ROOT / "pps" / "docker"
+# Archive source suffix → (relative entity path, description, critical)
+# Used to map {entity}_{suffix} archive dirs back to entity directories.
+ENTITY_SOURCE_SUFFIXES = {
+    "sqlite":      ("data",                  "SQLite databases",     True),
+    "identity":    ("",                       "Identity files",       True),
+    "crystals":    ("crystals",               "Crystals",             True),
+    "word_photos": ("memories/word_photos",   "Word photos",          True),
+}
+
+
+# =============================================================================
+# DESTINATION DISCOVERY
+# =============================================================================
+
+def build_restore_destinations(archive_source_names: set[str], entity_filter: str | None = None) -> dict:
+    """Build restore destinations from the set of source names found in an archive.
+
+    Recognises both shared sources (chromadb, neo4j) and entity-prefixed sources
+    like lyra_sqlite, caia_crystals, etc.
+
+    Args:
+        archive_source_names: Top-level directory names found inside the archive.
+        entity_filter: If given, only include destinations for this entity.
+
+    Returns:
+        Dict of source_name -> destination config, ready for use by restore logic.
+    """
+    destinations = {}
+
+    # Shared sources
+    for name, config in SHARED_DESTINATIONS.items():
+        if name in archive_source_names:
+            destinations[name] = config
+
+    # Entity sources: detect by matching known suffixes (e.g. "lyra_sqlite", "caia_word_photos")
+    for source_name in sorted(archive_source_names):
+        for suffix, (rel_path, description, critical) in ENTITY_SOURCE_SUFFIXES.items():
+            if not source_name.endswith(f"_{suffix}"):
+                continue
+            entity_name = source_name[: -(len(suffix) + 1)]  # strip _{suffix}
+            if not entity_name:
+                continue
+            if entity_filter is not None and entity_name != entity_filter:
+                break
+            entity_dir = PROJECT_ROOT / "entities" / entity_name
+            dest_path = entity_dir / rel_path if rel_path else entity_dir
+            destinations[source_name] = {
+                "path": dest_path,
+                "critical": critical,
+                "description": f"{entity_name}: {description}",
+            }
+            break
+
+    return destinations
 
 
 # =============================================================================
@@ -144,58 +174,67 @@ def list_backups(backup_dir: Path) -> None:
         print()
 
 
-def validate_backup(backup_path: Path) -> tuple[bool, dict]:
-    """Validate backup archive and return contents info.
+def validate_backup(backup_path: Path, entity_filter: str | None = None) -> tuple[bool, dict, dict]:
+    """Validate backup archive and return contents info plus restore destinations.
+
+    Discovers which entities are present in the archive and builds restore
+    destinations dynamically rather than relying on a hardcoded list.
+
+    Args:
+        backup_path: Path to the backup archive.
+        entity_filter: If given, only validate/plan restore for this entity.
 
     Returns:
-        Tuple of (is_valid, contents_dict)
+        Tuple of (is_valid, contents_dict, destinations_dict)
     """
     log("Validating backup archive...")
 
     if not backup_path.exists():
         log(f"  Backup file not found: {backup_path}", "ERROR")
-        return False, {}
+        return False, {}, {}
 
     try:
         with tarfile.open(backup_path, "r:gz") as tar:
             members = tar.getmembers()
             log(f"  Archive contains {len(members)} entries")
 
-            # Analyze contents
+            # Analyse contents — count files/bytes per top-level source dir
             contents = {}
             for member in members:
                 parts = member.name.split("/", 1)
                 if len(parts) < 1:
                     continue
-
                 source = parts[0]
                 if source not in contents:
                     contents[source] = {"files": 0, "bytes": 0}
-
                 contents[source]["files"] += 1
                 contents[source]["bytes"] += member.size
 
-            # Check for critical sources
-            critical_sources = {name for name, cfg in RESTORE_DESTINATIONS.items() if cfg["critical"]}
+            # Build destinations from what's actually in the archive
+            destinations = build_restore_destinations(set(contents.keys()), entity_filter)
+
+            # Check that every critical destination we'd restore has data
+            critical_destinations = {name for name, cfg in destinations.items() if cfg["critical"]}
             found_sources = set(contents.keys())
-            missing_critical = critical_sources - found_sources
+            missing_critical = critical_destinations - found_sources
 
             if missing_critical:
                 log(f"  WARNING: Missing critical sources: {missing_critical}", "WARN")
-                return False, contents
+                return False, contents, destinations
 
             # Display contents
             for source, stats in sorted(contents.items()):
-                critical = "[CRITICAL]" if RESTORE_DESTINATIONS.get(source, {}).get("critical") else "[optional]"
-                desc = RESTORE_DESTINATIONS.get(source, {}).get("description", "unknown")
+                dest_cfg = destinations.get(source, {})
+                critical = "[CRITICAL]" if dest_cfg.get("critical") else "[optional]"
+                desc = dest_cfg.get("description", "unknown (not being restored)")
                 log(f"  {critical} {source}: {stats['files']} files, {stats['bytes']:,} bytes ({desc})")
 
             log("  Validation PASSED", "OK")
-            return True, contents
+            return True, contents, destinations
 
     except Exception as e:
         log(f"  Validation failed: {e}", "ERROR")
-        return False, {}
+        return False, {}, {}
 
 
 def stop_pps_containers(dry_run: bool = False) -> bool:
@@ -329,13 +368,29 @@ def backup_current_state(dry_run: bool = False) -> Path | None:
 
         log(f"  Creating: {safety_backup}")
 
-        # Create quick tar of critical data only
+        # Create quick tar of critical entity data only
+        # Build destinations from whatever entities currently exist on disk
+        entities_dir = PROJECT_ROOT / "entities"
+        current_sources: dict = {}
+        if entities_dir.exists():
+            for entity_dir in sorted(entities_dir.iterdir()):
+                if not entity_dir.is_dir() or entity_dir.name.startswith("_"):
+                    continue
+                if not (entity_dir / "data").exists():
+                    continue
+                name = entity_dir.name
+                current_sources[f"{name}_sqlite"] = entity_dir / "data"
+                current_sources[f"{name}_identity"] = entity_dir
+                if (entity_dir / "crystals").exists():
+                    current_sources[f"{name}_crystals"] = entity_dir / "crystals"
+                if (entity_dir / "memories" / "word_photos").exists():
+                    current_sources[f"{name}_word_photos"] = entity_dir / "memories" / "word_photos"
+
         with tarfile.open(safety_backup, "w:gz") as tar:
-            for name, config in RESTORE_DESTINATIONS.items():
-                if config["critical"]:
-                    path = Path(config["path"])
-                    if path.exists():
-                        tar.add(path, arcname=f"{name}/{path.name}")
+            for source_name, path in current_sources.items():
+                path = Path(path)
+                if path.exists():
+                    tar.add(path, arcname=f"{source_name}/{path.name}")
 
         size_mb = safety_backup.stat().st_size / 1024 / 1024
         log(f"  Safety backup created: {size_mb:.1f} MB", "OK")
@@ -347,16 +402,22 @@ def backup_current_state(dry_run: bool = False) -> Path | None:
         return None
 
 
-def restore_from_archive(backup_path: Path, dry_run: bool = False, skip_sources: list = None) -> bool:
+def restore_from_archive(
+    backup_path: Path,
+    destinations: dict,
+    dry_run: bool = False,
+    skip_sources: list = None,
+) -> bool:
     """Extract and restore data from backup archive.
 
     Args:
-        backup_path: Path to backup archive
-        dry_run: If True, only show what would be restored
-        skip_sources: List of source names to skip
+        backup_path: Path to backup archive.
+        destinations: Dict of source_name -> config, as returned by build_restore_destinations().
+        dry_run: If True, only show what would be restored.
+        skip_sources: List of source names to skip.
 
     Returns:
-        True if successful
+        True if successful.
     """
     skip_sources = skip_sources or []
 
@@ -375,8 +436,8 @@ def restore_from_archive(backup_path: Path, dry_run: bool = False, skip_sources:
         with tarfile.open(backup_path, "r:gz") as tar:
             tar.extractall(temp_dir)
 
-        # Restore each source
-        for source_name, config in RESTORE_DESTINATIONS.items():
+        # Restore each destination we discovered
+        for source_name, config in destinations.items():
             if source_name in skip_sources:
                 log(f"Skipping {source_name} (--skip)", "INFO")
                 continue
@@ -451,6 +512,7 @@ Examples:
     python scripts/restore_pps.py --latest --dry-run               # Preview latest restore
     python scripts/restore_pps.py --backup pps_backup_DATE.tar.gz  # Restore specific
     python scripts/restore_pps.py --latest --skip chromadb neo4j   # Restore without DBs
+    python scripts/restore_pps.py --latest --entity lyra           # Restore only lyra's data
 
 SAFETY WARNINGS:
     - Always use --dry-run first!
@@ -493,8 +555,14 @@ SAFETY WARNINGS:
     parser.add_argument(
         "--skip",
         nargs="+",
-        choices=list(RESTORE_DESTINATIONS.keys()),
-        help="Skip restoring specific sources (e.g., --skip chromadb neo4j)",
+        metavar="SOURCE",
+        help="Skip restoring specific sources by name (e.g., --skip chromadb lyra_sqlite)",
+    )
+    parser.add_argument(
+        "--entity",
+        default=None,
+        metavar="NAME",
+        help="Restore only a specific entity's data (e.g., --entity lyra). Shared sources are always included.",
     )
     parser.add_argument(
         "--no-safety-backup",
@@ -533,10 +601,14 @@ SAFETY WARNINGS:
                 log(f"Tried: {backup_path}", "ERROR")
                 sys.exit(1)
 
-    # Validate backup
-    is_valid, contents = validate_backup(backup_path)
+    # Validate backup — discovers entities present in archive
+    is_valid, contents, destinations = validate_backup(backup_path, entity_filter=args.entity)
     if not is_valid:
         log("Backup validation failed!", "ERROR")
+        sys.exit(1)
+
+    if not destinations:
+        log("No restore destinations found in archive (check --entity filter?)", "ERROR")
         sys.exit(1)
 
     # Banner
@@ -546,6 +618,8 @@ SAFETY WARNINGS:
     log(f"Backup: {backup_path.name}")
     log(f"Size: {backup_path.stat().st_size / 1024 / 1024:.1f} MB")
     log(f"Date: {datetime.fromtimestamp(backup_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')}")
+    if args.entity:
+        log(f"Entity filter: {args.entity}")
     if args.skip:
         log(f"Skipping: {', '.join(args.skip)}")
     if args.dry_run:
@@ -585,6 +659,7 @@ SAFETY WARNINGS:
         # Perform restore
         success = restore_from_archive(
             backup_path,
+            destinations=destinations,
             dry_run=args.dry_run,
             skip_sources=args.skip or [],
         )
