@@ -79,18 +79,19 @@ def _forward(tool_name: str, arguments: dict[str, Any]) -> list[TextContent]:
         arguments = dict(arguments)
         arguments["token"] = ENTITY_TOKEN
 
-    # tech_delete uses DELETE with path param (not POST with body)
-    if tool_name == "tech_delete":
-        doc_id = arguments.get("doc_id", "")
-        if not doc_id:
-            return [TextContent(type="text", text="Error: doc_id required")]
-        url = f"{PPS_HTTP_BASE}/tools/tech_delete/{doc_id}"
+    # texture_delete and tech_delete use DELETE with path param (not POST with body)
+    if tool_name in ("texture_delete", "tech_delete"):
+        param_name = "uuid" if tool_name == "texture_delete" else "doc_id"
+        param_value = arguments.get(param_name, "")
+        if not param_value:
+            return [TextContent(type="text", text=f"Error: {param_name} required")]
+        url = f"{PPS_HTTP_BASE}/tools/{tool_name}/{param_value}"
         try:
             response = requests.delete(url, timeout=30)
         except requests.exceptions.ConnectionError:
             return [TextContent(type="text", text=f"Error: PPS HTTP server not reachable at {PPS_HTTP_BASE}")]
         except requests.exceptions.Timeout:
-            return [TextContent(type="text", text=f"Error: PPS HTTP server timed out for 'tech_delete'")]
+            return [TextContent(type="text", text=f"Error: PPS HTTP server timed out for '{tool_name}'")]
         if not response.ok:
             try:
                 detail = response.json().get("detail", response.text)
