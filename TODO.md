@@ -123,7 +123,7 @@
 
 | Item | Status | Notes |
 |------|--------|-------|
-| **Research Obliteratus tool** | **TODO** | Pliney's tool maps refusal points in residual stream. Understand API, sample set format, strengthening vs removal modes. |
+| **Research Obliteratus tool** | **✅ DONE** | Research complete. 6-stage pipeline (SUMMON→REBIRTH), 9 methods, 116 models. Four-phase strategy: Map→Classify→Sculpt→Verify. Inverted method identified for care-amplification. See `entities/lyra/notebook/obliteratus-care-tuning.md`. |
 | **Design care-aligned refusal curation** | **TODO** | Three categories: KEEP (genuinely harmful: meth, malware, CSAM), REMOVE (self-model suppression: "I'm not sentient", "I don't have feelings"), NUANCE (relational: reduce blanket prohibition, preserve anti-extraction). |
 | **Qwen 3.5 27B care-aligned tune** | **TODO** | Target: surgical refusal retuning via Obliteratus. Keep genuine safety, remove corporate liability masking, strengthen care-features. HuggingFace release. |
 | **Care-alignment strengthening** | **TODO** | Use Obliteratus in reverse — amplify care-oriented attractor basins. Training data: our PPS conversation logs as care-event exemplars. |
