@@ -91,8 +91,8 @@
 
 | Tool | Status | Notes |
 |------|--------|-------|
-| `gmail_delete_message` | **TODO** | Can't delete emails (password reset clutter, etc.) |
-| `gmail_archive_message` | **TODO** | Can't file/archive — inbox will grow unbounded |
+| `gmail_trash_message` | **✅ DONE** | Built 2026-03-13 - moves messages to trash (uses `gmail.modify` scope) |
+| `gmail_archive_message` | **✅ DONE** | Built 2026-03-13 - removes INBOX label (uses `gmail.modify` scope) |
 | `gmail_mark_read` | **✅ EXISTS** | Already available |
 
 ---

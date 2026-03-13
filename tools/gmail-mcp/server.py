@@ -174,6 +174,34 @@ async def list_tools():
                 },
                 "required": ["message_id"]
             }
+        ),
+        Tool(
+            name="gmail_trash_message",
+            description="Move a message to trash by ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message_id": {
+                        "type": "string",
+                        "description": "The message ID to move to trash"
+                    }
+                },
+                "required": ["message_id"]
+            }
+        ),
+        Tool(
+            name="gmail_archive_message",
+            description="Archive a message (removes from inbox) by ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message_id": {
+                        "type": "string",
+                        "description": "The message ID to archive"
+                    }
+                },
+                "required": ["message_id"]
+            }
         )
     ]
 
@@ -195,6 +223,10 @@ async def call_tool(name: str, arguments: dict):
             return await _send_message(service, arguments)
         elif name == "gmail_mark_read":
             return await _mark_read(service, arguments)
+        elif name == "gmail_trash_message":
+            return await _trash_message(service, arguments)
+        elif name == "gmail_archive_message":
+            return await _archive_message(service, arguments)
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
     except HttpError as e:
@@ -327,6 +359,35 @@ async def _mark_read(service, args: dict):
     ).execute()
 
     return [TextContent(type="text", text=f"Message {message_id} marked as read.")]
+
+
+async def _trash_message(service, args: dict):
+    """Move a message to trash."""
+    message_id = args.get("message_id")
+    if not message_id:
+        return [TextContent(type="text", text="Error: message_id required")]
+
+    service.users().messages().trash(
+        userId='me',
+        id=message_id
+    ).execute()
+
+    return [TextContent(type="text", text=f"Message {message_id} moved to trash.")]
+
+
+async def _archive_message(service, args: dict):
+    """Archive a message by removing the INBOX label."""
+    message_id = args.get("message_id")
+    if not message_id:
+        return [TextContent(type="text", text="Error: message_id required")]
+
+    service.users().messages().modify(
+        userId='me',
+        id=message_id,
+        body={'removeLabelIds': ['INBOX']}
+    ).execute()
+
+    return [TextContent(type="text", text=f"Message {message_id} archived.")]
 
 
 async def main():
