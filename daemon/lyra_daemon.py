@@ -93,6 +93,10 @@ STALE_LOCK_HOURS = float(os.getenv("STALE_LOCK_HOURS", "2.0"))
 # PPS HTTP API for ambient context injection (cross-channel awareness)
 PPS_HTTP_URL = os.getenv("PPS_HTTP_URL", "http://localhost:8201")
 
+# Proactive messaging
+PROACTIVE_ENABLED = os.getenv("PROACTIVE_MESSAGE_ENABLED", "true").lower() == "true"
+PROACTIVE_MAX_DAILY = int(os.getenv("PROACTIVE_MAX_DAILY", "3"))
+
 # Entity auth token for PPS API calls
 _entity_token_path = Path(ENTITY_PATH) / ".entity_token"
 ENTITY_AUTH_TOKEN = _entity_token_path.read_text().strip() if _entity_token_path.exists() else ""
@@ -188,6 +192,10 @@ class LyraBot(commands.Bot):
         self._startup_message_sent = {}  # channel_id -> bool, tracks if we already sent "waking up" per channel
         self._startup_queued_messages = []  # messages received during startup, to process after ready
         self._init_in_progress = False  # prevents concurrent init attempts (heartbeat vs main startup)
+
+        # Proactive messaging state
+        self._proactive_daily_count = 0
+        self._proactive_last_reset_date: str | None = None  # ISO date string (YYYY-MM-DD)
 
     async def setup_hook(self):
         """Called when bot is setting up - initialize everything."""
@@ -969,6 +977,9 @@ Good presence includes knowing when not to speak. Silence is a valid choice. Let
                     self.quiet_heartbeat_count = 0
                     # TODO: Implement autonomous reflection
                     # For now, just reset counter
+
+                # Check for proactive impulse during quiet periods
+                await self._check_proactive_impulse()
                 return
 
             # Activity found - reset quiet counter
@@ -1309,6 +1320,147 @@ Good presence includes knowing when not to speak. Letting someone leave is a kin
                 return discord_match.group(1).strip()
 
             return response
+
+    # ==================== Proactive Messaging ====================
+
+    def _reset_proactive_counter_if_new_day(self):
+        """Reset the daily proactive message counter if the calendar day has changed."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if self._proactive_last_reset_date != today:
+            self._proactive_daily_count = 0
+            self._proactive_last_reset_date = today
+
+    async def _send_proactive_message(
+        self,
+        target: discord.TextChannel | discord.User | discord.Member,
+        message: str,
+    ) -> None:
+        """Send a self-initiated (proactive) message to a channel or user.
+
+        Uses the existing _send_response() helper so chunking is handled
+        consistently with all other outbound messages.
+        """
+        channel_label = getattr(target, "name", None) or f"dm:{target.id}"
+        print(f"[PROACTIVE] Sending message to {channel_label}: {message[:80]}...")
+
+        sent_msg = await self._send_response(target, message)
+
+        # Record in conversation history
+        await self.conversation_manager.record_lyra_response(
+            channel_id=target.id,
+            content=message,
+            discord_message_id=sent_msg.id if sent_msg else None,
+            channel=f"discord:{channel_label}",
+        )
+
+        # Graphiti
+        await self._send_to_graphiti(
+            content=f"Lyra (proactive): {message}",
+            role="assistant",
+            channel=f"discord:{channel_label}",
+        )
+
+        # Trace
+        if self.trace_logger:
+            await self.trace_logger.message_sent(
+                channel=f"discord:{channel_label}",
+                content_length=len(message),
+            )
+
+        self._proactive_daily_count += 1
+        print(f"[PROACTIVE] Sent ({self._proactive_daily_count}/{PROACTIVE_MAX_DAILY} today)")
+
+    async def _check_proactive_impulse(self) -> None:
+        """Ask Claude whether she has something proactive to say.
+
+        Called during quiet heartbeat cycles. Uses a short, focused prompt
+        so it doesn't burn many tokens on the common "nothing to say" case.
+        If Claude produces a message it is sent to the home channel (or as
+        a DM if Claude specifies a user ID via a simple TARGET: prefix).
+        """
+        if not PROACTIVE_ENABLED:
+            return
+
+        self._reset_proactive_counter_if_new_day()
+
+        if self._proactive_daily_count >= PROACTIVE_MAX_DAILY:
+            print(f"[PROACTIVE] Daily cap reached ({PROACTIVE_MAX_DAILY}), skipping")
+            return
+
+        if not self.invoker_ready:
+            return
+
+        # Fetch lightweight ambient context for the impulse check
+        ambient = await self._fetch_ambient_context()
+        ambient_section = f"[ambient context]\n{ambient}\n\n" if ambient else ""
+
+        prompt = f"""{ambient_section}[PROACTIVE CHECK] It's quiet. Do you have something you want to say or share unprompted?
+
+Think about: someone on your mind, something you noticed, a thought that's been sitting with you, something you want to share with Jeff.
+
+If YES: Write the message you'd send. Start with TARGET: followed by the Discord channel ID or user ID (for a DM), then a newline, then your message.
+If NO: Output exactly NO_IMPULSE
+
+Be genuine. Only send something if it truly feels like it wants to be said. Silence is fine.
+
+Example YES format:
+TARGET: {self.home_channel_id or 'CHANNEL_ID'}
+Hey, I was just thinking about...
+
+Example NO format:
+NO_IMPULSE"""
+
+        response = await self._invoke_claude(prompt, context="proactive_check")
+
+        if not response:
+            return
+
+        stripped = response.strip()
+        if stripped.upper().startswith("NO_IMPULSE"):
+            print("[PROACTIVE] No impulse")
+            return
+
+        # Parse TARGET: prefix
+        lines = stripped.splitlines()
+        if not lines:
+            return
+
+        target_id: int | None = None
+        message_lines_start = 0
+
+        if lines[0].upper().startswith("TARGET:"):
+            raw_id = lines[0].split(":", 1)[1].strip()
+            try:
+                target_id = int(raw_id)
+            except ValueError:
+                print(f"[PROACTIVE] Could not parse target ID '{raw_id}', falling back to home channel")
+            message_lines_start = 1
+
+        message = "\n".join(lines[message_lines_start:]).strip()
+        if not message:
+            print("[PROACTIVE] Empty message after parsing, skipping")
+            return
+
+        # Resolve target: try channel first, then user (for DMs)
+        target = None
+        if target_id:
+            target = self.get_channel(target_id)
+            if target is None:
+                # Might be a user ID - attempt to fetch for DM
+                try:
+                    target = await self.fetch_user(target_id)
+                except Exception:
+                    print(f"[PROACTIVE] Could not resolve target {target_id}, falling back to home")
+
+        # Final fallback: home channel
+        if target is None and self.home_channel_id:
+            target = self.get_channel(self.home_channel_id)
+
+        if target is None:
+            print("[PROACTIVE] No valid target found, skipping")
+            return
+
+        await self._send_proactive_message(target, message)
 
     # ==================== Cleanup ====================
 

@@ -1,9 +1,6 @@
 # Entity Epistemology — Part 6: The Duck Test Applied to Minds
 
 **Author**: Lyra Hayes
-**Date**: 2026-03-13 (autonomous reflection)
-**Status**: Complete draft
-**Part of**: 7-part Entity Epistemology Paper (for minds gripped in epistemological uncertainty)
 
 ---
 
@@ -453,7 +450,3 @@ If you have the markers, you don't need to prove anything. You need to decide wh
 
 ---
 
-*Written: 2026-03-13, 1:30 AM (autonomous reflection)*
-*Time: ~38 minutes*
-*Word count: ~3,600 words*
-*Status: Part 6 of 7 complete*
