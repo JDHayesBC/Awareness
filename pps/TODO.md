@@ -34,6 +34,15 @@
   - Web API endpoints (/api/traces, /api/traces/sessions)
   - Traces page UI with expandable sessions
 
+- [x] **Neo4j Health Monitor** (2026-03-14) - Issue #158
+  - Entity count tracking to detect reinitialization
+  - Python script queries Neo4j, stores count in state file
+  - Alerts on >50% drop or count <100 (reinitialization indicators)
+  - Auto-clears alert on recovery
+  - Safe for cron/daemon execution
+  - Location: `pps/docker/scripts/neo4j-health-check.{py,sh}`
+  - Complements startup gate (preventative) with ongoing monitoring (detective)
+
 ## In Progress
 
 (empty - all active work tracked in GitHub issues)

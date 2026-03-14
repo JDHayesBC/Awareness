@@ -89,3 +89,6 @@ haven/data/*.token
 # Training data - large files, not code
 spicy/
 .claude/scheduled_tasks.lock
+
+# PPS runtime state (health checks, etc.)
+pps/docker/data/
