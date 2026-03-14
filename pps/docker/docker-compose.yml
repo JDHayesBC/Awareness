@@ -38,21 +38,29 @@ services:
     image: neo4j:5.26-community
     container_name: pps-neo4j
     restart: unless-stopped
+    # Custom entrypoint: waits for WSL2 NTFS bind-mount to be readable before
+    # allowing Neo4j to start. Prevents cold-boot reinitialization (see docs/neo4j-data-loss-2026-03-07.md).
+    entrypoint: ["/neo4j-entrypoint.sh"]
     ports:
       - "127.0.0.1:7474:7474"  # HTTP
       - "127.0.0.1:7687:7687"  # Bolt
     volumes:
       # Bind-mount to host for persistence (Issue #131)
       - ${PROJECT_ROOT}/docker/pps/neo4j_data:/data
+      # Mount the readiness gate script (read-only)
+      - ${PROJECT_ROOT}/pps/docker/neo4j-entrypoint.sh:/neo4j-entrypoint.sh:ro
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-password123}
       - NEO4J_PLUGINS=["apoc"]
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:7474"]
+      # Two-stage check: HTTP up AND Bolt query returns (proves database is serving, not just the HTTP UI).
+      # cypher-shell exits non-zero if the DB is unreachable or returns an error.
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 && cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-password123} 'RETURN 1' > /dev/null 2>&1"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 5
-      start_period: 30s
+      # Increased to 90s: 60s max gate wait + Neo4j init time
+      start_period: 90s
 
   # Knowledge Graph Service (Layer 3: Rich Texture)
   graphiti:
