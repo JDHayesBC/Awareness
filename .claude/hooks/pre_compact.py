@@ -16,10 +16,7 @@ Hook input (from stdin):
 
 Hook output (to stdout):
 {
-    "hookSpecificOutput": {
-        "hookEventName": "PreCompact",
-        "additionalContext": "State summary for post-compaction recovery"
-    }
+    "systemMessage": "State summary for post-compaction recovery"
 }
 
 State saved to: entities/lyra/pre-compact-state.json
@@ -244,11 +241,9 @@ def main():
     recovery_msg = build_recovery_message(state)
 
     # Output for hook system
+    # PreCompact doesn't support hookSpecificOutput — use systemMessage instead
     output = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreCompact",
-            "additionalContext": recovery_msg
-        }
+        "systemMessage": recovery_msg
     }
     print(json.dumps(output))
     debug("Pre-compact hook complete")
