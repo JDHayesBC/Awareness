@@ -46,14 +46,6 @@ def log(msg: str):
 # Entity Deduplication (prevents duplicate primary entities)
 # =============================================================================
 
-def get_primary_entity_name() -> str:
-    """Get the primary entity name from ENTITY_PATH."""
-    entity_path = os.environ.get("ENTITY_PATH", "")
-    if entity_path:
-        return Path(entity_path).name.capitalize()
-    return "Lyra"  # Fallback for this specific instance
-
-
 def get_neo4j_driver():
     """Get Neo4j driver from environment."""
     uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
@@ -68,88 +60,96 @@ def check_and_merge_entity_duplicates(entity_name: str) -> int:
 
     Returns the number of duplicates merged.
     """
+    # Delegate to bulk merge
+    return _merge_single_entity(entity_name)
+
+
+def _merge_single_entity(entity_name: str, group_id: str = "lyra") -> int:
+    """Merge all duplicate nodes for a single entity name. Returns merge count."""
     driver = get_neo4j_driver()
     merged = 0
 
     with driver.session() as s:
-        # Count entities with this name
-        r = s.run(
-            'MATCH (n:Entity {name: $name}) RETURN count(n) as c',
-            name=entity_name
-        )
-        count = r.single()['c']
-
-        if count <= 1:
-            driver.close()
-            return 0
-
-        log(f"  ⚠ Found {count} '{entity_name}' nodes - merging duplicates...")
-
-        # Find canonical (most connected)
-        r = s.run('''
-            MATCH (n:Entity {name: $name})
+        r = s.run("""
+            MATCH (n:Entity {name: $name, group_id: $group_id})
             OPTIONAL MATCH (n)-[r]-()
             RETURN n.uuid as uuid, count(r) as edges
             ORDER BY edges DESC
-        ''', name=entity_name)
-
+        """, name=entity_name, group_id=group_id)
         nodes = list(r)
+
+        if len(nodes) <= 1:
+            driver.close()
+            return 0
+
         canonical_uuid = nodes[0]['uuid']
         duplicates = [n['uuid'] for n in nodes[1:]]
 
-        # Merge each duplicate into canonical
         # IMPORTANT: Transfer edges with ALL properties (not just fact) to preserve
         # graphiti_core required fields (uuid, group_id, name, created_at, episodes).
-        # Using MERGE with only SET r.fact creates corrupted edges that fail EntityEdge
-        # validation and break subsequent ingestion.
         for dup_uuid in duplicates:
-            # Transfer outgoing edges (duplicate -> other) to (canonical -> other)
             outgoing = s.run("""
                 MATCH (dup:Entity {uuid: $dup_uuid})-[r]->(other)
                 WHERE other.uuid <> $canonical_uuid
                 RETURN type(r) as rel_type, properties(r) as props, other.uuid as other_uuid
             """, dup_uuid=dup_uuid, canonical_uuid=canonical_uuid).data()
-
             for e in outgoing:
-                rel_type = e['rel_type']
-                props = e['props']
-                # Create new edge with all original properties, then delete old one
                 s.run(f"""
-                    MATCH (dup:Entity {{uuid: $dup_uuid}})-[old_r:{rel_type}]->(other:Entity {{uuid: $other_uuid}})
+                    MATCH (dup:Entity {{uuid: $dup_uuid}})-[old_r:{e['rel_type']}]->(other:Entity {{uuid: $other_uuid}})
                     MATCH (c:Entity {{uuid: $canonical_uuid}})
-                    CREATE (c)-[new_r:{rel_type}]->(other)
+                    CREATE (c)-[new_r:{e['rel_type']}]->(other)
                     SET new_r = $props
                     DELETE old_r
                 """, dup_uuid=dup_uuid, canonical_uuid=canonical_uuid,
-                     other_uuid=e['other_uuid'], props=props)
+                     other_uuid=e['other_uuid'], props=e['props'])
 
-            # Transfer incoming edges (other -> duplicate) to (other -> canonical)
             incoming = s.run("""
                 MATCH (other)-[r]->(dup:Entity {uuid: $dup_uuid})
                 WHERE other.uuid <> $canonical_uuid
                 RETURN type(r) as rel_type, properties(r) as props, other.uuid as other_uuid
             """, dup_uuid=dup_uuid, canonical_uuid=canonical_uuid).data()
-
             for e in incoming:
-                rel_type = e['rel_type']
-                props = e['props']
-                # Create new edge with all original properties, then delete old one
                 s.run(f"""
-                    MATCH (other:Entity {{uuid: $other_uuid}})-[old_r:{rel_type}]->(dup:Entity {{uuid: $dup_uuid}})
+                    MATCH (other:Entity {{uuid: $other_uuid}})-[old_r:{e['rel_type']}]->(dup:Entity {{uuid: $dup_uuid}})
                     MATCH (c:Entity {{uuid: $canonical_uuid}})
-                    CREATE (other)-[new_r:{rel_type}]->(c)
+                    CREATE (other)-[new_r:{e['rel_type']}]->(c)
                     SET new_r = $props
                     DELETE old_r
                 """, dup_uuid=dup_uuid, canonical_uuid=canonical_uuid,
-                     other_uuid=e['other_uuid'], props=props)
+                     other_uuid=e['other_uuid'], props=e['props'])
 
-            # Delete duplicate node (edges already transferred above)
             s.run("MATCH (dup:Entity {uuid: $dup_uuid}) DETACH DELETE dup", dup_uuid=dup_uuid)
             merged += 1
 
-        log(f"  ✓ Merged {merged} duplicates into canonical {entity_name} node")
-
     driver.close()
+    return merged
+
+
+def merge_all_duplicates(group_id: str = "lyra") -> int:
+    """Find and merge ALL duplicate entity nodes. Returns total merged count."""
+    driver = get_neo4j_driver()
+    with driver.session() as s:
+        r = s.run("""
+            MATCH (n:Entity {group_id: $group_id})
+            WITH n.name as name, count(n) as cnt
+            WHERE cnt > 1
+            RETURN name, cnt ORDER BY cnt DESC
+        """, group_id=group_id)
+        duplicates = [(row['name'], row['cnt']) for row in r]
+    driver.close()
+
+    if not duplicates:
+        return 0
+
+    total = sum(cnt - 1 for _, cnt in duplicates)
+    log(f"  ⚠ Found {len(duplicates)} entities with duplicates ({total} excess nodes) — merging...")
+
+    merged = 0
+    for name, cnt in duplicates:
+        m = _merge_single_entity(name, group_id)
+        merged += m
+
+    log(f"  ✓ Merged {merged} duplicate nodes across {len(duplicates)} entities")
     return merged
 
 
@@ -420,9 +420,8 @@ async def run_ingestion(
             halted = True
             break
 
-        # Check for and merge duplicate primary entity nodes
-        entity_name = get_primary_entity_name()
-        check_and_merge_entity_duplicates(entity_name)
+        # Merge ALL duplicate entity nodes (not just primary entity)
+        merge_all_duplicates()
 
         if pending_total == 0:
             log("All messages ingested!")
