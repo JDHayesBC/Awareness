@@ -29,6 +29,19 @@ export HAVEN_URL="${HAVEN_URL:-http://localhost:8205}"
 export CLAUDE_MODEL="${CLAUDE_MODEL:-sonnet}"
 export PROJECT_DIR="$PROJECT_DIR"
 
+# Route to the correct PPS HTTP server for this entity.
+# Each entity has its own PPS instance on a dedicated port.
+if [ -z "${PPS_HTTP_URL:-}" ]; then
+    case "$ENTITY" in
+        lyra)  export PPS_HTTP_URL="http://localhost:8201" ;;
+        caia)  export PPS_HTTP_URL="http://localhost:8211" ;;
+        *)
+            echo "WARNING: Unknown entity '$ENTITY' — PPS_HTTP_URL not set. Ambient context will be disabled."
+            export PPS_HTTP_URL=""
+            ;;
+    esac
+fi
+
 echo "Starting Haven bot for $ENTITY"
 echo "  Haven: $HAVEN_URL"
 echo "  Token: $TOKEN_FILE"
