@@ -239,11 +239,15 @@ services:
       - PPS_SERVER_HOST=pps-lyra
       - PPS_SERVER_PORT=8000
       - ENTITY_CAIA_PPS_URL=http://pps-caia:8000
+      # Caia's entity filesystem mount path (enables Raw Capture + Crystals for Caia view)
+      - ENTITY_CAIA_PATH=/app/entity-caia
       # OpenAI for graphiti_core embeddings
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
-      # Mount entity directory (identity files, crystals, word-photos)
+      # Mount Lyra's entity directory (identity files, crystals, word-photos)
       - ${ENTITY_PATH}:/app/entity:ro
+      # Mount Caia's entity directory for multi-entity Observatory view
+      - ${CAIA_ENTITY_PATH}:/app/entity-caia:ro
       # Shared data (SQLite needs rw for WAL mode)
       - ${CLAUDE_HOME}/data:/app/claude_home/data:rw
       - ${CLAUDE_HOME}/journals:/app/claude_home/journals:ro
