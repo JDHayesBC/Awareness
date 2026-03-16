@@ -316,6 +316,10 @@ const haven = (() => {
         const time = formatTime(msg.created_at);
         const isMe = currentUser && msg.username === currentUser.username;
 
+        el.dataset.time = time;
+        el.dataset.author = msg.display_name;
+        el.dataset.content = msg.content;
+
         el.innerHTML = `
             <span class="text-xs text-gray-600 mt-1 flex-shrink-0 w-14 text-right">${time}</span>
             <span class="font-medium flex-shrink-0 ${isMe ? 'text-blue-400' : 'text-green-400'}">${escapeHtml(msg.display_name)}</span>
@@ -544,6 +548,37 @@ const haven = (() => {
         // UI update happens via member_left WebSocket event
     }
 
+    // --- Export ---
+
+    function exportConversation() {
+        const room = rooms.find(r => r.id === currentRoomId);
+        const roomLabel = room ? (room.is_dm ? room.display_name : `#${room.display_name}`) : 'Haven';
+
+        const rows = document.querySelectorAll('#message-list .message-row');
+        const lines = [
+            `# ${roomLabel}`,
+            `*Exported ${new Date().toLocaleString()}*`,
+            '',
+        ];
+
+        rows.forEach(row => {
+            const { time, author, content } = row.dataset;
+            if (author && content) {
+                lines.push(`**[${time}] ${author}**: ${content}`);
+            }
+        });
+
+        const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const dateStr = new Date().toISOString().split('T')[0];
+        const slug = (room?.display_name || 'chat').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        a.download = `haven-${slug}-${dateStr}.md`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
     // --- Init ---
 
     function init() {
@@ -553,5 +588,5 @@ const haven = (() => {
 
     document.addEventListener('DOMContentLoaded', init);
 
-    return { loadMore, selectRoom, inviteToRoom, leaveRoom };
+    return { loadMore, selectRoom, inviteToRoom, leaveRoom, exportConversation };
 })();
