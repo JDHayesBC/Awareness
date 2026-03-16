@@ -208,6 +208,22 @@ class InventoryDeleteRequest(BaseModel):
     token: str = ""
 
 
+class ListSpacesRequest(BaseModel):
+    """Request to list all known spaces."""
+    token: str = ""
+
+
+class TokenOnlyRequest(BaseModel):
+    """Generic token-only request for endpoints that need auth but no other params."""
+    token: str = ""
+
+
+class AnchorDeleteRequest(BaseModel):
+    """Request to delete a word-photo anchor."""
+    filename: str
+    token: str = ""
+
+
 class TechSearchRequest(BaseModel):
     """Request to search technical documentation."""
     query: str
@@ -2080,14 +2096,14 @@ async def enter_space(request: EnterSpaceRequest):
     }
 
 
-@app.get("/tools/list_spaces")
-async def list_spaces(token: str = ""):
+@app.post("/tools/list_spaces")
+async def list_spaces(request: ListSpacesRequest):
     """
     List all known spaces/rooms/locations.
 
     Returns space names, descriptions, and visit counts.
     """
-    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "list_spaces")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "list_spaces")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -2116,12 +2132,13 @@ async def list_spaces(token: str = ""):
 
 # === Anchor Management (3) ===
 
-@app.delete("/tools/anchor_delete/{filename}")
-async def anchor_delete(filename: str):
+@app.post("/tools/anchor_delete")
+async def anchor_delete(request: AnchorDeleteRequest):
     """
     Delete a word-photo from both disk and ChromaDB.
     Use for removing outdated or erroneous anchors.
     """
+    filename = request.filename
     if not filename:
         raise HTTPException(status_code=400, detail="filename required")
     
@@ -2136,13 +2153,13 @@ async def anchor_delete(filename: str):
         )
 
 
-@app.get("/tools/anchor_list")
-async def anchor_list(token: str = ""):
+@app.post("/tools/anchor_list")
+async def anchor_list(request: TokenOnlyRequest):
     """
     List all word-photos with sync status.
     Shows files on disk, entries in ChromaDB, orphans, and missing items.
     """
-    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "anchor_list")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "anchor_list")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -2176,8 +2193,8 @@ async def anchor_resync():
 
 # === Crystal Management (2) ===
 
-@app.delete("/tools/crystal_delete")
-async def crystal_delete():
+@app.post("/tools/crystal_delete")
+async def crystal_delete(request: TokenOnlyRequest):
     """
     Delete the most recent crystal ONLY.
     Crystals form a chain - only the latest can be deleted to preserve integrity.
@@ -2195,14 +2212,14 @@ async def crystal_delete():
     return result
 
 
-@app.get("/tools/crystal_list")
-async def crystal_list(token: str = ""):
+@app.post("/tools/crystal_list")
+async def crystal_list(request: TokenOnlyRequest):
     """
     List all crystals with metadata.
     Shows current crystals (rolling window of 4) and archived ones.
     Includes filename, number, size, modified date, and preview.
     """
-    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "crystal_list")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "crystal_list")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
@@ -2539,7 +2556,7 @@ async def inventory_get(request: InventoryGetRequest):
     return {"item": item}
 
 
-@app.delete("/tools/inventory_delete")
+@app.post("/tools/inventory_delete")
 async def inventory_delete(request: InventoryDeleteRequest):
     """
     Delete an inventory item.
@@ -2566,16 +2583,16 @@ async def inventory_delete(request: InventoryDeleteRequest):
         )
 
 
-@app.get("/tools/inventory_categories")
-async def inventory_categories(token: str = ""):
+@app.post("/tools/inventory_categories")
+async def inventory_categories(request: TokenOnlyRequest):
     """
     List all inventory categories with item counts.
     """
-    auth_error = check_auth(token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "inventory_categories")
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "inventory_categories")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
-    categories = await inventory.list_categories()
+    categories = await inventory.get_categories()
     
     return {
         "categories": categories,
@@ -2668,8 +2685,8 @@ async def tech_ingest(request: TechIngestRequest):
     }
 
 
-@app.get("/tools/tech_list")
-async def tech_list():
+@app.post("/tools/tech_list")
+async def tech_list(request: TokenOnlyRequest):
     """
     List all documents indexed in the Tech RAG.
     """
