@@ -523,14 +523,24 @@ class ClaudeInvoker:
             try:
                 await self._client.query(prompt)
 
-                # Collect response
+                # Collect response — use receive_messages() instead of receive_response()
+                # so we don't stop early on intermediate ResultMessages from tool-call turns.
+                # When Claude makes tool calls, the CC CLI emits:
+                #   Turn 1: AssistantMessage([TextBlock, ToolUseBlock]) → ResultMessage
+                #   Turn 2: AssistantMessage([TextBlock]) → ResultMessage (final)
+                # receive_response() stops at the FIRST ResultMessage, dropping Turn 2.
+                # receive_messages() continues until StopAsyncIteration (stream ends).
+                #
+                # We also skip TextBlocks from AssistantMessages that contain ToolUseBlocks.
+                # Those TextBlocks are pre-tool filler ("Let me check..."), not the final
+                # response. Text-only AssistantMessages contain the actual answer.
                 response_parts = []
                 msg_count = 0
                 text_block_count = 0
                 tool_block_count = 0
                 # Use iterator protocol directly so we can skip unparseable
                 # messages (e.g. rate_limit_event) without aborting the loop.
-                _response_iter = self._client.receive_response().__aiter__()
+                _response_iter = self._client.receive_messages().__aiter__()
                 while True:
                     try:
                         msg = await _response_iter.__anext__()
@@ -546,11 +556,18 @@ class ClaudeInvoker:
                     if isinstance(msg, AssistantMessage):
                         block_types = [type(b).__name__ for b in msg.content]
                         logger.info(f"Response msg #{msg_count}: {msg_type} with {len(msg.content)} blocks: {block_types}")
+                        # Check if this AssistantMessage contains tool calls.
+                        # If so, its TextBlocks are pre-tool filler — skip them.
+                        # Only collect text from tool-free turns (the actual response).
+                        msg_has_tool_use = any(isinstance(b, ToolUseBlock) for b in msg.content)
                         for block in msg.content:
                             if isinstance(block, TextBlock):
-                                text_block_count += 1
-                                logger.info(f"  TextBlock #{text_block_count}: {len(block.text)} chars: {block.text[:100]}...")
-                                response_parts.append(block.text)
+                                if msg_has_tool_use:
+                                    logger.info(f"  TextBlock (skipped — pre-tool filler): {block.text[:80]}...")
+                                else:
+                                    text_block_count += 1
+                                    logger.info(f"  TextBlock #{text_block_count}: {len(block.text)} chars: {block.text[:100]}...")
+                                    response_parts.append(block.text)
                             elif isinstance(block, ToolUseBlock):
                                 tool_block_count += 1
                                 tool_name = block.name
@@ -559,11 +576,13 @@ class ClaudeInvoker:
                                     tool_input = tool_input[:200] + "..."
                                 logger.info(f"  ToolUseBlock #{tool_block_count}: {tool_name}({tool_input})")
                     elif isinstance(msg, ResultMessage):
-                        logger.info(f"Response msg #{msg_count}: ResultMessage — ending. Collected {text_block_count} text blocks, {tool_block_count} tool blocks from {msg_count} messages")
-                        break
+                        # Log but continue — there may be more turns after this one
+                        # if tool calls are in progress.
+                        logger.info(f"Response msg #{msg_count}: ResultMessage (num_turns={msg.num_turns}). Continuing to collect remaining turns.")
                     else:
                         logger.info(f"Response msg #{msg_count}: {msg_type} (unhandled)")
 
+                logger.info(f"Response stream ended. Collected {text_block_count} text blocks, {tool_block_count} tool blocks from {msg_count} messages")
                 response = "".join(response_parts)
 
                 # Track response tokens and turn count
@@ -654,11 +673,16 @@ class ClaudeInvoker:
         try:
             await self._client.query(prompt)
 
-            async for msg in self._client.receive_response():
+            # Use receive_messages() (not receive_response()) to collect all turns,
+            # including post-tool-call turns. Skip text from AssistantMessages that
+            # contain tool calls — those are pre-tool filler, not the real response.
+            async for msg in self._client.receive_messages():
                 if isinstance(msg, AssistantMessage):
+                    msg_has_tool_use = any(isinstance(b, ToolUseBlock) for b in msg.content)
                     for block in msg.content:
                         if isinstance(block, TextBlock):
-                            yield block.text
+                            if not msg_has_tool_use:
+                                yield block.text
                         elif isinstance(block, ToolUseBlock):
                             # Log tool calls for observability
                             tool_name = block.name
@@ -668,7 +692,8 @@ class ClaudeInvoker:
                                 tool_input = tool_input[:200] + "..."
                             logger.info(f"Tool call: {tool_name}({tool_input})")
                 elif isinstance(msg, ResultMessage):
-                    break
+                    # Log but continue — more turns may follow after tool calls complete
+                    logger.debug(f"ResultMessage received (num_turns={msg.num_turns}), continuing stream")
 
         except (CLIConnectionError, ProcessError, ConnectionError) as e:
             logger.error(f"Connection error during streaming query: {e}")
