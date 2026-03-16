@@ -184,6 +184,37 @@ async def init_invoker() -> ClaudeInvoker:
 
 # ==================== Ambient Context ====================
 
+async def store_haven_message(username: str, display_name: str, content: str, room_id: str) -> None:
+    """Store a Haven message in PPS for cross-context visibility.
+
+    This is the Haven equivalent of the CLI capture_response + inject_context hooks.
+    Storing with channel="haven" means:
+    - The terminal hook's ambient_recall picks up Haven turns on next CLI message
+    - Other entities' ambient_recall surfaces these turns cross-channel
+    """
+    if not PPS_HTTP_URL or not content:
+        return
+    # Skip trivial warmup ack messages
+    if content.strip() in ("ready", "warmed up"):
+        return
+    is_entity = username.lower() != "jeff"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{PPS_HTTP_URL}/tools/store_message",
+                json={
+                    "content": content,
+                    "author_name": display_name,
+                    "channel": "haven",
+                    "is_lyra": is_entity,
+                    "session_id": room_id,
+                    "token": ENTITY_TOKEN,
+                },
+            )
+    except Exception as e:
+        print(f"[{ENTITY_NAME}] Haven→PPS store failed: {e}", file=sys.stderr)
+
+
 async def fetch_ambient_context() -> str:
     """Fetch ambient context from PPS HTTP server.
 
@@ -470,6 +501,13 @@ async def _process_batch(room_id: str) -> None:
                         f"[{ENTITY_NAME}] Sent ({len(response)} chars, {elapsed:.1f}s)",
                         file=sys.stderr,
                     )
+                    # Store our response in PPS so terminal CLI sees Haven turns
+                    asyncio.create_task(store_haven_message(
+                        username=my_username,
+                        display_name=ENTITY_NAME.capitalize(),
+                        content=response,
+                        room_id=room_id,
+                    ))
                 else:
                     print(f"[{ENTITY_NAME}] Failed to send response", file=sys.stderr)
             else:
@@ -521,6 +559,13 @@ async def connect() -> None:
                         )
 
                     elif event_type == "message":
+                        # Store all Haven messages in PPS (cross-context visibility)
+                        asyncio.create_task(store_haven_message(
+                            username=data.get("username", ""),
+                            display_name=data.get("display_name", data.get("username", "")),
+                            content=data.get("content", ""),
+                            room_id=data.get("room_id", "haven"),
+                        ))
                         asyncio.create_task(handle_message(data))
 
                     elif event_type == "presence":
