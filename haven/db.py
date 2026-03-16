@@ -177,6 +177,15 @@ class HavenDB:
         ) as cursor:
             return await cursor.fetchone() is not None
 
+    async def leave_room(self, room_id: str, user_id: str) -> bool:
+        """Leave a room. Returns True if was a member, False if not."""
+        async with self._db.execute(
+            "DELETE FROM room_members WHERE room_id = ? AND user_id = ?",
+            (room_id, user_id),
+        ) as cursor:
+            await self._db.commit()
+            return cursor.rowcount > 0
+
     async def get_room_members(self, room_id: str) -> list[dict]:
         async with self._db.execute(
             """SELECT u.* FROM users u

@@ -23,6 +23,7 @@ from haven.bridge import bridge_message
 from haven.db import HavenDB
 from haven.models import (
     CreateRoomRequest,
+    InviteRequest,
     MessageListResponse,
     MessageResponse,
     RoomListResponse,
@@ -286,6 +287,90 @@ async def join_room(room_id: str, request: Request):
 
     newly_joined = await db.join_room(room_id, user_id)
     return {"joined": newly_joined, "room_id": room_id}
+
+
+@app.get("/api/rooms/{room_id}/members")
+async def list_room_members(room_id: str, request: Request):
+    user_id = await get_current_user_id(request, db)
+
+    if not await db.is_room_member(room_id, user_id):
+        raise HTTPException(status_code=403, detail="Not a member of this room")
+
+    members = await db.get_room_members(room_id)
+    return {
+        "members": [
+            {
+                "id": m["id"],
+                "username": m["username"],
+                "display_name": m["display_name"],
+                "is_bot": bool(m["is_bot"]),
+            }
+            for m in members
+        ]
+    }
+
+
+@app.post("/api/rooms/{room_id}/invite")
+async def invite_to_room(room_id: str, request: Request, body: InviteRequest):
+    user_id = await get_current_user_id(request, db)
+
+    room = await db.get_room(room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    if not await db.is_room_member(room_id, user_id):
+        raise HTTPException(status_code=403, detail="Not a member of this room")
+
+    target_user = await db.get_user(body.user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    newly_joined = await db.join_room(room_id, body.user_id)
+
+    if newly_joined:
+        await manager.broadcast_to_room(room_id, {
+            "type": "member_joined",
+            "room_id": room_id,
+            "user_id": target_user["id"],
+            "username": target_user["username"],
+            "display_name": target_user["display_name"],
+        })
+
+    return {"joined": newly_joined, "room_id": room_id}
+
+
+@app.post("/api/rooms/{room_id}/leave")
+async def leave_room_endpoint(room_id: str, request: Request):
+    user_id = await get_current_user_id(request, db)
+
+    room = await db.get_room(room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    user = await db.get_user(user_id)
+
+    # Get member list BEFORE removal so the leaver receives the broadcast
+    members_before = await db.get_room_members(room_id)
+
+    left = await db.leave_room(room_id, user_id)
+
+    if left and user:
+        event = {
+            "type": "member_left",
+            "room_id": room_id,
+            "user_id": user_id,
+            "username": user["username"],
+        }
+        payload = json.dumps(event)
+        for member in members_before:
+            mid = member["id"]
+            for ws in manager.active.get(mid, []):
+                try:
+                    await ws.send_text(payload)
+                except Exception:
+                    pass
+
+    return {"left": left, "room_id": room_id}
 
 
 # --- WebSocket (browser clients) ---

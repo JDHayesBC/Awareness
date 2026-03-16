@@ -124,6 +124,12 @@ const haven = (() => {
             case 'typing':
                 onTyping(data);
                 break;
+            case 'member_joined':
+                onMemberJoined(data);
+                break;
+            case 'member_left':
+                onMemberLeft(data);
+                break;
         }
     }
 
@@ -205,6 +211,29 @@ const haven = (() => {
         updateTypingIndicator();
     }
 
+    function onMemberJoined(data) {
+        if (data.room_id === currentRoomId) {
+            appendSystemMessage(`${escapeHtml(data.display_name)} joined`);
+        }
+    }
+
+    function onMemberLeft(data) {
+        if (data.room_id === currentRoomId) {
+            appendSystemMessage(`${escapeHtml(data.username)} left`);
+        }
+        if (currentUser && data.user_id === currentUser.id) {
+            // We left — remove room from sidebar and switch
+            rooms = rooms.filter(r => r.id !== data.room_id);
+            renderRooms();
+            if (currentRoomId === data.room_id) {
+                currentRoomId = null;
+                $('room-name').textContent = '';
+                $('message-list').innerHTML = '';
+                if (rooms.length > 0) selectRoom(rooms[0].id);
+            }
+        }
+    }
+
     // --- Rendering ---
 
     function renderRooms() {
@@ -269,6 +298,14 @@ const haven = (() => {
         const list = $('message-list');
         list.appendChild(createMessageEl(msg));
         trackOldest(msg.room_id, msg.id);
+    }
+
+    function appendSystemMessage(text) {
+        const el = document.createElement('div');
+        el.className = 'text-xs text-gray-500 italic py-1 px-2 text-center';
+        el.textContent = text;
+        $('message-list').appendChild(el);
+        scrollToBottom();
     }
 
     function createMessageEl(msg) {
@@ -408,6 +445,64 @@ const haven = (() => {
         }
     }
 
+    // --- Invite / Leave ---
+
+    async function inviteToRoom() {
+        if (!currentRoomId) return;
+        const token = getToken();
+
+        // Fetch current members
+        const membersRes = await fetch(`/api/rooms/${currentRoomId}/members`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!membersRes.ok) return;
+        const { members } = await membersRes.json();
+        const memberIds = new Set(members.map(m => m.id));
+
+        // Show non-members
+        const nonMembers = users.filter(u => !memberIds.has(u.id));
+        if (nonMembers.length === 0) {
+            alert('Everyone is already in this room.');
+            return;
+        }
+
+        const names = nonMembers.map((u, i) => `${i + 1}. ${u.display_name} (${u.username})`).join('\n');
+        const input = prompt(`Invite to room:\n${names}\n\nEnter number:`);
+        if (!input) return;
+        const idx = parseInt(input) - 1;
+        if (idx < 0 || idx >= nonMembers.length) return;
+
+        const target = nonMembers[idx];
+        const res = await fetch(`/api/rooms/${currentRoomId}/invite`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ user_id: target.id })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(`Failed to invite: ${err.detail || res.status}`);
+        }
+    }
+
+    async function leaveRoom() {
+        if (!currentRoomId) return;
+        const room = rooms.find(r => r.id === currentRoomId);
+        if (!confirm(`Leave "${room ? room.display_name : 'this room'}"?`)) return;
+
+        const res = await fetch(`/api/rooms/${currentRoomId}/leave`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${getToken()}` }
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(`Failed to leave: ${err.detail || res.status}`);
+        }
+        // UI update happens via member_left WebSocket event
+    }
+
     // --- Init ---
 
     function init() {
@@ -417,5 +512,5 @@ const haven = (() => {
 
     document.addEventListener('DOMContentLoaded', init);
 
-    return { loadMore, selectRoom };
+    return { loadMore, selectRoom, inviteToRoom, leaveRoom };
 })();

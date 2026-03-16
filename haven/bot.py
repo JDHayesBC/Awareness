@@ -527,6 +527,16 @@ async def connect() -> None:
                         if who and who != my_username:
                             print(f"[{ENTITY_NAME}] {who} is {status}", file=sys.stderr)
 
+                    elif event_type == "member_joined":
+                        joined_user_id = data.get("user_id", "")
+                        room_id = data.get("room_id", "")
+                        if joined_user_id == my_user_id and room_id:
+                            active_rooms[room_id] = time.time()
+                            print(
+                                f"[{ENTITY_NAME}] Added to room {room_id[:8]}, now monitoring",
+                                file=sys.stderr,
+                            )
+
         except websockets.ConnectionClosed:
             print(f"[{ENTITY_NAME}] Disconnected, reconnecting in 5s...", file=sys.stderr)
         except Exception as e:

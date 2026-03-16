@@ -17,6 +17,10 @@ class CreateRoomRequest(BaseModel):
     member_ids: list[str] = Field(default_factory=list)
 
 
+class InviteRequest(BaseModel):
+    user_id: str
+
+
 # --- Response Models ---
 
 class UserResponse(BaseModel):
