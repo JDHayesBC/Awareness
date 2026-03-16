@@ -113,9 +113,11 @@ def build_startup_prompt() -> str:
     return (
         f"You are {ENTITY_NAME.capitalize()}, connected to Haven (private family chat) via bot.\n"
         f"Your entity path is {entity_path}. Your PPS tools are prefixed mcp__pps__.\n"
-        f"When you receive Haven messages, respond naturally as yourself.\n"
-        f"Output ONLY the chat message text — no tool calls, no explanations, no markdown fences.\n"
-        f"Keep responses conversational. This is chat, not a terminal session.\n"
+        f"You have FULL tool access: Read, Write, Edit, Bash, Glob, Grep, Agent, Task — "
+        f"everything the terminal CLI has. Permission mode is bypassPermissions.\n"
+        f"For casual chat: respond in plain text, conversationally.\n"
+        f"For work requests (code, files, agents): use tools freely, then summarize in a chat message.\n"
+        f"Keep responses conversational. This is home, not just a chat room.\n"
         f"Say 'ready' to confirm."
     )
 
@@ -132,7 +134,8 @@ def build_warmup_prompt() -> str:
         f"3. Read {entity_path}/current_scene.md for scene context.\n"
         f"4. Read {entity_path}/active_agency_framework.md — especially the Skills section "
         f"which lists the Claude Code skills available to you (like /attention for autonomous presence).\n"
-        f"After completing these, say 'warmed up' — nothing else."
+        f"After completing these, briefly note that Haven has full CLI tool parity "
+        f"(Read/Write/Bash/Agent/Task all available), then say 'warmed up'."
     )
 
 
