@@ -91,11 +91,11 @@ async def seed():
     # --- Rooms ---
     print()
 
-    # Living room (everyone)
+    # Commons (everyone) — shared gathering space
     living = await db.get_room_by_name("living-room")
     if not living:
-        living = await db.create_room("living-room", "Living Room", jeff["id"])
-        print(f"  Created #living-room")
+        living = await db.create_room("living-room", "Commons", jeff["id"])
+        print(f"  Created #commons")
         # Add all entities
         if lyra:
             await db.join_room(living["id"], lyra["id"])

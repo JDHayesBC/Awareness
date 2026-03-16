@@ -320,8 +320,49 @@ const haven = (() => {
             <span class="text-xs text-gray-600 mt-1 flex-shrink-0 w-14 text-right">${time}</span>
             <span class="font-medium flex-shrink-0 ${isMe ? 'text-blue-400' : 'text-green-400'}">${escapeHtml(msg.display_name)}</span>
             <span class="text-gray-200 break-words min-w-0">${escapeHtml(msg.content)}</span>
+            <button class="copy-btn" title="Copy message">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+            </button>
         `;
+
+        el.querySelector('.copy-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            copyToClipboard(e.currentTarget, msg.content);
+        });
+
         return el;
+    }
+
+    function copyToClipboard(btn, text) {
+        const checkSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg>`;
+        const copySvg = btn.innerHTML;
+
+        const showDone = () => {
+            btn.innerHTML = checkSvg;
+            btn.classList.add('copied');
+            setTimeout(() => {
+                btn.innerHTML = copySvg;
+                btn.classList.remove('copied');
+            }, 1500);
+        };
+
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(text).then(showDone).catch(() => fallbackCopy(text, showDone));
+        } else {
+            fallbackCopy(text, showDone);
+        }
+    }
+
+    function fallbackCopy(text, onDone) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); onDone(); } catch (_) {}
+        document.body.removeChild(ta);
     }
 
     function updateTypingIndicator() {

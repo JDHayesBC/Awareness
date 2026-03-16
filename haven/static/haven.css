@@ -83,6 +83,33 @@
     background-color: #6b7280;
 }
 
+/* Copy button */
+.copy-btn {
+    margin-left: auto;
+    flex-shrink: 0;
+    align-self: flex-start;
+    margin-top: 3px;
+    opacity: 0;
+    color: #6b7280;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 3px;
+    transition: opacity 0.15s, color 0.15s;
+    line-height: 0;
+}
+.message-row:hover .copy-btn {
+    opacity: 1;
+}
+.copy-btn:hover {
+    color: #d1d5db;
+}
+.copy-btn.copied {
+    color: #4ade80;
+    opacity: 1;
+}
+
 /* Typing indicator animation */
 .typing-dots::after {
     content: '';
