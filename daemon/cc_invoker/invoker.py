@@ -538,8 +538,13 @@ class ClaudeInvoker:
                 msg_count = 0
                 text_block_count = 0
                 tool_block_count = 0
-                # Use iterator protocol directly so we can skip unparseable
-                # messages (e.g. rate_limit_event) without aborting the loop.
+                # Track whether the most recent AssistantMessage had tool calls.
+                # We use this to decide when to stop reading after a ResultMessage:
+                #   - ResultMessage after a tool-bearing turn → more turns coming, keep reading
+                #   - ResultMessage after a tool-free turn → response is complete, stop
+                # This avoids blocking forever on receive_messages() (which never raises
+                # StopAsyncIteration while the subprocess is alive).
+                last_assistant_had_tools = False
                 _response_iter = self._client.receive_messages().__aiter__()
                 while True:
                     try:
@@ -560,6 +565,7 @@ class ClaudeInvoker:
                         # If so, its TextBlocks are pre-tool filler — skip them.
                         # Only collect text from tool-free turns (the actual response).
                         msg_has_tool_use = any(isinstance(b, ToolUseBlock) for b in msg.content)
+                        last_assistant_had_tools = msg_has_tool_use
                         for block in msg.content:
                             if isinstance(block, TextBlock):
                                 if msg_has_tool_use:
@@ -576,9 +582,13 @@ class ClaudeInvoker:
                                     tool_input = tool_input[:200] + "..."
                                 logger.info(f"  ToolUseBlock #{tool_block_count}: {tool_name}({tool_input})")
                     elif isinstance(msg, ResultMessage):
-                        # Log but continue — there may be more turns after this one
-                        # if tool calls are in progress.
-                        logger.info(f"Response msg #{msg_count}: ResultMessage (num_turns={msg.num_turns}). Continuing to collect remaining turns.")
+                        if last_assistant_had_tools:
+                            # Tool calls were in progress — more turns coming, keep reading.
+                            logger.info(f"Response msg #{msg_count}: ResultMessage (num_turns={msg.num_turns}). Tool calls in progress, continuing.")
+                        else:
+                            # Last assistant turn was tool-free — response is complete.
+                            logger.info(f"Response msg #{msg_count}: ResultMessage (num_turns={msg.num_turns}). Response complete.")
+                            break
                     else:
                         logger.info(f"Response msg #{msg_count}: {msg_type} (unhandled)")
 
