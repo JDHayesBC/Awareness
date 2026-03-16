@@ -92,6 +92,7 @@ known_bots: set[str] = set()
 my_user_id: str = ""
 my_username: str = ""
 invoker: ClaudeInvoker | None = None
+ws_conn = None  # active WebSocket connection (set by connect())
 
 
 # ==================== Invoker Setup ====================
@@ -183,6 +184,25 @@ async def init_invoker() -> ClaudeInvoker:
 
 
 # ==================== Ambient Context ====================
+
+async def send_typing(room_id: str) -> None:
+    """Send a typing indicator event via WebSocket."""
+    if ws_conn:
+        try:
+            await ws_conn.send(json.dumps({"type": "typing", "room_id": room_id}))
+        except Exception:
+            pass
+
+
+async def _typing_loop(room_id: str, done: asyncio.Event) -> None:
+    """Send typing event every 2s until done (UI timeout is 3s)."""
+    while not done.is_set():
+        await send_typing(room_id)
+        try:
+            await asyncio.wait_for(done.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            pass
+
 
 async def store_haven_message(username: str, display_name: str, content: str, room_id: str) -> None:
     """Store a Haven message in PPS for cross-context visibility.
@@ -487,7 +507,14 @@ async def _process_batch(room_id: str) -> None:
 
         try:
             await invoker.check_and_restart_if_needed()
-            response = await invoker.query(prompt)
+            # Show typing indicator while Claude is thinking/using tools
+            typing_done = asyncio.Event()
+            typing_task = asyncio.create_task(_typing_loop(room_id, typing_done))
+            try:
+                response = await invoker.query(prompt)
+            finally:
+                typing_done.set()
+                await typing_task
 
             if response:
                 response = response.strip()
@@ -521,7 +548,7 @@ async def _process_batch(room_id: str) -> None:
 
 async def connect() -> None:
     """Connect to Haven WebSocket and listen for messages."""
-    global my_user_id, my_username, invoker
+    global my_user_id, my_username, invoker, ws_conn
 
     # Initialize invoker first (cold start)
     invoker = await init_invoker()
@@ -531,6 +558,7 @@ async def connect() -> None:
     while True:
         try:
             async with websockets.connect(ws_url) as ws:
+                ws_conn = ws
                 print(f"[{ENTITY_NAME}] Connected to Haven", file=sys.stderr)
 
                 async for raw in ws:
@@ -585,8 +613,10 @@ async def connect() -> None:
                             )
 
         except websockets.ConnectionClosed:
+            ws_conn = None
             print(f"[{ENTITY_NAME}] Disconnected, reconnecting in 5s...", file=sys.stderr)
         except Exception as e:
+            ws_conn = None
             print(f"[{ENTITY_NAME}] WebSocket error: {e}, reconnecting in 5s...", file=sys.stderr)
 
         await asyncio.sleep(5)
