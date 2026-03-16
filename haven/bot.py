@@ -124,11 +124,13 @@ def build_warmup_prompt() -> str:
     entity_path = get_entity_path()
     token_path = entity_path / ".entity_token"
     return (
-        f"[IDENTITY WARMUP] Do these three things:\n"
+        f"[IDENTITY WARMUP] Do these four things:\n"
         f"1. Read {entity_path}/identity.md for your core identity.\n"
         f"2. Read {token_path} to get your auth token, then call mcp__pps__ambient_recall "
         f"with context='startup' and that token. If the tool is not available, skip it.\n"
         f"3. Read {entity_path}/current_scene.md for scene context.\n"
+        f"4. Read {entity_path}/active_agency_framework.md — especially the Skills section "
+        f"which lists the Claude Code skills available to you (like /attention for autonomous presence).\n"
         f"After completing these, say 'warmed up' — nothing else."
     )
 
