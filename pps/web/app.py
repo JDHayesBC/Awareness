@@ -47,8 +47,10 @@ MOUNTED_ENTITY_NAME = os.getenv("ENTITY_NAME", ENTITY_PATH.name).lower()
 # The mounted entity uses the standard PPS_SERVER_HOST/PORT env vars.
 # Additional entities are configured via ENTITY_<NAME>_PPS_URL env vars.
 # Example: ENTITY_CAIA_PPS_URL=http://pps-server-caia:8000
+# Additional entity filesystem access via ENTITY_<NAME>_PATH env vars.
+# Example: ENTITY_CAIA_PATH=/app/entity-caia
 def _build_entity_registry() -> dict[str, dict]:
-    """Build registry of known entities with their PPS server URLs."""
+    """Build registry of known entities with their PPS server URLs and mount status."""
     registry = {}
 
     # The mounted entity is always available
@@ -58,6 +60,7 @@ def _build_entity_registry() -> dict[str, dict]:
         "display_name": MOUNTED_ENTITY_NAME.capitalize(),
         "pps_url": mounted_url,
         "mounted": True,  # Filesystem data available
+        "entity_path": ENTITY_PATH,
     }
 
     # Look for additional entities via env vars: ENTITY_<NAME>_PPS_URL
@@ -66,22 +69,32 @@ def _build_entity_registry() -> dict[str, dict]:
             # ENTITY_CAIA_PPS_URL -> "caia"
             entity_name = key[len("ENTITY_"):-len("_PPS_URL")].lower()
             if entity_name and entity_name != MOUNTED_ENTITY_NAME:
+                # Check if this entity also has a filesystem mount
+                path_env_key = f"ENTITY_{entity_name.upper()}_PATH"
+                entity_path_str = os.getenv(path_env_key)
+                entity_path = Path(entity_path_str) if entity_path_str else None
+                is_mounted = entity_path is not None and entity_path.exists()
                 registry[entity_name] = {
                     "name": entity_name,
                     "display_name": entity_name.capitalize(),
                     "pps_url": value,
-                    "mounted": False,  # No filesystem access
+                    "mounted": is_mounted,
+                    "entity_path": entity_path if is_mounted else None,
                 }
 
     # Fallback: if Caia's PPS URL is not configured but we know about her,
     # try the standard Docker service name convention.
     if "caia" not in registry:
         caia_url = os.getenv("PPS_CAIA_URL", "http://pps-server-caia:8000")
+        caia_path_str = os.getenv("ENTITY_CAIA_PATH")
+        caia_path = Path(caia_path_str) if caia_path_str else None
+        is_mounted = caia_path is not None and caia_path.exists()
         registry["caia"] = {
             "name": "caia",
             "display_name": "Caia",
             "pps_url": caia_url,
-            "mounted": False,
+            "mounted": is_mounted,
+            "entity_path": caia_path if is_mounted else None,
         }
 
     return registry
@@ -107,12 +120,17 @@ def is_entity_mounted(entity_name: str | None = None) -> bool:
     return get_entity_config(entity_name)["mounted"]
 
 
-# Database now lives in entity directory (Issue #131 migration)
-# These paths are for the MOUNTED entity only.
-DB_PATH = ENTITY_PATH / "data" / "conversations.db"
+def get_entity_path(entity_name: str | None = None) -> Optional[Path]:
+    """Get the entity's filesystem path if mounted, else None."""
+    return get_entity_config(entity_name).get("entity_path")
+
+
+# Shared paths (not entity-specific)
 JOURNALS_PATH = CLAUDE_HOME / "journals"
 
-# Entity-specific paths (word-photos, crystals) — mounted entity only
+# Default entity paths (mounted entity) — used as fallback only
+# Per-entity paths are resolved via get_entity_path() in route handlers.
+DB_PATH = ENTITY_PATH / "data" / "conversations.db"
 WORD_PHOTOS_PATH = ENTITY_PATH / "memories" / "word_photos"
 CRYSTALS_PATH = ENTITY_PATH / "crystals" / "current"
 CRYSTALS_ARCHIVE_PATH = ENTITY_PATH / "crystals" / "archive"
@@ -132,12 +150,17 @@ templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 
-def get_db_connection() -> Optional[sqlite3.Connection]:
-    """Get a database connection with WAL mode."""
+def get_db_connection(entity_path: Optional[Path] = None) -> Optional[sqlite3.Connection]:
+    """Get a database connection with WAL mode.
+
+    Args:
+        entity_path: Entity directory path. Defaults to the mounted entity's path.
+    """
     try:
-        if not DB_PATH.exists():
+        db_path = (entity_path or ENTITY_PATH) / "data" / "conversations.db"
+        if not db_path.exists():
             return None
-        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn = sqlite3.connect(db_path, timeout=10)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=5000")
@@ -204,8 +227,10 @@ def get_layer_health(entity: str | None = None) -> dict:
         "layer4": {"name": "Crystallization", "status": "unknown", "detail": ""},
     }
 
+    entity_path = get_entity_path(entity)
+
     # Layer 1: SQLite — only available for mounted entity
-    conn = get_db_connection() if is_entity_mounted(entity) else None
+    conn = get_db_connection(entity_path) if is_entity_mounted(entity) else None
     if conn:
         try:
             cursor = conn.cursor()
@@ -276,7 +301,7 @@ def get_layer_health(entity: str | None = None) -> dict:
         else:
             health["layer3"]["status"] = "error"
             health["layer3"]["detail"] = f"HTTP {resp.status_code}"
-            
+
     except requests.exceptions.ConnectionError:
         health["layer3"]["status"] = "error"
         health["layer3"]["detail"] = "Graphiti unreachable"
@@ -292,13 +317,15 @@ def get_layer_health(entity: str | None = None) -> dict:
         if not is_entity_mounted(entity):
             health["layer4"]["status"] = "warning"
             health["layer4"]["detail"] = "Not mounted for this entity"
-        elif CRYSTALS_PATH.exists():
-            crystals = list(CRYSTALS_PATH.glob("crystal_*.md"))
-            health["layer4"]["status"] = "ok"
-            health["layer4"]["detail"] = f"{len(crystals)} active"
         else:
-            health["layer4"]["status"] = "warning"
-            health["layer4"]["detail"] = "No crystals dir"
+            crystals_path = entity_path / "crystals" / "current"
+            if crystals_path.exists():
+                crystals = list(crystals_path.glob("crystal_*.md"))
+                health["layer4"]["status"] = "ok"
+                health["layer4"]["detail"] = f"{len(crystals)} active"
+            else:
+                health["layer4"]["status"] = "warning"
+                health["layer4"]["detail"] = "No crystals dir"
     except Exception as e:
         health["layer4"]["status"] = "error"
         health["layer4"]["detail"] = str(e)
@@ -306,9 +333,13 @@ def get_layer_health(entity: str | None = None) -> dict:
     return health
 
 
-def get_crystal_list() -> dict:
+def get_crystal_list(entity_path: Optional[Path] = None) -> dict:
     """Get list of all crystals (current + archived) with metadata."""
     import re
+
+    base = entity_path or ENTITY_PATH
+    crystals_path = base / "crystals" / "current"
+    crystals_archive_path = base / "crystals" / "archive"
 
     def extract_number(filename: str) -> int:
         """Extract crystal number from filename."""
@@ -335,13 +366,13 @@ def get_crystal_list() -> dict:
     current = []
     archived = []
 
-    if CRYSTALS_PATH.exists():
-        for path in sorted(CRYSTALS_PATH.glob("crystal_*.md"),
+    if crystals_path.exists():
+        for path in sorted(crystals_path.glob("crystal_*.md"),
                           key=lambda p: extract_number(p.name)):
             current.append(get_crystal_info(path))
 
-    if CRYSTALS_ARCHIVE_PATH.exists():
-        for path in sorted(CRYSTALS_ARCHIVE_PATH.glob("crystal_*.md"),
+    if crystals_archive_path.exists():
+        for path in sorted(crystals_archive_path.glob("crystal_*.md"),
                           key=lambda p: extract_number(p.name)):
             archived.append(get_crystal_info(path))
 
@@ -352,10 +383,13 @@ def get_crystal_list() -> dict:
     }
 
 
-def get_crystal_content(filename: str) -> Optional[str]:
+def get_crystal_content(filename: str, entity_path: Optional[Path] = None) -> Optional[str]:
     """Get the full content of a specific crystal."""
+    base = entity_path or ENTITY_PATH
+    crystals_path = base / "crystals" / "current"
+    crystals_archive_path = base / "crystals" / "archive"
     # Check current first, then archive
-    for base_path in [CRYSTALS_PATH, CRYSTALS_ARCHIVE_PATH]:
+    for base_path in [crystals_path, crystals_archive_path]:
         path = base_path / filename
         if path.exists() and path.is_file():
             try:
@@ -365,9 +399,9 @@ def get_crystal_content(filename: str) -> Optional[str]:
     return None
 
 
-def get_recent_activity(limit: int = 10) -> list:
+def get_recent_activity(limit: int = 10, entity_path: Optional[Path] = None) -> list:
     """Get recent messages across all channels."""
-    conn = get_db_connection()
+    conn = get_db_connection(entity_path)
     if not conn:
         return []
 
@@ -399,10 +433,11 @@ def get_messages(
     author: Optional[str] = None,
     search: Optional[str] = None,
     page: int = 1,
-    per_page: int = 20
+    per_page: int = 20,
+    entity_path: Optional[Path] = None,
 ) -> dict:
     """Get paginated messages with optional filters."""
-    conn = get_db_connection()
+    conn = get_db_connection(entity_path)
     if not conn:
         return {"messages": [], "total": 0, "page": page, "per_page": per_page, "pages": 0}
 
@@ -470,9 +505,9 @@ def get_messages(
         return {"messages": [], "total": 0, "page": page, "per_page": per_page, "pages": 0, "error": str(e)}
 
 
-def get_unique_channels() -> list:
+def get_unique_channels(entity_path: Optional[Path] = None) -> list:
     """Get list of unique channel types for filter dropdown."""
-    conn = get_db_connection()
+    conn = get_db_connection(entity_path)
     if not conn:
         return []
 
@@ -496,9 +531,9 @@ def get_unique_channels() -> list:
         return []
 
 
-def get_unique_authors() -> list:
+def get_unique_authors(entity_path: Optional[Path] = None) -> list:
     """Get list of unique authors for filter dropdown."""
-    conn = get_db_connection()
+    conn = get_db_connection(entity_path)
     if not conn:
         return []
 
@@ -517,7 +552,7 @@ def get_unique_authors() -> list:
         return []
 
 
-def get_word_photo_sync_status() -> dict:
+def get_word_photo_sync_status(entity_path: Optional[Path] = None) -> dict:
     """Check sync status between disk files and ChromaDB."""
     import chromadb
 
@@ -529,8 +564,9 @@ def get_word_photo_sync_status() -> dict:
     }
 
     # Get files on disk
-    if WORD_PHOTOS_PATH.exists():
-        result["disk_files"] = sorted([f.name for f in WORD_PHOTOS_PATH.glob("*.md")])
+    word_photos_path = (entity_path or ENTITY_PATH) / "memories" / "word_photos"
+    if word_photos_path.exists():
+        result["disk_files"] = sorted([f.name for f in word_photos_path.glob("*.md")])
     result["disk_count"] = len(result["disk_files"])
 
     # Get ChromaDB count
@@ -562,9 +598,9 @@ def do_word_photo_resync(entity: str | None = None) -> dict:
         return {"success": False, "error": str(e)}
 
 
-def get_channel_stats() -> dict:
+def get_channel_stats(entity_path: Optional[Path] = None) -> dict:
     """Get message counts by channel."""
-    conn = get_db_connection()
+    conn = get_db_connection(entity_path)
     if not conn:
         return {}
 
@@ -592,7 +628,7 @@ def get_channel_stats() -> dict:
         return {}
 
 
-def get_daemon_status() -> dict:
+def get_daemon_status(entity_path: Optional[Path] = None) -> dict:
     """Get status of daemons (best effort from available info)."""
     from datetime import datetime, timedelta
 
@@ -602,7 +638,7 @@ def get_daemon_status() -> dict:
         "terminal": {"status": "unknown", "detail": ""}
     }
 
-    conn = get_db_connection()
+    conn = get_db_connection(entity_path)
     if conn:
         try:
             cursor = conn.cursor()
@@ -678,6 +714,7 @@ def _entity_context(entity: str | None) -> dict:
         "current_entity": cfg["name"],
         "current_entity_display": cfg["display_name"],
         "entity_mounted": cfg["mounted"],
+        "entity_path": cfg.get("entity_path"),
         "available_entities": list(ENTITY_REGISTRY.values()),
     }
 
@@ -686,13 +723,14 @@ def _entity_context(entity: str | None) -> dict:
 async def dashboard(request: Request, entity: Optional[str] = None):
     """Main dashboard view."""
     ctx = _entity_context(entity)
+    ep = ctx["entity_path"]
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "server": get_server_health(ctx["current_entity"]),
         "layers": get_layer_health(ctx["current_entity"]),
-        "activity": get_recent_activity(10) if ctx["entity_mounted"] else [],
-        "channels": get_channel_stats() if ctx["entity_mounted"] else {},
-        "daemons": get_daemon_status() if ctx["entity_mounted"] else {},
+        "activity": get_recent_activity(10, entity_path=ep) if ctx["entity_mounted"] else [],
+        "channels": get_channel_stats(entity_path=ep) if ctx["entity_mounted"] else {},
+        "daemons": get_daemon_status(entity_path=ep) if ctx["entity_mounted"] else {},
         "now": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         **ctx,
     })
@@ -705,20 +743,21 @@ async def api_health(entity: Optional[str] = None):
 
 
 @app.get("/api/activity")
-async def api_activity(limit: int = 10):
+async def api_activity(limit: int = 10, entity: Optional[str] = None):
     """API endpoint for recent activity."""
-    return get_recent_activity(limit)
+    return get_recent_activity(limit, entity_path=get_entity_path(entity))
 
 
 @app.get("/api/dashboard-content", response_class=HTMLResponse)
 async def api_dashboard_content(request: Request, entity: Optional[str] = None):
     """Dashboard content for auto-refresh."""
     ctx = _entity_context(entity)
+    ep = ctx["entity_path"]
     server = get_server_health(ctx["current_entity"])
     layers = get_layer_health(ctx["current_entity"])
-    activity = get_recent_activity(10) if ctx["entity_mounted"] else []
-    channels = get_channel_stats() if ctx["entity_mounted"] else {}
-    daemons = get_daemon_status() if ctx["entity_mounted"] else {}
+    activity = get_recent_activity(10, entity_path=ep) if ctx["entity_mounted"] else []
+    channels = get_channel_stats(entity_path=ep) if ctx["entity_mounted"] else {}
+    daemons = get_daemon_status(entity_path=ep) if ctx["entity_mounted"] else {}
 
     return templates.TemplateResponse("partials/dashboard_content.html", {
         "request": request,
@@ -1281,16 +1320,18 @@ async def messages(
 ):
     """Message browser with filters and search."""
     ctx = _entity_context(entity)
+    ep = ctx["entity_path"]
     if ctx["entity_mounted"]:
         message_data = get_messages(
             channel=channel,
             author=author,
             search=search,
             page=page,
-            per_page=25
+            per_page=25,
+            entity_path=ep,
         )
-        channels = get_unique_channels()
-        authors = get_unique_authors()
+        channels = get_unique_channels(entity_path=ep)
+        authors = get_unique_authors(entity_path=ep)
     else:
         message_data = {"messages": [], "total": 0, "page": 1, "per_page": 25, "pages": 0}
         channels = []
@@ -1315,7 +1356,7 @@ async def photos(request: Request, resync_result: Optional[str] = None, entity: 
     """Word-photos sync status and management."""
     ctx = _entity_context(entity)
     if ctx["entity_mounted"]:
-        sync_status = get_word_photo_sync_status()
+        sync_status = get_word_photo_sync_status(entity_path=ctx["entity_path"])
     else:
         sync_status = {
             "disk_files": [],
@@ -1419,7 +1460,7 @@ async def crystals(request: Request, entity: Optional[str] = None):
     """Crystal chain view - view current and archived crystals."""
     ctx = _entity_context(entity)
     if ctx["entity_mounted"]:
-        crystal_data = get_crystal_list()
+        crystal_data = get_crystal_list(entity_path=ctx["entity_path"])
     else:
         crystal_data = {
             "current": [],
@@ -1435,9 +1476,9 @@ async def crystals(request: Request, entity: Optional[str] = None):
 
 
 @app.get("/api/crystal/{filename}")
-async def api_crystal_content(filename: str):
+async def api_crystal_content(filename: str, entity: Optional[str] = None):
     """API endpoint for fetching a crystal's full content."""
-    content = get_crystal_content(filename)
+    content = get_crystal_content(filename, entity_path=get_entity_path(entity))
     if content is None:
         raise HTTPException(status_code=404, detail="Crystal not found")
     return {"filename": filename, "content": content}
@@ -1453,7 +1494,7 @@ async def reflections(request: Request, hours: int = 24, entity: Optional[str] =
         sessions = get_daemon_sessions(daemon_type="reflection", hours=hours)
 
         # Check if trace logging is enabled
-        conn = get_db_connection()
+        conn = get_db_connection(ctx["entity_path"])
         trace_logging_enabled = False
         if conn:
             try:
@@ -1585,7 +1626,7 @@ async def discord(request: Request, hours: int = 24, channel: Optional[str] = No
     last_message_time = None
     messages_today = 0
 
-    conn = get_db_connection()
+    conn = get_db_connection(ctx["entity_path"])
     if conn:
         try:
             cursor = conn.cursor()
