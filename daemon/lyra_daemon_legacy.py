@@ -54,6 +54,10 @@ ACTIVE_MODE_TIMEOUT_MINUTES = int(os.getenv("ACTIVE_MODE_TIMEOUT_MINUTES", "10")
 ENTITY_PATH = os.getenv("ENTITY_PATH", "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra")
 CONVERSATION_DB_PATH = os.getenv("CONVERSATION_DB_PATH", f"{ENTITY_PATH}/data/conversations.db")
 
+# Claude binary — use managed install, fall back to PATH
+_managed_claude = Path.home() / ".claude" / "local" / "claude"
+CLAUDE_BIN = str(_managed_claude) if _managed_claude.exists() else "claude"
+
 # Project directory (derived from daemon location, or override via env var)
 PROJECT_DIR = Path(os.getenv("AWARENESS_PROJECT_DIR", str(Path(__file__).parent.parent)))
 
@@ -221,7 +225,7 @@ class LyraBot(commands.Bot):
 
         # Execute warmup (this is the ONE invocation without --continue)
         cmd = [
-            "claude",
+            CLAUDE_BIN,
             "--model", CLAUDE_MODEL,
             "-p", warmup_prompt,
         ]
@@ -654,7 +658,7 @@ End with active agency footnotes showing what you scanned and chose.'''
             # --dangerously-skip-permissions allows tools without interactive prompts
             # --add-dir allows access to project directories
             cmd = [
-                "claude",
+                CLAUDE_BIN,
                 "--model", REFLECTION_MODEL,
                 "--dangerously-skip-permissions",
                 "--add-dir", str(PROJECT_DIR),
@@ -1286,7 +1290,7 @@ Output ONLY your Discord response."""
 
             try:
                 # Build command
-                cmd = ["claude", "--model", CLAUDE_MODEL]
+                cmd = [CLAUDE_BIN, "--model", CLAUDE_MODEL]
                 if should_continue:
                     cmd.append("--continue")
                 cmd.extend(["-p", prompt])
@@ -1513,7 +1517,7 @@ async def main():
 
     # Check if claude CLI is available
     try:
-        result = subprocess.run(["claude", "--version"], capture_output=True, text=True)
+        result = subprocess.run([CLAUDE_BIN, "--version"], capture_output=True, text=True)
         print(f"Claude CLI: {result.stdout.strip()}")
     except FileNotFoundError:
         print("Warning: Claude CLI not found in PATH. Responses won't work.")
