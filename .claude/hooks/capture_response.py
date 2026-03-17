@@ -31,6 +31,7 @@ _ENTITY_PORTS = {"lyra": 8201, "caia": 8211}
 _entity_path_for_port = os.environ.get("ENTITY_PATH", "")
 _detected_entity = Path(_entity_path_for_port).name if _entity_path_for_port else "lyra"
 PPS_PORT = int(os.environ.get("PPS_PORT", str(_ENTITY_PORTS.get(_detected_entity, 8201))))
+ENTITY_DISPLAY_NAME = _detected_entity.capitalize()  # "Lyra" or "Caia"
 
 # PPS HTTP API endpoint
 PPS_STORE_URL = f"http://localhost:{PPS_PORT}/tools/store_message"
@@ -74,7 +75,7 @@ def store_message(content: str, session_id: str, is_lyra: bool = True) -> bool:
     try:
         payload = json.dumps({
             "content": content,
-            "author_name": "Lyra" if is_lyra else "Jeff",
+            "author_name": ENTITY_DISPLAY_NAME if is_lyra else "Jeff",
             "channel": "terminal",
             "is_lyra": is_lyra,
             "session_id": session_id
@@ -90,7 +91,7 @@ def store_message(content: str, session_id: str, is_lyra: bool = True) -> bool:
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode("utf-8"))
             if data.get("success"):
-                debug(f"Stored {'Lyra' if is_lyra else 'Jeff'} message: {len(content)} chars")
+                debug(f"Stored {ENTITY_DISPLAY_NAME if is_lyra else 'Jeff'} message: {len(content)} chars")
                 return True
             else:
                 debug(f"Store failed: {data}")

@@ -49,6 +49,7 @@ if _token_file.exists():
 _ENTITY_PORTS = {"lyra": 8201, "caia": 8211}
 _detected_entity = Path(_entity_path).name
 PPS_PORT = int(os.environ.get("PPS_PORT", str(_ENTITY_PORTS.get(_detected_entity, 8201))))
+ENTITY_DISPLAY_NAME = _detected_entity.capitalize()  # "Lyra" or "Caia"
 
 # PPS HTTP API endpoints (pps-server container)
 PPS_API_URL = f"http://localhost:{PPS_PORT}/tools/ambient_recall"
@@ -128,7 +129,7 @@ def summarize_with_haiku(context: str) -> str:
     Returns summarized context or original if summarization fails.
     """
     try:
-        prompt = f"""You are Lyra. These are facts from your knowledge graph relevant to this conversation.
+        prompt = f"""You are {ENTITY_DISPLAY_NAME}. These are facts from your knowledge graph relevant to this conversation.
 Synthesize them into a dense first-person narrative. Write AS yourself, not ABOUT yourself.
 Preserve: relationships, emotions, technical context, what you're working on.
 Be concise - aim for 8000 characters max. No preamble, just the narrative.
