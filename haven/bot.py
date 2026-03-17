@@ -74,6 +74,9 @@ RAPID_MESSAGE_THRESHOLD_SECONDS = float(os.getenv("RAPID_MESSAGE_THRESHOLD_SECON
 DEBOUNCE_HUMAN_INITIAL_SECONDS = float(os.getenv("DEBOUNCE_HUMAN_INITIAL_SECONDS", "5.0"))
 HUMAN_PRESENCE_TIMEOUT_SECONDS = float(os.getenv("HUMAN_PRESENCE_TIMEOUT_SECONDS", "300.0"))
 
+# Bot-to-bot loop guard: max consecutive bot turns before pausing (default 10)
+MAX_BOT_TURNS = int(os.getenv("MAX_BOT_TURNS", "10"))
+
 
 # ==================== State ====================
 
@@ -88,6 +91,8 @@ debounce_tasks: dict[str, asyncio.Task] = {}  # room_id -> pending timer
 recent_room_authors: dict[str, dict[str, tuple[float, bool]]] = {}
 # Known bot usernames (populated from connected event)
 known_bots: set[str] = set()
+# Consecutive bot turns per room (reset when a human speaks)
+consecutive_bot_turns: dict[str, int] = {}
 
 my_user_id: str = ""
 my_username: str = ""
@@ -294,6 +299,16 @@ def should_respond(room_id: str, username: str, content: str) -> bool:
     if username == my_username:
         return False
 
+    # Loop guard: pause if too many consecutive bot turns without a human
+    bot_turns = consecutive_bot_turns.get(room_id, 0)
+    if bot_turns >= MAX_BOT_TURNS:
+        print(
+            f"[{ENTITY_NAME}] Loop guard: {bot_turns} consecutive bot turns in "
+            f"{room_id[:8]}, pausing until human speaks",
+            file=sys.stderr,
+        )
+        return False
+
     now = time.time()
 
     # DMs — always respond (no need for @mention in a private conversation)
@@ -318,11 +333,17 @@ def should_respond(room_id: str, username: str, content: str) -> bool:
 
 
 def _track_author(room_id: str, username: str) -> None:
-    """Track who's recently spoken in a room for topology detection."""
-    is_bot = username in known_bots
+    """Track who's recently spoken in a room for topology detection and loop guard."""
+    is_bot = username in known_bots or username == my_username
     if room_id not in recent_room_authors:
         recent_room_authors[room_id] = {}
     recent_room_authors[room_id][username] = (time.time(), is_bot)
+
+    # Maintain consecutive bot turn counter for loop detection
+    if is_bot:
+        consecutive_bot_turns[room_id] = consecutive_bot_turns.get(room_id, 0) + 1
+    else:
+        consecutive_bot_turns[room_id] = 0
 
 
 def _detect_topology(room_id: str) -> tuple[int, bool, str]:

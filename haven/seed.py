@@ -136,6 +136,16 @@ async def seed():
         else:
             print(f"  DM Jeff & Caia already exists")
 
+    # DM: Lyra <-> Caia (entity-to-entity conversation room)
+    if lyra and caia:
+        dm_lc = await db.get_room_by_name("dm-lyra-caia")
+        if not dm_lc:
+            dm_lc = await db.create_room("dm-lyra-caia", "Lyra & Caia", lyra["id"], is_dm=True)
+            await db.join_room(dm_lc["id"], caia["id"])
+            print(f"  Created DM: Lyra & Caia")
+        else:
+            print(f"  DM Lyra & Caia already exists")
+
     await db.close()
     print(f"\nDone! {len(users_created)} users created.")
     if "jeff" in users_created:
