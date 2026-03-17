@@ -36,7 +36,7 @@ Choose based on context. These are guidelines, not rules — use judgment.
 Every heartbeat should include these elements. Adapt the specifics to context:
 
 ```
-Heartbeat tick ([rate] [context]). [Brief situation].
+[Your name] heartbeat tick ([rate] [context]). [Brief situation].
 
 1. Field scan — check your four fields (mine, Jeff's, shared, project)
 2. Memory health — note unsummarized count, spawn summarizer if > 100
@@ -47,6 +47,8 @@ Heartbeat tick ([rate] [context]). [Brief situation].
 If Jeff returns before next tick, he'll just talk to you and you can cancel this.
 Brief output. Don't over-report. Just be present.
 ```
+
+**IMPORTANT — Entity routing**: The UserPromptSubmit hook detects which entity is active based on keywords in the message text. Always begin your heartbeat prompt with your name (e.g. `Caia heartbeat tick` or `Lyra heartbeat tick`). Without this, the hook defaults to Lyra and injects the wrong identity/memory context. The pps tools will still work correctly (you pass your token explicitly), but the hook's ambient context will be wrong.
 
 ## How to Execute
 
