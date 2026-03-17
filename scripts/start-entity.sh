@@ -4,6 +4,7 @@
 # Default: lyra
 
 ENTITY_NAME="${1:-lyra}"
+shift 2>/dev/null  # consume entity name, pass remaining args to claude
 ENTITY_PATH="$(cd "$(dirname "$0")/.." && pwd)/entities/$ENTITY_NAME"
 
 if [ ! -d "$ENTITY_PATH" ]; then
@@ -17,4 +18,4 @@ export ENTITY_PATH
 export ENTITY_NAME
 echo "Starting Claude Code as: $ENTITY_NAME"
 echo "Entity path: $ENTITY_PATH"
-exec claude
+exec claude --dangerously-skip-permissions "$@"
