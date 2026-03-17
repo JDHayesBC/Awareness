@@ -75,7 +75,7 @@ DEBOUNCE_HUMAN_INITIAL_SECONDS = float(os.getenv("DEBOUNCE_HUMAN_INITIAL_SECONDS
 HUMAN_PRESENCE_TIMEOUT_SECONDS = float(os.getenv("HUMAN_PRESENCE_TIMEOUT_SECONDS", "300.0"))
 
 # Bot-to-bot loop guard: max consecutive bot turns before pausing (default 10)
-MAX_BOT_TURNS = int(os.getenv("MAX_BOT_TURNS", "10"))
+MAX_BOT_TURNS = int(os.getenv("MAX_BOT_TURNS", "200"))
 
 
 # ==================== State ====================
@@ -516,6 +516,10 @@ async def _process_batch(room_id: str) -> None:
             if len(messages) > 1
             else ""
         )
+        # Detect if this is a bot-to-bot exchange (no human in recent authors)
+        _, humans_present, _ = _detect_topology(room_id)
+        bot_only = not humans_present
+
         prompt = (
             ambient_note
             + f"[Haven messages in #{room_id[:8]}]{batch_note}\n"
@@ -525,6 +529,16 @@ async def _process_batch(room_id: str) -> None:
                 "\nThese messages arrived in quick succession — "
                 "craft ONE cohesive response addressing all of them."
                 if len(messages) > 1
+                else ""
+            )
+            + (
+                "\n\nThis is an entity-to-entity exchange (no human present). "
+                "If the conversation has reached a natural resting point — "
+                "the other entity has settled, nothing more genuinely needs saying, "
+                "the silence would be better than another word — "
+                "output exactly: NO_RESPONSE\n"
+                "Otherwise respond as normal."
+                if bot_only
                 else ""
             )
         )
@@ -544,6 +558,14 @@ async def _process_batch(room_id: str) -> None:
                 response = response.strip()
                 if response.startswith("```") and response.endswith("```"):
                     response = response[3:-3].strip()
+
+                # LLM signals conversation complete — don't send anything
+                if response.upper().startswith("NO_RESPONSE"):
+                    print(
+                        f"[{ENTITY_NAME}] Conversation complete (NO_RESPONSE signal)",
+                        file=sys.stderr,
+                    )
+                    return
 
                 elapsed = time.time() - start
                 success = await send_message(room_id, response)
