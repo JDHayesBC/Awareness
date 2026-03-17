@@ -60,7 +60,7 @@ def resolve_room(haven_url: str, token: str, room_name: str) -> str:
     )
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
-            rooms = json.loads(r.read())
+            rooms = json.loads(r.read())["rooms"]
     except Exception as e:
         print(f"ERROR: Could not fetch rooms from Haven: {e}", file=sys.stderr)
         sys.exit(1)
