@@ -323,7 +323,7 @@ const haven = (() => {
         el.innerHTML = `
             <span class="text-xs text-gray-600 mt-1 flex-shrink-0 w-14 text-right">${time}</span>
             <span class="font-medium flex-shrink-0 ${isMe ? 'text-blue-400' : 'text-green-400'}">${escapeHtml(msg.display_name)}</span>
-            <span class="text-gray-200 break-words min-w-0">${escapeHtml(msg.content)}</span>
+            <div class="text-gray-200 break-words min-w-0 message-content">${marked.parse(msg.content)}</div>
             <button class="copy-btn" title="Copy message">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -426,6 +426,7 @@ const haven = (() => {
             if (!content || !currentRoomId) return;
             send({ type: 'message', room_id: currentRoomId, content });
             input.value = '';
+            input.style.height = 'auto';
         };
 
         sendBtn.addEventListener('click', doSend);
@@ -436,8 +437,12 @@ const haven = (() => {
             }
         });
 
-        // Typing indicator
+        // Auto-resize textarea and send typing indicator
         input.addEventListener('input', () => {
+            // Resize to fit content, capped at ~5 rows (120px)
+            input.style.height = 'auto';
+            input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+
             if (!currentRoomId) return;
             if (!typingTimer) {
                 send({ type: 'typing', room_id: currentRoomId });
@@ -466,8 +471,12 @@ const haven = (() => {
     }
 
     function formatTime(isoStr) {
+        if (!isoStr) return '';
         try {
-            const d = new Date(isoStr + (isoStr.endsWith('Z') ? '' : 'Z'));
+            // Normalize space→T (SQLite CURRENT_TIMESTAMP), strip +HH:MM offset before treating as UTC
+            const normalized = isoStr.replace(' ', 'T').replace(/[+-]\d{2}:\d{2}$/, 'Z');
+            const d = new Date(normalized.endsWith('Z') ? normalized : normalized + 'Z');
+            if (isNaN(d.getTime())) return '';
             return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         } catch {
             return '';

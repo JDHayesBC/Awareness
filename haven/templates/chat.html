@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Haven</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="stylesheet" href="/static/haven.css">
 </head>
 <body class="h-full bg-gray-900 text-gray-100">
@@ -114,13 +115,13 @@
             <!-- Input -->
             <div class="px-4 py-3 border-t border-gray-700 flex-shrink-0">
                 <div class="flex gap-2">
-                    <input
+                    <textarea
                         id="message-input"
-                        type="text"
+                        rows="1"
                         placeholder="Type a message..."
-                        class="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-blue-500 text-gray-100 placeholder-gray-500"
+                        class="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-blue-500 text-gray-100 placeholder-gray-500 resize-none overflow-y-hidden"
                         disabled
-                    >
+                    ></textarea>
                     <button
                         id="send-btn"
                         class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors disabled:opacity-50"
