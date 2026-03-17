@@ -47,15 +47,21 @@ DEBUG_LOG = Path.home() / ".claude" / "data" / "hooks_debug.log"
 
 # PPS HTTP API endpoints
 PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
-PPS_AGENT_CONTEXT_URL = "http://localhost:8201/context/agent"
-PPS_FRICTION_SEARCH_URL = "http://localhost:8201/friction/search"
 
-# Entity authentication token
+# Entity path and token (read first — port detection depends on this)
 ENTITY_TOKEN = ""
 _entity_path = os.environ.get("ENTITY_PATH", str(PROJECT_ROOT / "entities" / "lyra"))
 _token_file = Path(_entity_path) / ".entity_token"
 if _token_file.exists():
     ENTITY_TOKEN = _token_file.read_text().strip()
+
+# Entity-aware port detection (Issue #162)
+_ENTITY_PORTS = {"lyra": 8201, "caia": 8211}
+_detected_entity = Path(_entity_path).name
+PPS_PORT = int(os.environ.get("PPS_PORT", str(_ENTITY_PORTS.get(_detected_entity, 8201))))
+
+PPS_AGENT_CONTEXT_URL = f"http://localhost:{PPS_PORT}/context/agent"
+PPS_FRICTION_SEARCH_URL = f"http://localhost:{PPS_PORT}/friction/search"
 
 # Agent types that should NOT get context injection
 # (e.g., claude-code-guide is a documentation lookup, not a code agent)

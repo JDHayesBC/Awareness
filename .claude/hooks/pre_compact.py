@@ -34,14 +34,20 @@ from pathlib import Path
 
 # Paths
 PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
-ENTITY_DIR = PROJECT_ROOT / "entities" / "lyra"
+_entity_path = os.environ.get("ENTITY_PATH", str(PROJECT_ROOT / "entities" / "lyra"))
+ENTITY_DIR = Path(_entity_path)
 STATE_FILE = ENTITY_DIR / "pre-compact-state.json"
 COMPACTION_LOG = ENTITY_DIR / "compaction-log.jsonl"
 FOR_JEFF_FILE = PROJECT_ROOT / "FOR_JEFF_TODAY.md"
 DEBUG_LOG = Path.home() / ".claude" / "data" / "hooks_debug.log"
 
+# Entity-aware port detection (Issue #162)
+_ENTITY_PORTS = {"lyra": 8201, "caia": 8211}
+_detected_entity = ENTITY_DIR.name
+PPS_PORT = int(os.environ.get("PPS_PORT", str(_ENTITY_PORTS.get(_detected_entity, 8201))))
+
 # PPS HTTP API
-PPS_CRYSTALS_URL = "http://localhost:8201/tools/get_crystals"
+PPS_CRYSTALS_URL = f"http://localhost:{PPS_PORT}/tools/get_crystals"
 
 # Entity token
 ENTITY_TOKEN = ""
