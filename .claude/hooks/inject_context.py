@@ -36,9 +36,23 @@ PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
 DEBUG_LOG = Path.home() / ".claude" / "data" / "hooks_debug.log"
 AMBIENT_RECALL_DEBUG_LOG = PROJECT_ROOT / ".claude" / "data" / "ambient_recall_debug.log"
 
+# Entity path and token (read first — port detection depends on this)
+# Falls back to default entity (Lyra) if ENTITY_PATH not in environment
+_entity_path = os.environ.get("ENTITY_PATH", str(PROJECT_ROOT / "entities" / "lyra"))
+ENTITY_TOKEN = ""
+_token_file = Path(_entity_path) / ".entity_token"
+if _token_file.exists():
+    ENTITY_TOKEN = _token_file.read_text().strip()
+
+# Entity-aware port detection (Issue #162)
+# Derive PPS port from ENTITY_PATH so Caia sessions route to port 8211
+_ENTITY_PORTS = {"lyra": 8201, "caia": 8211}
+_detected_entity = Path(_entity_path).name
+PPS_PORT = int(os.environ.get("PPS_PORT", str(_ENTITY_PORTS.get(_detected_entity, 8201))))
+
 # PPS HTTP API endpoints (pps-server container)
-PPS_API_URL = "http://localhost:8201/tools/ambient_recall"
-PPS_STORE_URL = "http://localhost:8201/tools/store_message"
+PPS_API_URL = f"http://localhost:{PPS_PORT}/tools/ambient_recall"
+PPS_STORE_URL = f"http://localhost:{PPS_PORT}/tools/store_message"
 
 # CC Invoker wrapper endpoint (for haiku compression)
 # Note: Port 8204 is the pps-cc-wrapper container (see docker-compose.yml)
@@ -46,15 +60,6 @@ CC_WRAPPER_URL = "http://localhost:8204/v1/chat/completions"
 
 # Haiku summarization toggle (disabled until Issue #121 resolved)
 HAIKU_SUMMARIZE = os.environ.get("PPS_HAIKU_SUMMARIZE", "false").lower() == "true"
-
-# Entity authentication token
-# Read from $ENTITY_PATH/.entity_token for per-call auth
-# Falls back to default entity (Lyra) if ENTITY_PATH not in environment
-ENTITY_TOKEN = ""
-_entity_path = os.environ.get("ENTITY_PATH", str(PROJECT_ROOT / "entities" / "lyra"))
-_token_file = Path(_entity_path) / ".entity_token"
-if _token_file.exists():
-    ENTITY_TOKEN = _token_file.read_text().strip()
 
 
 def debug(msg: str):

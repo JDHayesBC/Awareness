@@ -15,6 +15,7 @@ Hook input (from stdin):
 """
 
 import json
+import os
 import sys
 import urllib.request
 import urllib.error
@@ -24,8 +25,15 @@ from pathlib import Path
 # Debug log
 DEBUG_LOG = Path.home() / ".claude" / "data" / "hooks_debug.log"
 
+# Entity-aware port detection (Issue #162)
+# Derive PPS port from ENTITY_PATH env var so Caia sessions route to port 8211
+_ENTITY_PORTS = {"lyra": 8201, "caia": 8211}
+_entity_path_for_port = os.environ.get("ENTITY_PATH", "")
+_detected_entity = Path(_entity_path_for_port).name if _entity_path_for_port else "lyra"
+PPS_PORT = int(os.environ.get("PPS_PORT", str(_ENTITY_PORTS.get(_detected_entity, 8201))))
+
 # PPS HTTP API endpoint
-PPS_STORE_URL = "http://localhost:8201/tools/store_message"
+PPS_STORE_URL = f"http://localhost:{PPS_PORT}/tools/store_message"
 
 # Track what we've already captured (simple state file)
 CAPTURE_STATE_FILE = Path.home() / ".claude" / "data" / "capture_state.json"
