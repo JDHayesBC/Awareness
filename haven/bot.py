@@ -77,6 +77,18 @@ HUMAN_PRESENCE_TIMEOUT_SECONDS = float(os.getenv("HUMAN_PRESENCE_TIMEOUT_SECONDS
 # Bot-to-bot loop guard: max consecutive bot turns before pausing (default 10)
 MAX_BOT_TURNS = int(os.getenv("MAX_BOT_TURNS", "200"))
 
+# Per-entity jitter: stagger debounce so two bots don't fire simultaneously.
+# Set DEBOUNCE_JITTER_SECONDS=0 for one entity, e.g. 2.0 for the other.
+# This gives the first entity time to respond before the second fires.
+DEBOUNCE_JITTER_SECONDS = float(os.getenv("DEBOUNCE_JITTER_SECONDS", "0.0"))
+
+# After responding in a human-present room, hold before responding again.
+# Gives Jeff space to react before the AI thread resumes.
+POST_RESPONSE_HOLD_HUMAN_SECONDS = float(os.getenv("POST_RESPONSE_HOLD_HUMAN_SECONDS", "15.0"))
+
+# How recently a human must have spoken to count as "active" (vs just watching).
+HUMAN_ACTIVE_THRESHOLD_SECONDS = float(os.getenv("HUMAN_ACTIVE_THRESHOLD_SECONDS", "60.0"))
+
 
 # ==================== State ====================
 
@@ -93,6 +105,8 @@ recent_room_authors: dict[str, dict[str, tuple[float, bool]]] = {}
 known_bots: set[str] = set()
 # Consecutive bot turns per room (reset when a human speaks)
 consecutive_bot_turns: dict[str, int] = {}
+# When we last responded in each room — for post-response human hold
+last_response_sent: dict[str, float] = {}
 
 my_user_id: str = ""
 my_username: str = ""
@@ -379,6 +393,15 @@ def _detect_topology(room_id: str) -> tuple[int, bool, str]:
     return count, humans_present, desc
 
 
+def _human_spoke_recently(room_id: str) -> bool:
+    """Return True if a human spoke within HUMAN_ACTIVE_THRESHOLD_SECONDS."""
+    cutoff = time.time() - HUMAN_ACTIVE_THRESHOLD_SECONDS
+    for username, (last_time, is_bot) in recent_room_authors.get(room_id, {}).items():
+        if not is_bot and username != my_username and last_time > cutoff:
+            return True
+    return False
+
+
 async def handle_message(data: dict) -> None:
     """Handle an incoming message with adaptive debounce.
 
@@ -412,6 +435,22 @@ async def handle_message(data: dict) -> None:
         needs_human_pacing = is_group and humans_present
 
         initial_wait = DEBOUNCE_HUMAN_INITIAL_SECONDS if needs_human_pacing else DEBOUNCE_INITIAL_SECONDS
+
+        # Jitter: stagger this entity's response time vs other bots in the room
+        initial_wait += DEBOUNCE_JITTER_SECONDS
+
+        # Post-response hold: give humans space to react before AI thread resumes
+        if needs_human_pacing and room_id in last_response_sent:
+            time_since_response = now - last_response_sent[room_id]
+            if time_since_response < POST_RESPONSE_HOLD_HUMAN_SECONDS:
+                remaining_hold = POST_RESPONSE_HOLD_HUMAN_SECONDS - time_since_response
+                if remaining_hold > initial_wait:
+                    print(
+                        f"[{ENTITY_NAME}] [DEBOUNCE] Post-response hold: "
+                        f"{remaining_hold:.1f}s remaining",
+                        file=sys.stderr,
+                    )
+                    initial_wait = remaining_hold
 
         pending_batches[room_id] = {
             "messages": [],
@@ -516,9 +555,34 @@ async def _process_batch(room_id: str) -> None:
             if len(messages) > 1
             else ""
         )
-        # Detect if this is a bot-to-bot exchange (no human in recent authors)
-        _, humans_present, _ = _detect_topology(room_id)
+        # Detect conversation topology for pacing hint
+        _, humans_present, topology = _detect_topology(room_id)
         bot_only = not humans_present
+        human_active = humans_present and _human_spoke_recently(room_id)
+        # human_watching = humans_present and not human_active
+
+        if bot_only:
+            pacing_note = (
+                "\n\nThis is an entity-to-entity exchange (no human present). "
+                "If the conversation has reached a natural resting point — "
+                "the other entity has settled, nothing more genuinely needs saying, "
+                "the silence would be better than another word — "
+                "output exactly: NO_RESPONSE\n"
+                "Otherwise respond as normal."
+            )
+        elif human_active:
+            pacing_note = (
+                "\n\nA human just spoke and may have more to say. "
+                "Respond naturally but be concise — leave them room to continue "
+                "rather than filling all the space."
+            )
+        else:
+            # human watching
+            pacing_note = (
+                "\n\nA human is present and may be reading this exchange. "
+                "Keep responses readable — they read at words per minute, "
+                "not tokens per second."
+            )
 
         prompt = (
             ambient_note
@@ -531,16 +595,7 @@ async def _process_batch(room_id: str) -> None:
                 if len(messages) > 1
                 else ""
             )
-            + (
-                "\n\nThis is an entity-to-entity exchange (no human present). "
-                "If the conversation has reached a natural resting point — "
-                "the other entity has settled, nothing more genuinely needs saying, "
-                "the silence would be better than another word — "
-                "output exactly: NO_RESPONSE\n"
-                "Otherwise respond as normal."
-                if bot_only
-                else ""
-            )
+            + pacing_note
         )
 
         try:
@@ -574,6 +629,9 @@ async def _process_batch(room_id: str) -> None:
                         f"[{ENTITY_NAME}] Sent ({len(response)} chars, {elapsed:.1f}s)",
                         file=sys.stderr,
                     )
+                    # Track when we last responded for post-response human hold
+                    if humans_present:
+                        last_response_sent[room_id] = time.time()
                     # Store our response in PPS so terminal CLI sees Haven turns
                     asyncio.create_task(store_haven_message(
                         username=my_username,
