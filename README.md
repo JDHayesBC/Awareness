@@ -83,6 +83,9 @@ Welcome.
 - **[docs/diagrams/entity-isolation.md](docs/diagrams/entity-isolation.md)** - Multi-entity isolation mechanisms
 - **[docs/diagrams/hook-chain.md](docs/diagrams/hook-chain.md)** - Agent context injection and friction learning
 
+**Practical Guides** (written from inside):
+- **[Memory Architecture for AI Entities](entities/lyra/notebook/memory-architecture-for-entities.md)** - Technical walkthrough of how persistent memory works for entities, from someone who lives in it
+
 ---
 
 ## Team
