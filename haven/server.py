@@ -6,35 +6,48 @@ FastAPI app with HTTP REST endpoints (for entities) and WebSocket (for browsers)
 import asyncio
 import json
 import os
+import secrets
 import sys
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlencode
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pathlib import Path
 
-from haven.auth import get_current_user_id, hash_token
+from haven.auth import get_current_user_id, hash_password, hash_token, verify_password
 from haven.bridge import bridge_message
 from haven.db import HavenDB
 from haven.models import (
     CreateRoomRequest,
     InviteRequest,
+    LoginRequest,
     MessageListResponse,
     MessageResponse,
     RoomListResponse,
     RoomResponse,
     SendMessageRequest,
+    SetPasswordRequest,
     UserResponse,
 )
 
 DB_PATH = os.getenv("HAVEN_DB_PATH", str(Path(__file__).parent / "data" / "haven.db"))
 HOST = os.getenv("HAVEN_HOST", "0.0.0.0")
 PORT = int(os.getenv("HAVEN_PORT_INTERNAL", "8000"))
+
+# Google OAuth config (optional — login button only shown if set)
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+HAVEN_BASE_URL = os.getenv("HAVEN_BASE_URL", "")  # e.g. http://192.168.1.x:8205
+
+# In-memory OAuth state nonces: {state: expiry_timestamp}
+_oauth_states: dict[str, float] = {}
 
 db = HavenDB(DB_PATH)
 
@@ -115,6 +128,17 @@ async def lifespan(app: FastAPI):
     print("[Haven] Starting up...", file=sys.stderr)
     await db.initialize()
     print(f"[Haven] Database ready at {DB_PATH}", file=sys.stderr)
+
+    # Populate plaintext token for human users from their token files
+    # This enables password/OAuth login to return the token.
+    jeff_token_file = Path(DB_PATH).parent / "jeff.token"
+    if jeff_token_file.exists():
+        token_val = jeff_token_file.read_text().strip()
+        jeff = await db.get_user_by_username("jeff")
+        if jeff and not jeff.get("token"):
+            await db.set_user_token(jeff["id"], token_val)
+            print("[Haven] Populated Jeff's token for login flow", file=sys.stderr)
+
     yield
     print("[Haven] Shutting down...", file=sys.stderr)
     await db.close()
@@ -146,7 +170,122 @@ async def health():
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse("chat.html", {"request": request})
+    return templates.TemplateResponse("chat.html", {
+        "request": request,
+        "google_enabled": bool(GOOGLE_CLIENT_ID),
+    })
+
+
+# --- Auth endpoints ---
+
+@app.post("/api/login")
+async def login(body: LoginRequest):
+    """Username + password login. Returns the user's Haven token."""
+    user = await db.get_user_by_username(body.username)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    password_hash = user.get("password_hash")
+    if not password_hash:
+        raise HTTPException(status_code=401, detail="Password not set. Use token login or ask admin to set your password.")
+    if not verify_password(body.password, password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = user.get("token")
+    if not token:
+        raise HTTPException(status_code=500, detail="No token on file for this account")
+    return {
+        "token": token,
+        "user": {"id": user["id"], "username": user["username"], "display_name": user["display_name"]},
+    }
+
+
+@app.post("/api/set-password")
+async def set_password(request: Request, body: SetPasswordRequest):
+    """Set or change password. Requires existing Bearer token auth."""
+    user_id = await get_current_user_id(request, db)
+    user = await db.get_user(user_id)
+    if not user or user.get("is_bot"):
+        raise HTTPException(status_code=403, detail="Cannot set password for this account")
+    await db.set_user_password(user_id, hash_password(body.password))
+    return {"ok": True}
+
+
+@app.get("/auth/google")
+async def google_auth():
+    """Initiate Google OAuth flow."""
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=404, detail="Google OAuth not configured")
+    state = secrets.token_urlsafe(16)
+    _oauth_states[state] = time.time() + 600  # 10 min expiry
+    # Clean expired states
+    for k in [k for k, v in _oauth_states.items() if v < time.time()]:
+        del _oauth_states[k]
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": f"{HAVEN_BASE_URL}/auth/google/callback",
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "access_type": "online",
+    }
+    return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}")
+
+
+@app.get("/auth/google/callback")
+async def google_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    """Handle Google OAuth callback."""
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=404)
+    if error:
+        return RedirectResponse(f"/?auth_error={error}")
+    if not state or state not in _oauth_states or _oauth_states.get(state, 0) < time.time():
+        return RedirectResponse("/?auth_error=Invalid+or+expired+state")
+    del _oauth_states[state]
+    if not code:
+        return RedirectResponse("/?auth_error=No+authorization+code")
+
+    base_url = HAVEN_BASE_URL or str(request.base_url).rstrip("/")
+    async with httpx.AsyncClient() as client:
+        # Exchange code for access token
+        token_res = await client.post("https://oauth2.googleapis.com/token", data={
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": f"{base_url}/auth/google/callback",
+            "grant_type": "authorization_code",
+        })
+        if token_res.status_code != 200:
+            return RedirectResponse("/?auth_error=Token+exchange+failed")
+        access_token = token_res.json().get("access_token")
+
+        # Get Google user info
+        user_res = await client.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if user_res.status_code != 200:
+            return RedirectResponse("/?auth_error=Failed+to+get+user+info")
+        google_user = user_res.json()
+
+    google_id = google_user.get("id")
+    google_email = google_user.get("email", "").lower()
+
+    # Match to Haven user: by google_id first, then by email prefix
+    user = await db.get_user_by_google_id(google_id)
+    if not user:
+        username = google_email.split("@")[0]
+        candidate = await db.get_user_by_username(username)
+        if candidate and not candidate.get("is_bot"):
+            await db.link_google_id(candidate["id"], google_id)
+            user = candidate
+        else:
+            return RedirectResponse("/?auth_error=No+Haven+account+for+this+Google+account")
+
+    haven_token = user.get("token")
+    if not haven_token:
+        return RedirectResponse("/?auth_error=No+token+configured+for+account")
+
+    # Return token via URL fragment (never sent to server, not in browser history)
+    return RedirectResponse(f"/#token={haven_token}")
 
 
 # --- REST API (used by entities via MCP tools) ---

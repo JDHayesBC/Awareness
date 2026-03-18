@@ -272,6 +272,11 @@ services:
       - HAVEN_DB_PATH=/app/data/haven.db
       - PPS_LYRA_URL=http://pps-lyra:8000
       - PPS_CAIA_URL=http://pps-caia:8000
+      # Google OAuth (optional — set both to enable "Sign in with Google" button)
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      # External URL for OAuth redirect URI (e.g. http://192.168.1.x:8205)
+      - HAVEN_BASE_URL=${HAVEN_BASE_URL:-}
     volumes:
       - ${PROJECT_ROOT}/haven/data:/app/data:rw
       - ${ENTITY_PATH}/.entity_token:/app/tokens/lyra.token:ro

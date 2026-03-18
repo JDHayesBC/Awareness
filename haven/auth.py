@@ -1,6 +1,7 @@
-"""Haven — Token authentication."""
+"""Haven — Token and password authentication."""
 
 import hashlib
+import bcrypt
 from fastapi import Request, HTTPException
 
 
@@ -12,6 +13,16 @@ def hash_token(token: str) -> str:
 def verify_token(provided: str, stored_hash: str) -> bool:
     """Verify a token against its stored hash."""
     return hash_token(provided) == stored_hash
+
+
+def hash_password(password: str) -> str:
+    """Bcrypt hash a password for storage."""
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify a password against its stored bcrypt hash."""
+    return bcrypt.checkpw(password.encode(), password_hash.encode())
 
 
 async def get_current_user_id(request: Request, db) -> str:

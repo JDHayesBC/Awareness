@@ -21,6 +21,15 @@ class InviteRequest(BaseModel):
     user_id: str
 
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class SetPasswordRequest(BaseModel):
+    password: str = Field(..., min_length=8)
+
+
 # --- Response Models ---
 
 class UserResponse(BaseModel):

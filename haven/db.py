@@ -63,6 +63,17 @@ class HavenDB:
         await self._db.execute("PRAGMA foreign_keys=ON")
         await self._db.executescript(SCHEMA)
         await self._db.commit()
+        # Migrations: add new columns if they don't exist yet
+        for col_sql in [
+            "ALTER TABLE users ADD COLUMN password_hash TEXT",
+            "ALTER TABLE users ADD COLUMN token TEXT",
+            "ALTER TABLE users ADD COLUMN google_id TEXT",
+        ]:
+            try:
+                await self._db.execute(col_sql)
+                await self._db.commit()
+            except Exception:
+                pass  # Column already exists
 
     async def close(self) -> None:
         if self._db:
@@ -111,6 +122,32 @@ class HavenDB:
         now = datetime.now(timezone.utc).isoformat()
         await self._db.execute(
             "UPDATE users SET last_seen_at = ? WHERE id = ?", (now, user_id)
+        )
+        await self._db.commit()
+
+    async def set_user_password(self, user_id: str, password_hash: str) -> None:
+        await self._db.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id)
+        )
+        await self._db.commit()
+
+    async def set_user_token(self, user_id: str, token: str) -> None:
+        """Store plaintext token for password/OAuth login flow."""
+        await self._db.execute(
+            "UPDATE users SET token = ? WHERE id = ?", (token, user_id)
+        )
+        await self._db.commit()
+
+    async def get_user_by_google_id(self, google_id: str) -> dict | None:
+        async with self._db.execute(
+            "SELECT * FROM users WHERE google_id = ?", (google_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def link_google_id(self, user_id: str, google_id: str) -> None:
+        await self._db.execute(
+            "UPDATE users SET google_id = ? WHERE id = ?", (google_id, user_id)
         )
         await self._db.commit()
 

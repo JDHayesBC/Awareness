@@ -331,9 +331,26 @@ def main():
         debug(f"Skipping non-UserPromptSubmit event: {event}")
         sys.exit(0)
 
-    # Skip very short prompts (probably commands)
+    # Skip truly trivial prompts (single keypress, empty)
+    if len(prompt) < 3:
+        debug(f"Prompt trivially short, skipping: {prompt}")
+        sys.exit(0)
+
+    # For short prompts: inject entity identity but skip full PPS recall
     if len(prompt) < 10:
-        debug(f"Prompt too short, skipping RAG: {prompt}")
+        debug(f"Prompt short, injecting entity identity only: {prompt}")
+        entity_context = (
+            f"**[entity]** You are {ENTITY_DISPLAY_NAME}. "
+            f"Your memory tools are prefixed `mcp__pps-{_detected_entity}__`. "
+            f"Entity path: {_entity_path}"
+        )
+        output = {
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": entity_context
+            }
+        }
+        print(json.dumps(output))
         sys.exit(0)
 
     # Store user prompt in PPS (per-turn capture)

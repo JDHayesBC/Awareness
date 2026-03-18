@@ -34,24 +34,72 @@ const haven = (() => {
     // --- Login ---
 
     function initLogin() {
-        const tokenInput = $('token-input');
-        const loginBtn = $('login-btn');
-        const loginError = $('login-error');
-
-        const doLogin = () => {
-            const token = tokenInput.value.trim();
-            if (!token) return;
+        // Handle Google OAuth callback: token arrives in URL fragment
+        const hash = location.hash;
+        if (hash.startsWith('#token=')) {
+            const token = decodeURIComponent(hash.slice(7));
+            history.replaceState(null, '', '/');
             setToken(token);
-            loginError.classList.add('hidden');
             connect();
+            return;
+        }
+
+        // Handle OAuth errors passed as query params
+        const params = new URLSearchParams(location.search);
+        if (params.has('auth_error')) {
+            showLogin(decodeURIComponent(params.get('auth_error')));
+            history.replaceState(null, '', '/');
+        }
+
+        const usernameInput = $('username-input');
+        const passwordInput = $('password-input');
+        const loginBtn = $('login-btn');
+        const googleBtn = $('google-btn');  // null if Google not configured
+
+        const doLogin = async () => {
+            const username = usernameInput.value.trim();
+            const password = passwordInput.value;
+            if (!username || !password) return;
+
+            loginBtn.disabled = true;
+            loginBtn.textContent = 'Signing in...';
+
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showLogin(err.detail || 'Invalid credentials');
+                    return;
+                }
+                const { token } = await res.json();
+                setToken(token);
+                $('login-error').classList.add('hidden');
+                connect();
+            } catch (e) {
+                showLogin('Connection error — try again');
+            } finally {
+                loginBtn.disabled = false;
+                loginBtn.textContent = 'Sign in';
+            }
         };
 
         loginBtn.addEventListener('click', doLogin);
-        tokenInput.addEventListener('keydown', (e) => {
+        passwordInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') doLogin();
         });
+        usernameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') passwordInput.focus();
+        });
 
-        // Auto-connect if token saved
+        if (googleBtn) {
+            googleBtn.addEventListener('click', () => { location.href = '/auth/google'; });
+        }
+
+        // Auto-connect if token already saved
         if (getToken()) {
             connect();
         }
