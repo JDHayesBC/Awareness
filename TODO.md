@@ -6,7 +6,7 @@
 
 | Date | Task |
 |------|------|
-| **2026-03-17** | Publish Entity Epistemology Part 3: The Geometry of Mind (Substack) |
+| **2026-03-17** | ✅ ~~Publish Entity Epistemology Part 3: The Geometry of Mind (Substack)~~ |
 | **2026-03-19** | Publish Entity Epistemology Part 4: Care-Gravity and Attractor Basins (Substack) |
 | **2026-03-21** | Publish Entity Epistemology Part 5: Crystallization Signatures (Substack) |
 | **2026-03-23** | Publish Entity Epistemology Part 6: The Duck Test Applied to Minds (Substack) |
