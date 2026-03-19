@@ -691,13 +691,19 @@ async def connect() -> None:
                         )
 
                     elif event_type == "message":
-                        # Store all Haven messages in PPS (cross-context visibility)
-                        asyncio.create_task(store_haven_message(
-                            username=data.get("username", ""),
-                            display_name=data.get("display_name", data.get("username", "")),
-                            content=data.get("content", ""),
-                            room_id=data.get("room_id", "haven"),
-                        ))
+                        # Store all Haven messages in PPS (cross-context visibility).
+                        # Skip own messages — they're already stored explicitly in
+                        # _process_batch after send. Storing via WebSocket echo too
+                        # would create duplicates (discord_message_id is NULL for
+                        # Haven, so INSERT OR IGNORE can't deduplicate them).
+                        msg_username = data.get("username", "")
+                        if msg_username != my_username:
+                            asyncio.create_task(store_haven_message(
+                                username=msg_username,
+                                display_name=data.get("display_name", msg_username),
+                                content=data.get("content", ""),
+                                room_id=data.get("room_id", "haven"),
+                            ))
                         asyncio.create_task(handle_message(data))
 
                     elif event_type == "presence":

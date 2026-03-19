@@ -1321,12 +1321,15 @@ async def ambient_recall(request: AmbientRecallRequest):
     if unsummarized_turns and not any("error" in str(t) for t in unsummarized_turns):
         formatted_lines.append("\n**[recent_turns]**")
         for turn in unsummarized_turns:
-            author = turn.get("author_name", "?")
+            author = turn.get("author", turn.get("author_name", "?"))  # key is "author", not "author_name"
+            channel = turn.get("channel", "")
             content = turn.get("content", "")
+            # Add channel prefix so entity can tell Haven turns from terminal turns
+            channel_prefix = channel.split(":")[0] if channel else "terminal"
             # Truncate very long turns
             if len(content) > 500:
                 content = content[:500] + "..."
-            formatted_lines.append(f"- [{author}]: {content}")
+            formatted_lines.append(f"- [**{channel_prefix}**] {author}: {content}")
 
         # Add overflow warning if there are more unsummarized turns than shown
         showing = len(unsummarized_turns)
