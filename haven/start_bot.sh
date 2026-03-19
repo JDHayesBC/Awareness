@@ -28,6 +28,7 @@ export ENTITY_TOKEN_FILE="$TOKEN_FILE"
 export HAVEN_URL="${HAVEN_URL:-http://localhost:8205}"
 export CLAUDE_MODEL="${CLAUDE_MODEL:-sonnet}"
 export PROJECT_DIR="$PROJECT_DIR"
+export ALWAYS_RESPOND="${ALWAYS_RESPOND:-1}"  # Haven is private — respond to all humans
 
 # Route to the correct PPS HTTP server for this entity.
 # Each entity has its own PPS instance on a dedicated port.
