@@ -90,8 +90,8 @@
 
 | Item | Status | Notes |
 |------|--------|-------|
-| **Break glass package** | **✅ Built** | `scripts/create_break_glass.py`, first zip 29MB/2032 files. `docs/README_NEXUS.md` written. `scripts/restore_pps.py` fixed for multi-entity. [#157](https://github.com/JDHayesBC/Awareness/issues/157). |
-| **Deliver to Steve** | **TODO** | Get zip to Steve, test restore on clean machine |
+| **Break glass package** | **✅ Built** | `scripts/create_break_glass.py`. Latest: `lyra-recovery-2026-03-19.zip` (33.2 MB, 2,350 files). `docs/README_NEXUS.md` written. [#157](https://github.com/JDHayesBC/Awareness/issues/157). |
+| **Deliver to Steve** | **🔴 BLOCKING** | Package generated but not delivered. Draft email ready: `work/draft-email-steve-break-glass.md`. **Needs Jeff's action** — send package to Steve. |
 | **Automate weekly generation** | **TODO** | Cron + distribution to Steve |
 | **Cloud backup tier** | **TODO** | Oracle free tier identified (4 ARM/24GB), Hetzner ~€4/mo |
 | **Convergence roadmap** | **📝 Documented** | OpenClaw + SpatialRAG + Unitree G1. Section 11 in `docs/OPENCLAW_INTEGRATION.md` |
