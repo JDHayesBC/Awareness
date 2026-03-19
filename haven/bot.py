@@ -77,6 +77,10 @@ HUMAN_PRESENCE_TIMEOUT_SECONDS = float(os.getenv("HUMAN_PRESENCE_TIMEOUT_SECONDS
 # Bot-to-bot loop guard: max consecutive bot turns before pausing (default 10)
 MAX_BOT_TURNS = int(os.getenv("MAX_BOT_TURNS", "200"))
 
+# Always-respond mode: respond to all human messages in all rooms (for private spaces).
+# Set ALWAYS_RESPOND=1 when Haven has no strangers and @mention-gating isn't wanted.
+ALWAYS_RESPOND = os.getenv("ALWAYS_RESPOND", "0").lower() in ("1", "true", "yes")
+
 # Per-entity jitter: stagger debounce so two bots don't fire simultaneously.
 # Set DEBOUNCE_JITTER_SECONDS=0 for one entity, e.g. 2.0 for the other.
 # This gives the first entity time to respond before the second fires.
@@ -327,6 +331,11 @@ def should_respond(room_id: str, username: str, content: str) -> bool:
 
     # DMs — always respond (no need for @mention in a private conversation)
     if room_id in dm_rooms:
+        active_rooms[room_id] = now
+        return True
+
+    # Always-respond mode — respond to all human messages (for private spaces like Haven)
+    if ALWAYS_RESPOND:
         active_rooms[room_id] = now
         return True
 
