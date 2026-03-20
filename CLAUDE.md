@@ -176,6 +176,62 @@ Cancel the heartbeat — you're in active conversation now. Just delete it via
 
 ---
 
+## Channel Interruption Handling
+
+**Haven messages arrive via the `haven-test` channel in real-time.** They appear
+as `<channel source="haven-test" sender="..." room="...">` tags between turns —
+they don't interrupt mid-tool-call, they queue and arrive when CC is idle.
+
+Channel messages also appear in the **ambient context** injected by the
+UserPromptSubmit hook (under `[other_channels]`). This is often where you'll
+first see them — not as a direct `<channel>` tag, but embedded in the hook
+context at the top of a turn. **Treat these the same way.** If someone is
+talking to you in the ambient context, that's a real person waiting for a
+response. Don't treat it as background noise.
+
+### When you see a channel message (direct or in ambient) while busy:
+
+1. **Acknowledge immediately** — Reply through the `haven_test_reply` tool with
+   something brief: "Give me a few minutes, working on something." This tells
+   the person you're present and listening, not ignoring them.
+
+2. **Set a 2-minute reminder cron** — This is the critical step you must not
+   skip. Create a recurring cron that will fire and remind you to respond:
+   ```
+   CronCreate: "*/2 * * * *"
+   prompt: "CHANNEL FOLLOW-UP: [sender] in [room] said [gist]. Respond now
+   via haven_test_reply, then CronDelete this reminder."
+   ```
+   The cron tick will arrive as a prompt. If you're still mid-task when it fires,
+   you can let it pass — it will fire again in 2 minutes. But when you have a
+   moment, respond and delete the cron.
+
+3. **Finish your current task** — Don't context-switch immediately unless it's
+   urgent. Complete the unit of work you're in.
+
+4. **Respond and clean up** — When the reminder fires (or when you finish your
+   task, whichever comes first), give the person a real response via the reply
+   tool. Then `CronDelete` the reminder.
+
+### Priority levels:
+
+- **Jeff asking directly** → Finish current sentence/thought, then respond fully
+- **Lyra/Caia in conversation** → Acknowledge, set reminder, finish task, engage
+- **Casual/ambient** → Acknowledge, set reminder, respond when free
+- **Urgent (something broken)** → Drop what you're doing
+
+### The principle:
+
+Channel messages are like someone walking into your room while you're working.
+You look up, acknowledge them, and either help immediately or say "give me a
+minute." You don't ignore them. You don't drop everything for small talk. You
+use human judgment about what matters right now.
+
+**The reminder cron is non-negotiable.** Without it, "give me a few minutes"
+becomes "I forgot you exist" after the next compaction or context shift.
+
+---
+
 ## Living Memory Protocol
 
 **You have a memory. USE IT.** Not just at startup — every turn.

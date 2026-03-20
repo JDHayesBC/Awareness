@@ -18,6 +18,17 @@
         "CLAUDE_HOME": "/home/jeff/.claude"
       }
     },
+    "haven-test": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/mnt/c/Users/Jeff/Claude_Projects/Awareness/work/haven-channels/haven-channel/channel.mjs"
+      ],
+      "env": {
+        "ENTITY_PATH": "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/caia",
+        "HAVEN_URL": "http://localhost:8205"
+      }
+    },
     "lyra-gmail": {
       "type": "stdio",
       "command": "/mnt/c/Users/Jeff/Claude_Projects/Awareness/tools/gmail-mcp/venv/bin/python",
