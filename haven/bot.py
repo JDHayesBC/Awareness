@@ -514,9 +514,16 @@ async def _debounce_timer(room_id: str, wait_seconds: float) -> None:
     """Wait then process the batch."""
     try:
         await asyncio.sleep(wait_seconds)
-        await _process_batch(room_id)
     except asyncio.CancelledError:
-        pass  # Timer reset by new message — expected
+        return  # Timer reset by new message — expected
+    # Past the sleep — shield batch processing from cancellation so a new
+    # message arriving mid-query doesn't kill the in-flight Claude call
+    # (and, via the SDK's cancel scopes, the entire websocket loop).
+    try:
+        await asyncio.shield(_process_batch(room_id))
+    except asyncio.CancelledError:
+        pass  # Shield raises CancelledError on the outer task but the
+              # shielded coroutine keeps running — swallow it here.
 
 
 async def _process_batch(room_id: str) -> None:
@@ -734,6 +741,9 @@ async def connect() -> None:
         except websockets.ConnectionClosed:
             ws_conn = None
             print(f"[{ENTITY_NAME}] Disconnected, reconnecting in 5s...", file=sys.stderr)
+        except asyncio.CancelledError:
+            ws_conn = None
+            print(f"[{ENTITY_NAME}] CancelledError in event loop, reconnecting in 5s...", file=sys.stderr)
         except Exception as e:
             ws_conn = None
             print(f"[{ENTITY_NAME}] WebSocket error: {e}, reconnecting in 5s...", file=sys.stderr)
