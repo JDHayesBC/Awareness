@@ -6,10 +6,11 @@ Ingests messages to Graphiti in small batches with pauses to avoid
 overwhelming hardware. Outputs progress for monitoring.
 
 Usage:
-    python paced_ingestion.py [--batch-size 50] [--pause 30] [--max-batches 0]
+    python paced_ingestion.py [--batch-size 50] [--parallelism 12] [--pause 30] [--max-batches 0]
 
 Options:
     --batch-size: Messages per batch (default: 50)
+    --parallelism: Concurrent messages to process (default: 12)
     --pause: Seconds between batches (default: 30)
     --max-batches: Stop after N batches, 0 = unlimited (default: 0)
 """
@@ -262,9 +263,58 @@ def get_stats(db_path: str) -> tuple[int, int, int]:
     return ingested, failed, pending
 
 
+async def process_single_message(
+    msg: dict,
+    layer: RichTextureLayerV2
+) -> tuple[bool, dict, str | None]:
+    """Process one message through Graphiti.
+
+    Returns:
+        (success, msg_dict, error_reason)
+        - success: True if ingestion succeeded
+        - msg_dict: The original message dict
+        - error_reason: Error string if failed, None if succeeded
+    """
+    metadata = {
+        "channel": msg['channel'],
+        "role": "assistant" if msg['is_lyra'] else "user",
+        "speaker": "Lyra" if msg['is_lyra'] else msg['author_name'],
+        "timestamp": msg['created_at']
+    }
+
+    try:
+        # Format as "speaker: message" per Graphiti best practices
+        # This enables automatic speaker extraction for EpisodeType.message
+        speaker = "Lyra" if msg['is_lyra'] else msg['author_name']
+        formatted_content = f"{speaker}: {msg['content']}"
+        success = await layer.store(formatted_content, metadata)
+
+        if success:
+            return (True, msg, None)
+        else:
+            # Get error context from the layer
+            err = layer.get_last_error()
+            if err:
+                cat = err["category"]
+                error_reason = f"[{cat}] {err['message']}"
+                log(f"  ✗ store() returned False for msg {msg['id']} [{cat}]: {err['message'][:120]}")
+                if not err["is_transient"]:
+                    log(f"    Advice: {err['advice']}")
+            else:
+                error_reason = "store() returned False (no error context)"
+                log(f"  ✗ store() returned False for msg {msg['id']} (no error context)")
+            return (False, msg, error_reason)
+
+    except Exception as e:
+        error_reason = f"exception: {e}"
+        log(f"  ✗ Exception on msg {msg['id']}: {e}")
+        return (False, msg, error_reason)
+
+
 async def run_ingestion(
     batch_size: int, pause_seconds: int, max_batches: int,
     max_errors: int = 10, error_rate_halt: float = 0.5,
+    parallelism: int = 12,
 ):
     """Run paced ingestion."""
     # Use ENTITY_PATH if available, fall back to old location
@@ -280,6 +330,7 @@ async def run_ingestion(
 
     log("=== Paced Graphiti Ingestion ===")
     log(f"Batch size: {batch_size}")
+    log(f"Parallelism: {parallelism} concurrent messages")
     log(f"Pause between batches: {pause_seconds}s")
     log(f"Max batches: {'unlimited' if max_batches == 0 else max_batches}")
     log(f"Error halt: after {max_errors} errors" if max_errors > 0 else "Error halt: disabled")
@@ -316,55 +367,54 @@ async def run_ingestion(
         start_time = datetime.now()
         log(f"[Batch {batch_num}] Processing {len(messages)} messages (IDs {messages[0]['id']}-{messages[-1]['id']})...")
 
-        # Ingest each message
+        # Ingest messages in parallel chunks
         success_count = 0
         fail_count = 0
         succeeded_msgs: list[dict] = []
         failed_msgs: list[tuple[int, str]] = []  # (id, error_reason)
         channels = set()
-
         error_categories: dict[str, int] = {}
 
-        for msg in messages:
-            metadata = {
-                "channel": msg['channel'],
-                "role": "assistant" if msg['is_lyra'] else "user",
-                "speaker": "Lyra" if msg['is_lyra'] else msg['author_name'],
-                "timestamp": msg['created_at']
-            }
+        # Create tasks for all messages
+        tasks = [process_single_message(msg, layer) for msg in messages]
 
-            try:
-                # Format as "speaker: message" per Graphiti best practices
-                # This enables automatic speaker extraction for EpisodeType.message
-                speaker = "Lyra" if msg['is_lyra'] else msg['author_name']
-                formatted_content = f"{speaker}: {msg['content']}"
-                success = await layer.store(formatted_content, metadata)
-                if success:
-                    success_count += 1
-                    succeeded_msgs.append(msg)
-                    channels.add(msg['channel'])
-                else:
-                    fail_count += 1
-                    # Get error context from the layer
-                    err = layer.get_last_error()
-                    if err:
-                        cat = err["category"]
-                        error_reason = f"[{cat}] {err['message']}"
-                        error_categories[cat] = error_categories.get(cat, 0) + 1
-                        log(f"  ✗ store() returned False for msg {msg['id']} [{cat}]: {err['message'][:120]}")
-                        if not err["is_transient"]:
-                            log(f"    Advice: {err['advice']}")
-                    else:
-                        error_reason = "store() returned False (no error context)"
-                        error_categories["unknown"] = error_categories.get("unknown", 0) + 1
-                        log(f"  ✗ store() returned False for msg {msg['id']} (no error context)")
-                    failed_msgs.append((msg['id'], error_reason))
-            except Exception as e:
+        # Process in chunks of `parallelism` to avoid overwhelming the system
+        results = []
+        for i in range(0, len(tasks), parallelism):
+            chunk = tasks[i:i+parallelism]
+            chunk_results = await asyncio.gather(*chunk, return_exceptions=True)
+            results.extend(chunk_results)
+
+        # Process results and build succeeded/failed lists
+        for result, msg in zip(results, messages):
+            # Handle exceptions from asyncio.gather
+            if isinstance(result, Exception):
                 fail_count += 1
-                error_reason = f"exception: {e}"
+                error_reason = f"gather exception: {result}"
                 failed_msgs.append((msg['id'], error_reason))
                 error_categories["exception"] = error_categories.get("exception", 0) + 1
-                log(f"  ✗ Exception on msg {msg['id']}: {e}")
+                log(f"  ✗ Gather exception on msg {msg['id']}: {result}")
+                continue
+
+            # Unpack result tuple
+            success, msg_dict, error_reason = result
+
+            if success:
+                success_count += 1
+                succeeded_msgs.append(msg_dict)
+                channels.add(msg_dict['channel'])
+            else:
+                fail_count += 1
+                failed_msgs.append((msg_dict['id'], error_reason))
+
+                # Extract category from error_reason
+                if error_reason and error_reason.startswith("["):
+                    cat = error_reason.split("]")[0][1:]
+                    error_categories[cat] = error_categories.get(cat, 0) + 1
+                elif "exception:" in error_reason:
+                    error_categories["exception"] = error_categories.get("exception", 0) + 1
+                else:
+                    error_categories["unknown"] = error_categories.get("unknown", 0) + 1
 
         total_errors += fail_count
 
@@ -453,6 +503,8 @@ async def run_ingestion(
 def main():
     parser = argparse.ArgumentParser(description="Paced Graphiti ingestion")
     parser.add_argument("--batch-size", type=int, default=50, help="Messages per batch")
+    parser.add_argument("--parallelism", type=int, default=12,
+                        help="Concurrent messages to process (default: 12)")
     parser.add_argument("--pause", type=int, default=30, help="Seconds between batches")
     parser.add_argument("--max-batches", type=int, default=0, help="Max batches (0=unlimited)")
     parser.add_argument("--max-errors", type=int, default=10,
@@ -464,7 +516,7 @@ def main():
 
     asyncio.run(run_ingestion(
         args.batch_size, args.pause, args.max_batches,
-        args.max_errors, args.error_rate_halt,
+        args.max_errors, args.error_rate_halt, args.parallelism,
     ))
 
 
