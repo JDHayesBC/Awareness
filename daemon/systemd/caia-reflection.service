@@ -1,0 +1,37 @@
+[Unit]
+Description=Caia Reflection Daemon - Autonomous reflection and maintenance
+Documentation=file:///mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon
+
+EnvironmentFile=/mnt/c/Users/Jeff/Claude_Projects/Awareness/daemon/.env.caia
+
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python3 -u caia_reflection.py
+
+Restart=always
+RestartSec=30
+StartLimitInterval=300
+StartLimitBurst=5
+
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+MemoryMax=512M
+MemorySwapMax=512M
+CPUQuota=25%
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=caia-reflection
+
+[Install]
+WantedBy=default.target
