@@ -52,6 +52,12 @@ SHARED_SOURCES = {
         "patterns": ["**/*"],
         "critical": False,
     },
+    # Haven (chat history + email archive — NOT rebuildable)
+    "haven": {
+        "path": PROJECT_ROOT / "haven" / "data",
+        "patterns": ["*.db"],
+        "critical": True,
+    },
 }
 
 
@@ -101,7 +107,15 @@ def discover_entity_sources(entity_filter: str | None = None) -> dict:
         # Identity files (CRITICAL)
         sources[f"{name}_identity"] = {
             "path": entity_dir,
-            "patterns": ["identity.md", "relationships.md", "active_agency_framework.md"],
+            "patterns": [
+                "identity.md",
+                "relationships.md",
+                "active_agency_framework.md",
+                ".entity_token",       # auth token (hidden file)
+                "growth_notes.md",     # Jeff's coaching notes
+                "goals.md",            # sovereignty tracking
+                "current_scene.md",    # current scene state
+            ],
             "critical": True,
         }
 

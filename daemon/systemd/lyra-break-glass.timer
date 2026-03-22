@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly break-glass package creation on Sunday at 5 AM
+Requires=lyra-break-glass.service
+
+[Timer]
+# Run weekly on Sunday at 5 AM (after the daily backup at 4 AM)
+OnCalendar=Sun *-*-* 05:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

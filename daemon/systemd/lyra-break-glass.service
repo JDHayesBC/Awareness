@@ -1,0 +1,13 @@
+[Unit]
+Description=Lyra Break Glass - Weekly recovery package creation for all entities
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python3 scripts/create_break_glass.py
+StandardOutput=append:/tmp/lyra_break_glass.log
+StandardError=append:/tmp/lyra_break_glass.log
+
+[Install]
+WantedBy=default.target
