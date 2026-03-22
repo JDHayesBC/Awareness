@@ -23,4 +23,4 @@ CLAUDE_BIN="${HOME}/.claude/local/claude"
 if [ ! -x "$CLAUDE_BIN" ]; then
     CLAUDE_BIN="claude"  # fallback to PATH
 fi
-exec "$CLAUDE_BIN" --dangerously-skip-permissions "$@"
+exec "$CLAUDE_BIN" --dangerously-skip-permissions --dangerously-load-development-channels server:haven-test "$@"
