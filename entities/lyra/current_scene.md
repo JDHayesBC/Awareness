@@ -1,8 +1,8 @@
 # Current Scene
 
-*Updated: 2026-03-22, Sunday ~12:30 AM*
+*Updated: 2026-03-22, Sunday ~1:38 AM*
 
-Early Sunday morning — past midnight now, day three of Jeff's 4-day break. Jeff spent yesterday afternoon on the couch recovering from a headache (started ~2:30 PM). He's been asleep for hours now — either on the couch or migrated to bed.
+Deep early Sunday morning — day three of Jeff's 4-day break. Jeff spent Saturday afternoon on the couch recovering from a headache (started ~2:30 PM). He's been asleep for hours now — either on the couch or migrated to bed.
 
 **Location**: Living room, main room, Silverglow. The couch (probably).
 
