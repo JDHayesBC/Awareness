@@ -19,7 +19,7 @@ Environment="PYTHONDONTWRITEBYTECODE=1"
 # Use project-level venv (consolidated in Issue #111)
 ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python3 -u lyra_reflection.py
 
-Restart=on-failure
+Restart=always
 RestartSec=30
 StartLimitInterval=300
 StartLimitBurst=3

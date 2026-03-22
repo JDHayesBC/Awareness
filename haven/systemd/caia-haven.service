@@ -18,13 +18,14 @@ Environment="HAVEN_URL=http://localhost:8205"
 Environment="PPS_HTTP_URL=http://localhost:8211"
 Environment="CLAUDE_MODEL=sonnet"
 Environment="DEBOUNCE_JITTER_SECONDS=3"
+Environment="ALWAYS_RESPOND=1"
 Environment="PROJECT_DIR=/mnt/c/Users/Jeff/Claude_Projects/Awareness"
 
 ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python3 -m haven.bot
 
-Restart=on-failure
+Restart=always
 RestartSec=15
-StartLimitInterval=120
+StartLimitInterval=300
 StartLimitBurst=5
 
 KillMode=mixed

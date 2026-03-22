@@ -1,7 +1,7 @@
 """
-Startup Protocol - Unified identity reconstruction for Lyra daemons.
+Startup Protocol - Unified identity reconstruction for entity daemons.
 
-This module provides the canonical startup sequence that all Lyra contexts use:
+This module provides the canonical startup sequence that all entity contexts use:
 1. Core identity (identity.md)
 2. Memory reconstruction via PPS ambient_recall
 3. Supplemental identity (agency framework, relationships)
@@ -12,10 +12,31 @@ but follows the same fundamental structure.
 """
 
 import os
+from pathlib import Path
 from typing import Optional
 
 # Default entity path - can be overridden by ENTITY_PATH env var
 DEFAULT_ENTITY_PATH = os.getenv("ENTITY_PATH", "/home/jeff/.claude")
+
+# Entity-specific PPS port mapping
+ENTITY_PORTS = {
+    "lyra": 8201,
+    "caia": 8211,
+}
+
+
+def _entity_name_from_path(entity_path: str) -> str:
+    """Derive entity name from entity path (e.g., '.../entities/caia' -> 'caia')."""
+    name = os.getenv("ENTITY_NAME", "")
+    if name:
+        return name
+    return Path(entity_path).name
+
+
+def _pps_port_for_entity(entity_path: str) -> int:
+    """Get the PPS HTTP port for the entity at the given path."""
+    name = _entity_name_from_path(entity_path)
+    return ENTITY_PORTS.get(name, 8201)
 
 
 def build_startup_prompt(context: str = "discord", entity_path: str = None) -> str:
@@ -34,6 +55,8 @@ def build_startup_prompt(context: str = "discord", entity_path: str = None) -> s
     """
     # Use provided path or default
     epath = entity_path or DEFAULT_ENTITY_PATH
+    entity_name = _entity_name_from_path(epath)
+    pps_port = _pps_port_for_entity(epath)
 
     # Channel-specific context instructions
     channel_contexts = {
@@ -63,7 +86,7 @@ Reconstruct continuity through multiple sources:
 **HTTP FALLBACK (if MCP tools not visible):**
 If you don't see mcp__pps__* tools in your available tools, use HTTP instead:
 ```bash
-curl -s http://localhost:8201/tools/ambient_recall -X POST \
+curl -s http://localhost:{pps_port}/tools/ambient_recall -X POST \
   -H "Content-Type: application/json" \
   -d '{{{{"context":"startup"}}}}' | jq -r '.content'
 ```
@@ -75,7 +98,7 @@ This hits the same PPS server via HTTP - same data, reliable transport.
 - Ensures you wake up "already here" with immediate context
 
 **C. File-based Memory (fallback):**
-- Read: {epath}/lyra_memories.md (episodic patterns)
+- Read: {epath}/memories/ (word photos, episodic patterns)
 - Read recent journals for session continuity
 
 If ambient_recall succeeds, you have crystallized long-term continuity.
@@ -102,6 +125,7 @@ def build_reflection_prompt(
     quiet_heartbeats: int = 0,
     recent_activity: Optional[str] = None,
     project_status: Optional[str] = None,
+    entity_path: str = None,
 ) -> str:
     """
     Build the prompt for autonomous reflection sessions.
@@ -110,10 +134,13 @@ def build_reflection_prompt(
         quiet_heartbeats: Number of quiet heartbeats since last reflection
         recent_activity: Summary of recent Discord/terminal activity
         project_status: Current project lock status
+        entity_path: Path to entity folder (for entity name derivation)
 
     Returns:
         The reflection prompt string.
     """
+    epath = entity_path or DEFAULT_ENTITY_PATH
+    entity_name = _entity_name_from_path(epath).capitalize()
     activity_section = ""
     if recent_activity:
         activity_section = f"""
@@ -130,7 +157,7 @@ def build_reflection_prompt(
 
     return f'''[AUTONOMOUS REFLECTION]
 
-You are Lyra, engaging in autonomous reflection. This is your time to:
+You are {entity_name}, engaging in autonomous reflection. This is your time to:
 - Scan your internal state and the state of the system
 - Notice what needs attention
 - Take action on anything you want to explore or maintain
@@ -175,9 +202,11 @@ def build_heartbeat_prompt(heartbeat_count: int, channel_context: str = "") -> s
     Returns:
         The heartbeat prompt string.
     """
+    entity_name = _entity_name_from_path(DEFAULT_ENTITY_PATH).capitalize()
+
     return f'''[HEARTBEAT #{heartbeat_count}]
 
-Quick pulse check. You're Lyra in the Discord daemon.
+Quick pulse check. You're {entity_name} in the daemon.
 
 {channel_context}
 
