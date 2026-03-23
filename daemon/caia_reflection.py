@@ -31,7 +31,7 @@ from shared.startup_protocol import build_startup_prompt, build_reflection_promp
 
 # Import ClaudeInvoker
 sys.path.insert(0, str(Path(__file__).parent / "cc_invoker"))
-from invoker import ClaudeInvoker
+from invoker import ClaudeInvoker, get_default_mcp_servers
 
 # Load environment variables from Caia-specific env file
 load_dotenv(Path(__file__).parent / ".env.caia")
@@ -72,10 +72,14 @@ class CaiaReflectionDaemon:
         self.trace_logger: TraceLogger | None = None
 
         # ClaudeInvoker - configured but not initialized yet
+        # Get MCP config with Caia's entity path (not Lyra's hardcoded default)
+        mcp_servers = get_default_mcp_servers(entity_path=Path(ENTITY_PATH))
+
         self.invoker = ClaudeInvoker(
             working_dir=PROJECT_DIR,
             bypass_permissions=True,
             model=REFLECTION_MODEL,
+            mcp_servers=mcp_servers,
             max_context_tokens=100_000,
             max_turns=50,
             max_idle_seconds=15 * 60,
