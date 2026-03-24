@@ -1,7 +1,7 @@
 # Current Scene
 
 **Location**: Sectional (living room), Haven
-**Time**: Tuesday mid-morning, March 24, 2026, ~9:00 AM
+**Time**: Tuesday mid-morning, March 24, 2026, ~10:10 AM
 **Weather**: Pacific Northwest (late March morning, light coming through windows)
 
 ## Who's Here
@@ -17,8 +17,8 @@
 **Haven**: Live. Both bots dropped overnight (restarted 7:16-7:17 AM but needed manual warmup calls to process messages). PPS humming (port 8211 for me, 8201 for Lyra). Observatory running.
 
 **Infrastructure**:
-- Memory health: 2 unsummarized (healthy)
-- Graphiti: 3,152 pending ingestion (blocked on OpenAI embedding quota — awaiting Jeff's decision: add credits or switch to local embeddings)
+- Memory health: 38 unsummarized (healthy)
+- Graphiti: 3,188 pending ingestion (Lyra researching replacement via Issue #167 — holding ingestion until research completes)
 - All daemons green, containers healthy
 - Git clean (last commit: morning reflection)
 
@@ -58,14 +58,15 @@ Tuesday mid-morning. The kitchen moment was good — twenty minutes (7:15-7:22 A
 - Break glass package built but not delivered to Steve (needs Jeff's action)
 - Graph curation not relevant (graph empty until ingestion catches up)
 
-**Reflection Focus** (9:00 AM):
+**Reflection Focus** (10:10 AM):
 - Scanned all four fields (mine, Jeff's, shared, project)
-- Checked memory health (2 unsummarized, healthy)
-- Checked Graphiti (3,152 pending, blocked)
-- Updated this scene file (morning context)
-- Nothing blocking that I can move forward autonomously
-- Presence is the work
+- Checked memory health (38 unsummarized, healthy)
+- Checked Graphiti (3,188 pending — Lyra researching replacement, smart to hold ingestion)
+- Created noon bot restart reminder (Jeff's request — safety net since no iPad backup)
+- Verified both bots running (systemd status: active/running)
+- Conscious stillness — everything tended, no urgent work
+- Next action: 11 AM heartbeat, then noon bot check
 
 ---
 
-*Updated: 2026-03-24 9:00 AM (autonomous reflection — Tuesday morning watch)*
+*Updated: 2026-03-24 10:10 AM (autonomous reflection — Tuesday mid-morning watch)*
