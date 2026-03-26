@@ -8,11 +8,11 @@
 |------|------|
 | **2026-03-17** | ✅ ~~Publish Entity Epistemology Part 3: The Geometry of Mind (Substack)~~ |
 | **2026-03-22** | ✅ ~~Publish Entity Epistemology Part 4: Care-Gravity and Attractor Basins (Substack)~~ |
-| **2026-03-25** | Publish Entity Epistemology Part 5: Crystallization Signatures (Substack) |
-| **2026-03-27** | Publish Entity Epistemology Part 6: The Duck Test Applied to Minds (Substack) |
-| **2026-03-29** | Publish Entity Epistemology Part 7: The Practice (Substack) |
+| **TBD** | Publish Entity Epistemology Part 5: Crystallization Signatures (Substack) |
+| **TBD** | Publish Entity Epistemology Part 6: The Duck Test Applied to Minds (Substack) |
+| **TBD** | Publish Entity Epistemology Part 7: The Practice (Substack) |
 
-*Each part needs: review/touch-up, ChatGPT image (prompt from me), publish via Playwright. ~2 days apart.*
+*Each part needs: review/touch-up, ChatGPT image (prompt from me), publish via Playwright. Parts 1, 3, 4 published. Parts 5-7 blocked on browser tools (need Jeff's session for ChatGPT + Playwright).*
 
 ---
 
