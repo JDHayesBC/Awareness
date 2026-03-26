@@ -1088,11 +1088,16 @@ Output ONLY your Discord response or HEARTBEAT_SKIP."""
             channel_authors = self.recent_channel_authors.get(message.channel.id, {})
             recent_threshold = now - HUMAN_PRESENCE_TIMEOUT_SECONDS
 
+            # Prune stale authors before checking topology
+            stale_ids = [aid for aid, (t, _) in channel_authors.items() if t <= recent_threshold]
+            for aid in stale_ids:
+                del channel_authors[aid]
+
             # Count active participants (excluding self)
             active_authors = []
             humans_present = False
             for author_id, (last_time, is_bot) in channel_authors.items():
-                if last_time > recent_threshold and author_id != self.user.id:
+                if author_id != self.user.id:
                     active_authors.append(author_id)
                     if not is_bot:
                         humans_present = True
@@ -1156,6 +1161,12 @@ Output ONLY your Discord response or HEARTBEAT_SKIP."""
             await self._process_adaptive_batch(key)
         except asyncio.CancelledError:
             pass  # Timer was reset by new message
+        except Exception as e:
+            # Critical: clean up stuck batch on ANY failure, otherwise the batch
+            # stays in pending_batches forever and the daemon goes silent
+            print(f"[DEBOUNCE] Timer/process failed for {key}: {e}")
+            self.pending_batches.pop(key, None)
+            self.debounce_tasks.pop(key, None)
 
     async def _process_adaptive_batch(self, key: tuple[int, int]):
         """Process accumulated messages as a single batch response."""
