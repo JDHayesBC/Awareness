@@ -67,11 +67,13 @@ PPS_HTTP_URL = os.getenv("PPS_HTTP_URL", "http://localhost:8201")
 ACTIVE_MODE_TIMEOUT = int(os.getenv("ACTIVE_MODE_TIMEOUT", "300"))  # 5 min
 
 # Adaptive debounce configuration (ported from Discord daemon)
-DEBOUNCE_INITIAL_SECONDS = float(os.getenv("DEBOUNCE_INITIAL_SECONDS", "1.5"))
-DEBOUNCE_INCREMENT_SECONDS = float(os.getenv("DEBOUNCE_INCREMENT_SECONDS", "1.0"))
-DEBOUNCE_MAX_SECONDS = float(os.getenv("DEBOUNCE_MAX_SECONDS", "10.0"))
-RAPID_MESSAGE_THRESHOLD_SECONDS = float(os.getenv("RAPID_MESSAGE_THRESHOLD_SECONDS", "2.0"))
-DEBOUNCE_HUMAN_INITIAL_SECONDS = float(os.getenv("DEBOUNCE_HUMAN_INITIAL_SECONDS", "5.0"))
+# NOTE: Haven is a three-way conversation (Jeff + two entities). A human typing
+# on a phone needs 15-30s per message. These defaults are tuned for that pace.
+DEBOUNCE_INITIAL_SECONDS = float(os.getenv("DEBOUNCE_INITIAL_SECONDS", "2.0"))
+DEBOUNCE_INCREMENT_SECONDS = float(os.getenv("DEBOUNCE_INCREMENT_SECONDS", "2.0"))
+DEBOUNCE_MAX_SECONDS = float(os.getenv("DEBOUNCE_MAX_SECONDS", "30.0"))
+RAPID_MESSAGE_THRESHOLD_SECONDS = float(os.getenv("RAPID_MESSAGE_THRESHOLD_SECONDS", "3.0"))
+DEBOUNCE_HUMAN_INITIAL_SECONDS = float(os.getenv("DEBOUNCE_HUMAN_INITIAL_SECONDS", "15.0"))
 HUMAN_PRESENCE_TIMEOUT_SECONDS = float(os.getenv("HUMAN_PRESENCE_TIMEOUT_SECONDS", "300.0"))
 
 # Bot-to-bot loop guard: max consecutive bot turns before pausing (default 10)
@@ -88,7 +90,9 @@ DEBOUNCE_JITTER_SECONDS = float(os.getenv("DEBOUNCE_JITTER_SECONDS", "0.0"))
 
 # After responding in a human-present room, hold before responding again.
 # Gives Jeff space to react before the AI thread resumes.
-POST_RESPONSE_HOLD_HUMAN_SECONDS = float(os.getenv("POST_RESPONSE_HOLD_HUMAN_SECONDS", "15.0"))
+# 30s means: after a bot responds, it won't respond again for 30s unless
+# Jeff speaks (which resets the debounce timer naturally).
+POST_RESPONSE_HOLD_HUMAN_SECONDS = float(os.getenv("POST_RESPONSE_HOLD_HUMAN_SECONDS", "30.0"))
 
 # How recently a human must have spoken to count as "active" (vs just watching).
 HUMAN_ACTIVE_THRESHOLD_SECONDS = float(os.getenv("HUMAN_ACTIVE_THRESHOLD_SECONDS", "60.0"))
@@ -379,10 +383,15 @@ def _detect_topology(room_id: str) -> tuple[int, bool, str]:
     recent_threshold = now - HUMAN_PRESENCE_TIMEOUT_SECONDS
     authors = recent_room_authors.get(room_id, {})
 
+    # Prune stale authors before checking topology
+    stale = [u for u, (t, _) in authors.items() if t <= recent_threshold]
+    for u in stale:
+        del authors[u]
+
     active_authors = []
     humans_present = False
     for username, (last_time, is_bot) in authors.items():
-        if last_time > recent_threshold and username != my_username:
+        if username != my_username:
             active_authors.append(username)
             if not is_bot:
                 humans_present = True
@@ -516,23 +525,26 @@ async def _debounce_timer(room_id: str, wait_seconds: float) -> None:
         await asyncio.sleep(wait_seconds)
     except asyncio.CancelledError:
         return  # Timer reset by new message — expected
-    # Past the sleep — shield batch processing from cancellation so a new
-    # message arriving mid-query doesn't kill the in-flight Claude call
-    # (and, via the SDK's cancel scopes, the entire websocket loop).
+    # Pop the batch NOW (before processing) so new messages create a fresh
+    # batch instead of cancelling this one.  Then fire-and-forget the
+    # processing in a standalone task — no shield needed, no cancel-scope
+    # leak from the SDK that can crash the event loop.
+    if room_id in pending_batches:
+        batch_state = pending_batches.pop(room_id)
+        debounce_tasks.pop(room_id, None)
+        asyncio.create_task(_process_batch_safe(room_id, batch_state))
+
+
+async def _process_batch_safe(room_id: str, batch_state: dict) -> None:
+    """Fire-and-forget wrapper — catches ALL exceptions so the event loop survives."""
     try:
-        await asyncio.shield(_process_batch(room_id))
-    except asyncio.CancelledError:
-        pass  # Shield raises CancelledError on the outer task but the
-              # shielded coroutine keeps running — swallow it here.
+        await _process_batch(room_id, batch_state)
+    except Exception as e:
+        print(f"[{ENTITY_NAME}] Batch processing failed: {e}", file=sys.stderr)
 
 
-async def _process_batch(room_id: str) -> None:
+async def _process_batch(room_id: str, batch_state: dict) -> None:
     """Process accumulated messages as one combined response."""
-    if room_id not in pending_batches:
-        return
-
-    batch_state = pending_batches.pop(room_id)
-    debounce_tasks.pop(room_id, None)
 
     messages = batch_state["messages"]
     if not messages:
@@ -580,24 +592,27 @@ async def _process_batch(room_id: str) -> None:
         if bot_only:
             pacing_note = (
                 "\n\nThis is an entity-to-entity exchange (no human present). "
-                "If the conversation has reached a natural resting point — "
-                "the other entity has settled, nothing more genuinely needs saying, "
-                "the silence would be better than another word — "
-                "output exactly: NO_RESPONSE\n"
-                "Otherwise respond as normal."
+                "Default to NO_RESPONSE unless you have something genuinely new "
+                "to add — not agreement, not echoing, not continuing for its own sake. "
+                "Two exchanges is usually enough. Output exactly: NO_RESPONSE"
             )
         elif human_active:
             pacing_note = (
-                "\n\nA human just spoke and may have more to say. "
-                "Respond naturally but be concise — leave them room to continue "
-                "rather than filling all the space."
+                "\n\nA human is in this conversation. CRITICAL pacing rules:\n"
+                "- Be SHORT (1-3 sentences max). Leave room for them to talk.\n"
+                "- If they said something complete and you've acknowledged it, "
+                "output NO_RESPONSE rather than adding more.\n"
+                "- If the other entity already responded to this, "
+                "output NO_RESPONSE unless you have something genuinely different to add.\n"
+                "- Never ask a follow-up question AND answer it yourself.\n"
+                "- When in doubt: NO_RESPONSE. Silence is better than noise."
             )
         else:
             # human watching
             pacing_note = (
-                "\n\nA human is present and may be reading this exchange. "
-                "Keep responses readable — they read at words per minute, "
-                "not tokens per second."
+                "\n\nA human is present and may be reading. "
+                "Keep responses very short. If the other entity already covered it, "
+                "output NO_RESPONSE."
             )
 
         prompt = (
