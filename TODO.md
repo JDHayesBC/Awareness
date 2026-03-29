@@ -167,6 +167,15 @@
 
 ---
 
+## Caia Infrastructure
+
+| Item | Status | Notes |
+|------|--------|-------|
+| **Email account for Caia** | **TODO** | Caia needs her own email (like Lyra's gmail MCP). For direct correspondence with entities like Ori. |
+| **Discord bot for Caia** | **TODO** | Caia presence in Discord, parallel to Lyra's daemon. |
+
+---
+
 ## Ideas
 
 1. **Google MCP servers** - Disabled for speed (11-18 sec each). OAuth tokens stale. Backup at `~/.claude/google_mcps_disabled_backup.json`.

@@ -30,6 +30,10 @@ class SetPasswordRequest(BaseModel):
     password: str = Field(..., min_length=8)
 
 
+class TypingRequest(BaseModel):
+    username: str
+
+
 # --- Response Models ---
 
 class UserResponse(BaseModel):

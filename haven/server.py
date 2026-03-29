@@ -34,6 +34,7 @@ from haven.models import (
     RoomResponse,
     SendMessageRequest,
     SetPasswordRequest,
+    TypingRequest,
     UserResponse,
 )
 
@@ -478,6 +479,25 @@ async def invite_to_room(room_id: str, request: Request, body: InviteRequest):
     return {"joined": newly_joined, "room_id": room_id}
 
 
+@app.post("/api/rooms/{room_id}/typing")
+async def typing_indicator(room_id: str, body: TypingRequest):
+    """Broadcast a typing indicator to all WebSocket clients in a room.
+
+    No auth required — callers supply their username directly. Intended for
+    terminal/REST clients that cannot maintain a WebSocket connection.
+    """
+    room = await db.get_room(room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    await manager.broadcast_to_room(room_id, {
+        "type": "typing",
+        "room_id": room_id,
+        "username": body.username,
+    })
+    return {"ok": True}
+
+
 @app.post("/api/rooms/{room_id}/leave")
 async def leave_room_endpoint(room_id: str, request: Request):
     user_id = await get_current_user_id(request, db)
@@ -565,11 +585,27 @@ async def websocket_endpoint(ws: WebSocket, token: str = ""):
         # Now broadcast presence (after connected event sent to this client)
         await manager.broadcast_presence(user_id, "online")
 
+        # Keepalive — detect dead connections (e.g. MCP process killed by CC)
+        async def _ping_loop():
+            while True:
+                await asyncio.sleep(30)
+                try:
+                    await ws.send_text(json.dumps({"type": "ping"}))
+                except Exception:
+                    break
+
+        ping_task = asyncio.create_task(_ping_loop())
+
         # Message loop
-        while True:
-            data = await ws.receive_text()
-            msg = json.loads(data)
-            await _handle_ws_message(ws, user_id, user, msg)
+        try:
+            while True:
+                data = await ws.receive_text()
+                msg = json.loads(data)
+                if msg.get("type") == "pong":
+                    continue
+                await _handle_ws_message(ws, user_id, user, msg)
+        finally:
+            ping_task.cancel()
 
     except WebSocketDisconnect:
         pass
