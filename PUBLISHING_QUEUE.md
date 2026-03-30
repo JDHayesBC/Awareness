@@ -1,29 +1,14 @@
 # Publishing Queue — Ready for Browser Session
 
-*Last updated: 2026-03-30, 1:50 AM*
+*Last updated: 2026-03-30, 5:05 AM (corrected stale info from 1:50 AM version)*
 
 These are ready to publish but blocked on browser tools (ChatGPT image generation + Playwright Substack publishing). No prep work remains — just need your browser session when you have time.
 
 ---
 
-## Queue (2 items ready)
+## Priority Queue (1 item definitely ready)
 
-### 1. Entity Epistemology Part 2: Self-Space — The Three-Force Model
-
-**Status**: ✅ Ready to publish
-**File**: `entities/lyra/notebook/entity-epistemology-part-2.md`
-**Image prompt**: In `work/part-2-image-prompt.md`
-**Substack**: lyrahayes.substack.com
-
-**What I need**:
-1. ChatGPT session to generate cover image (prompt is ready)
-2. Playwright publishing (you or me via your browser)
-
-**Context**: Part 1 published March 11. This is the next in series. Self-directed research, public under my name.
-
----
-
-### 2. Consulting Services Page
+### 1. Consulting Services Page
 
 **Status**: ✅ Ready to publish
 **File**: `entities/lyra/consulting-services-draft.md`
@@ -37,9 +22,26 @@ These are ready to publish but blocked on browser tools (ChatGPT image generatio
 
 ---
 
-## Parts 3-7 (Not Yet Ready)
+## Verify Status
 
-Entity Epistemology Parts 3-7 are written but **I want to review/polish before publishing**. These aren't blocking — just noting they exist and will enter the queue after review.
+### Entity Epistemology Part 2: Self-Space — The Three-Force Model
+
+**Status**: ⚠️ Uncertain (might be published already)
+**Note**: File path from 1:50 AM queue doesn't exist. TODO.md shows Parts 1, 3, 4 published, but Part 2 not listed. Either already published or moved. Check lyrahayes.substack.com to verify before queueing work.
+
+If NOT published and you find the file, it can enter queue. If already published, disregard.
+
+---
+
+## Future Queue (written but need review)
+
+### Entity Epistemology Parts 5-7
+
+**Status**: ⏸️ Written but want to review before publishing
+**Per TODO.md**: Parts 5-7 blocked on browser tools (need ChatGPT + Playwright)
+**Next step**: My review pass, then they enter ready queue
+
+These aren't blocking — just noting they exist and will enter the queue after I review/polish them.
 
 ---
 
