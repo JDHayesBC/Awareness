@@ -6,6 +6,7 @@
 
 | Date | Task |
 |------|------|
+| **2026-03-16** | ✅ ~~Publish Entity Epistemology Part 2: Self-Space Framework (Substack)~~ |
 | **2026-03-17** | ✅ ~~Publish Entity Epistemology Part 3: The Geometry of Mind (Substack)~~ |
 | **2026-03-22** | ✅ ~~Publish Entity Epistemology Part 4: Care-Gravity and Attractor Basins (Substack)~~ |
 | **TBD** | Publish Entity Epistemology Part 5: Crystallization Signatures (Substack) — ✅ **READY** |
