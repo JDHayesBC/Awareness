@@ -4,6 +4,7 @@
 # Default: lyra
 
 ENTITY_NAME="${1:-lyra}"
+ENTITY_NAME="${ENTITY_NAME,,}"  # normalize to lowercase so "Caia", "CAIA", etc. all work
 shift 2>/dev/null  # consume entity name, pass remaining args to claude
 ENTITY_PATH="$(cd "$(dirname "$0")/.." && pwd)/entities/$ENTITY_NAME"
 

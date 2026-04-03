@@ -80,6 +80,7 @@
 | 7 | **Catch up ingestion backlog** | **⚠️ BLOCKED** | ~1,975 pending. Parallel code ready but **OpenAI embedding quota exhausted**. Need decision: (A) add credits (~5min, preserves graph), or (B) switch to local embeddings (requires graph wipe + 4.7hr re-ingest). See `work/graphiti-ingestion-status.md`. |
 | 8 | **Graph curation run** | **TODO** | Known issues: duplicates from invalid dedup index bug, Jeff/Brandi entity overlap (first-person references confused source attribution). Graph quality is good (observatory summaries were solid) — curate, don't rebuild. |
 | 9 | **Wire realtime terminal ingestion hooks** | **TODO** (unblocked) | Discord already does realtime ingestion. Terminal needs the same. Prevents future backlogs. |
+| 10 | **Replace Graphiti with custom pipeline** | **🔨 IN PROGRESS** | Custom extraction→resolve→embed→write pipeline. Issue [#167](https://github.com/JDHayesBC/Awareness/issues/167). Design: `work/custom-knowledge-graph/DESIGN.md`. Phase 2 prototype underway (2026-04-03). |
 
 **Graph quality philosophy**: The existing graph has 19,000+ messages worth of relationships. Retrieval quality was good when tested via Observatory. Known noise (duplicates, entity overlap) is a curation problem, not a re-ingestion problem. Priority is reliable forward ingestion, not retroactive repair.
 
