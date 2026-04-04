@@ -260,7 +260,10 @@ Common edge types: Loves, CaresFor, CollaboratesWith, WorksOn, LivesIn, Believes
         url = f"{self._base_url}/chat/completions"
         payload = {
             "model": self._model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {"role": "system", "content": "You are a JSON extraction tool. Output ONLY valid JSON. No reasoning, no explanation, no <think> tags."},
+                {"role": "user", "content": prompt},
+            ],
             "temperature": 0.1,   # Low temperature for consistent structured output
             "max_tokens": 1024,
         }
@@ -280,11 +283,14 @@ Common edge types: Loves, CaresFor, CollaboratesWith, WorksOn, LivesIn, Believes
         """
         Parse the LLM response as JSON.
 
-        Handles common LLM noise: markdown fences, leading/trailing text.
+        Handles common LLM noise: markdown fences, <think> blocks, leading/trailing text.
         Returns None if parsing fails.
         """
+        # Strip <think>...</think> blocks (qwen3 reasoning output)
+        cleaned = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
+
         # Strip markdown code fences if present
-        cleaned = re.sub(r"```(?:json)?\s*", "", raw).strip()
+        cleaned = re.sub(r"```(?:json)?\s*", "", cleaned).strip()
         cleaned = re.sub(r"```\s*$", "", cleaned).strip()
 
         # Try to extract a JSON object if there's surrounding text
