@@ -332,6 +332,14 @@ except ImportError:
     from layers.rich_texture import RichTextureLayer
     USE_RICH_TEXTURE_V2 = False
 
+# Import custom graph layer (replaces Graphiti entirely)
+# Set USE_CUSTOM_GRAPH=true in environment to enable
+try:
+    from layers.custom_graph import CustomGraphLayer
+    USE_CUSTOM_GRAPH = os.getenv("USE_CUSTOM_GRAPH", "").lower() == "true"
+except ImportError:
+    USE_CUSTOM_GRAPH = False
+
 # Import ChromaDB-enabled version if available
 try:
     from layers.core_anchors_chroma import CoreAnchorsChromaLayer
@@ -589,8 +597,11 @@ def get_layers():
     data_path = ENTITY_PATH / "data" / "conversations.db"
     crystals_path = ENTITY_PATH / "crystals" / "current"
 
-    # Use V2 rich texture layer if available (supports add_triplet_direct)
-    if USE_RICH_TEXTURE_V2:
+    # Use custom graph layer if enabled (replaces Graphiti entirely)
+    if USE_CUSTOM_GRAPH:
+        rich_texture_layer = CustomGraphLayer()
+    # Otherwise use V2 rich texture layer if available (supports add_triplet_direct)
+    elif USE_RICH_TEXTURE_V2:
         rich_texture_layer = RichTextureLayerV2()
     else:
         rich_texture_layer = RichTextureLayer()
@@ -874,6 +885,7 @@ async def lifespan(app: FastAPI):
     print(f"  ChromaDB: {CHROMA_HOST}:{CHROMA_PORT}")
     print(f"  USE_CHROMA: {USE_CHROMA}")
     print(f"  USE_RICH_TEXTURE_V2: {USE_RICH_TEXTURE_V2}")
+    print(f"  USE_CUSTOM_GRAPH: {USE_CUSTOM_GRAPH}")
     print(f"  USE_TECH_RAG: {USE_TECH_RAG}")
     print(f"  Inventory: {inventory_db_path}")
     print(f"  Tech RAG: {tech_docs_path if USE_TECH_RAG else 'disabled'}")

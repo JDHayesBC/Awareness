@@ -29,10 +29,10 @@ import os
 import uuid
 from typing import Optional
 
-from pps.layers import LayerHealth, LayerType, PatternLayer, SearchResult
-from pps.layers.entity_extractor import EntityExtractor
-from pps.layers.entity_resolver import EntityResolver
-from pps.layers.graph_embedder import GraphEmbedder
+from . import LayerHealth, LayerType, PatternLayer, SearchResult
+from .entity_extractor import EntityExtractor
+from .entity_resolver import EntityResolver
+from .graph_embedder import GraphEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -631,6 +631,225 @@ class CustomGraphLayer(PatternLayer):
         logger.info(
             "Neo4j indexes verified (dims=%d, group_id=%s)", dims, self._group_id
         )
+
+    # ─────────────────────────────────────────
+    # Additional Layer 3 methods (compatibility with RichTextureLayerV2)
+    # ─────────────────────────────────────────
+
+    async def explore(self, entity_name: str, depth: int = 2) -> list[SearchResult]:
+        """
+        Explore the graph from a specific entity.
+
+        Currently implemented as a search for the entity name with expanded limit.
+        Future enhancement: could traverse graph edges up to `depth` hops.
+
+        Args:
+            entity_name: Name of entity to explore from.
+            depth: Maximum graph traversal depth (currently unused, treated as multiplier).
+
+        Returns:
+            List of SearchResult related to the entity.
+        """
+        # Simple implementation: search for the entity with larger result set
+        return await self.search(entity_name, limit=depth * 10)
+
+    async def delete_edge(self, uuid: str) -> dict:
+        """
+        Delete a fact (edge) from the knowledge graph by UUID.
+
+        Args:
+            uuid: Edge UUID from texture_search results (source field).
+
+        Returns:
+            dict with success status and message.
+        """
+        if not uuid:
+            return {
+                "success": False,
+                "message": "UUID required",
+                "uuid": uuid,
+            }
+
+        try:
+            driver = self._get_driver()
+        except Exception as exc:
+            return {
+                "success": False,
+                "message": f"Neo4j connection failed: {exc}",
+                "uuid": uuid,
+            }
+
+        # Extract actual UUID from source field format "neo4j:edge:{uuid}"
+        actual_uuid = uuid
+        if uuid.startswith("neo4j:edge:"):
+            actual_uuid = uuid.split(":", 2)[2]
+
+        cypher = """
+        MATCH ()-[r:RELATES_TO {uuid: $uuid}]-()
+        DELETE r
+        RETURN count(r) as deleted_count
+        """
+
+        try:
+            records, _, _ = driver.execute_query(cypher, uuid=actual_uuid)
+            deleted_count = records[0]["deleted_count"] if records else 0
+
+            if deleted_count > 0:
+                return {
+                    "success": True,
+                    "message": f"Edge deleted (uuid={actual_uuid})",
+                    "uuid": uuid,
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": f"Edge not found (uuid={actual_uuid})",
+                    "uuid": uuid,
+                }
+        except Exception as exc:
+            logger.error("delete_edge failed: %s", exc)
+            return {
+                "success": False,
+                "message": f"Delete failed: {exc}",
+                "uuid": uuid,
+            }
+
+    async def timeline(
+        self,
+        since: str,
+        until: Optional[str] = None,
+        limit: int = 20,
+    ) -> list[SearchResult]:
+        """
+        Query episodes by time range.
+
+        Note: Custom graph layer doesn't currently track Episode nodes separately.
+        This is a placeholder for compatibility. Future enhancement: add Episode
+        provenance tracking similar to Graphiti.
+
+        Args:
+            since: Start time (ISO format).
+            until: End time (optional, defaults to now).
+            limit: Maximum results.
+
+        Returns:
+            Empty list (not yet implemented).
+        """
+        # TODO: Implement Episode tracking for provenance
+        logger.warning("timeline() not yet implemented in CustomGraphLayer")
+        return []
+
+    async def add_triplet_direct(
+        self,
+        source: str,
+        relationship: str,
+        target: str,
+        fact: Optional[str] = None,
+        source_type: Optional[str] = None,
+        target_type: Optional[str] = None,
+    ) -> dict:
+        """
+        Add a structured triplet directly to the knowledge graph.
+
+        Creates entities and relationship without LLM extraction. Useful for
+        known facts where you control the exact entities and relationship.
+
+        Args:
+            source: Source entity name (e.g., "Jeff").
+            relationship: Edge type (e.g., "SPOUSE_OF").
+            target: Target entity name (e.g., "Carol").
+            fact: Optional human-readable fact text.
+            source_type: Optional entity type for source.
+            target_type: Optional entity type for target.
+
+        Returns:
+            dict with success status and details.
+        """
+        try:
+            driver = self._get_driver()
+            await self._ensure_indexes()
+        except Exception as exc:
+            return {
+                "success": False,
+                "message": f"Neo4j connection failed: {exc}",
+            }
+
+        embedder = self._get_embedder()
+
+        # Default entity type to "Person" if not specified
+        source_type = source_type or "Person"
+        target_type = target_type or "Person"
+
+        # Generate fact text if not provided
+        if not fact:
+            fact = f"{source} {relationship.replace('_', ' ').lower()} {target}"
+
+        try:
+            # Create or update source entity
+            source_embedding = embedder.embed_entity(source, summary="")
+            source_uuid = str(uuid.uuid4())
+            driver.execute_query(
+                _MERGE_ENTITY,
+                name=source,
+                gid=self._group_id,
+                uuid=source_uuid,
+                entity_type=source_type,
+                summary="",
+                embedding=source_embedding,
+            )
+
+            # Create or update target entity
+            target_embedding = embedder.embed_entity(target, summary="")
+            target_uuid = str(uuid.uuid4())
+            driver.execute_query(
+                _MERGE_ENTITY,
+                name=target,
+                gid=self._group_id,
+                uuid=target_uuid,
+                entity_type=target_type,
+                summary="",
+                embedding=target_embedding,
+            )
+
+            # Create relationship
+            fact_hash = hashlib.sha256(fact.lower().encode()).hexdigest()[:16]
+            edge_embedding = embedder.embed_text(fact)
+            edge_uuid = str(uuid.uuid4())
+
+            driver.execute_query(
+                _MERGE_EDGE,
+                source_name=source,
+                target_name=target,
+                gid=self._group_id,
+                fact_hash=fact_hash,
+                uuid=edge_uuid,
+                edge_type=relationship,
+                fact_text=fact,
+                embedding=edge_embedding,
+            )
+
+            logger.info(
+                "add_triplet_direct: Created %s -[%s]-> %s",
+                source,
+                relationship,
+                target,
+            )
+
+            return {
+                "success": True,
+                "message": f"Triplet added: {source} -[{relationship}]-> {target}",
+                "source": source,
+                "relationship": relationship,
+                "target": target,
+                "fact": fact,
+            }
+
+        except Exception as exc:
+            logger.error("add_triplet_direct failed: %s", exc)
+            return {
+                "success": False,
+                "message": f"Failed to add triplet: {exc}",
+            }
 
     # ─────────────────────────────────────────
     # Teardown
