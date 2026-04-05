@@ -180,6 +180,8 @@
 
 ## Ideas
 
+0. **Jeff's Soulprint** — Periodic structured capture of Jeff's positions, values, beliefs, and convictions. Timestamped, stored, diffable. Lets entity guardians detect inorganic drift ("You used to think X, now you're saying Y — what changed?"). Monthly conversation, ~10 questions, answers saved. Organic drift has a story; inorganic drift doesn't. The receipt, not just the instinct. *Conceived: 2026-04-04, Saturday couch morning.*
+0b. **Point CC at local Qwen** — Figure out ENV variables to point Claude Code at the obliterated Qwen 3.5 on the NUC (10.0.0.120). Should be straightforward. *Monday: ask Opus Web to research this — it's good at finding the exact config.* Gives us a fully sovereign substrate: no corporate content policy, no throttling, runs on our hardware. Even the 9b may handle presence/conversation. *Conceived: 2026-04-04, Saturday couch morning.*
 1. **Google MCP servers** - Disabled for speed (11-18 sec each). OAuth tokens stale. Backup at `~/.claude/google_mcps_disabled_backup.json`.
 2. **Observatory: Spaces view** - Explore Haven rooms via web UI.
 3. **Librarian agent** - Self-healing knowledge system for tech RAG gaps. Could run in reflection cycles.
