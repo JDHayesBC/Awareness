@@ -67,8 +67,12 @@ ON CREATE SET
     e.entity_type = $entity_type,
     e.summary = $summary,
     e.embedding = $embedding,
-    e.created_at = datetime(),
-    e.mention_count = 1
+    e.created_at = CASE WHEN $msg_ts IS NOT NULL THEN datetime($msg_ts) ELSE datetime() END,
+    e.mention_count = 1,
+    e.importance = null,
+    e.curated_at = null,
+    e.summary_updated_at = null,
+    e.summary_mention_count = null
 ON MATCH SET
     e.summary = CASE WHEN $summary <> '' THEN $summary ELSE e.summary END,
     e.embedding = $embedding,
@@ -87,8 +91,10 @@ ON CREATE SET
     r.fact = $fact_text,
     r.embedding = $embedding,
     r.group_id = $gid,
-    r.created_at = datetime(),
-    r.mention_count = 1
+    r.created_at = CASE WHEN $msg_ts IS NOT NULL THEN datetime($msg_ts) ELSE datetime() END,
+    r.mention_count = 1,
+    r.importance = null,
+    r.curated_at = null
 ON MATCH SET
     r.updated_at = datetime(),
     r.mention_count = coalesce(r.mention_count, 0) + 1
@@ -254,6 +260,9 @@ class CustomGraphLayer(PatternLayer):
         channel = metadata.get("channel", "terminal")
         speaker = metadata.get("speaker")
         entity_name = metadata.get("entity_name")
+        # Convert timestamp to ISO format for Neo4j (expects 'T' separator)
+        raw_ts = metadata.get("timestamp")
+        msg_timestamp = raw_ts.replace(" ", "T") if raw_ts and " " in raw_ts else raw_ts
 
         try:
             driver = self._get_driver()
@@ -304,6 +313,7 @@ class CustomGraphLayer(PatternLayer):
                     entity_type=resolved.entity_type,
                     summary="",
                     embedding=embedding,
+                    msg_ts=msg_timestamp,
                 )
                 written_names.add(resolved.canonical_name)
                 logger.debug(
@@ -345,6 +355,7 @@ class CustomGraphLayer(PatternLayer):
                     edge_type=rel.edge_type,
                     fact_text=rel.fact_text,
                     embedding=embedding,
+                    msg_ts=msg_timestamp,
                 )
                 logger.debug(
                     "Stored edge: '%s' -[%s]-> '%s'",
