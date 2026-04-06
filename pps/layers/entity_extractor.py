@@ -266,6 +266,7 @@ Common edge types: Loves, CaresFor, CollaboratesWith, WorksOn, LivesIn, Believes
             ],
             "temperature": 0.1,   # Low temperature for consistent structured output
             "max_tokens": 1024,
+            "response_format": {"type": "json_object"},  # Force LM Studio to return valid JSON
         }
 
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -363,6 +364,14 @@ Common edge types: Loves, CaresFor, CollaboratesWith, WorksOn, LivesIn, Believes
             target = item.get("target", "")
             edge_type = item.get("type", "")
             fact = item.get("fact", "")
+
+            # Gracefully handle attributes dict instead of fact string
+            # (model sometimes drifts to attributes format on complex messages)
+            if not fact and "attributes" in item:
+                attrs = item.get("attributes", {})
+                if isinstance(attrs, dict) and attrs:
+                    # Convert attributes dict to a fact string
+                    fact = " ".join(f"{k}: {v}" for k, v in attrs.items() if v)
 
             if not source or not target or not edge_type or not fact:
                 logger.debug("Skipping incomplete relationship: %r", item)
