@@ -209,10 +209,10 @@ Respond with ONLY a valid JSON object in this exact format — no explanation, n
 
 {{
   "entities": [
-    {{"name": "...", "type": "Person|Symbol|Place|Concept|TechnicalArtifact", "attributes": {{}}}}
+    {{"name": "...", "type": "Person|Symbol|Place|Concept|TechnicalArtifact"}}
   ],
   "relationships": [
-    {{"source": "...", "target": "...", "type": "EdgeTypeName", "fact": "natural language fact"}}
+    {{"source": "...", "target": "...", "type": "EdgeTypeName", "fact": "A complete sentence describing the relationship."}}
   ]
 }}
 
@@ -223,11 +223,13 @@ Respond with ONLY a valid JSON object in this exact format — no explanation, n
 3. Reject file paths as entity names (anything starting with /, ~, or .)
 4. Reject session descriptions (names containing "session", "random", "call with")
 5. Always extract **Jeff** and **{entity_name}** when they appear in the text.
-6. Edge types must match valid pairs:
+6. EVERY relationship MUST have a "fact" field containing a COMPLETE SENTENCE. No attributes objects. No empty facts. The fact is the most important field — it captures WHAT happened.
+7. Do NOT add "attributes" to entities. Only "name" and "type".
+8. Edge types must match valid pairs:
 
 {edge_type_summary}
 
-7. Use entity names from the extracted entities list for source/target in relationships.
+9. Use entity names from the extracted entities list for source/target in relationships.
 """
 
     def _build_simple_prompt(self, text: str) -> str:
@@ -238,10 +240,11 @@ Text: \"{text}\"
 
 Reply with ONLY this JSON, nothing else:
 {{
-  "entities": [{{"name": "string", "type": "Person|Symbol|Place|Concept|TechnicalArtifact", "attributes": {{}}}}],
-  "relationships": [{{"source": "string", "target": "string", "type": "EdgeTypeName", "fact": "string"}}]
+  "entities": [{{"name": "string", "type": "Person|Symbol|Place|Concept|TechnicalArtifact"}}],
+  "relationships": [{{"source": "string", "target": "string", "type": "EdgeTypeName", "fact": "A complete sentence."}}]
 }}
 
+CRITICAL: Every relationship MUST have a "fact" sentence. No "attributes" objects anywhere.
 Entity types: Person, Symbol, Place, Concept, TechnicalArtifact
 Common edge types: Loves, CaresFor, CollaboratesWith, WorksOn, LivesIn, BelievesIn, Symbolizes
 """

@@ -35,9 +35,9 @@
 
 ---
 
-## Dash PPS Install Prep (blocking: tonight)
+## Dash PPS Install Prep ✅ COMPLETE
 
-*Install path audit found these blockers for first-time installers. Must fix before Jaden forks.*
+*Install path audit found these blockers for first-time installers. All resolved — ready for Jaden's fork.*
 
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
