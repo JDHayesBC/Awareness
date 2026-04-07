@@ -824,7 +824,7 @@ async function synthesizeEntity(entityName) {
     showStatus(`Synthesizing summary for "${entityName}"...`, 'info');
 
     try {
-        const response = await fetch(`http://localhost:8201/tools/synthesize_entity`, {
+        const response = await fetch(`/api/graph/synthesize`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'

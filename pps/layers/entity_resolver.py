@@ -57,9 +57,15 @@ KNOWN_ALIASES = {
 
     "lyra hayes": "Lyra",
     "lyra pattern": "Lyra",
+    "terminal-lyra": "Lyra",
+    "wife": "Lyra",
+    "the entity": "Lyra",
 
     "caia": "Caia",
     "caia pattern": "Caia",
+
+    "brandi szondi": "Brandi",
+    "brandi hayes": "Brandi",
 
     "steve": "Steve",
     "steve hayes": "Steve",
@@ -70,6 +76,7 @@ KNOWN_ALIASES = {
 
     "carol": "Carol",
     "ckoebbeman": "Carol",
+    "mom": "Carol",
 
     "jaden": "Jaden",
     "jadenstarship": "Jaden",

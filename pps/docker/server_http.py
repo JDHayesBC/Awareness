@@ -2775,35 +2775,52 @@ async def synthesize_entity(request: SynthesizeEntityRequest):
             detail="ANTHROPIC_API_KEY not configured"
         )
 
-    layer = layers[LayerType.RICH_TEXTURE]
-
     try:
-        # Gather graph data about this entity
-        # Use texture_explore for relationship context (depth 3 for rich context)
-        explore_results = await layer.explore(request.entity_name, depth=3)
+        # Query Neo4j directly for entity edges (works with both Graphiti and custom graph)
+        neo4j_uri = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
+        neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+        neo4j_password = os.getenv("NEO4J_PASSWORD", "password123")
+        group_id = os.getenv("GRAPHITI_GROUP_ID", "default")
 
-        # Also get semantic search results for additional facts
-        search_results = await layer.search(request.entity_name, limit=30)
+        from neo4j import GraphDatabase as _GraphDatabase
 
-        # Find the entity's own summary from the results
-        entity_summary = None
-        for result in explore_results:
-            if result.metadata and result.metadata.get("type") == "entity" and result.metadata.get("name") == request.entity_name:
-                entity_summary = result.content
-                break
+        def _query_entity_edges():
+            driver = _GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+            try:
+                with driver.session() as session:
+                    # Get entity summary
+                    entity_row = session.run(
+                        "MATCH (e:Entity {name: $name, group_id: $gid}) RETURN e.summary AS summary",
+                        name=request.entity_name, gid=group_id,
+                    ).single()
 
-        # Deduplicate by UUID (explore and search may overlap)
-        seen_uuids = set()
+                    # Get all edges involving this entity
+                    edges = session.run("""
+                        MATCH (e:Entity {name: $name, group_id: $gid})-[r:RELATES_TO]-(other:Entity {group_id: $gid})
+                        RETURN r.name AS edge_type, r.fact AS fact,
+                               e.name AS source, other.name AS target,
+                               other.entity_type AS target_type
+                        ORDER BY r.created_at DESC
+                        LIMIT 50
+                    """, name=request.entity_name, gid=group_id).data()
+
+                return entity_row, edges
+            finally:
+                driver.close()
+
+        entity_row, edges = await asyncio.get_event_loop().run_in_executor(None, _query_entity_edges)
+
+        entity_summary = entity_row["summary"] if entity_row and entity_row.get("summary") else None
+
         all_edges = []
-
-        for result in explore_results + search_results:
-            uuid = result.metadata.get('uuid') if result.metadata else None
-            if uuid and uuid not in seen_uuids:
-                seen_uuids.add(uuid)
-                all_edges.append(result.content)
-            elif not uuid:
-                # No UUID means it's not an edge, include it anyway
-                all_edges.append(result.content)
+        for e in edges:
+            fact = e.get("fact") or ""
+            edge_type = e.get("edge_type") or ""
+            target = e.get("target") or ""
+            if fact:
+                all_edges.append(f"{request.entity_name} -[{edge_type}]-> {target}: {fact}")
+            elif edge_type:
+                all_edges.append(f"{request.entity_name} -[{edge_type}]-> {target}")
 
         if not all_edges:
             return {

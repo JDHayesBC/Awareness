@@ -234,6 +234,7 @@ services:
       # Entity path - container internal path (host path in .env is for volume mount only)
       - ENTITY_PATH=/app/entity
       - ENTITY_NAME=${ENTITY_NAME:-lyra}
+      - GRAPHITI_GROUP_ID=lyra_v2
       - CLAUDE_HOME=/app/claude_home
       # PPS server connections (mounted entity uses pps-lyra, Caia accessible via pps-caia)
       - PPS_SERVER_HOST=pps-lyra
@@ -243,6 +244,8 @@ services:
       - ENTITY_CAIA_PATH=/app/entity-caia
       # OpenAI for graphiti_core embeddings
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Anthropic for entity synthesis (haiku summarization)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
       # Mount Lyra's entity directory (identity files, crystals, word-photos)
       - ${ENTITY_PATH}:/app/entity:ro

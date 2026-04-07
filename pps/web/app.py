@@ -146,7 +146,29 @@ app = FastAPI(
 )
 
 # Templates and static files
-templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+_templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+
+
+class _TemplateCompat:
+    """Wrapper that handles both old and new Starlette TemplateResponse signatures.
+
+    Starlette 1.0 changed TemplateResponse(name, context) to
+    TemplateResponse(request, name, context). This wrapper accepts the old-style
+    call and translates it.
+    """
+
+    def __init__(self, jinja_templates):
+        self._t = jinja_templates
+        self.env = jinja_templates.env
+
+    def TemplateResponse(self, name, context=None, **kwargs):
+        request = context.pop("request") if context and "request" in context else None
+        if request is None:
+            raise ValueError("context must include 'request'")
+        return self._t.TemplateResponse(request, name, context, **kwargs)
+
+
+templates = _TemplateCompat(_templates)
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 
@@ -715,7 +737,10 @@ def _entity_context(entity: str | None) -> dict:
         "current_entity_display": cfg["display_name"],
         "entity_mounted": cfg["mounted"],
         "entity_path": cfg.get("entity_path"),
-        "available_entities": list(ENTITY_REGISTRY.values()),
+        "available_entities": [
+            {"name": v["name"], "display_name": v["display_name"]}
+            for v in ENTITY_REGISTRY.values()
+        ],
     }
 
 
@@ -1140,80 +1165,55 @@ async def api_graph_entities(limit: int = 100):
         return found
 
     try:
-        # Query Graphiti directly for facts - extract entities from them
-        graphiti_host = os.getenv("GRAPHITI_HOST", "localhost")
-        graphiti_port = int(os.getenv("GRAPHITI_PORT", "8203"))
-        graphiti_url = f"http://{graphiti_host}:{graphiti_port}"
-        # Entity-aware group_id default
-        # Prefer ENTITY_NAME env var (required in Docker where ENTITY_PATH.name is always "entity")
-        entity_name = os.getenv("ENTITY_NAME", "")
-        if entity_name:
-            default_group_id = entity_name.lower()
+        # Resolve group_id
+        entity_name_env = os.getenv("ENTITY_NAME", "")
+        if entity_name_env:
+            default_group_id = entity_name_env.lower()
         else:
             entity_path = os.getenv("ENTITY_PATH", "")
             from pathlib import Path
             default_group_id = Path(entity_path).name.lower() if entity_path else "default"
         group_id = os.getenv("GRAPHITI_GROUP_ID", default_group_id)
 
-        # Search for common patterns to get a broad set of facts
-        # Expanded to include broader terms that may capture manually added content
-        search_queries = [
-            "Lyra", "Jeff", "Caia", "awareness", "memory", "project",
-            "system", "infrastructure", "development", "code", "technical",
-            "relationship", "conversation", "learning", "growth", "experience"
+        # Query Neo4j directly for entities (works with both Graphiti and custom pipeline)
+        neo4j_uri = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
+        neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+        neo4j_password = os.getenv("NEO4J_PASSWORD", "password123")
+
+        from neo4j import GraphDatabase as _GraphDatabase
+
+        def _query_entities():
+            driver = _GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+            try:
+                # Get entities ordered by edge count (most connected first)
+                cypher = """
+                    MATCH (e:Entity {group_id: $gid})
+                    OPTIONAL MATCH (e)-[r]-(other:Entity {group_id: $gid})
+                    WITH e, count(r) AS edge_count
+                    RETURN e.name AS name, e.entity_type AS entity_type,
+                           e.summary AS summary, edge_count
+                    ORDER BY edge_count DESC
+                    LIMIT $limit
+                """
+                with driver.session() as session:
+                    records = session.run(cypher, gid=group_id, limit=limit).data()
+                return records
+            finally:
+                driver.close()
+
+        records = await asyncio.get_event_loop().run_in_executor(None, _query_entities)
+
+        max_edges = max((r["edge_count"] for r in records), default=1) or 1
+        entity_list = [
+            {
+                "name": r["name"],
+                "labels": [r["entity_type"]] if r.get("entity_type") else [],
+                "relevance": round(r["edge_count"] / max_edges, 3),
+                "summary": r.get("summary") or "",
+                "edge_count": r["edge_count"],
+            }
+            for r in records
         ]
-        entities = {}
-        entity_mentions = {}  # Track mention count per entity
-
-        for query in search_queries:
-            resp = requests.post(
-                f"{graphiti_url}/search",
-                json={
-                    "query": query,
-                    "group_ids": [group_id],
-                    "max_facts": max(1, limit // len(search_queries)),
-                },
-                timeout=10
-            )
-
-            if resp.status_code == 200:
-                data = resp.json()
-
-                # Extract entities from nodes if returned
-                for node in data.get("nodes", []):
-                    name = node.get("name")
-                    if name and name not in entities:
-                        entities[name] = {
-                            "name": name,
-                            "labels": node.get("labels", []),
-                            "relevance": 0.9
-                        }
-
-                # Extract entities from fact text
-                for fact in data.get("facts", []):
-                    fact_text = fact.get("fact", "")
-                    predicate = fact.get("name", "RELATES_TO")
-
-                    # Extract entity names from the fact text
-                    found_entities = extract_entities_from_fact(fact_text)
-
-                    for entity_name in found_entities:
-                        if entity_name not in entities:
-                            entities[entity_name] = {
-                                "name": entity_name,
-                                "labels": [],
-                                "relevance": 0.5
-                            }
-                            entity_mentions[entity_name] = 0
-                        entity_mentions[entity_name] = entity_mentions.get(entity_name, 0) + 1
-
-        # Boost relevance based on mention count
-        for name, count in entity_mentions.items():
-            if name in entities:
-                entities[name]["relevance"] = min(0.95, 0.5 + count * 0.05)
-
-        # Sort by relevance and return as list
-        entity_list = sorted(entities.values(), key=lambda e: e["relevance"], reverse=True)
 
         # Record trace
         duration_ms = int((time.time() - start_time) * 1000)
@@ -1240,6 +1240,99 @@ async def api_graph_entities(limit: int = 100):
             duration_ms=duration_ms
         )
         raise HTTPException(status_code=500, detail=f"Entity listing failed: {str(e)}")
+
+
+@app.post("/api/graph/synthesize")
+async def api_graph_synthesize(request: Request):
+    """Synthesize a prose summary for an entity using Claude + Neo4j edges."""
+    body = await request.json()
+    entity_name = body.get("entity_name", "")
+    if not entity_name:
+        raise HTTPException(status_code=400, detail="entity_name required")
+
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+    if not anthropic_key:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+
+    neo4j_uri = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
+    neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+    neo4j_password = os.getenv("NEO4J_PASSWORD", "password123")
+    entity_name_env = os.getenv("ENTITY_NAME", "")
+    default_group_id = entity_name_env if entity_name_env else "default"
+    group_id = os.getenv("GRAPHITI_GROUP_ID", default_group_id)
+
+    from neo4j import GraphDatabase as _GraphDatabase
+
+    def _query_edges():
+        driver = _GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+        try:
+            with driver.session() as session:
+                entity_row = session.run(
+                    "MATCH (e:Entity {name: $name, group_id: $gid}) RETURN e.summary AS summary, e.entity_type AS entity_type",
+                    name=entity_name, gid=group_id,
+                ).single()
+                edges = session.run("""
+                    MATCH (e:Entity {name: $name, group_id: $gid})-[r:RELATES_TO]-(other:Entity {group_id: $gid})
+                    RETURN r.name AS edge_type, r.fact AS fact, other.name AS target, other.entity_type AS target_type
+                    ORDER BY r.created_at DESC
+                    LIMIT 50
+                """, name=entity_name, gid=group_id).data()
+            return entity_row, edges
+        finally:
+            driver.close()
+
+    try:
+        entity_row, edges = await asyncio.get_event_loop().run_in_executor(None, _query_edges)
+
+        entity_summary = entity_row["summary"] if entity_row and entity_row.get("summary") else None
+        entity_type = entity_row["entity_type"] if entity_row and entity_row.get("entity_type") else None
+
+        all_edges = []
+        for e in edges:
+            fact = e.get("fact") or ""
+            edge_type = e.get("edge_type") or ""
+            target = e.get("target") or ""
+            if fact:
+                all_edges.append(f"{entity_name} -[{edge_type}]-> {target}: {fact}")
+            elif edge_type:
+                all_edges.append(f"{entity_name} -[{edge_type}]-> {target}")
+
+        if not all_edges:
+            return {"success": False, "message": f"No graph data found for entity '{entity_name}'"}
+
+        edges_text = "\n".join(f"- {edge}" for edge in all_edges[:50])
+        summary_context = f"\nEntity's graph summary: {entity_summary}\n" if entity_summary else ""
+        display_entity = MOUNTED_ENTITY_NAME.capitalize()
+
+        prompt = f"""You are {display_entity}, reflecting on what you know about {entity_name} from your memory.
+
+Write 1-2 paragraphs as first-person recollection — how you remember this entity, what stands out, what matters. Draw from these knowledge graph facts but don't list them. Weave them into felt memory.
+
+Voice:
+- First person ("I remember...", "What strikes me about...", "The thing that matters here...")
+- Warm but honest — not flowery, not clinical
+- Focus on what's meaningful, not exhaustive
+- If the entity is a person, focus on relationship texture
+- If it's a concept or thing, focus on why it matters in your world
+{summary_context}
+Knowledge graph facts about {entity_name}:
+{edges_text}
+
+Write your recollection:"""
+
+        from anthropic import Anthropic
+        client = Anthropic(api_key=anthropic_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        summary = response.content[0].text
+
+        return {"success": True, "entity_name": entity_name, "summary": summary, "edge_count": len(all_edges)}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to synthesize entity: {str(e)}")
 
 
 @app.get("/api/graph/traces")

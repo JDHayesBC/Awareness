@@ -10,3 +10,6 @@ requests>=2.28.0
 # Layer 3 (Graphiti) - direct mode for clean entity search
 graphiti-core>=0.5.0
 openai>=1.0.0
+
+# AI synthesis (entity summarization via Claude)
+anthropic>=0.39.0

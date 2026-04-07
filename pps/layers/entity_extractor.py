@@ -269,7 +269,6 @@ Common edge types: Loves, CaresFor, CollaboratesWith, WorksOn, LivesIn, Believes
             ],
             "temperature": 0.1,   # Low temperature for consistent structured output
             "max_tokens": 1024,
-            "response_format": {"type": "json_object"},  # Force LM Studio to return valid JSON
         }
 
         async with httpx.AsyncClient(timeout=60.0) as client:
