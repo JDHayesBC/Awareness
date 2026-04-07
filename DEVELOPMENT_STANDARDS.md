@@ -236,6 +236,44 @@ bash scripts/pps_verify_deployment.sh <container-name> <source-file>
 - Exit code 0 = deployment current, proceed with tests
 - Exit code 1 = deployment stale, rebuild required
 
+### Integration Testing Before Scale
+
+**Pattern: Always validate small before scaling big.**
+
+When deploying new data processing pipelines (graph ingestion, summarization, batch operations):
+
+1. **Small batch validation first** (10-50 records)
+   - Run the pipeline on a tiny sample
+   - Check success rate (should be ≥ 90%)
+   - Inspect output quality manually
+   - Review error patterns if any
+
+2. **If validation fails** (< 90% success):
+   - Debug on the small batch (fast iteration)
+   - Fix bugs with quick feedback loop
+   - Re-validate until success rate is high
+
+3. **Only then scale up** (full dataset):
+   - Run production volume with confidence
+   - Monitor early results
+   - Have kill switch ready if issues appear
+
+**Why this matters:**
+- 10-message test: 30 seconds
+- 3,000-message failed run: 2+ hours + debugging + lost trust
+- The cost of validation is negligible. The cost of skipping it is high.
+
+**Anti-pattern to avoid:**
+- "Code works in unit test → run it on everything"
+- Discovering bugs after processing 1,000 records
+- Wasting compute time on broken pipelines
+
+**This applies to:**
+- Graph ingestion (Graphiti or custom)
+- Batch summarization
+- Data migrations
+- Any operation processing > 100 records
+
 ### Manual Verification Checklist
 
 For changes that touch production systems:
@@ -244,6 +282,7 @@ For changes that touch production systems:
 - [ ] Memory Inspector shows expected results
 - [ ] Dashboard indicators correct
 - [ ] No errors in Docker logs
+- [ ] For batch operations: small-batch validation passed
 
 ## Documentation
 

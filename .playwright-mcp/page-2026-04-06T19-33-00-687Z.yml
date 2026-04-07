@@ -1,0 +1,71 @@
+- generic [active] [ref=e1]:
+  - navigation [ref=e2]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - generic [ref=e6]: PPS Observatory
+        - generic [ref=e7]:
+          - generic [ref=e8]: "Entity:"
+          - link "Lyra" [ref=e9] [cursor=pointer]:
+            - /url: /graph?entity=lyra
+          - link "Caia" [ref=e10] [cursor=pointer]:
+            - /url: /graph?entity=caia
+      - generic [ref=e11]:
+        - link "Dashboard" [ref=e12] [cursor=pointer]:
+          - /url: /?entity=lyra
+        - link "Graph" [ref=e13] [cursor=pointer]:
+          - /url: /graph?entity=lyra
+        - link "Messages" [ref=e14] [cursor=pointer]:
+          - /url: /messages?entity=lyra
+        - link "Word-Photos" [ref=e15] [cursor=pointer]:
+          - /url: /photos?entity=lyra
+        - link "Crystals" [ref=e16] [cursor=pointer]:
+          - /url: /crystals?entity=lyra
+        - link "Ambient Recall" [ref=e17] [cursor=pointer]:
+          - /url: /memory?entity=lyra
+        - link "Traces" [ref=e18] [cursor=pointer]:
+          - /url: /traces?entity=lyra
+        - link "Reflections" [ref=e19] [cursor=pointer]:
+          - /url: /reflections?entity=lyra
+        - link "Discord" [ref=e20] [cursor=pointer]:
+          - /url: /discord?entity=lyra
+  - main [ref=e21]:
+    - generic [ref=e22]:
+      - heading "Knowledge Graph Visualization" [level=1] [ref=e23]
+      - paragraph [ref=e24]: Explore the rich texture of consciousness - entities, relationships, and patterns.
+    - generic [ref=e25]:
+      - generic [ref=e26]:
+        - generic [ref=e27]:
+          - generic [ref=e28]: Search Entities & Relationships
+          - generic [ref=e29]:
+            - textbox "Search Entities & Relationships" [ref=e30]:
+              - /placeholder: Enter search query (e.g., 'Jeff', 'care-gravity', 'favorite tee')
+            - button "Search" [ref=e31] [cursor=pointer]
+        - generic [ref=e32]:
+          - generic [ref=e33]: Graph Layout
+          - combobox "Graph Layout" [ref=e34]:
+            - option "Force-Directed" [selected]
+            - option "Hierarchical"
+            - option "Circular"
+            - option "Concentric"
+        - generic [ref=e35]:
+          - generic [ref=e36]: Search Depth (hops)
+          - combobox "Search Depth (hops)" [ref=e37]:
+            - option "2 hops (fast)" [selected]
+            - option "3 hops"
+            - option "4 hops"
+            - option "5 hops (slow)"
+      - generic [ref=e38]:
+        - generic [ref=e39]: "Or explore from entity:"
+        - combobox "Or explore from entity:" [ref=e40]:
+          - option "Loading entities..." [selected]
+    - generic [ref=e47] [cursor=pointer]:
+      - generic [ref=e48]:
+        - generic [ref=e49]: ▶
+        - heading "MCP Server Activity" [level=3] [ref=e50]
+        - generic [ref=e51]: 0 calls
+        - generic [ref=e52]: (auto-refreshing)
+      - generic [ref=e53]:
+        - button "Refresh" [ref=e54]
+        - button "Clear" [ref=e55]
+  - contentinfo [ref=e56]:
+    - generic [ref=e57]: PPS Observatory v0.1.0 | Pattern Persistence System
