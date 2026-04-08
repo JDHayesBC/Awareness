@@ -28,6 +28,7 @@ import sys
 import urllib.request
 import urllib.error
 import os
+import time as _time
 from datetime import datetime
 from pathlib import Path
 
@@ -223,11 +224,14 @@ def query_pps_ambient_recall(context: str) -> str:
     Optionally compresses via Haiku if PPS_HAIKU_SUMMARIZE=true.
     """
     try:
+        # Detect user's local timezone from where they hit [enter]
+        user_tz = _time.strftime("%Z")  # e.g., "PDT", "PST", "EST"
+
         payload = json.dumps({
             "context": context,
             "token": ENTITY_TOKEN,
-            "channel": "terminal"
-            # No limit_per_layer - let server return full 200 edges
+            "channel": "terminal",
+            "user_timezone": user_tz
         }).encode("utf-8")
 
         req = urllib.request.Request(

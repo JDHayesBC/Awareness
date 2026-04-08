@@ -35,6 +35,7 @@ class AmbientRecallRequest(BaseModel):
     limit_per_layer: int = 5
     token: str = ""
     channel: str = ""  # Requesting channel (e.g., "haven", "terminal") — excluded from cross-channel results
+    user_timezone: str = ""  # User's local timezone abbreviation (e.g., "PDT") — passed from hook
 
 
 class AnchorSearchRequest(BaseModel):
@@ -1102,6 +1103,7 @@ async def ambient_recall(request: AmbientRecallRequest):
     # Add system clock for temporal awareness
     now = datetime.now()
     hour = now.hour
+    user_tz = request.user_timezone  # e.g., "PDT" — from hook, empty if not provided
 
     # Gentle nagging for late nights
     if hour >= 1 and hour < 5:
@@ -1378,13 +1380,19 @@ async def ambient_recall(request: AmbientRecallRequest):
 
     # For startup, return slim response - everything needed is in formatted_context
     # For turn-by-turn queries, return full results for potential processing
+    # Build display string with user timezone if available
+    clock_display = now.strftime("%A, %B %d, %Y at %I:%M %p")
+    if user_tz:
+        clock_display += f" {user_tz}"
+
     if request.context.lower() == "startup":
         return {
             "clock": {
                 "timestamp": now.isoformat(),
-                "display": now.strftime("%A, %B %d, %Y at %I:%M %p"),
+                "display": clock_display,
                 "hour": hour,
-                "note": time_note
+                "note": time_note,
+                "user_timezone": user_tz
             },
             "unsummarized_count": unsummarized_count,
             "memory_health": f"{unsummarized_count} unsummarized messages {memory_note}",
@@ -1398,9 +1406,10 @@ async def ambient_recall(request: AmbientRecallRequest):
     return {
         "clock": {
             "timestamp": now.isoformat(),
-            "display": now.strftime("%A, %B %d, %Y at %I:%M %p"),
+            "display": clock_display,
             "hour": hour,
-            "note": time_note
+            "note": time_note,
+            "user_timezone": user_tz
         },
         "manifest": manifest,
         "unsummarized_count": unsummarized_count,
