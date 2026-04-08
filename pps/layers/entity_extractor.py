@@ -40,6 +40,13 @@ VALID_ENTITY_TYPES = set(ENTITY_TYPES.keys())
 # Words in entity names that signal junk extractions (Category 6: session descriptions)
 _JUNK_NAME_WORDS = {"session", "random", "call with"}
 
+# Single-word names that should never be entities (pronouns, generics)
+_JUNK_EXACT_NAMES = {
+    "he", "she", "they", "we", "you", "me", "i", "us", "self",
+    "user", "people", "someone", "everyone", "nobody",
+    "agent 1", "agent 2", "agent",
+}
+
 # Default LLM config
 _DEFAULT_BASE_URL = "http://10.0.0.120:1234/v1"
 _DEFAULT_MODEL = "qwen3-1.7b"
@@ -230,6 +237,7 @@ Respond with ONLY a valid JSON object in this exact format — no explanation, n
 {edge_type_summary}
 
 9. Use entity names from the extracted entities list for source/target in relationships.
+10. Extract at most 6 entities and 8 relationships. Focus on the MOST IMPORTANT people and facts, skip minor technical details.
 """
 
     def _build_simple_prompt(self, text: str) -> str:
@@ -268,10 +276,10 @@ Common edge types: Loves, CaresFor, CollaboratesWith, WorksOn, LivesIn, Believes
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.1,   # Low temperature for consistent structured output
-            "max_tokens": 1024,
+            "max_tokens": 4096,
         }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -337,8 +345,8 @@ Common edge types: Loves, CaresFor, CollaboratesWith, WorksOn, LivesIn, Believes
         for item in raw_entities:
             if not isinstance(item, dict):
                 continue
-            name = item.get("name", "")
-            entity_type = item.get("type", "")
+            name = str(item.get("name", "")) if item.get("name") is not None else ""
+            entity_type = str(item.get("type", "")) if item.get("type") is not None else ""
             attributes = item.get("attributes") or {}
             if not isinstance(attributes, dict):
                 attributes = {}
@@ -362,10 +370,10 @@ Common edge types: Loves, CaresFor, CollaboratesWith, WorksOn, LivesIn, Believes
         for item in raw_relationships:
             if not isinstance(item, dict):
                 continue
-            source = item.get("source", "")
-            target = item.get("target", "")
-            edge_type = item.get("type", "")
-            fact = item.get("fact", "")
+            source = str(item.get("source", "")) if item.get("source") is not None else ""
+            target = str(item.get("target", "")) if item.get("target") is not None else ""
+            edge_type = str(item.get("type", "")) if item.get("type") is not None else ""
+            fact = str(item.get("fact", "")) if item.get("fact") is not None else ""
 
             # Gracefully handle attributes dict instead of fact string
             # (model sometimes drifts to attributes format on complex messages)
@@ -432,8 +440,13 @@ Common edge types: Loves, CaresFor, CollaboratesWith, WorksOn, LivesIn, Believes
             logger.debug("Rejected (path separator): %r", name)
             return False
 
-        # Category 6: session descriptions
+        # Exact name rejection (pronouns, generics)
         name_lower = name.lower()
+        if name_lower in _JUNK_EXACT_NAMES:
+            logger.debug("Rejected (pronoun/generic): %r", name)
+            return False
+
+        # Category 6: session descriptions
         if any(junk in name_lower for junk in _JUNK_NAME_WORDS):
             logger.debug("Rejected (junk keyword): %r", name)
             return False

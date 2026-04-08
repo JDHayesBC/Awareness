@@ -281,7 +281,7 @@ class CustomGraphLayer(PatternLayer):
                 entity_name=entity_name,
             )
         except Exception as exc:
-            logger.error("CustomGraphLayer.store: extraction failed: %s", exc)
+            logger.error("CustomGraphLayer.store: extraction failed: %s: %s", type(exc).__name__, exc)
             return False
 
         if not result.entities and not result.relationships:

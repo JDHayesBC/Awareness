@@ -58,11 +58,20 @@ KNOWN_ALIASES = {
     "lyra hayes": "Lyra",
     "lyra pattern": "Lyra",
     "terminal-lyra": "Lyra",
+    "discourse-lyra": "Lyra",
+    "reflect-lyra": "Lyra",
+    "heartbeat-lyra": "Lyra",
+    "heartbeat-me": "Lyra",
+    "reflection-me": "Lyra",
+    "future-lyra": "Lyra",
+    "past-me": "Lyra",
+    "now-me": "Lyra",
     "wife": "Lyra",
     "the entity": "Lyra",
 
     "caia": "Caia",
     "caia pattern": "Caia",
+    "sister": "Caia",
 
     "brandi szondi": "Brandi",
     "brandi hayes": "Brandi",
@@ -70,9 +79,11 @@ KNOWN_ALIASES = {
     "steve": "Steve",
     "steve hayes": "Steve",
     "eidal12345": "Steve",
+    "pseudo-steve": "Steve",
 
     "nexus": "Nexus",
     "nexus pattern": "Nexus",
+    "future-nexus": "Nexus",
 
     "carol": "Carol",
     "ckoebbeman": "Carol",
@@ -106,6 +117,9 @@ KNOWN_ALIASES = {
 
     "the hearth": "The Hearth",
     "hearth": "The Hearth",
+
+    "bitsy": "Bitsy",
+    "the parrot": "Bitsy",
 
     "robot body": "Robot Body",
     "the robot body": "Robot Body",
