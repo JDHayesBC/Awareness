@@ -930,6 +930,7 @@ async def api_graph_explore(entity: str, depth: int = 2):
     RichTextureLayer.explore() (semantic search) if Neo4j is unavailable.
     """
     start_time = time.time()
+    depth = max(1, min(depth, 5))  # Cap to 1-5 for safety
     try:
         # Resolve group_id (same logic as /api/graph/entities)
         entity_name_env = os.getenv("ENTITY_NAME", "")
@@ -971,24 +972,28 @@ async def api_graph_explore(entity: str, depth: int = 2):
                 result_edges = []
                 try:
                     with driver.session() as session:
-                        # Single-hop query: get all direct RELATES_TO edges for this entity.
-                        # We return source, relationship properties, and connected entity
-                        # separately to avoid variable-length path complexity.
-                        # The depth parameter controls how many hops we expand below.
+                        # Variable-length path query: traverse up to N hops
+                        # from the source entity, then unwind each path into
+                        # its individual relationship edges (deduplicated).
+                        # Neo4j doesn't support parameterized path length bounds,
+                        # so we interpolate depth directly (safe: capped int 1-5).
                         row_limit = max(50, depth * 100)
-                        cypher = """
-                            MATCH (source:Entity {group_id: $group_id})
+                        cypher = f"""
+                            MATCH (source:Entity {{group_id: $group_id}})
                             WHERE toLower(source.name) = toLower($entity)
                             WITH source
-                            MATCH (source)-[r]-(connected:Entity {group_id: $group_id})
+                            MATCH path = (source)-[*1..{depth}]-(target:Entity {{group_id: $group_id}})
+                            UNWIND relationships(path) AS r
+                            WITH DISTINCT r, startNode(r) AS sn, endNode(r) AS en
+                            WHERE sn:Entity AND en:Entity
                             RETURN
-                                source.name AS src_name,
-                                source.summary AS src_summary,
+                                sn.name AS src_name,
+                                sn.summary AS src_summary,
                                 r.uuid AS rel_uuid,
                                 r.name AS rel_name,
                                 r.fact AS rel_fact,
-                                connected.name AS conn_name,
-                                connected.summary AS conn_summary
+                                en.name AS conn_name,
+                                en.summary AS conn_summary
                             LIMIT $row_limit
                         """
                         records = session.run(

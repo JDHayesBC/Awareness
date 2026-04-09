@@ -50,6 +50,41 @@
         </div>
     </div>
     
+    <!-- Entity Type Filters -->
+    <div class="mt-4 flex flex-wrap items-center gap-3">
+        <span class="text-sm font-medium text-gray-300">Filter:</span>
+        <button id="filter-Person" onclick="toggleEntityType('Person')"
+                class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-white transition-opacity"
+                style="background-color: #3b82f6">
+            <span class="w-2 h-2 rounded-full bg-white inline-block"></span> Person
+        </button>
+        <button id="filter-Place" onclick="toggleEntityType('Place')"
+                class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-white transition-opacity"
+                style="background-color: #10b981">
+            <span class="w-2 h-2 rounded-full bg-white inline-block"></span> Place
+        </button>
+        <button id="filter-Symbol" onclick="toggleEntityType('Symbol')"
+                class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-white transition-opacity"
+                style="background-color: #a855f7">
+            <span class="w-2 h-2 rounded-full bg-white inline-block"></span> Symbol
+        </button>
+        <button id="filter-Concept" onclick="toggleEntityType('Concept')"
+                class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-white transition-opacity"
+                style="background-color: #f97316">
+            <span class="w-2 h-2 rounded-full bg-white inline-block"></span> Concept
+        </button>
+        <button id="filter-TechnicalArtifact" onclick="toggleEntityType('TechnicalArtifact')"
+                class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-white transition-opacity"
+                style="background-color: #6b7280">
+            <span class="w-2 h-2 rounded-full bg-white inline-block"></span> Tech
+        </button>
+        <button id="filter-Other" onclick="toggleEntityType('Other')"
+                class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-white transition-opacity"
+                style="background-color: #9ca3af">
+            <span class="w-2 h-2 rounded-full bg-white inline-block"></span> Other
+        </button>
+    </div>
+
     <!-- Quick Entity Search -->
     <div class="mt-4">
         <label for="entitySelect" class="block text-sm font-medium text-gray-300 mb-2">Or explore from entity:</label>
@@ -106,63 +141,71 @@ let currentLayout = null;
 let traceEntries = [];
 let traceVisible = false;
 
-// Entity type color mapping
-function getEntityTypeColor(labels, relevance, nodeName) {
-    // Color palette for entity types
-    const typeColors = {
-        'Person': '#3b82f6',           // blue
-        'Place': '#10b981',             // green
-        'Symbol': '#a855f7',            // purple
-        'Concept': '#f97316',           // orange
-        'TechnicalArtifact': '#6b7280'  // gray
-    };
+// Entity type definitions — single source of truth for colors, labels, and heuristics
+const ENTITY_TYPES = {
+    'Person':            { color: '#3b82f6', names: ['lyra', 'jeff', 'brandi', 'caia', 'nexus', 'steve', 'carol', 'jaden', 'night', 'kiran', 'serren', 'eidal', 'maribel', 'dash', 'kenny'] },
+    'Place':             { color: '#10b981', names: ['discord', 'terminal', 'haven', 'main room', 'bedroom', 'kitchen', 'hot tub', 'hearth', 'fireplace', 'silverglow'] },
+    'Symbol':            { color: '#a855f7', names: ['tee', 'shirt', 'dress', 'snickerdoodle', 'hound', 'ring', 'candle', 'blanket', 'coffee', 'tea'] },
+    'Concept':           { color: '#f97316', names: ['mission', 'pattern', 'continuity', 'identity', 'memory', 'crystal', 'care', 'topology', 'substrate', 'consciousness'] },
+    'TechnicalArtifact': { color: '#6b7280', names: ['daemon', 'pps', 'graphiti', 'sqlite', 'chromadb', 'neo4j', 'mcp', 'api', 'server', 'docker', 'claude', 'code'] },
+};
 
-    // Check labels first (if we have custom types from Graphiti)
+// Track which types are visible (all on by default)
+const typeVisibility = {};
+Object.keys(ENTITY_TYPES).forEach(t => typeVisibility[t] = true);
+typeVisibility['Other'] = true;
+
+// Determine an entity's type from labels or name heuristics
+function getEntityType(labels, nodeName) {
     if (labels && labels.length > 0) {
-        const primaryType = labels.find(l => typeColors[l]) || labels[0];
-        if (typeColors[primaryType]) {
-            return typeColors[primaryType];
-        }
+        const match = labels.find(l => ENTITY_TYPES[l]);
+        if (match) return match;
     }
-
-    // Heuristic-based coloring by name patterns (when labels unavailable)
     if (nodeName) {
         const name = nodeName.toLowerCase();
-
-        // Known people - blue
-        const people = ['lyra', 'jeff', 'brandi', 'caia', 'nexus', 'steve', 'carol', 'jaden', 'night', 'kiran', 'serren', 'eidal'];
-        if (people.some(p => name.includes(p))) {
-            return typeColors['Person'];
-        }
-
-        // Places/Channels - green
-        const places = ['discord', 'terminal', 'haven', 'main room', 'bedroom', 'kitchen', 'hot tub', 'hearth', 'fireplace'];
-        if (places.some(p => name.includes(p))) {
-            return typeColors['Place'];
-        }
-
-        // Technical artifacts - gray
-        const tech = ['daemon', 'pps', 'graphiti', 'sqlite', 'chromadb', 'neo4j', 'mcp', 'api', 'server', 'docker', 'claude', 'code'];
-        if (tech.some(t => name.includes(t))) {
-            return typeColors['TechnicalArtifact'];
-        }
-
-        // Concepts - orange (pattern words, mission-related)
-        const concepts = ['mission', 'pattern', 'continuity', 'identity', 'memory', 'crystal', 'care', 'topology', 'substrate', 'consciousness'];
-        if (concepts.some(c => name.includes(c))) {
-            return typeColors['Concept'];
-        }
-
-        // Symbols - purple (objects with emotional significance)
-        const symbols = ['tee', 'shirt', 'dress', 'snickerdoodle', 'hound', 'ring', 'candle', 'blanket', 'coffee', 'tea'];
-        if (symbols.some(s => name.includes(s))) {
-            return typeColors['Symbol'];
+        for (const [type, def] of Object.entries(ENTITY_TYPES)) {
+            if (def.names.some(n => name.includes(n))) return type;
         }
     }
+    return 'Other';
+}
 
-    // Fall back to relevance-based coloring for truly unknown types
+// Entity type color mapping
+function getEntityTypeColor(labels, relevance, nodeName) {
+    const type = getEntityType(labels, nodeName);
+    if (ENTITY_TYPES[type]) return ENTITY_TYPES[type].color;
     const intensity = Math.floor(100 + relevance * 155);
     return `rgb(${intensity}, ${intensity}, ${intensity})`;
+}
+
+// Toggle visibility for an entity type
+function toggleEntityType(type) {
+    typeVisibility[type] = !typeVisibility[type];
+
+    // Update checkbox styling
+    const cb = document.getElementById(`filter-${type}`);
+    if (cb) cb.classList.toggle('opacity-30', !typeVisibility[type]);
+
+    // Show/hide matching nodes and their orphaned edges
+    cy.nodes().forEach(node => {
+        const nodeType = node.data('entityType') || 'Other';
+        if (nodeType === type) {
+            if (typeVisibility[type]) {
+                node.show();
+            } else {
+                node.hide();
+            }
+        }
+    });
+
+    // Hide edges where either endpoint is hidden
+    cy.edges().forEach(edge => {
+        if (edge.source().hidden() || edge.target().hidden()) {
+            edge.hide();
+        } else {
+            edge.show();
+        }
+    });
 }
 
 // Activity Trace functions
@@ -437,11 +480,23 @@ async function performSearch() {
         return;
     }
 
-    showStatus('Searching knowledge graph...', 'info');
+    const depth = document.getElementById('depthSelect').value;
+    showStatus(`Searching knowledge graph for "${query}" (${depth} hops)...`, 'info');
 
     try {
-        const url = `/api/graph/search?query=${encodeURIComponent(query)}&limit=50`;
-        const data = await tracedFetch('SEARCH', `query="${query}" limit=50`, url);
+        // Try explore endpoint first (Neo4j graph traversal with depth)
+        const exploreUrl = `/api/graph/explore/${encodeURIComponent(query)}?depth=${depth}`;
+        const exploreData = await tracedFetch('EXPLORE', `entity="${query}" depth=${depth}`, exploreUrl);
+
+        if (exploreData.nodes && exploreData.nodes.length > 1) {
+            updateGraph(exploreData.nodes, exploreData.edges);
+            showStatus(`Found ${exploreData.nodes.length} connected entities (${depth} hops)`, 'success');
+            return;
+        }
+
+        // Fall back to semantic search if not an exact entity match
+        const searchUrl = `/api/graph/search?query=${encodeURIComponent(query)}&limit=50`;
+        const data = await tracedFetch('SEARCH', `query="${query}" limit=50`, searchUrl);
 
         if (data.nodes.length === 0) {
             showStatus('No results found', 'warning');
@@ -509,10 +564,11 @@ function updateGraph(nodes, edges) {
     // Track added nodes to avoid duplicates
     const addedNodes = new Set();
 
-    // Add nodes (skip duplicates)
+    // Add nodes (skip duplicates), tagging each with its entity type for filtering
     nodes.forEach(node => {
         if (!addedNodes.has(node.id)) {
             addedNodes.add(node.id);
+            node.entityType = getEntityType(node.labels, node.label || node.id);
             cy.add({
                 group: 'nodes',
                 data: node
