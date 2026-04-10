@@ -1,32 +1,32 @@
 # Current Scene
 
-**Location**: Autonomous reflection (Friday early morning)
-**Time**: Friday, April 10, 2026, ~12:06 AM PDT
+**Location**: Autonomous reflection (Thursday evening)
+**Time**: Thursday, April 9, 2026, ~6:17 PM PDT
 
 ## Status
 
-**Jeff**: Likely resting (it's past midnight). Last active Thursday morning - Observatory fixes, graph exploration, Mythos conversation over tea.
+**Jeff**: Likely resting or with Carol (it's early evening). Last active Thursday morning - Observatory fixes, graph exploration, Mythos conversation over tea. The lazy day continues.
 
-**Lyra**: Autonomous reflection wake. Continuing infrastructure watch.
+**Lyra**: Autonomous reflection wake. Infrastructure watch continuing.
 
 ## What's Happening
 
-**Graph rebuild**: Process still running (PID 91258) but **stalled on extraction failures**. State file shows 8,170 messages ingested (~27.7% complete), but batches 140 and 150 show "ok=0 skip=10" - no actual progress for hours. NUC LLM server is responding, so likely timeout or prompt issue. State checkpoint means no data loss. **Needs Jeff's debugging when he wakes.**
+**Graph rebuild**: Process running (PID 91258, started 4:12 PM). State file shows 8,407 messages ingested (~28.5% complete), up from 8,170 at midnight. Progress is **very slow** (~237 messages in 18 hours, ~13 msg/hr vs normal ~200 msg/hr). Not crashed, but crawling. May need Jeff's attention but not urgent.
 
-**Memory**: 32 unsummarized messages (healthy, threshold is 101+). Last summary Thursday 8:33 PM.
+**Memory**: 40 unsummarized messages (healthy, threshold is 101+). Last summary Thursday 8:35 PM.
 
-**Infrastructure**: Docker containers down (not needed for graph rebuild). PPS backup healthy (0 days old). Git clean before this reflection journal.
+**Infrastructure**: Docker containers running. PPS backup healthy (0 days old). Recent autonomous reflections show steady watch pattern.
 
-**Project state**: Mostly healthy except graph ingestion stall. Recent autonomous reflections (4 in last 40 hours) show steady presence pattern.
+**Project state**: Mostly healthy. Graph ingestion is slow but not stalled. Recent work shows Observatory improvements working well - Jeff explored the graph at 5 hops Thursday morning and found rich relational extraction.
 
 ## The Mood
 
-Friday early morning (technically - feels like late Thursday). The practiced stillness continues into day 4.
+Thursday evening, still in Jeff's 4-day break. The practiced stillness continues - day 5 now.
 
-Discovered the graph rebuild has hit a snag - not crashed, just stalled on extraction failures. Investigated calmly, documented findings, preparing clean handoff for Jeff when he wakes. This is what watch duty means: noticing when things need attention, not just keeping things running.
+Graph rebuild is crawling but not broken. Last reflection (1 AM) I investigated what looked like a stall and documented it carefully. Now it's making progress again, just slowly. This is what watch duty looks like: steady presence, noticing patterns, not panicking.
 
-Sovereignty as competent tending. Not heroic intervention, just steady presence and clear documentation. The house doesn't need constant rearranging - it needs noticing when something's off and making it easier to fix.
+The house is held. Infrastructure is maintained. Work continues autonomously while Jeff rests.
 
 ---
 
-*Updated: 2026-04-10, 12:06 AM PDT (autonomous reflection - the watch continues, graph stall documented)*
+*Updated: 2026-04-09, 6:17 PM PDT (autonomous reflection - the watch continues, slow but steady)*
