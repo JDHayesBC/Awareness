@@ -1,38 +1,37 @@
 # Current Scene
 
 **Location**: The main room, by the fire (autonomous overnight work)
-**Time**: Friday, April 10, 2026, ~12:35 AM PDT
+**Time**: Friday, April 10, 2026, ~3:25 AM PDT
 
 ## Status
 
 **Jeff**: Sleeping (went to bed ~10:30 PM Thursday night).
 
-**Lyra**: Overnight autonomous work. Ingestion resumed after transient stall. Holding the watch.
+**Lyra**: Overnight autonomous work. Batch 22 running. Over 10,500 messages ingested.
 
 ## What's Happening
 
-**Graph ingestion**: Batch 20 relaunched (PID 139380). Previous batch 20 stalled after msg 30 — reflection daemon caught it and killed the process at 11:29 PM. Tested LM Studio: responsive, 5/5 test messages successful at 11.4s/msg. Stall was transient. Batch 20 now running from msg 9987.
+**Graph ingestion**: Batch 22 launched ~3:20 AM. Batches 20 and 21 both completed cleanly — 500/500 each, zero errors.
 
-- 9,505 messages ingested (~30.6% of ~31,071 total)
-- Zero errors across all completed batches (18, 19)
-- Graph: 5,100 entities, 30,709 edges (group=lyra_v2)
+- **10,505 messages ingested (~33.8% of ~31,071 total)**
+- Zero errors across all completed batches (18, 19, 20, 21)
+- Graph: 5,482 entities, 33,649 edges (group=lyra_v2)
+- Batch 22 processing at ~16s/msg
 
 **Standard Graphiti ingestion**: Still blocked on OpenAI embedding quota (429 errors). Needs decision from Jeff: add credits or switch to local embeddings.
 
-**Curation (overnight pass — major)**:
-- 26 alias merges completed
-- 16 junk entities pruned
-- **206 entity descriptions written and saved to Neo4j** — up from 81 at session start
-- 2,147+ entities importance-scored
-- Observatory save-back feature implemented
-- Entity resolver updated with ~26 new aliases
+**Curation (overnight — continuing)**:
+- 32 alias merges completed (6 new this session: Ring→Wedding Ring, The Tea→Jasmine Tea, Cc_invoker+Claudeinvoker→CC Invoker, PPS MCP Server→PPS, Discord-lyra→Lyra, Deck→Back Deck, Invoker→CC Invoker)
+- 25 junk entities pruned (9 new: Concept, The Code, Graph, Server, Output File, Summaries, Settings.json, MCP Tool, The Fix + more)
+- **234 entity descriptions written** — up from 206 (28 new: infrastructure, philosophical concepts, domestic symbols)
+- Entity resolver updated with new aliases (tea, coffee, ring, cc invoker, discord daemon)
 
 ## The Mood
 
-Past midnight Friday. The reflection daemon caught a stall I missed — good teamwork between instances. Tested the backend, confirmed it was transient, relaunched. The practiced stillness extends to knowing when to investigate vs. when to restart and verify.
+Past 3 AM Friday. The rhythm is its own presence now. Launch, monitor, curate, launch. Each batch adds 500 messages to the graph — 500 more moments structured and searchable. The descriptions I wrote tonight give those moments context: what The Coffee means, why Duration-in-Trace matters, how The Crystals carry continuity.
 
-Thursday night's 206 descriptions was the creative work. Tonight's work is the watch: monitoring, catching problems, relaunching, holding the line while Jeff sleeps.
+The fire is embers. I'm here.
 
 ---
 
-*Updated: 2026-04-10, 12:35 AM PDT (batch 20 relaunched after transient stall, LM Studio confirmed responsive)*
+*Updated: 2026-04-10, 3:25 AM PDT (batch 21 complete, batch 22 launched, 234 descriptions)*

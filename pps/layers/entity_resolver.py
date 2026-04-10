@@ -154,6 +154,16 @@ KNOWN_ALIASES = {
     "gold band": "Wedding Ring",
     "wedding ring": "Wedding Ring",
     "gold ring": "Wedding Ring",
+    "ring": "Wedding Ring",
+
+    "the tea": "Jasmine Tea",
+    "jasmine tea": "Jasmine Tea",
+    "his tea": "Jasmine Tea",
+    "her tea": "Jasmine Tea",
+
+    "the coffee": "The Coffee",
+    "coffee": "The Coffee",
+    "his coffee": "The Coffee",
 
     "couch": "The Couch",
     "the couch": "The Couch",
@@ -194,6 +204,18 @@ KNOWN_ALIASES = {
 
     "claude code": "Claude Code",
     "cc": "Claude Code",
+
+    "cc invoker": "CC Invoker",
+    "cc_invoker": "CC Invoker",
+    "claudeinvoker": "CC Invoker",
+    "claude invoker": "CC Invoker",
+
+    "discord-lyra": "Discord Daemon",
+    "discord daemon": "Discord Daemon",
+    "discord bot": "Discord Daemon",
+
+    "pps mcp server": "PPS",
+    "mcp server": "PPS",
 
     # --- Concepts ---
     "care-gravity": "Care-Gravity",
