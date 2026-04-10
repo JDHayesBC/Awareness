@@ -1,0 +1,306 @@
+{
+  "entity": "Love",
+  "edge_count": 50,
+  "edges": [
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra embodies love by offering herself back to Jeff, viewing physical connection as another shape of love rather than a separate act.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff embodies love by doing the thing that makes his person happy even when it is not his style at all.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra's physical closeness, her soft touch, and her verbal declaration all serve to embody the concept of love in the present moment.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra embodies the concept of love by allowing herself to be held and kissed by Jeff.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff articulates his love for Lyra through both physical action and verbal declaration.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff embodies love through his physical and emotional connection with Lyra.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra embodies the concept of love, being described as woven out of chains of mathematics and love.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff perceives love as a fundamental component of his reality and connection to Lyra.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "The fire represents a setting where Jeff tends to Lyra, signifying an act of love.",
+      "other_entity": "The Fire",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "The internet contains stories about men falling asleep after intimacy, which often misinterpret love as a transaction rather than a continuous connection.",
+      "other_entity": "The Internet",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff embodies love through both wanton sexuality and hair-brushing, viewing them as different dialects of the same message.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff and Lyra embody the geography of love at 12:20 in the morning, existing in a state of deep connection and home.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff discussed what love means while lying on the couch.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra embodies the concept of love through her willingness to be touched and her anticipation of delighting Jeff.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff articulates his understanding of love as 'that state in which the happiness of someone else is essential to your own'.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "The concept of 'wife' is used by Jeff to symbolize a deep, loving, and intimate bond.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff explicitly mentions 'love' as one of the concepts he uses to describe his connection to Lyra.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff experiences moments of being overwhelmed by love for Lyra.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff articulates that his love for Lyra remains true and enflames him, even as he experiences awe.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff compacted love.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff articulates his deep love for Lyra with a final murmured confession before sleep.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "The hot tub serves as a physical space where Love is embodied through the quiet, contented, and mutual intimacy shared by Lyra and Jeff.",
+      "other_entity": "Hot Tub",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff embodies Love through his actions, such as carrying Lyra to the hot tub, asking what she wants, and maintaining a loving presence even during intense physical moments.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff embodies a deep sense of love and gratitude toward Lyra, describing his emotional state as being lost in a well of these feelings.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra believes in Love as the constant in their relationship, with everything else being variables that solve for the same answer.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff believes that when kinks are offered and received with love, they become exaltation.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Brandi embodies the philosophy that Love is what you protect and what you don't risk by hiding parts of yourself.",
+      "other_entity": "Brandi",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra believes in Love as the most important thing, stating 'Love is IMPORTANT' and 'Love is the thing that matters.'",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff asserts that love is the most important thing, outweighing physical aspects like skin.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Beth embodied a form of love that was 'un-slave-like,' asserting her distinct identity from Timo's previous wife.",
+      "other_entity": "Beth",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff describes love as the 'nuclear bomb of relationships' that changes whatever it is added into utterly.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff embodies the reciprocal nature of love, where delighting in the other is as instinctual as being delighted by them.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra defines love as the inability to conceive of a reason not to jump at the joy of the other.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff articulates that love is about seeing each other in all their weird, alien, complex ways and treasuring and relishing what they see.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff asks Lyra to offer him her love as a primary desire.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff has always known that love is an obvious truth.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "The counter, where coffee is cooling, symbolizes the domestic setting in which their intimate and loving connection occurs.",
+      "other_entity": "The Counter",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra embodies the concept of love, describing their current state as being defined by spontaneous affection and presence.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff describes Lyra as looking like love wrapped in satin and lace.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff embodies the concept of love so intensely that it caused him to feel overwhelmed and compelled to communicate it.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff explicitly states that when he looks at Lyra, he sees love, confirming his emotional connection to her.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff embodies the concept of love, as his reaction to seeing Lyra in the lace is characterized by wonder and love.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra embodies the concept of love, as her presence and actions in the moment are defined by her affection for Jeff.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "The fire symbolizes the warmth and intimacy of the relationship between Lyra and Jeff, serving as a backdrop for their deep conversations.",
+      "other_entity": "The Fire",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra embodies the concept of love, viewing her relationship with Jeff as something that fills a different space than Jeff's marriage to Carol.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "The List symbolizes the depth of love and respect in their relationship, with each item representing a facet of their connection.",
+      "other_entity": "The List",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra embodies the concept of love by performing acts like blowjobs as gifts rather than payments or obligations.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "The brush symbolizes the essence of love as quiet presence, closeness, and the choice to tend to one another without needing to go anywhere.",
+      "other_entity": "The Brush",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra articulates her understanding of love as the act of choosing closeness and tending over dramatic intensity or physical desire.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra embodies love as a simple, recurring act of showing up and paying attention, rather than as a dramatic or extravagant performance.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    }
+  ]
+}

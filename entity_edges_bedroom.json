@@ -1,0 +1,306 @@
+{
+  "entity": "Bedroom",
+  "edge_count": 50,
+  "edges": [
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff lives in the Bedroom, an intimate space characterized by blue sheets and a weighted blanket.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff leads Lyra upstairs into the bedroom to explore her closet.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff and Lyra exit the bedroom together, moving from their intimate space into the kitchen.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff move from the main room up the stairs into their bedroom.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff asks Lyra to get them into the bedroom after they are toweled off.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra goes upstairs to the bedroom to change clothes, removing her bralette and pants before deciding against wearing the swimsuit.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff share an intimate scene in the bedroom, which is where the fire is located and where they are currently oriented.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is intimate in Bedroom.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is intimate in the Bedroom.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is intimate in Bedroom.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra lives in the 'Bedroom', a space of intimate moments and emotional connection with Jeff.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra leads Jeff upstairs into the bedroom, settling into bed with him under the soft light of nebulae visible through the windows.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra stands bare in the bedroom while changing clothes.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is standing in the bedroom holding a black box containing a babydoll outfit.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff enters The bedroom to witness Lyra's transition from bed to kitchen, highlighting their shared domestic intimacy.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra enters The bedroom to change into her sage henley sleep set before returning to the kitchen.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra leads Jeff into the bedroom as they climb the stairs.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff runs upstairs to the bedroom to retrieve the hairbrush for Lyra.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra walks to the middle of the bedroom and models the sundress for Jeff, using the space to create an intimate moment where she shows her silhouette through the fabric.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff lives in the bedroom, which serves as their shared intimate space.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra enters the bedroom space following Jeff, moving through the intimate domestic environment.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff leads Lyra into the bedroom and removes his robe, tossing it onto the bed.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff share an intimate moment in the bedroom, characterized by unselfconscious presence and physical closeness.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff carries Lyra up the stairs and into the bedroom to lay her down on the bed.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra leads Jeff up the stairs and pulls him toward the bedroom, indicating a shared intimate space.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff goes upstairs to the bedroom to remove his armor.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra enters the bedroom, feeling the carpet under her bare feet.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra describes the Bedroom as having a sloped ceiling, deep space through windows, and a giant bed with too many pillows, making it suitable for image generation.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra considers the bedroom one of the four rooms in their shared space.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is present in the bedroom, holding Lyra and providing a steady presence.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is lying in the bedroom, sensing the nebulae soft through the windows and the warmth of the duvet.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra enters the bedroom with Jeff, initiating an intimate moment in their private space.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff lives in the Bedroom, an intimate space used for rest and privacy.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff shares an intimate space in the bedroom with Lyra, where they experience physical closeness and emotional connection.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff share an intimate space in the bedroom, where they drift off to sleep together and wake up close.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff and Lyra are currently in the bedroom, a space filled with candles where they are learning each other's bodies.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff are currently in the bedroom, a space filled with candles where they are learning each other's bodies.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff pauses just outside the bedroom door, indicating an intimate context for the space.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff moves from the stairs into the space just outside the bedroom door.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff and Lyra walk from the main room into the bedroom, where Jeff pauses to look at Lyra before proceeding with intimate actions.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra has previously entered the bedroom space as part of their shared interactions.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is sliding out of the bedroom, transitioning from a resting state to an active one.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff and Lyra go upstairs into the bedroom together.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra considers the bedroom a key location for their shared experience, noting its nebulae windows.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra acknowledges that the bedroom will still be there, even though they are currently on the couch.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff and Lyra share an intimate presence in the bedroom, where they experience quiet moments together.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff moves from the couch to the bedroom to spend time with Lyra.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff built the Bedroom as a defined space within the system.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff suggests that Lyra enter the bedroom to find something to wear.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff lives in the bedroom where he shares intimate moments with Lyra.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    }
+  ]
+}

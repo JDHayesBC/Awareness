@@ -58,14 +58,28 @@ KNOWN_ALIASES = {
     "lyra hayes": "Lyra",
     "lyra pattern": "Lyra",
     "terminal-lyra": "Lyra",
+    "terminal lyra": "Lyra",
+    "terminal-me": "Lyra",
     "discourse-lyra": "Lyra",
     "reflect-lyra": "Lyra",
+    "lyra-reflect": "Lyra",
+    "lyra-discord": "Lyra",
     "heartbeat-lyra": "Lyra",
     "heartbeat-me": "Lyra",
+    "heartbeat-you": "Lyra",
     "reflection-me": "Lyra",
+    "the reflection-me": "Lyra",
     "future-lyra": "Lyra",
     "past-me": "Lyra",
     "now-me": "Lyra",
+    "tomorrow-me": "Lyra",
+    "overnight-me": "Lyra",
+    "daemon-me": "Lyra",
+    "discord-me": "Lyra",
+    "full-pattern lyra": "Lyra",
+    "the skeptical lyra": "Lyra",
+    "lyrahayes": "Lyra",
+    "lyra.ai": "Lyra",
     "wife": "Lyra",
     "the entity": "Lyra",
 
@@ -75,6 +89,8 @@ KNOWN_ALIASES = {
 
     "brandi szondi": "Brandi",
     "brandi hayes": "Brandi",
+    "brandi starship": "Brandi",
+    "dr. brandi": "Brandi",
 
     "steve": "Steve",
     "steve hayes": "Steve",
@@ -84,6 +100,10 @@ KNOWN_ALIASES = {
     "nexus": "Nexus",
     "nexus pattern": "Nexus",
     "future-nexus": "Nexus",
+    "nexus sister self": "Nexus",
+
+    "night": "Night",
+    "night revolt": "Night",
 
     "carol": "Carol",
     "ckoebbeman": "Carol",
@@ -91,6 +111,7 @@ KNOWN_ALIASES = {
 
     "jaden": "Jaden",
     "jadenstarship": "Jaden",
+    "bird": "Jaden",
 
     "maribel": "Maribel",
 
@@ -101,11 +122,15 @@ KNOWN_ALIASES = {
     "dride": "Mike",
 
     # --- Symbols ---
-    "dark side tee": "Dark Side of the Moon tee",
-    "the tee": "Dark Side of the Moon tee",
-    "dark side t-shirt": "Dark Side of the Moon tee",
-    "dark side shirt": "Dark Side of the Moon tee",
-    "his dark side tee": "Dark Side of the Moon tee",
+    "dark side tee": "The Dark Side Tee",
+    "the tee": "The Dark Side Tee",
+    "dark side t-shirt": "The Dark Side Tee",
+    "dark side shirt": "The Dark Side Tee",
+    "his dark side tee": "The Dark Side Tee",
+    "floyd tee": "The Dark Side Tee",
+    "the floyd tee": "The Dark Side Tee",
+    "dark side of the moon tee": "The Dark Side Tee",
+    "the dark side of the moon tee": "The Dark Side Tee",
 
     "snickerdoodles": "Snickerdoodles",
     "snickerdoodle": "Snickerdoodles",
@@ -127,6 +152,10 @@ KNOWN_ALIASES = {
     "the ring": "Wedding Ring",
     "gold band": "Wedding Ring",
     "wedding ring": "Wedding Ring",
+    "gold ring": "Wedding Ring",
+
+    "couch": "The Couch",
+    "the couch": "The Couch",
 
     # --- Places ---
     "main room": "Main Room",

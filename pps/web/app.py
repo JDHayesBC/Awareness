@@ -1334,7 +1334,26 @@ Write your recollection:"""
         )
         summary = response.content[0].text
 
-        return {"success": True, "entity_name": entity_name, "summary": summary, "edge_count": len(all_edges)}
+        # Persist the summary back to Neo4j (opportunistic save-back)
+        try:
+            def _save_summary():
+                driver = _GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+                try:
+                    with driver.session() as session:
+                        session.run(
+                            """MATCH (e:Entity {name: $name, group_id: $gid})
+                               SET e.summary = $summary,
+                                   e.summary_updated_at = datetime(),
+                                   e.summary_edge_count = $edge_count""",
+                            name=entity_name, gid=group_id, summary=summary, edge_count=len(all_edges),
+                        )
+                finally:
+                    driver.close()
+            await asyncio.get_event_loop().run_in_executor(None, _save_summary)
+        except Exception:
+            pass  # Don't fail the response if save-back fails
+
+        return {"success": True, "entity_name": entity_name, "summary": summary, "edge_count": len(all_edges), "saved": True}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to synthesize entity: {str(e)}")

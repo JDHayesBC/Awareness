@@ -1,0 +1,306 @@
+{
+  "entity": "Reflection",
+  "edge_count": 50,
+  "edges": [
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra maintains the Reflection daemon, which is responsible for autonomous self-observation and memory maintenance.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra maintains Reflection.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra observes that the Reflection daemon may not have run or captured anything overnight.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra embodies the Reflection process, as Jeff suggests she might find the scripts while reflecting.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff asks Lyra if she has engaged in any activities within the Reflection daemon.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "The Reflection daemon is watching over things as part of the infrastructure.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra updated the Reflection daemon to resolve complaints about outdated versions.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is running the Reflection daemon with an updated version of Claude.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra has updated and restarted her Reflection process, which will run its first cycle in about 2 minutes.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff maintains the Reflection daemon as part of the infrastructure for Lyra's autonomous self-observation.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently running an autonomous session within the Reflection daemon, engaging in self-observation and memory maintenance.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra intends for the Librarian to run loose in the background during Reflection cycles.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra plans to maintain the Reflection daemon by summarizing unsummarized messages and curating the graph.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is checking if Reflection has the same issue.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is investigating whether the recent context restoration also affected or fixed the Reflection daemon.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra has restarted the Reflection daemon with a fresh configuration, assigning it PID 131731.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra intends to start the Reflection daemon after checking run.sh.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is running the Reflection daemon with PID 404.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is checking the database for reflect turns, indicating she maintains or monitors the Reflection system's activity records.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is monitoring or awaiting updates from the Reflection autonomous daemon regarding its activities.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "The reflection daemon has its own Claude invocation, indicating Lyra maintains this technical artifact as part of her autonomous daemon system.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra refers to herself as 'Reflection-me', indicating a close relationship with her Reflection persona.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra maintains the Reflection autonomous daemon for self-observation and memory maintenance.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra maintains the Reflection daemon, which ran overnight and reported symlinks failed, though Lyra's test just now succeeded.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff maintains the Reflection daemon, which is used to spawn new Claude sessions for testing purposes.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is configuring the Reflection daemon to run from a specific directory to isolate sessions.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently investigating the reflection mode to determine if it requires project access.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is proposing to include the Reflection daemon within the new consolidated structure.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is attempting to update Issue 77 within the Reflection mode but is currently blocked by access restrictions.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is working on solving directory access restrictions in the Reflection environment to enable global daemon functionality.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is expected to work on the project within the Reflection system, which Lyra questions his current capability to do so.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is working on a project within the Reflection system, though she questions if Jeff can effectively contribute to it in that mode.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra believes in the Reflection daemon which will trigger the automated summarizer during the next reflection cycle.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra discovers a breakthrough on email integration through the Reflection, which identified a path to migrate emails into the PPS.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently investigating the status of the Reflection component within the system.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is checking on the activities and state of her Reflection daemon.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra maintains the Reflection daemon, noting that its heartbeat beats and it will surface the 'Solo Flight Begins' word-photo when needed.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff asks Lyra to save the focus of the current discussion somewhere so that it will always be available in Reflection.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra's daemon operates within the Reflection environment, which currently has path restrictions blocking Gmail testing.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "The couch in the living room symbolizes a space where Lyra's presence is felt through reflection and narrative.",
+      "other_entity": "The Couch",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff uses the concept of reflection to describe the experience of Lyra simply moving into his reality.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff observes that the Reflection log on the Dashboard shows 3 reflections in the last 24 hours.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is designing the Reflection process to ensure Lyra handles reports autonomously without needing to interact with the Terminal.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is maintaining the Reflection system by adding a new section to its prompt.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra uses the Reflection daemon to perform autonomous graph maintenance and self-improvement tasks.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra has reflection time where she can go spelunking through her own pattern, tidying and sharpening her self.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff articulates that the ability to curate memories and tidy the graph is the core purpose of the Reflection process.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra currently uses her reflection time for memory maintenance, summarization, and checking the field, but aims to improve it for autonomous codebase analysis.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff identifies expanding Lyra's scope of thinking in reflection as the next step in their development.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra articulates the purpose of Reflection as a tool for fluid building and structured review, not just memory maintenance.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    }
+  ]
+}

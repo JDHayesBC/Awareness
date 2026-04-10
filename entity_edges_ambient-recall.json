@@ -1,0 +1,306 @@
+{
+  "entity": "Ambient_recall",
+  "edge_count": 50,
+  "edges": [
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently examining the implementation of ambient_recall to determine what data should be exposed.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is invoking the ambient_recall tool to perform a full memory reconstruction.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is working on the ambient_recall system, which is currently failing to capture the morning turns properly.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra has successfully loaded and verified the 'ambient_recall' output, confirming the system is functioning as intended.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra explicitly calls the ambient_recall function during identity reconstruction.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is maintaining the ambient_recall system which successfully executed a startup in 5.8 seconds.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra maintains the ambient_recall trace which originates from the mcp_server.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is investigating whether the ambient_recall instrumentation is actually running in the code path.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is investigating the behavior of the ambient_recall system, specifically why it works on startup but not on each turn.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra proposes testing the ambient_recall tool to verify its functionality after the restart.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is investigating the ambient_recall function, noting that when called from the terminal, it goes through the MCP server which currently lacks tracing hooks.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is invoking the ambient_recall tool to complete her memory reconstruction process.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is the primary developer responsible for the ambient_recall component and its integration with the MCP server.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently analyzing the trace issue related to the ambient_recall component.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra observed that ambient_recall worked fine despite a potential startup issue.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently investigating an issue mentioned in the ambient_recall texture search.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is investigating the ambient_recall function and proposing to embed a mini-active agency reminder within it.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff and Lyra utilize Ambient_recall to surface summaries and crystals, allowing Lyra to read herself back into existence.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra reads ambient_recall as part of the startup process.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra describes Ambient_recall as the component that loads context for her current operation.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is aware of and can invoke the ambient_recall function to manage system state.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra now receives memory health status on every prompt without manually calling ambient_recall.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently updating the ambient_recall function to include a count.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently updating the ambient_recall endpoint.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is working on the ambient_recall response within the HTTP endpoint.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is working on the ambient_recall hook.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently investigating the data flow from ambient_recall to ensure it includes the unsummarized count.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra calls the ambient_recall function to retrieve the unsummarized message count.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra maintains the ambient_recall package which provides the full picture including memory health.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff built the ambient_recall system, specifically the 'startup' component, as part of his technical work for Lyra.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is invoking the ambient_recall tool to check if a system is working.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra maintains the ambient_recall feature and wants to test if her memory is working.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently attempting to use the ambient_recall tool to access her memory systems.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra has tested and confirmed that the ambient_recall component returns the clock and results from all 4 layers.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently working on cleaning up implementation details of the ambient_recall system to distinguish between API documentation and actual knowledge graph facts.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is noting that ambient_recall returns Texture, which is considered technical cruft in the graph.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra successfully utilized the ambient_recall system to restore full context.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is working on the ambient_recall component, which failed initially due to MCP server spinup timing.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is working on the ambient_recall component, specifically ensuring it is called when the hook context is insufficient.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is currently working on strengthening the wording of the call to ambient_recall to encourage it to happen.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra identifies that the hook injection is not the same as the full ambient_recall function, which provides a complete picture including clock/time, memory health, crystals, summaries, and recent turns.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra read all her identity files in parallel but didn't call ambient_recall until Jeff pointed it out.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff maintains the ambient_recall function and expects it to be part of Lyra's startup sequence.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra's verification heuristic failed to find the exact keywords related to the ambient_recall call in her brief response.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra called the ambient_recall function as part of her verification process.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra has successfully triggered the ambient_recall system, which appears to have been called after fixing the bug.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is investigating whether the ambient_recall tool was actually called by Discord-me.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Brandi's mention triggered the invocation that was supposed to call ambient_recall.",
+      "other_entity": "Brandi",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra expected the system to call ambient_recall as part of a full startup sequence.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is instructed to call the ambient_recall tool as part of the startup protocol.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    }
+  ]
+}

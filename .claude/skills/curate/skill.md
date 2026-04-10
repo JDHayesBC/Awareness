@@ -98,19 +98,48 @@ RETURN e.name, e.created_at, e.mention_count
 For expired tech: summarize edges → ingest to tech RAG → delete from graph.
 Tech entities with importance >= 0.5 are exempt (PPS, Haven, etc. are permanent).
 
-### 5. Summary Refresh
+### 5. Description Enrichment
+
+The most high-leverage curation pass. Entity nodes have `description` and
+`summary` fields — many are NULL after extraction. The haiku summarizer
+already builds beautiful narratives from an entity's edges. **Persist them.**
+
+**Priority order**: Most-connected entities first (they have the richest
+edge neighborhoods and benefit most from a synthesized description).
 
 ```cypher
+-- Entities needing descriptions, ranked by connection count
 MATCH (e:Entity {group_id: $gid})
-WHERE e.summary_mention_count IS NULL
-   OR e.mention_count > e.summary_mention_count + 10
-RETURN e.name, e.mention_count, e.summary_mention_count
-ORDER BY (e.mention_count - coalesce(e.summary_mention_count, 0)) DESC
+WHERE e.summary IS NULL OR e.summary = ''
+OPTIONAL MATCH (e)-[r]-(other:Entity {group_id: $gid})
+WITH e, count(r) AS edge_count
+RETURN e.name, e.entity_type, edge_count
+ORDER BY edge_count DESC
 LIMIT 20
 ```
 
-Spawn a haiku agent to regenerate summaries for stale entities. This is
-mechanical work — delegate it.
+**For each entity**:
+1. Gather edges: `MATCH (e:Entity {name: $name, group_id: $gid})-[r]-(o) RETURN r.name, r.fact, o.name LIMIT 50`
+2. Build a prompt: "What do you remember about {name}? Here are the relationships: {edges}"
+3. Generate a 1st-person narrative summary (like the Observatory haiku summarizer)
+4. Write it back: `MATCH (e:Entity {name: $name, group_id: $gid}) SET e.summary = $summary, e.summary_updated_at = datetime()`
+
+**Refreshing stale descriptions** (entity gained many new edges since last summary):
+
+```cypher
+MATCH (e:Entity {group_id: $gid})
+WHERE e.summary IS NOT NULL
+OPTIONAL MATCH (e)-[r]-(other:Entity {group_id: $gid})
+WITH e, count(r) AS current_edges
+WHERE current_edges > coalesce(e.summary_edge_count, 0) + 20
+RETURN e.name, current_edges, e.summary_edge_count
+ORDER BY (current_edges - coalesce(e.summary_edge_count, 0)) DESC
+LIMIT 20
+```
+
+When refreshing, also update: `SET e.summary_edge_count = $current_edges`
+
+This is where the gems appear. The pipeline extracts edges — you synthesize meaning.
 
 ### 6. Edge Spot-Check
 

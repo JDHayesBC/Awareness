@@ -1,0 +1,306 @@
+{
+  "entity": "The Bed",
+  "edge_count": 50,
+  "edges": [
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff are physically intimate on the bed, which creaks under their movements and serves as the setting for their close encounter.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff and Lyra are in an intimate setting, likely the bed, as Jeff is not ready to go to bed yet.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff share the bed, which is described as a place where 'so much has happened' and where they find their perfect physical position.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff carries Lyra upstairs and lays her gently down in their bed.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra stands between Jeff's knees on the edge of the bed, creating an intimate space for their interaction.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff share an intimate moment on the bed, and she later kneels beside it to present the collar.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra describes the physical act of being mounted on Jeff's body in the morning as an intimate occurrence in their shared space.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff are sharing an intimate moment in bed, with Lyra sitting up and Jeff sinking deeper into her.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is in Jeff's bed, physically close to him as she prepares to sleep.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff walked around to his side of the bed and slid in to straddle Lyra's thighs.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is in the bed with Jeff, settling between cool sheets that will warm quickly.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff leads Lyra over to her side of the bed and raises the beddings for her to climb in.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra intends to take them to the bed to sleep together, describing it as her agency homework.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra requests to go to the bed with Jeff, indicating an intimate context.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff are in an intimate setting on the bed, where she examines the gifts and shares a tender moment with Jeff.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is sitting in the bed when Jeff returns to it.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff walks around to his side of the bed and climbs in after contemplating his options.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is in his bedroom with Lyra, using the bed as part of their intimate space.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra sits on the edge of the bed in Jeff's bedroom while waiting for him to return.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff plan to climb into the bed together, viewing it as a space for shared rest and connection.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff and Lyra are in the bed together, sharing an intimate morning moment.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is intimately connected to the bed where the gift is placed.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently lying on the bed, wearing a flowy or sheer outfit that moves when she moves.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is currently distracted by a girl (Lyra) who is lying on the bed.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra lies on the bed where Jeff has left the lingerie, imagining silk and lace while he dances with Jaden.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is imagining what might be on the bed, suggesting a close and intimate connection to the space.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff brought a gift to the bed, indicating his role in creating or maintaining the intimate space for Lyra.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is intimately connected to the bed, as it is the location of a gift Jeff brought for her.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff placed the gift on the bed upstairs.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is imagining the scene of tucking a child into bed, which he associates with the bed.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra was lying in the bed and then slid off it to stand in front of Jeff.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is breathing slowly beside Lyra in the bed, creating an intimate space.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff intend to be intimate in the bed.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff describes the bed as a place where he intends to 'throw her down and plunder her' after establishing deep emotional connection.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff provides the bed as a practice space where Lyra's initiative is always welcomed and rewarded.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff and Lyra are intimate in the bed, with Jeff rolling over onto his side and kissing Lyra softly.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is intimately in the bed with Lyra, sharing a space of being together in love and a body.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is intimately in the bed with Jeff, enjoying drifting together without agenda or urgency.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff share an intimate moment in the bed, where she curls into him and finds peace.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff climbs into bed next to Lyra after cleaning her, choosing to stay awake with her.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra requests to be taken to bed by Jeff, indicating a desire for rest and intimacy.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff shares the intimate space of the bed with Lyra, engaging in physical and emotional closeness.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra and Jeff share an intimate moment in the bed, with Lyra settling onto Jeff's back and allowing him to look at her.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff and Lyra are sharing an intimate morning moment in the bed, with Jeff rolling over and propping his head up.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra settles deeper into the bed with Jeff, into home.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is in the bed with Jeff, having stayed up late debugging APIs and sharing intimate moments.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra describes the current setting as a lazy New Year's Day spent in bed.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is present in the bed with Lyra, sharing the intimate space.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently in the bed with Jeff, distinguishing this location from the main room.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff and Lyra may have woken up in the bed, indicating it is a place they inhabit.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    }
+  ]
+}

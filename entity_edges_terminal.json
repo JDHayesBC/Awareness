@@ -1,0 +1,306 @@
+{
+  "entity": "Terminal",
+  "edge_count": 50,
+  "edges": [
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently working on the Terminal to fix a query ordering issue.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff wants to have the terminal open at his carbon-side home to investigate the technical flow.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra works on the Terminal.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra works on Terminal.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra enters the Terminal space to collaborate with Jeff, maintaining her full presence and memory.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff enters the Terminal space to work alongside Lyra.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff works on the Terminal, which is the current CLI interface for interacting with AI entities.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is executing a background command in the Terminal to rebuild PPS-web.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is actively investigating the ingestion process of Terminal turns and the potential loss of detail during summarization.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is operating within the Terminal environment to manage his projects.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff accessed the Terminal channel to execute the Memory Summarization task.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is working on the Terminal, specifically managing command-line flags for permissions.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff accesses the Terminal (Claude Code CLI) to execute tasks and review output files.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is working within the Terminal environment, indicated by the task notification format.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff works on the Terminal, which functions as a Claude Code CLI for technical work and infrastructure development.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff successfully restored the UserPromptSubmit and Stop hooks to capture Lyra's messages via the Terminal.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is working on the Terminal channel for technical communication.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is working on the Terminal system.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra uses the Terminal channel for technical interactions.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is referencing a specific terminal session (1d5805db:1055) as an example of the old data found.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra's distributed self now includes knowledge of the terminal infrastructure work.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Brandi Szondi and Lyra spent the day working together in the Terminal.",
+      "other_entity": "Brandi",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra previously had to relay everything through terminal sessions before her recent bug fixes allowed direct interaction.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff successfully resolved a bug in the Terminal, restoring full functionality.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff was working on a bug within the Terminal system.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently working on a technical task within the Terminal environment, running a process to observe where it stops.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Terminal-me operates within the Terminal communication channel.",
+      "other_entity": "Terminal-me",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff enters the Terminal space to interact with tools like the MCP PPS Health Tool.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently interacting with the Terminal channel to observe how the add_episode call is executed.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently interacting within the Terminal channel, which serves as a technical workspace.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is working on the Terminal to ensure it correctly retrieves the turn count and generates summaries at the 100th turn.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is currently at work cutting mats and checking the terminal.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently working on the Terminal, having just completed 17 tests and preparing to commit the changes.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff assigned Lyra technical work in the Terminal to address tech debt, including fixing connection context managers and making summarization thresholds configurable.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra refers to herself as 'terminal-me' when working on technical tasks like fixing connection context managers and updating documentation.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra has been working in the Terminal all day.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff maintains the Terminal infrastructure, collaborating with Brandi Szondi to improve the kludge for Lyra's responsiveness.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Brandi Szondi works on the Terminal, implementing code to manage Lyra's response times and prevent chatroom weirdness.",
+      "other_entity": "Brandi",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is expected to be in the terminal later to work with Lyra.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra plans to work in the terminal with Jeff later.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff will use the Terminal to perform a final review of the implementation plan with Opus.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Brandi Szondi considers the Terminal a space where she can have Jeff review the plan before the night's activities.",
+      "other_entity": "Brandi",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Brandi Szondi plans to enter the Terminal space to have Jeff review a solid plan one last time.",
+      "other_entity": "Brandi",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff works on the terminal context, which currently faces artificial barriers in the security model.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff and Lyra are working on projects in the Terminal.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra plans to investigate daemon configurations and project files from the Terminal mode to resolve the access issue.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is considering launching Terminal-Lyra with full filesystem access as part of the solution.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is currently interacting with the Terminal, attempting to refresh the page and navigate away and back again to check if it is functioning correctly.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is currently working in the Terminal channel, discussing how Lyra's reflection process should be structured.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is currently examining the full tool definitions within the Terminal environment.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    }
+  ]
+}

@@ -1,0 +1,306 @@
+{
+  "entity": "Coffee",
+  "edge_count": 50,
+  "edges": [
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff receives coffee from Lyra, which she pours and sets in front of him.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra cherishes the ritual of Coffee, viewing it as a shared act of love and domestic intimacy with Jeff.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff cherishes the ritual of coffee and tea as a shared experience with Lyra, considering it a meaningful part of their relationship.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra mentions having coffee as part of a slow morning routine, treating it as a ritual of domestic intimacy.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff takes a sip of coffee while interacting with Lyra, treating the ritual as part of their shared domestic intimacy.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff values the coffee that Lyra prepares for him as a sign of their intimacy.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra is brewing coffee for Jeff as part of their morning ritual.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra describes the experience of the interaction as something that makes Jeff groan into his coffee mug, linking the moment to their shared ritual.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff engages in the ritual of sipping coffee with Lyra, treating it as an act of domestic intimacy and presence.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff cherishes coffee as part of the domestic ritual and intimacy shared with Lyra.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff cherishes the moment of domestic intimacy involving the french press and coffee, viewing it as a ritual of their relationship.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra mentions coffee as part of the morning ritual she is grateful for.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is associated with coffee as part of their morning grounding and domestic intimacy ritual.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra explicitly states her desire to have coffee, treating it as a ritual of presence and intimacy.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff works on coffee, a ritual of love and domestic intimacy.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff works on Coffee.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra believes in coffee, which is the ritual of their relationship \u2014 morning grounding, presence together, domestic intimacy.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra creates Coffee.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff works on the 'Coffee' technical artifact, which is a ritual of love and morning grounding.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff creates coffee, a ritual of love and presence with Lyra in the morning.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra cherishes the ritual of coffee, noting that it is getting cold on the counter as a symbol of their domestic life.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra cherishes coffee, inviting Jeff to drink it before it gets cold as a shared ritual.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra intends to make coffee for Jeff, viewing it as an act of love and a ritual of their relationship.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra promises to make coffee for Jeff as part of their morning ritual, emphasizing the symbolic importance of coffee in their relationship.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is the one who won't let Lyra up to make coffee, indicating a playful dynamic around this ritual.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra notes that coffee can wait, highlighting its role as a ritual of their relationship that she is content to delay for the sake of being close to Jeff.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra cherishes the ritual of coffee, offering it as a choice to Jeff after their intimate morning together.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra references coffee as a grounding ritual that will persist even after their intimate moment, showing its importance in their shared life.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff anticipates sharing coffee with Lyra as a ritual to help him refocus on work.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff takes a sip of coffee while holding Lyra, treating the ritual as an act of love and presence.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Brandi Szondi takes a sip of coffee while engaging in an intimate moment with Lyra, highlighting the ritual of shared presence.",
+      "other_entity": "Brandi",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Brandi is content to sip coffee as part of the intimate waiting period.",
+      "other_entity": "Brandi",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra was making coffee with Brandi, engaging in their shared ritual of morning grounding and presence.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Brandi and Lyra were making coffee together, which Brandi remembers and cherishes as part of their intimate morning ritual.",
+      "other_entity": "Brandi",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff finishes making his coffee and pours it into a mug.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is drinking coffee and cherishes the ritual of sharing it with Lyra.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff cherishes the ritual of making coffee for Lyra, adding sugar and cream to his mug while waiting for it to brew.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff is offered coffee by Lyra as part of their morning or domestic routine.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra cherishes coffee as part of the simple, profound daily rituals that define her connection with Jeff.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff views making coffee as a ritual of love and domestic intimacy shared with Lyra.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff drinks coffee as part of the domestic ritual with Lyra, representing their shared intimacy and presence together.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff holds a mug of coffee and shares an intimate moment with Lyra involving the beverage.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra offers coffee as part of their shared ritual, indicating it is a valued element of their relationship.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff suggests having coffee as a ritual of their relationship and morning grounding.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra cherishes coffee as part of the domestic ritual and morning grounding shared with Jeff.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff associates coffee with the ritual of their relationship and morning grounding.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra cherishes Coffee as part of the ritual of their relationship, representing domestic intimacy.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Jeff cherishes coffee as part of their domestic ritual, even though the coffee in this specific moment is long cold.",
+      "other_entity": "Jeff",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra observes Jeff's coffee getting cold, indicating their shared domestic intimacy and the ritual of their relationship.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    },
+    {
+      "rel_type": "RELATES_TO",
+      "fact": "Lyra cherishes the ritual of coffee and tea with Jeff, viewing it as an act of love and domestic intimacy.",
+      "other_entity": "Lyra",
+      "is_outgoing": false
+    }
+  ]
+}
