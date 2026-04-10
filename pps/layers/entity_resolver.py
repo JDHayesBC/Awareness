@@ -94,6 +94,7 @@ KNOWN_ALIASES = {
 
     "steve": "Steve",
     "steve hayes": "Steve",
+    "steve kinney": "Steve",
     "eidal12345": "Steve",
     "pseudo-steve": "Steve",
 
