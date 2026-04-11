@@ -17,7 +17,6 @@ from typing import Optional
 import requests
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 # Add asyncio for async operations
@@ -169,7 +168,6 @@ class _TemplateCompat:
 
 
 templates = _TemplateCompat(_templates)
-app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 
 def get_db_connection(entity_path: Optional[Path] = None) -> Optional[sqlite3.Connection]:

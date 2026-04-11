@@ -64,6 +64,8 @@ ENTITY_SOURCE_SUFFIXES = {
     "identity":    ("",                       "Identity files",       True),
     "crystals":    ("crystals",               "Crystals",             True),
     "word_photos": ("memories/word_photos",   "Word photos",          True),
+    "journals":    ("journals",               "Journals",             True),
+    "notebook":    ("notebook",               "Notebooks",            True),
 }
 
 

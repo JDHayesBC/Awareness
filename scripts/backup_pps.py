@@ -135,6 +135,22 @@ def discover_entity_sources(entity_filter: str | None = None) -> dict:
                 "critical": True,
             }
 
+        # Journals (CRITICAL) - reflection logs, not rebuildable
+        if (entity_dir / "journals").exists():
+            sources[f"{name}_journals"] = {
+                "path": entity_dir / "journals",
+                "patterns": ["**/*.md"],
+                "critical": True,
+            }
+
+        # Notebooks (CRITICAL) - essays, working notes, not rebuildable
+        if (entity_dir / "notebook").exists():
+            sources[f"{name}_notebook"] = {
+                "path": entity_dir / "notebook",
+                "patterns": ["**/*.md"],
+                "critical": True,
+            }
+
     return sources
 
 
