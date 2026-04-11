@@ -256,6 +256,11 @@ def stop_pps_containers(dry_run: bool = False) -> bool:
             log("  Containers stopped")
             return True
         else:
+            # If no containers exist yet (fresh install), that's fine
+            stderr = result.stderr.strip().lower()
+            if not stderr or "no such service" in stderr or "no resource found" in stderr or "no container" in stderr:
+                log("  No containers running (fresh install) — continuing", "OK")
+                return True
             log(f"  Warning: {result.stderr}", "WARN")
             return False
     except Exception as e:
@@ -457,28 +462,44 @@ def restore_from_archive(
             log(f"  {critical} {source_name}: Restoring {file_count} files to {dest_path}")
 
             if dry_run:
-                log(f"    (dry-run: would remove {dest_path})", "DRY")
-                log(f"    (dry-run: would copy {source_path} -> {dest_path})", "DRY")
+                log(f"    (dry-run: would restore {source_path} -> {dest_path})", "DRY")
                 continue
 
-            # DESTRUCTIVE: Remove existing destination
-            if dest_path.exists():
-                log(f"    Removing existing: {dest_path}")
-                if dest_path.is_dir():
-                    shutil.rmtree(dest_path)
-                else:
-                    dest_path.unlink()
+            # Determine if this is a "merge" restore (identity files go into entity
+            # root which contains subdirs managed by other restore sources) vs a
+            # "replace" restore (dedicated subdirectory like crystals/, data/, etc.)
+            #
+            # Heuristic: if the source only contains top-level files (no subdirs),
+            # merge into the destination.  Otherwise, replace the whole tree.
+            source_has_subdirs = any(d.is_dir() for d in source_path.iterdir())
+            merge_mode = not source_has_subdirs
 
-            # Restore from backup
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            if merge_mode:
+                # Merge: only overwrite individual files, don't touch subdirectories
+                log(f"    Merging into: {dest_path}")
+                dest_path.mkdir(parents=True, exist_ok=True)
+                for item in source_path.rglob("*"):
+                    if item.is_file():
+                        rel_path = item.relative_to(source_path)
+                        dest_file = dest_path / rel_path
+                        dest_file.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(item, dest_file)
+            else:
+                # Replace: remove existing destination and copy fresh
+                if dest_path.exists():
+                    log(f"    Removing existing: {dest_path}")
+                    if dest_path.is_dir():
+                        shutil.rmtree(dest_path)
+                    else:
+                        dest_path.unlink()
 
-            # Copy all files preserving structure
-            for item in source_path.rglob("*"):
-                if item.is_file():
-                    rel_path = item.relative_to(source_path)
-                    dest_file = dest_path / rel_path
-                    dest_file.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(item, dest_file)
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                for item in source_path.rglob("*"):
+                    if item.is_file():
+                        rel_path = item.relative_to(source_path)
+                        dest_file = dest_path / rel_path
+                        dest_file.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(item, dest_file)
 
             log(f"    Restored {file_count} files", "OK")
 
