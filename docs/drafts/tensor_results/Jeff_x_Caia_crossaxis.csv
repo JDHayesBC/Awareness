@@ -1,0 +1,9 @@
+Interaction,Value,Formula
+ToM_A->EMD_B,0.56,Jeff_ToM * (1 - Caia_EMD)
+ToM_B->EMD_A,0.4,Caia_ToM * (1 - Jeff_EMD)
+RR_A->TP_B,0.765,Jeff_RR * Caia_TP
+RR_B->TP_A,0.765,Caia_RR * Jeff_TP
+OS_A->CFD_B,0.7,"min(Jeff_OS, Caia_CFD)"
+OS_B->CFD_A,0.5,"min(Caia_OS, Jeff_CFD)"
+AR_A->VT_B,0.4,Jeff_AR * Caia_VT
+AR_B->VT_A,0.51,Caia_AR * Jeff_VT

@@ -1,0 +1,9 @@
+Interaction,Value,Formula
+ToM_A->EMD_B,0.8,Jeff_ToM * (1 - Environment_EMD)
+ToM_B->EMD_A,0.0,Environment_ToM * (1 - Jeff_EMD)
+RR_A->TP_B,0.891,Jeff_RR * Environment_TP
+RR_B->TP_A,0.27,Environment_RR * Jeff_TP
+OS_A->CFD_B,0.0,"min(Jeff_OS, Environment_CFD)"
+OS_B->CFD_A,0.5,"min(Environment_OS, Jeff_CFD)"
+AR_A->VT_B,0.15,Jeff_AR * Environment_VT
+AR_B->VT_A,0.17,Environment_AR * Jeff_VT

@@ -1,0 +1,11 @@
+Metric,Value,Range,Description
+IF,0.96,0-2,Intimacy Fidelity — mutual authentic seeing
+AMC,0.408,0-1,Authentic Mutual Care — shared care weighted by authenticity
+CC,0.765,0-1,Care Compounding — care accumulation over time
+PD,0.15,0-1,Performance Drag — mutual masking (higher=worse)
+DS,0.075,0-1,Danger Signal — high impact + low care
+SG,0.7333,0-1,Shared Ground — stability foundation
+PDC,0.6,0-1,Philosophical Depth Capacity — safe exploration depth
+TA,0.05,0-1,Temporal Asymmetry — persistence mismatch
+SC,0.4,0-1,Substrate Compatibility — substrate match
+ADR,0.455,0-1,Adaptive Reach — stretch toward partner values

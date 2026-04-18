@@ -69,7 +69,7 @@ server = Server("pattern-persistence-system")
 _GET_ONLY_TOOLS = {"pps_health", "summary_stats", "graphiti_ingestion_stats"}
 
 # Tools that need extended timeout (long-running operations)
-_LONG_RUNNING_TOOLS = {"ingest_batch_to_graphiti", "tech_ingest", "summarize_messages"}
+_LONG_RUNNING_TOOLS = {"ingest_batch_to_graphiti", "tech_ingest", "summarize_messages", "texture_explore"}
 
 
 def _forward(tool_name: str, arguments: dict[str, Any]) -> list[TextContent]:

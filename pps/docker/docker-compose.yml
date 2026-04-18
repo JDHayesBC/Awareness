@@ -140,6 +140,8 @@ services:
       - RAG_ENGINE_URL=http://rag-engine:8000
       # Use custom graph layer (CustomGraphLayer / Neo4j direct) instead of Graphiti
       - USE_CUSTOM_GRAPH=${USE_CUSTOM_GRAPH:-false}
+      # Number of uvicorn workers (default 3 — handles concurrent requests)
+      - PPS_WORKERS=${PPS_WORKERS:-3}
     volumes:
       # Mount entity directory (identity files, crystals, word-photos, AND databases)
       - ${ENTITY_PATH}:/app/entity:rw
@@ -198,6 +200,8 @@ services:
       - RAG_ENGINE_URL=http://rag-engine:8000
       # Use custom graph layer (CustomGraphLayer / Neo4j direct) instead of Graphiti
       - USE_CUSTOM_GRAPH=${USE_CUSTOM_GRAPH:-false}
+      # Number of uvicorn workers (default 3 — handles concurrent requests)
+      - PPS_WORKERS=${PPS_WORKERS:-3}
     volumes:
       # Mount Caia's entity directory (CAIA_ENTITY_PATH must be set in .env)
       - ${CAIA_ENTITY_PATH}:/app/entity:rw

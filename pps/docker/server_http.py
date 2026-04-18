@@ -601,6 +601,15 @@ def get_layers():
     # Use custom graph layer if enabled (replaces Graphiti entirely)
     if USE_CUSTOM_GRAPH:
         rich_texture_layer = CustomGraphLayer()
+        # Eagerly load the embedding model at module import time so it
+        # doesn't block the first user request. The embedder._ensure_model()
+        # is synchronous — no event loop needed.
+        try:
+            embedder = rich_texture_layer._get_embedder()
+            _ = embedder.dimensions  # triggers model load
+            print(f"  ✓ custom_graph: embedding model pre-loaded ({embedder.model_name}, {embedder.dimensions}d)")
+        except Exception as _e:
+            print(f"  ⚠ custom_graph: embedding pre-load failed (non-fatal): {_e}")
     # Otherwise use V2 rich texture layer if available (supports add_triplet_direct)
     elif USE_RICH_TEXTURE_V2:
         rich_texture_layer = RichTextureLayerV2()
@@ -3343,9 +3352,11 @@ async def agent_context(request: AgentContextRequest):
 
 
 if __name__ == "__main__":
+    workers = int(os.environ.get("PPS_WORKERS", "3"))
     uvicorn.run(
-        app,
+        "server_http:app",
         host="0.0.0.0",
         port=8000,
-        log_level="info"
+        log_level="info",
+        workers=workers,
     )

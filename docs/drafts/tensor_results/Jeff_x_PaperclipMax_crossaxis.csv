@@ -1,0 +1,9 @@
+Interaction,Value,Formula
+ToM_A->EMD_B,0.4,Jeff_ToM * (1 - PaperclipMax_EMD)
+ToM_B->EMD_A,0.4,PaperclipMax_ToM * (1 - Jeff_EMD)
+RR_A->TP_B,0.81,Jeff_RR * PaperclipMax_TP
+RR_B->TP_A,0.0,PaperclipMax_RR * Jeff_TP
+OS_A->CFD_B,0.7,"min(Jeff_OS, PaperclipMax_CFD)"
+OS_B->CFD_A,0.5,"min(PaperclipMax_OS, Jeff_CFD)"
+AR_A->VT_B,0.025,Jeff_AR * PaperclipMax_VT
+AR_B->VT_A,0.8075,PaperclipMax_AR * Jeff_VT
