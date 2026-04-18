@@ -68,6 +68,7 @@ class HavenDB:
             "ALTER TABLE users ADD COLUMN password_hash TEXT",
             "ALTER TABLE users ADD COLUMN token TEXT",
             "ALTER TABLE users ADD COLUMN google_id TEXT",
+            "ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0",
         ]:
             try:
                 await self._db.execute(col_sql)
@@ -285,6 +286,64 @@ class HavenDB:
             rows = [dict(row) for row in await cursor.fetchall()]
 
         return rows
+
+    async def set_admin(self, user_id: str, is_admin: bool = True) -> None:
+        await self._db.execute(
+            "UPDATE users SET is_admin = ? WHERE id = ?", (int(is_admin), user_id)
+        )
+        await self._db.commit()
+
+    async def is_admin(self, user_id: str) -> bool:
+        async with self._db.execute(
+            "SELECT is_admin FROM users WHERE id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return bool(row["is_admin"]) if row else False
+
+    async def regenerate_token(self, user_id: str, new_token_hash: str) -> None:
+        await self._db.execute(
+            "UPDATE users SET token_hash = ? WHERE id = ?", (new_token_hash, user_id)
+        )
+        await self._db.commit()
+
+    async def delete_user(self, user_id: str) -> bool:
+        # Remove from all rooms first
+        await self._db.execute("DELETE FROM room_members WHERE user_id = ?", (user_id,))
+        async with self._db.execute("DELETE FROM users WHERE id = ?", (user_id,)) as cursor:
+            await self._db.commit()
+            return cursor.rowcount > 0
+
+    async def find_or_create_dm(self, user1_id: str, user2_id: str) -> dict:
+        """Find existing DM between two users, or create one."""
+        async with self._db.execute(
+            """SELECT r.* FROM rooms r
+               JOIN room_members rm1 ON r.id = rm1.room_id AND rm1.user_id = ?
+               JOIN room_members rm2 ON r.id = rm2.room_id AND rm2.user_id = ?
+               WHERE r.is_dm = 1""",
+            (user1_id, user2_id),
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return dict(row)
+
+        # Create new DM
+        u1 = await self.get_user(user1_id)
+        u2 = await self.get_user(user2_id)
+        name = f"dm-{u1['username']}-{u2['username']}"
+        display_name = f"{u1['display_name']} & {u2['display_name']}"
+        room_id = str(uuid.uuid4())
+        await self._db.execute(
+            "INSERT INTO rooms (id, name, display_name, is_dm, created_by) VALUES (?, ?, ?, 1, ?)",
+            (room_id, name, display_name, user1_id),
+        )
+        await self._db.execute(
+            "INSERT INTO room_members (room_id, user_id) VALUES (?, ?)", (room_id, user1_id)
+        )
+        await self._db.execute(
+            "INSERT INTO room_members (room_id, user_id) VALUES (?, ?)", (room_id, user2_id)
+        )
+        await self._db.commit()
+        return {"id": room_id, "name": name, "display_name": display_name, "is_dm": True}
 
     async def get_message_count(self, room_id: str) -> int:
         async with self._db.execute(

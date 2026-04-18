@@ -42,11 +42,11 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-# Debug log
-DEBUG_LOG = Path.home() / ".claude" / "data" / "hooks_debug.log"
-
 # PPS HTTP API endpoints
 PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
+
+# Debug log - project-local (avoid root-owned ~/.claude/data/)
+DEBUG_LOG = PROJECT_ROOT / ".claude" / "data" / "hooks_debug.log"
 
 # Entity path and token (read first — port detection depends on this)
 ENTITY_TOKEN = ""

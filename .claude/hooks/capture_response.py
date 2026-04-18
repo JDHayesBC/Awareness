@@ -22,8 +22,9 @@ import urllib.error
 from datetime import datetime
 from pathlib import Path
 
-# Debug log
-DEBUG_LOG = Path.home() / ".claude" / "data" / "hooks_debug.log"
+# Debug log - project-local (avoid root-owned ~/.claude/data/)
+PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
+DEBUG_LOG = PROJECT_ROOT / ".claude" / "data" / "hooks_debug.log"
 
 # Entity-aware port detection (Issue #162)
 # Derive PPS port from ENTITY_PATH env var so Caia sessions route to port 8211
@@ -37,7 +38,7 @@ ENTITY_DISPLAY_NAME = _detected_entity.capitalize()  # "Lyra" or "Caia"
 PPS_STORE_URL = f"http://localhost:{PPS_PORT}/tools/store_message"
 
 # Track what we've already captured (simple state file)
-CAPTURE_STATE_FILE = Path.home() / ".claude" / "data" / "capture_state.json"
+CAPTURE_STATE_FILE = PROJECT_ROOT / ".claude" / "data" / "capture_state.json"
 
 
 def debug(msg: str):

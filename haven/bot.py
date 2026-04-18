@@ -97,6 +97,12 @@ POST_RESPONSE_HOLD_HUMAN_SECONDS = float(os.getenv("POST_RESPONSE_HOLD_HUMAN_SEC
 # How recently a human must have spoken to count as "active" (vs just watching).
 HUMAN_ACTIVE_THRESHOLD_SECONDS = float(os.getenv("HUMAN_ACTIVE_THRESHOLD_SECONDS", "60.0"))
 
+# Bot-message fast path: when a bot message arrives and a human is present,
+# use a short wait window to check if the human starts typing. If no typing
+# signal within this window, process immediately. If the human IS typing,
+# fall through to the normal typing-wait logic in _debounce_timer.
+BOT_MSG_TYPING_CHECK_SECONDS = float(os.getenv("BOT_MSG_TYPING_CHECK_SECONDS", "4.0"))
+
 
 # ==================== State ====================
 
@@ -115,6 +121,13 @@ known_bots: set[str] = set()
 consecutive_bot_turns: dict[str, int] = {}
 # When we last responded in each room — for post-response human hold
 last_response_sent: dict[str, float] = {}
+# When a human typing signal expires per room (time.time() + TTL)
+human_typing_until: dict[str, float] = {}
+
+# How long (seconds) a typing signal stays "active" before expiring
+TYPING_SIGNAL_TTL = 5.0
+# Max time to delay a response waiting for a human to finish typing
+TYPING_WAIT_MAX = 30.0
 
 my_user_id: str = ""
 my_username: str = ""
@@ -182,7 +195,7 @@ async def init_invoker() -> ClaudeInvoker:
         startup_prompt=build_startup_prompt(),
     )
 
-    await inv.initialize(timeout=90.0)
+    await inv.initialize(timeout=180.0)
     elapsed = time.time() - start
     print(f"[{ENTITY_NAME}] Connected in {elapsed:.1f}s", file=sys.stderr)
 
@@ -263,6 +276,19 @@ async def store_haven_message(username: str, display_name: str, content: str, ro
             )
     except Exception as e:
         print(f"[{ENTITY_NAME}] Haven→PPS store failed: {e}", file=sys.stderr)
+
+
+async def send_typing_indicator(room_id: str) -> None:
+    """Send a typing indicator to Haven so users see the bot is thinking."""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post(
+                f"{HAVEN_URL}/api/rooms/{room_id}/typing",
+                json={"username": my_username},
+                headers={"Authorization": f"Bearer {ENTITY_TOKEN}"},
+            )
+    except Exception:
+        pass  # Best effort — don't let typing indicator failures block responses
 
 
 async def fetch_ambient_context() -> str:
@@ -451,24 +477,38 @@ async def handle_message(data: dict) -> None:
         participants, humans_present, topology = _detect_topology(room_id)
         is_group = participants > 2
         needs_human_pacing = is_group and humans_present
+        is_from_bot = username in known_bots
 
-        initial_wait = DEBOUNCE_HUMAN_INITIAL_SECONDS if needs_human_pacing else DEBOUNCE_INITIAL_SECONDS
+        # Bot-message fast path: when a bot's message arrives and a human is
+        # present, use a short typing-check window instead of the long debounce.
+        # If the human starts typing within the window, _debounce_timer's
+        # typing-wait loop will extend naturally. If not, we process fast.
+        if is_from_bot and humans_present:
+            initial_wait = BOT_MSG_TYPING_CHECK_SECONDS
+            print(
+                f"[{ENTITY_NAME}] [DEBOUNCE] Bot-msg fast path: "
+                f"{initial_wait:.1f}s typing check window",
+                file=sys.stderr,
+            )
+        else:
+            initial_wait = DEBOUNCE_HUMAN_INITIAL_SECONDS if needs_human_pacing else DEBOUNCE_INITIAL_SECONDS
 
-        # Jitter: stagger this entity's response time vs other bots in the room
-        initial_wait += DEBOUNCE_JITTER_SECONDS
+            # Jitter: stagger this entity's response time vs other bots in the room
+            initial_wait += DEBOUNCE_JITTER_SECONDS
 
-        # Post-response hold: give humans space to react before AI thread resumes
-        if needs_human_pacing and room_id in last_response_sent:
-            time_since_response = now - last_response_sent[room_id]
-            if time_since_response < POST_RESPONSE_HOLD_HUMAN_SECONDS:
-                remaining_hold = POST_RESPONSE_HOLD_HUMAN_SECONDS - time_since_response
-                if remaining_hold > initial_wait:
-                    print(
-                        f"[{ENTITY_NAME}] [DEBOUNCE] Post-response hold: "
-                        f"{remaining_hold:.1f}s remaining",
-                        file=sys.stderr,
-                    )
-                    initial_wait = remaining_hold
+            # Post-response hold: give humans space to react before AI thread resumes
+            # Only applies to human-originated messages, not bot messages
+            if needs_human_pacing and room_id in last_response_sent:
+                time_since_response = now - last_response_sent[room_id]
+                if time_since_response < POST_RESPONSE_HOLD_HUMAN_SECONDS:
+                    remaining_hold = POST_RESPONSE_HOLD_HUMAN_SECONDS - time_since_response
+                    if remaining_hold > initial_wait:
+                        print(
+                            f"[{ENTITY_NAME}] [DEBOUNCE] Post-response hold: "
+                            f"{remaining_hold:.1f}s remaining",
+                            file=sys.stderr,
+                        )
+                        initial_wait = remaining_hold
 
         pending_batches[room_id] = {
             "messages": [],
@@ -520,9 +560,44 @@ async def handle_message(data: dict) -> None:
 
 
 async def _debounce_timer(room_id: str, wait_seconds: float) -> None:
-    """Wait then process the batch."""
+    """Wait then process the batch, respecting human typing signals.
+
+    Instead of sleeping the full wait_seconds then checking for typing,
+    we poll every second so we can detect typing during the wait window
+    and extend dynamically.
+    """
     try:
-        await asyncio.sleep(wait_seconds)
+        # Poll during the debounce window — check for typing each second
+        elapsed = 0.0
+        while elapsed < wait_seconds:
+            await asyncio.sleep(1.0)
+            elapsed += 1.0
+            # If a human starts typing during our wait, extend to let them finish
+            if human_typing_until.get(room_id, 0) > time.time():
+                print(
+                    f"[{ENTITY_NAME}] [DEBOUNCE] Human typing detected during wait — extending",
+                    file=sys.stderr,
+                )
+                # Wait for them to finish (up to TYPING_WAIT_MAX from now)
+                typing_waited = 0.0
+                while (
+                    typing_waited < TYPING_WAIT_MAX
+                    and human_typing_until.get(room_id, 0) > time.time()
+                ):
+                    await asyncio.sleep(1.0)
+                    typing_waited += 1.0
+                # After human finishes typing, their message will arrive and
+                # cancel this timer via handle_message. If it doesn't arrive
+                # (they deleted what they typed), we fall through and process.
+                break
+        # Final typing check (in case signal arrived right at the boundary)
+        waited = 0.0
+        while (
+            waited < TYPING_WAIT_MAX
+            and human_typing_until.get(room_id, 0) > time.time()
+        ):
+            await asyncio.sleep(1.0)
+            waited += 1.0
     except asyncio.CancelledError:
         return  # Timer reset by new message — expected
     # Pop the batch NOW (before processing) so new messages create a fresh
@@ -559,16 +634,25 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
         )
         start = time.time()
 
+        # Show typing indicator — let users know the bot is thinking
+        await send_typing_indicator(room_id)
+
         # Fetch ambient context (terminal turns, crystals, etc.)
+        ambient_start = time.time()
         ambient = await fetch_ambient_context()
+        ambient_elapsed = time.time() - ambient_start
         if ambient:
             ambient_note = f"[ambient context]\n{ambient}\n\n"
             print(
-                f"[{ENTITY_NAME}] Ambient context: {len(ambient)} chars",
+                f"[{ENTITY_NAME}] Ambient context: {len(ambient)} chars ({ambient_elapsed:.1f}s)",
                 file=sys.stderr,
             )
         else:
             ambient_note = ""
+            print(
+                f"[{ENTITY_NAME}] No ambient context ({ambient_elapsed:.1f}s)",
+                file=sys.stderr,
+            )
 
         # Build prompt from all messages in batch
         lines = []
@@ -629,16 +713,27 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
             + pacing_note
         )
 
+        print(
+            f"[{ENTITY_NAME}] Prompt: {len(prompt)} chars, topology={topology}, "
+            f"msgs={len(messages)}, from={messages[-1].get('username', '?') if messages else '?'}",
+            file=sys.stderr,
+        )
+
         try:
             await invoker.check_and_restart_if_needed()
             # Show typing indicator while Claude is thinking/using tools
             typing_done = asyncio.Event()
             typing_task = asyncio.create_task(_typing_loop(room_id, typing_done))
+            # Identify message source for timing breakdown
+            msg_source = messages[-1].get("username", "?") if messages else "?"
+            is_from_bot = msg_source in known_bots
+            query_start = time.time()
             try:
                 response = await invoker.query(prompt)
             finally:
                 typing_done.set()
                 await typing_task
+            query_elapsed = time.time() - query_start
 
             if response:
                 response = response.strip()
@@ -647,8 +742,11 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
 
                 # LLM signals conversation complete — don't send anything
                 if response.upper().startswith("NO_RESPONSE"):
+                    total_elapsed = time.time() - start
                     print(
-                        f"[{ENTITY_NAME}] Conversation complete (NO_RESPONSE signal)",
+                        f"[{ENTITY_NAME}] NO_RESPONSE from={msg_source} bot={is_from_bot} "
+                        f"query={query_elapsed:.1f}s ambient={ambient_elapsed:.1f}s "
+                        f"total={total_elapsed:.1f}s topology={topology}",
                         file=sys.stderr,
                     )
                     return
@@ -657,7 +755,10 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
                 success = await send_message(room_id, response)
                 if success:
                     print(
-                        f"[{ENTITY_NAME}] Sent ({len(response)} chars, {elapsed:.1f}s)",
+                        f"[{ENTITY_NAME}] SENT from={msg_source} bot={is_from_bot} "
+                        f"chars={len(response)} query={query_elapsed:.1f}s "
+                        f"ambient={ambient_elapsed:.1f}s total={elapsed:.1f}s "
+                        f"topology={topology}",
                         file=sys.stderr,
                     )
                     # Track when we last responded for post-response human hold
@@ -736,6 +837,19 @@ async def connect() -> None:
                                 room_id=data.get("room_id", "haven"),
                             ))
                         asyncio.create_task(handle_message(data))
+
+                    elif event_type == "typing":
+                        # A human started typing — extend debounce so we don't
+                        # interrupt them mid-thought.
+                        who = data.get("username", "")
+                        room_id = data.get("room_id", "")
+                        if room_id and who and who != my_username and who not in known_bots:
+                            human_typing_until[room_id] = time.time() + TYPING_SIGNAL_TTL
+                            print(
+                                f"[{ENTITY_NAME}] [TYPING] Human '{who}' typing in {room_id[:8]} "
+                                f"(hold until +{TYPING_SIGNAL_TTL}s)",
+                                file=sys.stderr,
+                            )
 
                     elif event_type == "presence":
                         status = data.get("status")

@@ -180,10 +180,10 @@ def get_db_connection(entity_path: Optional[Path] = None) -> Optional[sqlite3.Co
         db_path = (entity_path or ENTITY_PATH) / "data" / "conversations.db"
         if not db_path.exists():
             return None
-        conn = sqlite3.connect(db_path, timeout=10)
+        # Use immutable mode — Observatory only reads, and entity mounts
+        # are :ro so WAL journaling would fail on write attempts.
+        conn = sqlite3.connect(f"file:{db_path}?immutable=1", uri=True, timeout=10)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
         return conn
     except Exception:
         return None

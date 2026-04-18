@@ -171,8 +171,7 @@ async def health():
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse("chat.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "chat.html", {
         "google_enabled": bool(GOOGLE_CLIENT_ID),
     })
 
@@ -532,6 +531,163 @@ async def leave_room_endpoint(room_id: str, request: Request):
     return {"left": left, "room_id": room_id}
 
 
+# --- DM shortcut ---
+
+@app.post("/api/dm/{username}")
+async def start_dm(request: Request, username: str):
+    """Find or create a DM with the specified user."""
+    user_id = await get_current_user_id(request, db)
+    target = await db.get_user_by_username(username)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target["id"] == user_id:
+        raise HTTPException(status_code=400, detail="Cannot DM yourself")
+
+    room = await db.find_or_create_dm(user_id, target["id"])
+    return room
+
+
+# --- Admin endpoints ---
+
+async def require_admin(request: Request) -> str:
+    """Verify the requester is an admin. Returns user_id."""
+    user_id = await get_current_user_id(request, db)
+    if not await db.is_admin(user_id):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user_id
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    """Serve the admin console. Auth checked client-side via API calls."""
+    return templates.TemplateResponse(request, "admin.html", {})
+
+
+@app.get("/api/admin/users")
+async def admin_list_users(request: Request):
+    """List all users with full details (admin only)."""
+    await require_admin(request)
+    users = await db.list_users()
+    return {
+        "users": [
+            {
+                "id": u["id"],
+                "username": u["username"],
+                "display_name": u["display_name"],
+                "is_bot": bool(u["is_bot"]),
+                "is_admin": bool(u.get("is_admin", 0)),
+                "online": manager.is_online(u["id"]),
+                "created_at": u.get("created_at", ""),
+                "last_seen_at": u.get("last_seen_at", ""),
+            }
+            for u in users
+        ]
+    }
+
+
+@app.post("/api/admin/users")
+async def admin_create_user(request: Request):
+    """Create a new user account (admin only). Returns the plaintext token."""
+    await require_admin(request)
+    body = await request.json()
+    username = body.get("username", "").strip().lower()
+    display_name = body.get("display_name", "").strip()
+    is_bot = body.get("is_bot", False)
+
+    if not username or not display_name:
+        raise HTTPException(status_code=400, detail="username and display_name required")
+
+    # Check if username exists
+    existing = await db.get_user_by_username(username)
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Username '{username}' already exists")
+
+    # Generate token
+    token = secrets.token_urlsafe(32)
+    token_h = hash_token(token)
+
+    user = await db.create_user(username, display_name, token_h, is_bot=is_bot)
+
+    # Store plaintext token for admin visibility
+    await db.set_user_token(user["id"], token)
+
+    return {**user, "token": token}
+
+
+@app.post("/api/admin/users/{user_id}/token")
+async def admin_regenerate_token(request: Request, user_id: str):
+    """Regenerate a user's token (admin only). Returns new plaintext token."""
+    await require_admin(request)
+    user = await db.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    token = secrets.token_urlsafe(32)
+    token_h = hash_token(token)
+    await db.regenerate_token(user_id, token_h)
+    await db.set_user_token(user_id, token)
+
+    return {"user_id": user_id, "token": token}
+
+
+@app.delete("/api/admin/users/{user_id}")
+async def admin_delete_user(request: Request, user_id: str):
+    """Delete a user (admin only)."""
+    admin_id = await require_admin(request)
+    if user_id == admin_id:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+
+    deleted = await db.delete_user(user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {"deleted": True, "user_id": user_id}
+
+
+@app.post("/api/admin/users/{user_id}/password")
+async def admin_reset_password(request: Request, user_id: str):
+    """Reset a user's password (admin only)."""
+    await require_admin(request)
+    body = await request.json()
+    password = body.get("password", "")
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    user = await db.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    pw_hash = hash_password(password)
+    await db.set_user_password(user_id, pw_hash)
+    return {"user_id": user_id, "password_reset": True}
+
+
+@app.post("/api/admin/users/{user_id}/admin")
+async def admin_toggle_admin(request: Request, user_id: str):
+    """Toggle admin status for a user (admin only)."""
+    admin_id = await require_admin(request)
+    body = await request.json()
+    is_admin = body.get("is_admin", False)
+
+    user = await db.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    await db.set_admin(user_id, is_admin)
+    return {"user_id": user_id, "is_admin": is_admin}
+
+
+@app.get("/api/admin/rooms")
+async def admin_list_rooms(request: Request):
+    """List all rooms (admin only)."""
+    await require_admin(request)
+    async with db._db.execute(
+        "SELECT r.*, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id ORDER BY r.name"
+    ) as cursor:
+        rooms = [dict(row) for row in await cursor.fetchall()]
+    return {"rooms": rooms}
+
+
 # --- WebSocket (browser clients) ---
 
 @app.websocket("/ws")
@@ -559,6 +715,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = ""):
                 "id": user["id"],
                 "username": user["username"],
                 "display_name": user["display_name"],
+                "is_admin": bool(user.get("is_admin", 0)),
             },
             "rooms": [
                 {

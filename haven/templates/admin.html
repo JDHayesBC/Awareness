@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Haven Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/haven.css">
+</head>
+<body class="h-full bg-gray-900 text-gray-100">
+    <div class="max-w-4xl mx-auto p-6">
+        <div class="flex justify-between items-center mb-8">
+            <div>
+                <h1 class="text-2xl font-bold text-white">Haven Admin</h1>
+                <p class="text-gray-400 text-sm">Manage users, rooms, and tokens</p>
+            </div>
+            <a href="/" class="text-indigo-400 hover:text-indigo-300 text-sm">&larr; Back to Chat</a>
+        </div>
+
+        <!-- Create User -->
+        <div class="bg-gray-800 rounded-lg p-5 mb-6 border border-gray-700">
+            <h2 class="text-lg font-semibold mb-4 text-white">Create User</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                <input id="new-username" type="text" placeholder="Username (lowercase)"
+                    class="bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:border-indigo-500 focus:outline-none">
+                <input id="new-display-name" type="text" placeholder="Display Name"
+                    class="bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:border-indigo-500 focus:outline-none">
+                <div class="flex gap-3 items-center">
+                    <label class="flex items-center gap-2 text-sm text-gray-300">
+                        <input id="new-is-bot" type="checkbox" class="rounded">
+                        Bot account
+                    </label>
+                    <button id="create-user-btn" onclick="createUser()"
+                        class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded text-sm font-medium transition-colors">
+                        Create
+                    </button>
+                </div>
+            </div>
+            <div id="create-result" class="text-sm mt-2 hidden"></div>
+        </div>
+
+        <!-- Users List -->
+        <div class="bg-gray-800 rounded-lg p-5 mb-6 border border-gray-700">
+            <h2 class="text-lg font-semibold mb-4 text-white">Users</h2>
+            <div id="users-list" class="space-y-2">
+                <p class="text-gray-500">Loading...</p>
+            </div>
+        </div>
+
+        <!-- Rooms List -->
+        <div class="bg-gray-800 rounded-lg p-5 mb-6 border border-gray-700">
+            <h2 class="text-lg font-semibold mb-4 text-white">Rooms</h2>
+            <div id="rooms-list" class="space-y-2">
+                <p class="text-gray-500">Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const token = localStorage.getItem('haven_token');
+    if (!token) {
+        location.href = '/';
+    }
+
+    const headers = {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+    };
+
+    async function loadUsers() {
+        try {
+            const resp = await fetch('/api/admin/users', { headers });
+            if (resp.status === 403) {
+                document.body.innerHTML = '<div class="flex items-center justify-center h-full"><p class="text-red-400 text-lg">Admin access required</p></div>';
+                return;
+            }
+            const data = await resp.json();
+            const el = document.getElementById('users-list');
+            if (!data.users.length) {
+                el.innerHTML = '<p class="text-gray-500">No users</p>';
+                return;
+            }
+            el.innerHTML = data.users.map(u => `
+                <div class="flex items-center justify-between p-3 bg-gray-750 rounded border border-gray-700 hover:border-gray-600 transition-colors" style="background: rgb(42, 45, 52);">
+                    <div class="flex items-center gap-3">
+                        <span class="w-2 h-2 rounded-full ${u.online ? 'bg-green-400' : 'bg-gray-600'}"></span>
+                        <div>
+                            <span class="font-medium text-white">${esc(u.display_name)}</span>
+                            <span class="text-gray-400 text-sm ml-2">@${esc(u.username)}</span>
+                            ${u.is_bot ? '<span class="text-xs bg-indigo-900 text-indigo-300 px-1.5 py-0.5 rounded ml-2">BOT</span>' : ''}
+                            ${u.is_admin ? '<span class="text-xs bg-amber-900 text-amber-300 px-1.5 py-0.5 rounded ml-2">ADMIN</span>' : ''}
+                        </div>
+                    </div>
+                    <div class="flex gap-2">
+                        ${u.is_bot ? `<button onclick="regenToken('${u.id}', '${esc(u.username)}')"
+                            class="text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 px-2 py-1 rounded transition-colors">
+                            New Token
+                        </button>` : `<button onclick="resetPassword('${u.id}', '${esc(u.username)}')"
+                            class="text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 px-2 py-1 rounded transition-colors">
+                            Reset Password
+                        </button>`}
+                        ${!u.is_admin ? `<button onclick="deleteUser('${u.id}', '${esc(u.username)}')"
+                            class="text-xs bg-red-900/50 hover:bg-red-800 text-red-300 px-2 py-1 rounded transition-colors">
+                            Delete
+                        </button>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        } catch (e) {
+            document.getElementById('users-list').innerHTML = `<p class="text-red-400">Error: ${e.message}</p>`;
+        }
+    }
+
+    async function loadRooms() {
+        try {
+            const resp = await fetch('/api/admin/rooms', { headers });
+            const data = await resp.json();
+            const el = document.getElementById('rooms-list');
+            if (!data.rooms.length) {
+                el.innerHTML = '<p class="text-gray-500">No rooms</p>';
+                return;
+            }
+            el.innerHTML = data.rooms.map(r => `
+                <div class="flex items-center justify-between p-3 rounded border border-gray-700" style="background: rgb(42, 45, 52);">
+                    <div>
+                        <span class="font-medium text-white">${esc(r.display_name)}</span>
+                        <span class="text-gray-400 text-sm ml-2">#${esc(r.name)}</span>
+                        ${r.is_dm ? '<span class="text-xs bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded ml-2">DM</span>' : ''}
+                    </div>
+                    <span class="text-gray-400 text-sm">${r.member_count} members</span>
+                </div>
+            `).join('');
+        } catch (e) {
+            document.getElementById('rooms-list').innerHTML = `<p class="text-red-400">Error: ${e.message}</p>`;
+        }
+    }
+
+    async function createUser() {
+        const username = document.getElementById('new-username').value.trim().toLowerCase();
+        const display_name = document.getElementById('new-display-name').value.trim();
+        const is_bot = document.getElementById('new-is-bot').checked;
+        const result = document.getElementById('create-result');
+
+        if (!username || !display_name) {
+            result.className = 'text-sm mt-2 text-red-400';
+            result.textContent = 'Username and display name required';
+            return;
+        }
+
+        try {
+            const resp = await fetch('/api/admin/users', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ username, display_name, is_bot })
+            });
+            const data = await resp.json();
+            if (!resp.ok) {
+                result.className = 'text-sm mt-2 text-red-400';
+                result.textContent = data.detail || 'Error creating user';
+                return;
+            }
+            result.className = 'text-sm mt-2 text-green-400';
+            result.innerHTML = `Created <strong>${esc(data.display_name)}</strong>. Token: <code class="bg-gray-700 px-2 py-0.5 rounded text-amber-300 select-all">${esc(data.token)}</code>`;
+            document.getElementById('new-username').value = '';
+            document.getElementById('new-display-name').value = '';
+            document.getElementById('new-is-bot').checked = false;
+            loadUsers();
+        } catch (e) {
+            result.className = 'text-sm mt-2 text-red-400';
+            result.textContent = `Error: ${e.message}`;
+        }
+    }
+
+    async function regenToken(userId, username) {
+        if (!confirm(`Regenerate token for @${username}? The old token will stop working.`)) return;
+        try {
+            const resp = await fetch(`/api/admin/users/${userId}/token`, { method: 'POST', headers });
+            const data = await resp.json();
+            if (!resp.ok) {
+                alert(data.detail || 'Error');
+                return;
+            }
+            alert(`New token for @${username}:\n\n${data.token}\n\nSave this — it won't be shown again.`);
+        } catch (e) {
+            alert(`Error: ${e.message}`);
+        }
+    }
+
+    async function deleteUser(userId, username) {
+        if (!confirm(`Delete @${username}? This removes them from all rooms and cannot be undone.`)) return;
+        try {
+            const resp = await fetch(`/api/admin/users/${userId}`, { method: 'DELETE', headers });
+            if (resp.ok) {
+                loadUsers();
+            } else {
+                const data = await resp.json();
+                alert(data.detail || 'Error');
+            }
+        } catch (e) {
+            alert(`Error: ${e.message}`);
+        }
+    }
+
+    async function resetPassword(userId, username) {
+        const newPw = prompt(`Set new password for @${username} (min 8 characters):`);
+        if (!newPw || newPw.length < 8) {
+            if (newPw) alert('Password must be at least 8 characters');
+            return;
+        }
+        try {
+            const resp = await fetch(`/api/admin/users/${userId}/password`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ password: newPw })
+            });
+            if (resp.ok) {
+                alert(`Password updated for @${username}`);
+            } else {
+                const data = await resp.json();
+                alert(data.detail || 'Error');
+            }
+        } catch (e) {
+            alert(`Error: ${e.message}`);
+        }
+    }
+
+    function esc(s) {
+        const d = document.createElement('div');
+        d.textContent = s || '';
+        return d.innerHTML;
+    }
+
+    // Load on page ready
+    loadUsers();
+    loadRooms();
+    </script>
+</body>
+</html>

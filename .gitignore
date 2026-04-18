@@ -92,3 +92,7 @@ spicy/
 
 # PPS runtime state (health checks, etc.)
 pps/docker/data/
+.playwright-mcp/
+.claude/data/
+pps/docker/google-chrome-stable_current_amd64.deb
+.claude/settings.local.json

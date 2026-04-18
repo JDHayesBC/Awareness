@@ -55,6 +55,11 @@ SHARED_DESTINATIONS = {
         "critical": False,
         "description": "Neo4j graph database (Graphiti)",
     },
+    "haven": {
+        "path": PROJECT_ROOT / "haven" / "data",
+        "critical": True,
+        "description": "Haven chat and email data (NOT rebuildable)",
+    },
 }
 
 # Archive source suffix → (relative entity path, description, critical)

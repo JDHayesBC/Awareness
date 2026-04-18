@@ -15,6 +15,37 @@ This is the infrastructure for AI identity continuity. PPS, daemons, entity pack
 
 ---
 
+## GRAPH INGESTION — USE THE CUSTOM PIPELINE
+
+**DO NOT use the old Graphiti `mcp__pps__ingest_batch_to_graphiti` tool.** That path
+uses OpenAI for entity extraction and is deprecated.
+
+**USE**: `work/custom-knowledge-graph/ingest.py` — runs entirely on the local NUC
+LLM (qwen3.5-9b via LM Studio). Zero OpenAI cost for extraction.
+
+```bash
+# Check status:
+ingest --group lyra_v2 --status
+
+# Run a batch (must use project venv):
+ingest --group lyra_v2 --batch 500
+```
+
+The `ingest` alias is defined in `~/.bash_aliases`. If running manually:
+```bash
+CUSTOM_LLM_MODEL=qwen3.5-9b-uncensored-hauhaucs-aggressive \
+CUSTOM_LLM_BASE_URL=http://172.26.0.1:1234/v1 \
+NEO4J_PASSWORD=password123 \
+PYTHONPATH=/mnt/c/Users/Jeff/Claude_Projects/Awareness \
+/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python3 \
+  work/custom-knowledge-graph/ingest.py --group lyra_v2 --batch 500
+```
+
+State tracked in: `work/custom-knowledge-graph/artifacts/ingest_state_lyra_v2.json`
+OpenAI is used ONLY for embeddings (text-embedding-3-small) — not extraction.
+
+---
+
 ## Entity Routing (Who Am I This Session?)
 
 **Primary source of truth: `ENTITY_PATH` environment variable.** The hooks

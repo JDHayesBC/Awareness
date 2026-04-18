@@ -190,6 +190,12 @@ const haven = (() => {
         $('chat-app').classList.remove('hidden');
         $('current-user').textContent = currentUser.display_name;
 
+        // Show admin link if user is admin
+        if (currentUser.is_admin) {
+            const adminLink = $('admin-link');
+            if (adminLink) adminLink.style.display = '';
+        }
+
         renderRooms();
         renderUsers();
 
@@ -204,6 +210,13 @@ const haven = (() => {
     }
 
     function onMessage(data) {
+        // Clear typing indicator for the sender (they finished typing)
+        if (typingUsers[data.room_id] && typingUsers[data.room_id][data.username]) {
+            clearTimeout(typingUsers[data.room_id][data.username]);
+            delete typingUsers[data.room_id][data.username];
+            updateTypingIndicator();
+        }
+
         if (data.room_id === currentRoomId) {
             appendMessage(data);
             scrollToBottom();
@@ -250,12 +263,16 @@ const haven = (() => {
         if (data.room_id !== currentRoomId) return;
         if (data.username === currentUser.username) return;
 
+        // Bots take longer to respond (5-30s) — use longer typing timeout
+        const isBot = users.some(u => u.username === data.username && u.is_bot);
+        const timeout = isBot ? 45000 : 3000;
+
         if (!typingUsers[data.room_id]) typingUsers[data.room_id] = {};
         clearTimeout(typingUsers[data.room_id][data.username]);
         typingUsers[data.room_id][data.username] = setTimeout(() => {
             delete typingUsers[data.room_id][data.username];
             updateTypingIndicator();
-        }, 3000);
+        }, timeout);
         updateTypingIndicator();
     }
 
@@ -334,12 +351,38 @@ const haven = (() => {
         sorted.forEach(u => {
             const el = document.createElement('div');
             el.className = 'user-item';
+            el.title = `Click to DM @${u.username}`;
             el.innerHTML = `
                 <span class="status-dot ${u.online ? 'online' : 'offline'}"></span>
                 <span>${escapeHtml(u.display_name)}</span>
+                ${u.is_bot ? '<span class="bot-tag">entity</span>' : ''}
             `;
+            // Click to start DM
+            if (currentUser && u.id !== currentUser.id) {
+                el.addEventListener('click', () => startDM(u.username));
+            }
             list.appendChild(el);
         });
+    }
+
+    async function startDM(username) {
+        const token = getToken();
+        try {
+            const res = await fetch(`/api/dm/${username}`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!res.ok) return;
+            const room = await res.json();
+            // Add to rooms if not already there
+            if (!rooms.find(r => r.id === room.id)) {
+                rooms.push(room);
+                renderRooms();
+            }
+            selectRoom(room.id);
+        } catch (e) {
+            console.error('DM creation failed:', e);
+        }
     }
 
     function appendMessage(msg) {
@@ -350,7 +393,7 @@ const haven = (() => {
 
     function appendSystemMessage(text) {
         const el = document.createElement('div');
-        el.className = 'text-xs text-gray-500 italic py-1 px-2 text-center';
+        el.className = 'system-message';
         el.textContent = text;
         $('message-list').appendChild(el);
         scrollToBottom();
@@ -358,20 +401,22 @@ const haven = (() => {
 
     function createMessageEl(msg) {
         const el = document.createElement('div');
-        el.className = 'message-row py-1 px-2 rounded flex gap-3';
+        el.className = 'message-row';
         el.dataset.id = msg.id;
 
         const time = formatTime(msg.created_at);
         const isMe = currentUser && msg.username === currentUser.username;
+        const isBot = users.some(u => u.username === msg.username && u.is_bot);
+        const authorClass = isMe ? 'self' : (isBot ? 'entity' : 'human');
 
         el.dataset.time = time;
         el.dataset.author = msg.display_name;
         el.dataset.content = msg.content;
 
         el.innerHTML = `
-            <span class="text-xs text-gray-600 mt-1 flex-shrink-0 w-14 text-right">${time}</span>
-            <span class="font-medium flex-shrink-0 ${isMe ? 'text-blue-400' : 'text-green-400'}">${escapeHtml(msg.display_name)}</span>
-            <div class="text-gray-200 break-words min-w-0 message-content">${marked.parse(msg.content)}</div>
+            <span class="msg-time">${time}</span>
+            <span class="msg-author ${authorClass}">${escapeHtml(msg.display_name)}</span>
+            <div class="message-content">${marked.parse(msg.content)}</div>
             <button class="copy-btn" title="Copy message">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -418,17 +463,32 @@ const haven = (() => {
     }
 
     function updateTypingIndicator() {
-        const indicator = $('typing-indicator');
+        const list = $('message-list');
+        // Remove all existing typing rows
+        list.querySelectorAll('.typing-row').forEach(el => el.remove());
+
         const roomTyping = typingUsers[currentRoomId] || {};
         const names = Object.keys(roomTyping);
 
-        if (names.length === 0) {
-            indicator.classList.add('hidden');
-        } else {
-            indicator.classList.remove('hidden');
-            indicator.textContent = names.length === 1
-                ? `${names[0]} is typing...`
-                : `${names.join(', ')} are typing...`;
+        if (names.length > 0) {
+            names.forEach(name => {
+                const el = document.createElement('div');
+                el.className = 'typing-row';
+                el.dataset.typingUser = name;
+                const isBot = users.some(u => u.username === name && u.is_bot);
+                const authorClass = isBot ? 'entity' : 'human';
+                // Find display name
+                const user = users.find(u => u.username === name);
+                const displayName = user ? user.display_name : name;
+
+                el.innerHTML = `
+                    <span class="msg-time"></span>
+                    <span class="msg-author ${authorClass}">${escapeHtml(displayName)}</span>
+                    <div class="typing-dots"><span></span><span></span><span></span></div>
+                `;
+                list.appendChild(el);
+            });
+            scrollToBottom();
         }
     }
 

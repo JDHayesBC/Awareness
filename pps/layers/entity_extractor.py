@@ -48,8 +48,10 @@ _JUNK_EXACT_NAMES = {
 }
 
 # Default LLM config
-_DEFAULT_BASE_URL = "http://10.0.0.120:1234/v1"
-_DEFAULT_MODEL = "qwen3-1.7b"
+# WSL2 can't reach Windows localhost — use gateway IP to hit LM Studio
+# Override: CUSTOM_LLM_BASE_URL env var
+_DEFAULT_BASE_URL = "http://172.26.0.1:1234/v1"
+_DEFAULT_MODEL = "qwen3.5-9b-uncensored-hauhaucs-aggressive"
 
 
 # =============================================================================

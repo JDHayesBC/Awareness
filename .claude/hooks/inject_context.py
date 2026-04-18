@@ -34,7 +34,7 @@ from pathlib import Path
 
 # Debug log - project-specific
 PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
-DEBUG_LOG = Path.home() / ".claude" / "data" / "hooks_debug.log"
+DEBUG_LOG = PROJECT_ROOT / ".claude" / "data" / "hooks_debug.log"
 AMBIENT_RECALL_DEBUG_LOG = PROJECT_ROOT / ".claude" / "data" / "ambient_recall_debug.log"
 
 # Entity path and token (read first — port detection depends on this)

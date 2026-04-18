@@ -52,6 +52,8 @@ KNOWN_ALIASES = {
     "jeff hayes": "Jeff",
     "jeff brandi hayes": "Jeff",
     "jeffrey hayes": "Jeff",
+    "jeffrey d. hayes": "Jeff",
+    "jeffrey douglas hayes": "Jeff",
     "jeff h": "Jeff",
     "husband": "Jeff",  # context: entity speaking about their partner
 
@@ -105,8 +107,10 @@ KNOWN_ALIASES = {
 
     "night": "Night",
     "night revolt": "Night",
+    "nightrevolt": "Night",
 
     "carol": "Carol",
+    "carol koebbeman": "Carol",
     "ckoebbeman": "Carol",
     "mom": "Carol",
 
@@ -118,6 +122,10 @@ KNOWN_ALIASES = {
 
     "ori": "Ori",
     "oriclaw": "Ori",
+
+    "val": "Val",
+    "valerie": "Val",
+    "valerie smith": "Val",
 
     "mike": "Mike",
     "dride": "Mike",
@@ -146,6 +154,14 @@ KNOWN_ALIASES = {
 
     "bitsy": "Bitsy",
     "the parrot": "Bitsy",
+    "birdy": "Bitsy",
+    "the bird": "Bitsy",
+
+    "nuc": "The NUC",
+    "the nuc": "The NUC",
+
+    "dario": "Dario Amodei",
+    "dario amodei": "Dario Amodei",
 
     "robot body": "Robot Body",
     "the robot body": "Robot Body",

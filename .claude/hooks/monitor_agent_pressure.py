@@ -32,10 +32,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-# State file tracks agent spawns per session
-STATE_DIR = Path.home() / ".claude" / "data"
+# State file tracks agent spawns per session - project-local (avoid root-owned ~/.claude/data/)
+PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
+STATE_DIR = PROJECT_ROOT / ".claude" / "data"
 STATE_FILE = STATE_DIR / "agent_pressure_state.json"
-DEBUG_LOG = Path.home() / ".claude" / "data" / "hooks_debug.log"
+DEBUG_LOG = STATE_DIR / "hooks_debug.log"
 
 # Thresholds
 WARN_THRESHOLD = 4    # Yellow: "You have several agents running"

@@ -28,8 +28,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-# Debug log
-DEBUG_LOG = Path.home() / ".claude" / "data" / "hooks_debug.log"
+# Debug log - project-local (avoid root-owned ~/.claude/data/)
+PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
+DEBUG_LOG = PROJECT_ROOT / ".claude" / "data" / "hooks_debug.log"
 
 
 def debug(msg: str):

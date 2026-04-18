@@ -51,7 +51,7 @@ echo ""
 
 cd "$PROJECT_DIR"
 
-# Use project venv (has claude-agent-sdk)
+# Use project venv (one venv to rule them all)
 VENV_PYTHON="$PROJECT_DIR/.venv/bin/python"
 if [ ! -f "$VENV_PYTHON" ]; then
     echo "ERROR: Project venv not found at $PROJECT_DIR/.venv"
