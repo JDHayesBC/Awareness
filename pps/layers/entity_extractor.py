@@ -24,13 +24,13 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from pps.layers.extraction_context import (
+from .extraction_context import (
     build_extraction_instructions,
     get_entity_name,
     get_speaker_from_content,
 )
-from pps.layers.rich_texture_edge_types import EDGE_TYPE_MAP
-from pps.layers.rich_texture_entities import ENTITY_TYPES
+from .rich_texture_edge_types import EDGE_TYPE_MAP
+from .rich_texture_entities import ENTITY_TYPES
 
 logger = logging.getLogger(__name__)
 

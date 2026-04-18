@@ -144,6 +144,29 @@ _HEALTH_EDGE_QUERY = """
 MATCH ()-[r:RELATES_TO {group_id: $gid}]->() RETURN count(r) AS edge_count
 """
 
+# Neighborhood traversal: find entity by exact name (case-insensitive fallback)
+# Returns entity summary + connected edges with source/target names
+_EXPLORE_FIND_ENTITY = """
+MATCH (e:Entity {group_id: $gid})
+WHERE toLower(e.name) = toLower($name)
+RETURN e.uuid AS uuid, e.name AS name, e.summary AS summary,
+       e.entity_type AS entity_type, e.mention_count AS mention_count
+LIMIT 1
+"""
+
+_EXPLORE_NEIGHBORHOOD = """
+MATCH (center:Entity {group_id: $gid})
+WHERE toLower(center.name) = toLower($name)
+MATCH (s)-[r:RELATES_TO]->(t)
+WHERE (s = center OR t = center)
+  AND r.group_id = $gid
+RETURN r.uuid AS uuid, r.fact AS fact, r.name AS edge_type,
+       r.mention_count AS mention_count,
+       s.name AS source_name, t.name AS target_name
+ORDER BY coalesce(r.mention_count, 1) DESC
+LIMIT $k
+"""
+
 
 # ─────────────────────────────────────────────
 # Helpers
@@ -649,20 +672,141 @@ class CustomGraphLayer(PatternLayer):
 
     async def explore(self, entity_name: str, depth: int = 2) -> list[SearchResult]:
         """
-        Explore the graph from a specific entity.
+        Explore the neighborhood of a named entity in the knowledge graph.
 
-        Currently implemented as a search for the entity name with expanded limit.
-        Future enhancement: could traverse graph edges up to `depth` hops.
+        Finds the entity by name (case-insensitive), then returns:
+        1. The entity itself (with summary if available) as the first result
+        2. Connected edges with source/target entity names for relational context
+        3. Near-duplicate edges are collapsed (same source/target/type, different phrasing)
+
+        Falls back to hybrid search if the entity is not found by name.
 
         Args:
-            entity_name: Name of entity to explore from.
-            depth: Maximum graph traversal depth (currently unused, treated as multiplier).
+            entity_name: Name of entity to explore from (e.g., "Jeff", "Hot Tub").
+            depth: Controls result count — depth * 10 edges returned (default 20).
 
         Returns:
-            List of SearchResult related to the entity.
+            List of SearchResult: entity summary first, then ranked neighborhood edges.
         """
-        # Simple implementation: search for the entity with larger result set
-        return await self.search(entity_name, limit=depth * 10)
+        try:
+            driver = self._get_driver()
+            await self._ensure_indexes()
+        except Exception as exc:
+            logger.error("CustomGraphLayer.explore: Neo4j unavailable: %s", exc)
+            return []
+
+        edge_limit = max(depth * 10, 20)
+        results: list[SearchResult] = []
+
+        # 1. Find the entity by name (case-insensitive)
+        entity_row = None
+        try:
+            records, _, _ = driver.execute_query(
+                _EXPLORE_FIND_ENTITY,
+                name=entity_name,
+                gid=self._group_id,
+            )
+            if records:
+                entity_row = dict(records[0])
+        except Exception as exc:
+            logger.debug("explore: entity lookup failed: %s", exc)
+
+        if entity_row:
+            # Entity found — emit summary as first result
+            name = entity_row.get("name", entity_name)
+            summary = entity_row.get("summary") or ""
+            entity_type = entity_row.get("entity_type", "")
+            mention_count = entity_row.get("mention_count", 0)
+            if summary:
+                content = f"{name} ({entity_type}): {summary}"
+            else:
+                content = f"{name} ({entity_type}) — {mention_count} mentions"
+            results.append(SearchResult(
+                content=content,
+                source=f"neo4j:entity:{entity_row.get('uuid', '')}",
+                layer=LayerType.RICH_TEXTURE,
+                relevance_score=1.0,
+                metadata={
+                    "type": "entity",
+                    "entity_type": entity_type,
+                    "name": name,
+                    "mention_count": mention_count,
+                    "has_summary": bool(summary),
+                },
+            ))
+
+            # 2. Fetch neighborhood edges with source/target context
+            try:
+                records, _, _ = driver.execute_query(
+                    _EXPLORE_NEIGHBORHOOD,
+                    name=entity_name,
+                    gid=self._group_id,
+                    k=edge_limit * 3,  # Fetch extra to allow deduplication
+                )
+                raw_edges = [dict(r) for r in records]
+            except Exception as exc:
+                logger.debug("explore: neighborhood query failed: %s", exc)
+                raw_edges = []
+
+            # 3. Deduplicate: collapse edges with same source/target/type
+            # Keep highest mention_count representative per (source, target, type) bucket
+            seen_buckets: dict[tuple, dict] = {}
+            for edge in raw_edges:
+                src = edge.get("source_name", "")
+                tgt = edge.get("target_name", "")
+                etype = (edge.get("edge_type") or "").upper()
+                bucket = (src, tgt, etype)
+                existing = seen_buckets.get(bucket)
+                if existing is None:
+                    seen_buckets[bucket] = edge
+                else:
+                    # Keep the one with more mentions (higher confidence)
+                    if (edge.get("mention_count") or 0) > (existing.get("mention_count") or 0):
+                        seen_buckets[bucket] = edge
+
+            deduped = sorted(
+                seen_buckets.values(),
+                key=lambda r: r.get("mention_count") or 0,
+                reverse=True,
+            )[:edge_limit]
+
+            for i, edge in enumerate(deduped):
+                fact = edge.get("fact", "")
+                edge_type = edge.get("edge_type", "")
+                src_name = edge.get("source_name", "")
+                tgt_name = edge.get("target_name", "")
+                mentions = edge.get("mention_count", 0)
+                # Format with source→target context (the key insight from retrieval research)
+                if src_name and tgt_name:
+                    content = f"{src_name} -[{edge_type}]-> {tgt_name}: {fact}"
+                elif edge_type:
+                    content = f"[{edge_type}] {fact}"
+                else:
+                    content = fact
+                score = 0.95 / (1 + i)
+                results.append(SearchResult(
+                    content=content,
+                    source=f"neo4j:edge:{edge.get('uuid', '')}",
+                    layer=LayerType.RICH_TEXTURE,
+                    relevance_score=score,
+                    metadata={
+                        "type": "edge",
+                        "edge_type": edge_type,
+                        "source_name": src_name,
+                        "target_name": tgt_name,
+                        "mention_count": mentions,
+                    },
+                ))
+        else:
+            # Entity not found by name — fall back to hybrid search
+            logger.debug(
+                "explore: entity '%s' not found by name in group '%s', falling back to search",
+                entity_name,
+                self._group_id,
+            )
+            return await self.search(entity_name, limit=edge_limit)
+
+        return results
 
     async def delete_edge(self, uuid: str) -> dict:
         """
@@ -807,6 +951,7 @@ class CustomGraphLayer(PatternLayer):
                 entity_type=source_type,
                 summary="",
                 embedding=source_embedding,
+                msg_ts=None,  # No timestamp for manual triplets
             )
 
             # Create or update target entity
@@ -820,6 +965,7 @@ class CustomGraphLayer(PatternLayer):
                 entity_type=target_type,
                 summary="",
                 embedding=target_embedding,
+                msg_ts=None,  # No timestamp for manual triplets
             )
 
             # Create relationship
@@ -837,6 +983,7 @@ class CustomGraphLayer(PatternLayer):
                 edge_type=relationship,
                 fact_text=fact,
                 embedding=edge_embedding,
+                msg_ts=None,  # No timestamp for manual triplets
             )
 
             logger.info(

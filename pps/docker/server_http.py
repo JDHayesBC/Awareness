@@ -1490,23 +1490,21 @@ async def raw_search(request: RawSearchRequest):
     }
 
 
-@app.post("/tools/add_triplet")
-async def add_triplet(request: AddTripletRequest):
-    """
-    Add a structured triplet directly to the knowledge graph.
-    Bypasses extraction and creates proper entity-to-entity relationships.
-    """
+async def _do_add_triplet(request: AddTripletRequest):
+    """Shared implementation for add_triplet and texture_add_triplet."""
     auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "add_triplet")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
-    if not USE_RICH_TEXTURE_V2:
+    layer = layers[LayerType.RICH_TEXTURE]
+
+    # Verify the layer supports add_triplet_direct (V2 or custom graph)
+    if not (USE_RICH_TEXTURE_V2 or USE_CUSTOM_GRAPH):
         raise HTTPException(
             status_code=501,
-            detail="add_triplet requires RichTextureLayerV2 (graphiti_core)"
+            detail="add_triplet requires RichTextureLayerV2 or CustomGraphLayer"
         )
 
-    layer = layers[LayerType.RICH_TEXTURE]
     result = await layer.add_triplet_direct(
         source=request.source,
         relationship=request.relationship,
@@ -1520,6 +1518,24 @@ async def add_triplet(request: AddTripletRequest):
         raise HTTPException(status_code=500, detail=result.get("message", "Unknown error"))
 
     return result
+
+
+@app.post("/tools/add_triplet")
+async def add_triplet(request: AddTripletRequest):
+    """
+    Add a structured triplet directly to the knowledge graph.
+    Bypasses extraction and creates proper entity-to-entity relationships.
+    """
+    return await _do_add_triplet(request)
+
+
+@app.post("/tools/texture_add_triplet")
+async def texture_add_triplet(request: AddTripletRequest):
+    """
+    Add a structured triplet directly to the knowledge graph.
+    Alias for /tools/add_triplet — matches the MCP tool name texture_add_triplet.
+    """
+    return await _do_add_triplet(request)
 
 
 @app.get("/tools/pps_health")
