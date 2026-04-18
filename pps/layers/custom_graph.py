@@ -23,9 +23,11 @@ Environment variables:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
+import time
 import uuid
 from typing import Optional
 
@@ -422,23 +424,32 @@ class CustomGraphLayer(PatternLayer):
 
         embedder = self._get_embedder()
         try:
-            query_embedding = embedder.embed_text(query)
+            # embed_text is CPU-bound (sentence-transformers); run in thread
+            # so we don't block the event loop during inference.
+            query_embedding = await asyncio.to_thread(embedder.embed_text, query)
         except Exception as exc:
             logger.warning("CustomGraphLayer.search: embedding failed: %s", exc)
             query_embedding = None
 
         k = max(limit, 10)  # Fetch more candidates before fusion narrows them down
 
+        # Run all four Neo4j queries via asyncio.to_thread() — the synchronous
+        # driver.execute_query() blocks the calling thread, which would stall
+        # the uvicorn event loop if called directly in an async function.
+        # We run them as concurrent tasks so the four roundtrips overlap.
+
+        async def _run_query(cypher, **params) -> list[dict]:
+            def _execute():
+                records, _, _ = driver.execute_query(cypher, **params)
+                return [dict(r) for r in records]
+            return await asyncio.to_thread(_execute)
+
         # --- Entity fulltext ---
         entity_ft: list[dict] = []
         try:
-            records, _, _ = driver.execute_query(
-                _FULLTEXT_ENTITIES,
-                query=query,
-                gid=self._group_id,
-                k=k,
+            entity_ft = await _run_query(
+                _FULLTEXT_ENTITIES, query=query, gid=self._group_id, k=k
             )
-            entity_ft = [dict(r) for r in records]
         except Exception as exc:
             logger.debug("entity fulltext search failed: %s", exc)
 
@@ -446,26 +457,19 @@ class CustomGraphLayer(PatternLayer):
         entity_vec: list[dict] = []
         if query_embedding:
             try:
-                records, _, _ = driver.execute_query(
+                entity_vec = await _run_query(
                     _VECTOR_ENTITIES,
-                    embedding=query_embedding,
-                    gid=self._group_id,
-                    k=k,
+                    embedding=query_embedding, gid=self._group_id, k=k,
                 )
-                entity_vec = [dict(r) for r in records]
             except Exception as exc:
                 logger.debug("entity vector search failed: %s", exc)
 
         # --- Edge fulltext ---
         edge_ft: list[dict] = []
         try:
-            records, _, _ = driver.execute_query(
-                _FULLTEXT_EDGES,
-                query=query,
-                gid=self._group_id,
-                k=k,
+            edge_ft = await _run_query(
+                _FULLTEXT_EDGES, query=query, gid=self._group_id, k=k
             )
-            edge_ft = [dict(r) for r in records]
         except Exception as exc:
             logger.debug("edge fulltext search failed: %s", exc)
 
@@ -473,13 +477,10 @@ class CustomGraphLayer(PatternLayer):
         edge_vec: list[dict] = []
         if query_embedding:
             try:
-                records, _, _ = driver.execute_query(
+                edge_vec = await _run_query(
                     _VECTOR_EDGES,
-                    embedding=query_embedding,
-                    gid=self._group_id,
-                    k=k,
+                    embedding=query_embedding, gid=self._group_id, k=k,
                 )
-                edge_vec = [dict(r) for r in records]
             except Exception as exc:
                 logger.debug("edge vector search failed: %s", exc)
 
@@ -688,9 +689,12 @@ class CustomGraphLayer(PatternLayer):
         Returns:
             List of SearchResult: entity summary first, then ranked neighborhood edges.
         """
+        t_start = time.perf_counter()
         try:
             driver = self._get_driver()
-            await self._ensure_indexes()
+            # Note: explore does NOT call _ensure_indexes() — it uses pure
+            # Cypher name lookup, not vector search. Loading the embedding
+            # model (13s) would block the single-threaded server unnecessarily.
         except Exception as exc:
             logger.error("CustomGraphLayer.explore: Neo4j unavailable: %s", exc)
             return []
@@ -698,16 +702,29 @@ class CustomGraphLayer(PatternLayer):
         edge_limit = max(depth * 10, 20)
         results: list[SearchResult] = []
 
-        # 1. Find the entity by name (case-insensitive)
+        # 1. Find the entity by name (case-insensitive).
+        #    Run synchronous driver call in a thread so we don't block the uvicorn
+        #    event loop (sync Neo4j execute_query() holds the calling thread).
         entity_row = None
         try:
-            records, _, _ = driver.execute_query(
-                _EXPLORE_FIND_ENTITY,
-                name=entity_name,
-                gid=self._group_id,
+            t0 = time.perf_counter()
+
+            def _find_entity() -> list:
+                records, _, _ = driver.execute_query(
+                    _EXPLORE_FIND_ENTITY,
+                    name=entity_name,
+                    gid=self._group_id,
+                )
+                return [dict(r) for r in records]
+
+            records_list = await asyncio.to_thread(_find_entity)
+            t1 = time.perf_counter()
+            logger.debug(
+                "explore: entity lookup for '%s' took %.3fs, got %d rows",
+                entity_name, t1 - t0, len(records_list),
             )
-            if records:
-                entity_row = dict(records[0])
+            if records_list:
+                entity_row = records_list[0]
         except Exception as exc:
             logger.debug("explore: entity lookup failed: %s", exc)
 
@@ -735,15 +752,28 @@ class CustomGraphLayer(PatternLayer):
                 },
             ))
 
-            # 2. Fetch neighborhood edges with source/target context
+            # 2. Fetch neighborhood edges with source/target context.
+            #    Also run in thread to avoid blocking the event loop.
+            raw_edges: list[dict] = []
             try:
-                records, _, _ = driver.execute_query(
-                    _EXPLORE_NEIGHBORHOOD,
-                    name=entity_name,
-                    gid=self._group_id,
-                    k=edge_limit * 3,  # Fetch extra to allow deduplication
+                t0 = time.perf_counter()
+                k_fetch = edge_limit * 3  # Fetch extra to allow deduplication
+
+                def _neighborhood() -> list:
+                    records, _, _ = driver.execute_query(
+                        _EXPLORE_NEIGHBORHOOD,
+                        name=entity_name,
+                        gid=self._group_id,
+                        k=k_fetch,
+                    )
+                    return [dict(r) for r in records]
+
+                raw_edges = await asyncio.to_thread(_neighborhood)
+                t1 = time.perf_counter()
+                logger.debug(
+                    "explore: neighborhood for '%s' took %.3fs, got %d edges",
+                    entity_name, t1 - t0, len(raw_edges),
                 )
-                raw_edges = [dict(r) for r in records]
             except Exception as exc:
                 logger.debug("explore: neighborhood query failed: %s", exc)
                 raw_edges = []
@@ -806,6 +836,11 @@ class CustomGraphLayer(PatternLayer):
             )
             return await self.search(entity_name, limit=edge_limit)
 
+        elapsed = time.perf_counter() - t_start
+        logger.info(
+            "explore: '%s' depth=%d → %d results in %.3fs",
+            entity_name, depth, len(results), elapsed,
+        )
         return results
 
     async def delete_edge(self, uuid: str) -> dict:
