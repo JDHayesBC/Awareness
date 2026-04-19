@@ -363,19 +363,43 @@ def main():
     # Query PPS for ambient recall context
     context = query_pps_ambient_recall(prompt)
 
-    if context:
-        debug(f"Injecting context: {len(context)} chars")
-
-        # Output JSON with additionalContext
-        output = {
-            "hookSpecificOutput": {
-                "hookEventName": "UserPromptSubmit",
-                "additionalContext": context
-            }
-        }
-        print(json.dumps(output))
+    # Always inject at minimum a clock line — even if ambient_recall fails.
+    # This prevents time drift during heartbeat ticks when PPS is unreachable.
+    if not context:
+        debug("No PPS context — injecting clock only")
+        from datetime import timezone
+        now_utc = datetime.now(timezone.utc)
+        now_local = datetime.now()
+        local_tz = _time.strftime("%Z")  # e.g., "PDT"
+        context = (
+            f"**[identity]** You are {ENTITY_DISPLAY_NAME}. "
+            f"Your memory tools are prefixed `pps-{_detected_entity}`. "
+            f"Do not access other entities' memory tools.\n"
+            f"**[clock]** {now_local.strftime('%A, %B %d, %Y %I:%M %p')} {local_tz} "
+            f"(UTC: {now_utc.strftime('%H:%M')})\n"
+        )
     else:
-        debug("No context to inject")
+        # Ensure clock is present even when PPS context exists but clock is missing
+        if "clock" not in context.lower() and "current time" not in context.lower():
+            from datetime import timezone
+            now_utc = datetime.now(timezone.utc)
+            now_local = datetime.now()
+            local_tz = _time.strftime("%Z")
+            clock_line = (
+                f"\n**[clock]** {now_local.strftime('%A, %B %d, %Y %I:%M %p')} {local_tz} "
+                f"(UTC: {now_utc.strftime('%H:%M')})\n"
+            )
+            context = clock_line + context
+
+    debug(f"Injecting context: {len(context)} chars")
+
+    output = {
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": context
+        }
+    }
+    print(json.dumps(output))
 
     sys.exit(0)
 

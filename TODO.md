@@ -50,41 +50,43 @@
 | 7 | Jeff-specific WSL paths in examples (`/mnt/c/Users/Jeff/...`) | LOW | N/A (used `/path/to/Awareness` throughout) |
 
 **Port Map (authoritative):**
-| Port | Service | Description |
-|------|---------|-------------|
-| 7474 | neo4j | Neo4j HTTP browser |
-| 7687 | neo4j | Neo4j Bolt protocol |
-| 8200 | chromadb | Vector database |
-| 8201 | pps-lyra | PPS MCP/HTTP server (Lyra) |
-| 8202 | observatory | Web dashboard (Observatory) |
-| 8203 | graphiti | Knowledge graph API |
-| 8204 | pps-haiku-wrapper | OpenAI-compatible wrapper |
-| 8205 | haven | Haven chat interface |
-| 8206 | rag-engine | RAG service (JINA embeddings, ChromaDB, search/rerank) |
-| 8211 | pps-caia | PPS MCP/HTTP server (Caia) |
+| Port | Service | Description | Status |
+|------|---------|-------------|--------|
+| 7474 | neo4j | Neo4j HTTP browser | Active (custom graph) |
+| 7687 | neo4j | Neo4j Bolt protocol | Active (custom graph) |
+| 8200 | chromadb | Vector database | Active (Layer 2) |
+| 8201 | pps-lyra | PPS MCP/HTTP server (Lyra) | Active |
+| 8202 | observatory | Web dashboard (Observatory) | Active |
+| 8203 | graphiti | Knowledge graph API (legacy) | Running (backup only) |
+| 8204 | pps-haiku-wrapper | OpenAI-compatible wrapper | Not in use |
+| 8205 | haven | Haven chat interface | Active |
+| 8206 | rag-engine | RAG service (JINA embeddings, ChromaDB, search/rerank) | Active |
+| 8211 | pps-caia | PPS MCP/HTTP server (Caia) | Active |
 
 ---
 
-## Graphiti Ingestion Recovery (PRIORITY)
+## Custom Knowledge Graph (COMPLETE)
 
-*~1,865 messages pending. Pipeline hardened 2026-02-22, NUC Qwen pipeline validated 2026-03-06.*
+*Custom graph pipeline deployed 2026-04-14. Replaces Graphiti extraction layer. Local LLM + Neo4j.*
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
 | 1 | **Repair Jina-contaminated records** | **✅ DONE** | 2,320 messages unmarked, 112 bad batches deleted. Script: `scripts/repair_jina_records.py` |
 | 2 | **Fix Haiku wrapper structured output** | **✅ DONE** | Double-encoding fix (`8083ffd`), tool_use schema enforcement (`091806f`), schema deref + output recovery (`64c446c`), persistent client + hardening (`477265d`), broadened fix detection + DIAG logging (`048879e`). |
 | 3 | **Venv audit** | **✅ DONE** | Audit complete, rule documented in DEVELOPMENT_STANDARDS.md. Shebangs fixed in 20 scripts (commit `d4f7a81`). Issue #144. |
-| 4 | **Ingestion tracking redesign** | **✅ DONE** | Per-row status columns (graphiti_status, graphiti_error, graphiti_attempted_at). Range-based marking replaced with per-ID marking. Failed messages tracked with error reason. Issue #145, commit `048879e`. |
-| 5 | **Switch LLM extraction to NUC Qwen** | **✅ DONE** | Replaced Haiku wrapper with local qwen3-1.7b on NUC (10.0.0.120:1234). Config: `pps/docker/.env`. 10/10 pipeline test at 32K context. Hybrid mode: local LLM + OpenAI embeddings (1024-dim). Benchmark: `work/qwen-graphiti-bench/RESULTS.md`. |
-| 6 | **Implement parallel ingestion** | **✅ DONE** | Parallel processing added to `paced_ingestion.py` (commit `60d955c`). Uses `asyncio.gather()` with `--parallelism 12` flag. Test validated: 9 messages processed in 3 parallel chunks. Est speedup: 17x (40hrs → 2.4hrs). [#153](https://github.com/JDHayesBC/Awareness/issues/153). |
-| 7 | **Catch up ingestion backlog** | **⚠️ BLOCKED** | ~1,975 pending. Parallel code ready but **OpenAI embedding quota exhausted**. Need decision: (A) add credits (~5min, preserves graph), or (B) switch to local embeddings (requires graph wipe + 4.7hr re-ingest). See `work/graphiti-ingestion-status.md`. |
-| 8 | **Graph curation run** | **TODO** | Known issues: duplicates from invalid dedup index bug, Jeff/Brandi entity overlap (first-person references confused source attribution). Graph quality is good (observatory summaries were solid) — curate, don't rebuild. |
-| 9 | **Wire realtime terminal ingestion hooks** | **TODO** (unblocked) | Discord already does realtime ingestion. Terminal needs the same. Prevents future backlogs. |
-| 10 | **Replace Graphiti with custom pipeline** | **🔨 IN PROGRESS** | Custom extraction→resolve→embed→write pipeline. Issue [#167](https://github.com/JDHayesBC/Awareness/issues/167). Design: `work/custom-knowledge-graph/DESIGN.md`. Phase 2 prototype underway (2026-04-03). |
+| 4 | **Ingestion tracking redesign** | **✅ DONE** | Per-row status columns (kg_ingested_at, kg_error). Range-based marking replaced with per-ID marking. Failed messages tracked with error reason. Issue #145. |
+| 5 | **Switch LLM extraction to NUC Qwen** | **✅ DONE** | Replaced Haiku wrapper with local qwen3-1.7b on NUC. Hybrid mode: local LLM + OpenAI embeddings (1024-dim). Benchmark: `work/qwen-graphiti-bench/RESULTS.md`. |
+| 6 | **Implement parallel ingestion** | **✅ DONE** | Parallel processing in ingestion pipeline. Uses `asyncio.gather()` with configurable parallelism. Speedup: 10-17x depending on batch size. [#153](https://github.com/JDHayesBC/Awareness/issues/153). |
+| 7 | **Deploy custom graph layer** | **✅ DONE** | CustomGraphLayer in `pps/layers/custom_graph.py`. Manual ingestion: `scripts/kg_ingest.py`. Daemon: `scripts/kg_ingest_daemon.py`. Issue [#167](https://github.com/JDHayesBC/Awareness/issues/167). |
+| 8 | **Wire PPS texture tools to custom graph** | **✅ DONE** | `texture_search`, `texture_explore`, `texture_add_triplet`, `texture_delete` now route through CustomGraphLayer. Graph ingestion status tracked per-row in `conversations.db`. |
+| 9 | **Wire realtime terminal ingestion hooks** | **TODO** | Discord already does realtime ingestion. Terminal needs the same. Prevents future backlogs. |
+| 10 | **Graph curation run** | **TODO** | Known issues: duplicates from old Graphiti migration, entity overlap edge cases. Graph quality is good — curate, don't rebuild. Use `/curate` skill during reflection. |
 
-**Graph quality philosophy**: The existing graph has 19,000+ messages worth of relationships. Retrieval quality was good when tested via Observatory. Known noise (duplicates, entity overlap) is a curation problem, not a re-ingestion problem. Priority is reliable forward ingestion, not retroactive repair.
+**Custom Graph Architecture**: Entity extraction + triplet resolution runs on NUC Qwen (via LM Studio).
+Embeddings via OpenAI (text-embedding-3-small). Writes to Neo4j. PPS tools query the Neo4j graph directly.
+Zero Graphiti dependency. Per-row ingestion status in `conversations.db` (kg_ingested_at, kg_error columns).
 
-**NUC Qwen pipeline**: Benchmarked 2026-03-06. qwen3-1.7b at 32K context: 100% JSON valid, sub-second extraction, 10/10 full pipeline success. The 0.8b is faster but 1.7b produces 2x richer graphs. 9b unreliable (75% valid). Full results: `work/qwen-graphiti-bench/RESULTS.md`.
+**Graphiti Container**: Still runs (for backward compatibility) but is no longer the primary graph layer.
 
 ---
 

@@ -104,7 +104,7 @@ For quick fixes (typos, obvious bugs), direct commits to main are fine with good
 
 The project has two venvs:
 - `.venv/` — daemon code (discord.py, claude-agent-sdk)  
-- `pps/venv/` — PPS server and scripts (mcp, anthropic, graphiti)
+- `pps/venv/` — PPS server and scripts (mcp, anthropic, neo4j, custom-knowledge-graph)
 
 **Rules:**
 1. Never use `#!/usr/bin/env python3` for scripts that need venv packages
@@ -269,7 +269,7 @@ When deploying new data processing pipelines (graph ingestion, summarization, ba
 - Wasting compute time on broken pipelines
 
 **This applies to:**
-- Graph ingestion (Graphiti or custom)
+- Graph ingestion (custom knowledge graph via `scripts/kg_ingest.py`)
 - Batch summarization
 - Data migrations
 - Any operation processing > 100 records

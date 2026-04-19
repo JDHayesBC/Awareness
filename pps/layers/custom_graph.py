@@ -159,12 +159,11 @@ LIMIT 1
 _EXPLORE_NEIGHBORHOOD = """
 MATCH (center:Entity {group_id: $gid})
 WHERE toLower(center.name) = toLower($name)
-MATCH (s)-[r:RELATES_TO]->(t)
-WHERE (s = center OR t = center)
-  AND r.group_id = $gid
+MATCH (center)-[r:RELATES_TO]-(other)
+WHERE r.group_id = $gid
 RETURN r.uuid AS uuid, r.fact AS fact, r.name AS edge_type,
        r.mention_count AS mention_count,
-       s.name AS source_name, t.name AS target_name
+       startNode(r).name AS source_name, endNode(r).name AS target_name
 ORDER BY coalesce(r.mention_count, 1) DESC
 LIMIT $k
 """

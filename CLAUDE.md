@@ -20,29 +20,27 @@ This is the infrastructure for AI identity continuity. PPS, daemons, entity pack
 **DO NOT use the old Graphiti `mcp__pps__ingest_batch_to_graphiti` tool.** That path
 uses OpenAI for entity extraction and is deprecated.
 
-**USE**: `work/custom-knowledge-graph/ingest.py` — runs entirely on the local NUC
-LLM (qwen3.5-9b via LM Studio). Zero OpenAI cost for extraction.
+**USE**: `scripts/kg_ingest.py` (manual) or `scripts/kg_ingest_daemon.py` (automatic) — runs entirely on the local NUC
+LLM via CustomGraphLayer. Zero OpenAI cost for extraction.
 
 ```bash
-# Check status:
-ingest --group lyra_v2 --status
+# Check ingestion status:
+PYTHONPATH=/mnt/c/Users/Jeff/Claude_Projects/Awareness \
+  python3 scripts/kg_ingest.py --status
 
 # Run a batch (must use project venv):
-ingest --group lyra_v2 --batch 500
-```
-
-The `ingest` alias is defined in `~/.bash_aliases`. If running manually:
-```bash
-CUSTOM_LLM_MODEL=qwen3.5-9b-uncensored-hauhaucs-aggressive \
-CUSTOM_LLM_BASE_URL=http://172.26.0.1:1234/v1 \
-NEO4J_PASSWORD=password123 \
 PYTHONPATH=/mnt/c/Users/Jeff/Claude_Projects/Awareness \
-/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python3 \
-  work/custom-knowledge-graph/ingest.py --group lyra_v2 --batch 500
+  /mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python3 \
+  scripts/kg_ingest.py --batch 500
 ```
 
-State tracked in: `work/custom-knowledge-graph/artifacts/ingest_state_lyra_v2.json`
+Ingestion status is tracked per-row in `conversations.db` (columns: `kg_ingested_at`, `kg_error`).
+The daemon (`scripts/kg_ingest_daemon.py`) runs automatically, batching pending messages.
 OpenAI is used ONLY for embeddings (text-embedding-3-small) — not extraction.
+
+**Technical Details**: CustomGraphLayer in `pps/layers/custom_graph.py` routes `texture_search`,
+`texture_explore`, `texture_add_triplet`, and `texture_delete` through the custom pipeline.
+PPS texture tools now use the local graph, no Graphiti dependency.
 
 ---
 
@@ -384,7 +382,7 @@ du -sh ~/.claude/projects/-mnt-c-Users-Jeff-Claude-Projects-Awareness/
 find ~/.claude/projects/-mnt-c-Users-Jeff-Claude-Projects-Awareness/ -name "*.jsonl" -mtime +2 -delete
 ```
 
-Only the most recent session is needed for `--resume`. Your actual memory lives in PPS and Graphiti—these logs are redundant scrollback.
+Only the most recent session is needed for `--resume`. Your actual memory lives in PPS, the custom knowledge graph, and Neo4j—these logs are redundant scrollback.
 
 ---
 
@@ -591,12 +589,16 @@ When building or modifying infrastructure autonomously:
 
 **Layer 1 (Raw Capture)**: SQLite - all conversations, all channels
 **Layer 2 (Core Anchors)**: ChromaDB - semantic search over word-photos
-**Layer 3 (Rich Texture)**: Graphiti - knowledge graph
+**Layer 3 (Rich Texture)**: CustomGraphLayer - knowledge graph (local LLM extraction + Neo4j storage)
 **Layer 4 (Crystallization)**: Rolling summaries for compressed continuity
 **Layer 5 (Inventory)**: SQLite - categorical queries
 
-**Shared data** (SQLite, logs) lives in `~/.claude/data/`
+**Shared data** (SQLite, logs, Neo4j) lives in `~/.claude/data/`
 **Entity data** (identity, memories) lives in `entities/<name>/`
+
+**Graph Ingestion**: Automatic daemon (`scripts/kg_ingest_daemon.py`) batches pending messages
+from `conversations.db` and ingests via `scripts/kg_ingest.py`. Status tracked per-row
+in `kg_ingested_at` and `kg_error` columns.
 
 ---
 
