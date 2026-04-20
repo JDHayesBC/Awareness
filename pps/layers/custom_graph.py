@@ -32,8 +32,8 @@ import uuid
 from typing import Optional
 
 from . import LayerHealth, LayerType, PatternLayer, SearchResult
-from .entity_extractor import EntityExtractor
-from .entity_resolver import EntityResolver
+from .entity_extractor import EntityExtractor, ExtractionResult
+from .entity_resolver import EntityResolver, KNOWN_ALIASES
 from .graph_embedder import GraphEmbedder
 
 logger = logging.getLogger(__name__)
@@ -311,6 +311,14 @@ class CustomGraphLayer(PatternLayer):
         if not result.entities and not result.relationships:
             logger.debug("CustomGraphLayer.store: nothing extracted from text")
             return True  # Not an error — some text genuinely has no graph-worthy content
+
+        # 1b. Filter edges for entity context in shared Haven channels
+        if "haven" in channel.lower() and entity_name:
+            result = self._filter_for_entity_context(
+                result=result,
+                entity_name=entity_name,
+                speaker=speaker,
+            )
 
         # 2. Resolve entities + 3. Embed + 4. Write nodes
         embedder = self._get_embedder()
@@ -1042,6 +1050,71 @@ class CustomGraphLayer(PatternLayer):
                 "success": False,
                 "message": f"Failed to add triplet: {exc}",
             }
+
+    # ─────────────────────────────────────────
+    # Entity-context filtering for shared channels
+    # ─────────────────────────────────────────
+
+    @staticmethod
+    def _filter_for_entity_context(
+        result: ExtractionResult,
+        entity_name: str,
+        speaker: str | None = None,
+    ) -> ExtractionResult:
+        """
+        Filter extraction results to keep only edges relevant to the target entity.
+
+        For shared Haven channels, multiple entities converse but only edges
+        involving the target entity (or Jeff, or the current speaker) should be
+        written to this entity's graph.
+
+        Entity nodes pass through unfiltered — only edges are filtered.
+
+        Args:
+            result: The raw ExtractionResult from the extractor.
+            entity_name: The entity whose graph we are building (e.g., "Lyra").
+            speaker: The speaker of the current message (if known).
+
+        Returns:
+            A new ExtractionResult with irrelevant edges removed.
+        """
+        # Build set of relevant canonical names (lowercased for matching)
+        relevant_names: set[str] = set()
+
+        # Always include the target entity and Jeff
+        for name in [entity_name, "Jeff"]:
+            canonical = KNOWN_ALIASES.get(name.lower().strip(), name)
+            relevant_names.add(canonical.lower())
+
+        # Include the speaker if present
+        if speaker:
+            canonical_speaker = KNOWN_ALIASES.get(speaker.lower().strip(), speaker)
+            relevant_names.add(canonical_speaker.lower())
+
+        # Filter edges: keep only those where at least one endpoint matches
+        original_count = len(result.relationships)
+        filtered_edges = []
+        for rel in result.relationships:
+            src_canonical = KNOWN_ALIASES.get(rel.source_name.lower().strip(), rel.source_name)
+            tgt_canonical = KNOWN_ALIASES.get(rel.target_name.lower().strip(), rel.target_name)
+            if src_canonical.lower() in relevant_names or tgt_canonical.lower() in relevant_names:
+                filtered_edges.append(rel)
+
+        removed = original_count - len(filtered_edges)
+        if removed > 0:
+            logger.info(
+                "Entity-context filter (%s): kept %d/%d edges, removed %d irrelevant",
+                entity_name,
+                len(filtered_edges),
+                original_count,
+                removed,
+            )
+
+        return ExtractionResult(
+            entities=result.entities,
+            relationships=filtered_edges,
+            raw_response=result.raw_response,
+        )
 
     # ─────────────────────────────────────────
     # Teardown

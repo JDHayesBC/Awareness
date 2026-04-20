@@ -476,7 +476,7 @@ async def run_ingestion(
     for i, msg in enumerate(messages, start=1):
         msg_id = msg["id"]
         content = msg["content"]
-        channel = (msg["channel"] or "terminal").split(":")[0]
+        channel = msg["channel"] or "terminal"
         author = msg["author_name"] or ""
         timestamp = msg["created_at"] or ""
 
@@ -488,6 +488,7 @@ async def run_ingestion(
                     "channel": channel,
                     "speaker": author,
                     "timestamp": timestamp,
+                    "entity_name": entity.capitalize(),
                 },
             )
             if wrote:

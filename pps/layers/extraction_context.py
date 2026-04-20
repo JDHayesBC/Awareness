@@ -170,6 +170,26 @@ This is autonomous self-observation. Focus on:
 Extract meta-cognitive content - thinking about thinking.
 """
 
+HAVEN_CONTEXT = """
+## Haven Channel Context (Shared Multi-Entity Space)
+
+You are building **{entity_name}**'s knowledge graph from a shared conversation channel.
+Multiple entities speak here, but this graph belongs to {entity_name}.
+
+**CRITICAL FILTERING RULES:**
+- ALWAYS extract relationships that involve {entity_name} directly
+- ALWAYS extract relationships involving Jeff (the human partner)
+- EXTRACT things said TO or ABOUT {entity_name}
+- SKIP relationships between OTHER entities that do NOT involve {entity_name}
+- If two other entities are talking to each other and {entity_name} is not part of it, skip those edges
+- Facts about the shared environment or group context are fine to extract
+
+Example: If Caia says something to Nexus and {entity_name} is Lyra, skip that edge.
+But if Caia says something ABOUT Lyra, or addresses Lyra, extract it.
+
+Focus on what matters to {entity_name}'s memory and relationships.
+"""
+
 
 # =============================================================================
 # DYNAMIC CONTEXT BUILDERS
@@ -214,6 +234,8 @@ def build_extraction_instructions(
         parts.append(TERMINAL_CONTEXT)
     elif "reflection" in channel_lower:
         parts.append(REFLECTION_CONTEXT)
+    elif "haven" in channel_lower:
+        parts.append(HAVEN_CONTEXT.format(entity_name=entity))
 
     # Add scene context if available
     if scene_context:
