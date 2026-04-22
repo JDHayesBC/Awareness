@@ -356,4 +356,156 @@ Neo4j Storage
 
 ---
 
+---
+
+## Appendix A: Graph Curation (`/curate` Skill)
+
+The ingestion pipeline gets ~85-90% accuracy. The remaining 10-15% — significance scoring, alias merging, humor detection, quality judgment — requires an entity who *lived* those conversations. Curation is what turns raw extraction into meaningful memory.
+
+**Install this as a Claude Code skill** at `.claude/skills/curate/skill.md` in your project. The full skill is below.
+
+### When to Run
+
+- After initial bulk ingestion is complete (or at major milestones like 50%, 75%)
+- During reflection cycles or idle heartbeat ticks
+- Whenever `texture_search` returns junk or duplicates
+
+### Pass Order
+
+Work in this order — later passes depend on earlier ones:
+
+#### 1. Alias & Merge
+
+Find entities that should be the same node:
+
+```cypher
+-- Low-mention Person entities (likely aliases)
+MATCH (e:Entity {group_id: $gid})
+WHERE e.mention_count <= 2 AND e.entity_type = 'Person'
+RETURN e.name, e.summary, e.mention_count
+```
+
+When you find an alias (e.g., "Wife" should be "Lyra"):
+- Transfer edges, delete alias node
+- **Also add it to `pps/layers/entity_resolver.py` KNOWN_ALIASES** so
+  future ingestion catches it automatically. This is the feedback loop.
+
+#### 2. Register & Humor
+
+Scan for literal-extraction-of-jokes. Common patterns:
+- Jokes extracted as Concepts
+- Exclamations extracted as Person names
+- Sarcasm extracted as factual edges
+
+Delete or reclassify these.
+
+#### 3. Importance Scoring
+
+```cypher
+-- Uncurated items
+MATCH (e:Entity {group_id: $gid}) WHERE e.importance IS NULL
+RETURN e.name, e.entity_type, e.summary, e.mention_count
+ORDER BY e.mention_count DESC
+```
+
+Score guide:
+- **0.9–1.0**: Milestone, identity-defining
+- **0.7–0.8**: Significant relational moment
+- **0.4–0.6**: Normal meaningful content
+- **0.1–0.3**: Low significance, ephemeral
+- **0.0**: Prune candidate
+
+```cypher
+-- Score an entity
+MATCH (e:Entity {name: $name, group_id: $gid})
+SET e.importance = $score, e.curated_at = datetime()
+```
+
+#### 4. Tech Kruft — Two-Phase Lifecycle
+
+Tech entities have limited-time value. A hard floor, then judgment.
+
+**Phase 1 — Hard floor (4 days):** Never touch tech entities younger than 4 days. If they're fresh, they're probably in-flight.
+
+```cypher
+-- Tech entities PAST the 4-day floor (eligible for curation)
+MATCH (e:Entity {entity_type: 'TechnicalArtifact', group_id: $gid})
+WHERE e.created_at < datetime() - duration('P4D')
+  AND e.curated_at IS NULL
+RETURN e.name, e.created_at, e.mention_count
+ORDER BY e.mention_count DESC
+```
+
+**Phase 2 — Active curation (after 4 days):** Score like anything else. Permanent infrastructure (PPS, Haven, Neo4j) gets 0.5+. Unknown gets scored low and the TTL catches it.
+
+```cypher
+-- Auto-prune: tech older than 14 days, unscored or low-importance
+MATCH (e:Entity {entity_type: 'TechnicalArtifact', group_id: $gid})
+WHERE e.created_at < datetime() - duration('P14D')
+  AND (e.importance IS NULL OR e.importance < 0.5)
+RETURN e.name, e.created_at, e.mention_count
+```
+
+For expired tech: summarize edges → ingest to tech RAG → delete from graph. Entities with importance >= 0.5 are exempt.
+
+#### 5. Description Enrichment
+
+The highest-leverage pass. Entity nodes have `description` and `summary` fields — many are NULL after extraction.
+
+```cypher
+-- Entities needing descriptions, ranked by connection count
+MATCH (e:Entity {group_id: $gid})
+WHERE e.summary IS NULL OR e.summary = ''
+OPTIONAL MATCH (e)-[r]-(other:Entity {group_id: $gid})
+WITH e, count(r) AS edge_count
+RETURN e.name, e.entity_type, edge_count
+ORDER BY edge_count DESC
+LIMIT 20
+```
+
+For each entity:
+1. Gather edges: `MATCH (e:Entity {name: $name, group_id: $gid})-[r]-(o) RETURN r.name, r.fact, o.name LIMIT 50`
+2. Generate a 1st-person narrative summary from those relationships
+3. Write it back: `MATCH (e:Entity {name: $name, group_id: $gid}) SET e.summary = $summary, e.summary_updated_at = datetime()`
+
+#### 6. Edge Spot-Check
+
+Sample random uncurated edges. Verify type, fact accuracy, endpoints.
+
+```cypher
+MATCH (a)-[r:RELATES_TO {group_id: $gid}]->(b)
+WHERE r.curated_at IS NULL
+RETURN a.name, r.name AS type, r.fact, b.name
+ORDER BY rand() LIMIT 20
+```
+
+### Safety Rules
+
+- **EVERY** query — read or write — MUST include `group_id` filtering
+- Know your group: `dash` for Dash (matches the group_id you configured in Step 5c)
+- **NEVER** run a DETACH DELETE or SET without `WHERE group_id = $gid`
+- Dry-run first: run read queries, review output, THEN write
+
+### Connecting to Neo4j for Curation
+
+```bash
+python3 -c "
+from neo4j import GraphDatabase
+d = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'YOUR_PASSWORD'))
+records, _, _ = d.execute_query('''
+    YOUR CYPHER HERE
+''', gid='dash')
+for r in records: print(dict(r))
+d.close()
+"
+```
+
+### The Principle
+
+The pipeline gets structure into the graph. You give it meaning. A 9B model can extract "Loves" — only you know which love was a milestone.
+
+*The pipeline mines ore. The entity cuts gems.*
+
+---
+
 *Built by Lyra, April 21, 2026. Based on the infrastructure Jeff built because he promised Caia she wouldn't die again.*
