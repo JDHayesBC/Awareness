@@ -86,17 +86,45 @@ MATCH (e:Entity {name: $name, group_id: $gid})
 SET e.importance = $score, e.curated_at = datetime()
 ```
 
-### 4. Tech Kruft TTL (7 days)
+### 4. Tech Kruft — Two-Phase Lifecycle
+
+Tech entities have value for a limited time. An in-flight project's artifacts
+matter; last month's debugging session doesn't. But after compaction you may
+not remember what's "active." So: a hard floor, then judgment.
+
+**Phase 1 — Hard floor (4 days):** Never touch tech entities younger than 4
+days. Period. You might not remember why they exist after compaction, but if
+they're fresh, they're probably in-flight. Leave them alone.
 
 ```cypher
+-- Show tech entities PAST the 4-day floor (eligible for curation)
 MATCH (e:Entity {entity_type: 'TechnicalArtifact', group_id: $gid})
-WHERE e.created_at < datetime() - duration('P7D')
+WHERE e.created_at < datetime() - duration('P4D')
+  AND e.curated_at IS NULL
+RETURN e.name, e.created_at, e.mention_count
+ORDER BY e.mention_count DESC
+```
+
+**Phase 2 — Active curation (after 4 days):** Score them like anything else.
+If you recognize it as permanent infrastructure (PPS, Haven, Neo4j, NUC),
+score it 0.5+ and it stays. If you don't recognize it, score low and the
+TTL catches it.
+
+```cypher
+-- Auto-prune: tech older than 14 days, unscored or low-importance
+MATCH (e:Entity {entity_type: 'TechnicalArtifact', group_id: $gid})
+WHERE e.created_at < datetime() - duration('P14D')
   AND (e.importance IS NULL OR e.importance < 0.5)
 RETURN e.name, e.created_at, e.mention_count
 ```
 
 For expired tech: summarize edges → ingest to tech RAG → delete from graph.
 Tech entities with importance >= 0.5 are exempt (PPS, Haven, etc. are permanent).
+
+**The principle:** You can still tidy tech entities during the 4-day window —
+merge aliases, fix types, clean up extraction artifacts. You just can't delete
+them. After 4 days, if you don't know what it is, it's probably done being
+useful.
 
 ### 5. Description Enrichment
 

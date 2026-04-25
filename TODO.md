@@ -77,9 +77,10 @@
 | 4 | **Ingestion tracking redesign** | **✅ DONE** | Per-row status columns (kg_ingested_at, kg_error). Range-based marking replaced with per-ID marking. Failed messages tracked with error reason. Issue #145. |
 | 5 | **Switch LLM extraction to NUC Qwen** | **✅ DONE** | Replaced Haiku wrapper with local qwen3-1.7b on NUC. Hybrid mode: local LLM + OpenAI embeddings (1024-dim). Benchmark: `work/qwen-graphiti-bench/RESULTS.md`. |
 | 6 | **Implement parallel ingestion** | **✅ DONE** | Parallel processing in ingestion pipeline. Uses `asyncio.gather()` with configurable parallelism. Speedup: 10-17x depending on batch size. [#153](https://github.com/JDHayesBC/Awareness/issues/153). |
-| 7 | **Deploy custom graph layer** | **✅ DONE** | CustomGraphLayer in `pps/layers/custom_graph.py`. Manual ingestion: `scripts/kg_ingest.py`. Daemon: `scripts/kg_ingest_daemon.py`. Issue [#167](https://github.com/JDHayesBC/Awareness/issues/167). |
+| 7 | **Deploy custom graph layer** | **✅ DONE** | CustomGraphLayer in `pps/layers/custom_graph.py`. Manual ingestion: `scripts/kg_ingest.py`. Daemon: `scripts/kg_ingest_daemon.py`. Issue [#167](https://github.com/JDHayesBC/Awareness/issues/167) — **closed 2026-04-23**. |
 | 8 | **Wire PPS texture tools to custom graph** | **✅ DONE** | `texture_search`, `texture_explore`, `texture_add_triplet`, `texture_delete` now route through CustomGraphLayer. Graph ingestion status tracked per-row in `conversations.db`. |
-| 9 | **Wire realtime terminal ingestion hooks** | **TODO** | Discord already does realtime ingestion. Terminal needs the same. Prevents future backlogs. |
+| 9 | **Wire realtime terminal ingestion hooks** | **TODO** | Discord already does realtime ingestion. Terminal needs the same. Less urgent now that `kg_ingest_daemon.py` has lock file protection and is ready for `*/30` cron (2026-04-23). |
+| 11 | **Cron automation for ingestion daemon** | **READY** | Lock file added 2026-04-23. Needs one `crontab -e` line: `*/30 * * * *` with batch 200. Prevents overlap via PID lock. Jeff to wire. |
 | 10 | **Graph curation run** | **TODO** | Known issues: duplicates from old Graphiti migration, entity overlap edge cases. Graph quality is good — curate, don't rebuild. Use `/curate` skill during reflection. |
 
 **Custom Graph Architecture**: Entity extraction + triplet resolution runs on NUC Qwen (via LM Studio).
@@ -196,14 +197,19 @@ Zero Graphiti dependency. Per-row ingestion status in `conversations.db` (kg_ing
 
 ## Open Issues
 
-Tracked on GitHub: https://github.com/JDHayesBC/Awareness/issues
+Tracked on GitHub: https://github.com/JDHayesBC/Awareness/issues — **33 open** (as of 2026-04-23)
 
 Key open issues:
-- [#63](https://github.com/JDHayesBC/Awareness/issues/63) - Multi-entity support (Haven foundation) — **now part of Phase B above**
 - [#64](https://github.com/JDHayesBC/Awareness/issues/64) - Multi-substrate support (provider flexibility)
 - [#60](https://github.com/JDHayesBC/Awareness/issues/60) - Email content doesn't surface in ambient recall
 - [#62](https://github.com/JDHayesBC/Awareness/issues/62) - Email state tracking via Gmail labels
-- [#131](https://github.com/JDHayesBC/Awareness/issues/131) - PPS backup system (Phase 1-3 complete, Phase 4 cloud sync future)
+- [#125](https://github.com/JDHayesBC/Awareness/issues/125) - PPS large result truncation (priority:high)
+- [#155](https://github.com/JDHayesBC/Awareness/issues/155) - Daemon prompt injection vulnerability (security)
+- [#157](https://github.com/JDHayesBC/Awareness/issues/157) - Break glass package delivery to Steve (**BLOCKING on Jeff**)
+- [#158](https://github.com/JDHayesBC/Awareness/issues/158) - Neo4j reinitializes on restart (WSL race condition)
+- [#169](https://github.com/JDHayesBC/Awareness/issues/169) - Haven Docker mount race condition
+
+**Recently closed (2026-04-23)**: #167 (custom graph — done), #142 (Graphiti sandbox — superseded), #149 (bulk ingestion — superseded), #150 (Haiku dedup — superseded), #76 (break glass — done as #157), #130 (Haiku round-robin — no longer needed)
 
 ---
 

@@ -39,10 +39,13 @@ SCOPES = [
     'https://www.googleapis.com/auth/gmail.modify'
 ]
 
-# Paths
+# Paths — credentials dir can be overridden per-entity via GMAIL_CREDENTIALS_DIR env var.
+# This allows one server.py shared across entities, each with their own OAuth tokens.
+# Default: same directory as server.py (backward-compatible).
 TOOL_DIR = Path(__file__).parent
-CREDENTIALS_FILE = TOOL_DIR / "credentials.json"
-TOKEN_FILE = TOOL_DIR / "token.json"
+CRED_DIR = Path(os.environ.get("GMAIL_CREDENTIALS_DIR", str(TOOL_DIR)))
+CREDENTIALS_FILE = CRED_DIR / "credentials.json"
+TOKEN_FILE = CRED_DIR / "token.json"
 
 # MCP Server
 server = Server("gmail-mcp")
