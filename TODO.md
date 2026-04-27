@@ -61,6 +61,7 @@
 | 8204 | pps-haiku-wrapper | OpenAI-compatible wrapper | Not in use |
 | 8205 | haven | Haven chat interface | Active |
 | 8206 | rag-engine | RAG service (JINA embeddings, ChromaDB, search/rerank) | Active |
+| 8209 | ntfy | Push notifications (entity → Jeff's phone) | Active |
 | 8211 | pps-caia | PPS MCP/HTTP server (Caia) | Active |
 
 ---

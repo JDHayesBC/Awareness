@@ -120,6 +120,13 @@ def assert_no_crossbleed(entity: str, db_path: str | Path, group_id: str) -> Non
 NEO4J_URI = "bolt://localhost:7687"
 NEO4J_USER = "neo4j"
 NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "")
+if not NEO4J_PASSWORD:
+    _dotenv = PROJECT_ROOT / "pps" / "docker" / ".env"
+    if _dotenv.exists():
+        for _line in _dotenv.read_text().splitlines():
+            if _line.startswith("NEO4J_PASSWORD="):
+                NEO4J_PASSWORD = _line.split("=", 1)[1].strip()
+                break
 
 MIN_CONTENT_LENGTH = 30
 MAX_CONTENT_LENGTH = 2000

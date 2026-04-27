@@ -17,6 +17,7 @@ Behavior:
 Venv requirement: pps/venv
 """
 
+import atexit
 import asyncio
 import logging
 import os
@@ -72,6 +73,13 @@ DAEMON_BATCH = int(os.environ.get("KG_DAEMON_BATCH", "50"))
 NEO4J_URI = "bolt://localhost:7687"
 NEO4J_USER = "neo4j"
 NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "")
+if not NEO4J_PASSWORD:
+    _dotenv = PROJECT_ROOT / "pps" / "docker" / ".env"
+    if _dotenv.exists():
+        for _line in _dotenv.read_text().splitlines():
+            if _line.startswith("NEO4J_PASSWORD="):
+                NEO4J_PASSWORD = _line.split("=", 1)[1].strip()
+                break
 
 MIN_CONTENT_LENGTH = 30
 MAX_CONTENT_LENGTH = 2000
@@ -92,6 +100,59 @@ ENTITY_CONFIG: dict[str, dict] = {
         "pps_port": 8211,
     },
 }
+
+
+# ─────────────────────────────────────────────
+# Lock file (cron overlap prevention)
+# ─────────────────────────────────────────────
+
+LOCK_FILE = Path(os.environ.get("KG_DAEMON_LOCKFILE", "/tmp/kg_ingest_daemon.lock"))
+
+
+def acquire_lock() -> None:
+    """
+    Create a PID lock file.  If a live instance is already running, log and exit.
+    Stale lock files (dead PID) are silently removed before proceeding.
+    The lock is released automatically on exit via atexit.
+    """
+    if LOCK_FILE.exists():
+        try:
+            pid = int(LOCK_FILE.read_text().strip())
+        except (ValueError, OSError):
+            pid = None
+
+        if pid is not None:
+            try:
+                os.kill(pid, 0)  # signal 0 = existence check, no actual signal sent
+                # Process is alive — another instance is running
+                log(f"Lock held by PID {pid} ({LOCK_FILE}) — exiting to avoid overlap")
+                sys.exit(0)
+            except ProcessLookupError:
+                # PID does not exist — stale lock, safe to remove
+                log(f"Removing stale lock file (PID {pid} no longer running)")
+                LOCK_FILE.unlink(missing_ok=True)
+            except PermissionError:
+                # os.kill(pid, 0) raises PermissionError if the process exists but
+                # is owned by a different user — treat as alive to be safe.
+                log(f"Lock held by PID {pid} (different owner) — exiting to avoid overlap")
+                sys.exit(0)
+        else:
+            # Lock file unreadable / malformed — remove and proceed
+            log(f"Removing unreadable lock file at {LOCK_FILE}")
+            LOCK_FILE.unlink(missing_ok=True)
+
+    # Write our PID
+    LOCK_FILE.write_text(str(os.getpid()))
+    atexit.register(_release_lock)
+
+
+def _release_lock() -> None:
+    """Remove the lock file on exit (registered via atexit)."""
+    try:
+        if LOCK_FILE.exists() and LOCK_FILE.read_text().strip() == str(os.getpid()):
+            LOCK_FILE.unlink()
+    except OSError:
+        pass  # best-effort cleanup
 
 
 # ─────────────────────────────────────────────
@@ -347,6 +408,9 @@ async def ingest_entity(entity: str) -> dict:
 async def main() -> None:
     run_start = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     log(f"kg_ingest_daemon starting — batch={DAEMON_BATCH} per entity")
+
+    # Prevent cron overlap — exits cleanly if another instance is running
+    acquire_lock()
 
     # Single LLM pre-flight shared across all entities
     llm_url = check_llm_reachable()

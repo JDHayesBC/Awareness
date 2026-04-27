@@ -11,6 +11,7 @@
 #   - pps-lyra: Lyra's PPS tool server (port 8201)
 #   - pps-caia: Caia's PPS tool server (port 8211)
 #   - observatory: Web dashboard for observability
+#   - ntfy: Push notifications to Jeff's phone (port 8209)
 #
 # Data Persistence:
 #   - ChromaDB data: ${PROJECT_ROOT}/docker/pps/chromadb_data (bind-mount)
@@ -348,6 +349,29 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+  # ntfy — Self-hosted push notifications (entity → Jeff's phone)
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    container_name: ntfy
+    restart: unless-stopped
+    ports:
+      - "8209:80"
+    volumes:
+      - ${PROJECT_ROOT}/docker/pps/ntfy_cache:/var/cache/ntfy
+      - ${PROJECT_ROOT}/docker/pps/ntfy_etc:/etc/ntfy
+    command: serve
+    environment:
+      - NTFY_BASE_URL=http://localhost:8209
+      - NTFY_AUTH_DEFAULT_ACCESS=deny-all
+      - NTFY_BEHIND_PROXY=false
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
 # Volumes removed - now using bind-mounts to ${PROJECT_ROOT}/docker/pps/ (Issue #131)
 # This ensures data survives Docker incidents

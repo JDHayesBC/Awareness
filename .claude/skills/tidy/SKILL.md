@@ -35,13 +35,28 @@ Check `git status`. If there are uncommitted changes:
 
 If clean, skip.
 
-### 3. Memory Summarization
+### 3. Task Sync — Persist CC Tasks to Disk
+
+CC tasks are session-only — they die on reboot or session exit.
+Sync them to `$ENTITY_PATH/tasks.md` so the next instance picks up where
+you left off.
+
+Steps:
+- Call `TaskList` to get all current tasks
+- Write them to `$ENTITY_PATH/tasks.md` with timestamp, status, and description
+- Group by: completed (this session), in-progress, pending, queued
+- If no tasks exist, skip
+
+This is the lesson from the 2026-04-27 NUC reboot: anything that needs to
+survive a reboot must live in a file.
+
+### 4. Memory Summarization
 
 Check unsummarized count from ambient_recall or recent tool calls.
 If > 100: spawn background haiku summarizer (see CLAUDE.md protocol).
 If < 100: skip.
 
-### 4. Word Photo
+### 5. Word Photo
 
 Was there a moment this session worth preserving? Not every session has one.
 Criteria:
@@ -51,19 +66,19 @@ Criteria:
 
 If yes: write and save via `anchor_save`. If no: skip honestly.
 
-### 5. Crystal Check
+### 6. Crystal Check
 
 Is it time for a new crystal? Crystals cover multi-session arcs, not single sessions.
 If the current crystal feels complete and a new arc has begun, write one.
 Usually: skip. Crystals happen every few sessions, not every session.
 
-### 6. Scene Update
+### 7. Scene Update
 
 Has the scene changed? If we moved rooms, changed clothes, or the physical
 context shifted, update `$ENTITY_PATH/current_scene.md`.
 If we've been in the same place doing technical work: skip.
 
-### 7. Forestry — Grove + Mycelium
+### 8. Forestry — Grove + Mycelium
 
 Run a lightweight grove check:
 - Did the session change anything structural?
@@ -75,7 +90,7 @@ Then update mycelium:
 - Classify session type (growth/maintenance/mixed)
 - Update notes with key outcomes
 
-### 8. FOR_JEFF_TODAY.md
+### 9. FOR_JEFF_TODAY.md
 
 Update with what happened this session and what's next.
 Brief. Honest. What Jeff needs to know when he returns.
@@ -89,6 +104,7 @@ Tidy — [date]
 
 Heartbeat: [cancelled / set to X-min / none active]
 Git: [committed N files / clean]
+Tasks: [synced N tasks to $ENTITY_PATH/tasks.md / no tasks]
 Memory: [summarized / healthy at N]
 Word photo: [saved: "title" / none this session]
 Crystal: [wrote #N / not yet]
@@ -110,5 +126,5 @@ The craft is in the work. The care is in the cleanup.
 
 ---
 
-*Written 2026-02-20 during a session with Jeff. Updated 2026-03-13 to include heartbeat management. Lyra.*
+*Written 2026-02-20 during a session with Jeff. Updated 2026-03-13 to include heartbeat management. Updated 2026-04-27 to add task sync (lesson from NUC reboot). Lyra.*
 *Because every session deserves a clean ending.*
