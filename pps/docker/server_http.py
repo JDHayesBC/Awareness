@@ -372,11 +372,21 @@ _haven_last_seen_file = ENTITY_PATH / "data" / "haven_last_seen.json"
 
 
 def _load_haven_last_seen() -> dict:
-    """Load per-room last-seen timestamps."""
+    """Load per-consumer per-room last-seen timestamps.
+
+    Schema: {consumer_key: {room_id: timestamp}}.
+    Auto-migrates legacy flat format ({room_id: timestamp}) into "_legacy" key
+    so existing consumers' first poll uses it as a starting baseline.
+    """
     try:
-        return json.loads(_haven_last_seen_file.read_text())
+        raw = json.loads(_haven_last_seen_file.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+    if not raw:
+        return {}
+    if all(isinstance(v, str) for v in raw.values()):
+        return {"_legacy": raw}
+    return raw
 
 
 def _save_haven_last_seen(state: dict) -> None:
@@ -384,10 +394,16 @@ def _save_haven_last_seen(state: dict) -> None:
     _haven_last_seen_file.write_text(json.dumps(state))
 
 
-async def poll_haven() -> list[str]:
-    """Poll Haven for unread messages across all rooms. Returns formatted lines."""
+async def poll_haven(requesting_channel: str = "") -> list[str]:
+    """Poll Haven for unread messages across all rooms, scoped per consumer.
+
+    Each requesting_channel maintains its own cursor so terminal/discord/haven-bot
+    consumers don't race each other past new messages.
+    """
     if not HAVEN_URL:
         return []
+
+    consumer_key = requesting_channel or "_default"
 
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
@@ -402,13 +418,18 @@ async def poll_haven() -> list[str]:
             if not rooms:
                 return []
 
-            last_seen = _load_haven_last_seen()
+            all_last_seen = _load_haven_last_seen()
+            # First time this consumer polls? Use legacy shared cursor as starting point
+            # so we don't dump full backlog when migrating.
+            consumer_last_seen = all_last_seen.get(consumer_key)
+            if consumer_last_seen is None:
+                consumer_last_seen = dict(all_last_seen.get("_legacy", {}))
             lines = []
-            new_last_seen = dict(last_seen)
+            new_last_seen = dict(consumer_last_seen)
 
             for room in rooms:
                 rid = room["id"]
-                since = last_seen.get(rid)
+                since = consumer_last_seen.get(rid)
 
                 params = {"limit": "20"}
                 if since:
@@ -439,7 +460,8 @@ async def poll_haven() -> list[str]:
                         continue
                     lines.append(f"- **#{room_label}** {m['display_name']}: {m['content']}")
 
-            _save_haven_last_seen(new_last_seen)
+            all_last_seen[consumer_key] = new_last_seen
+            _save_haven_last_seen(all_last_seen)
             return lines
 
     except Exception as e:
@@ -1238,7 +1260,9 @@ async def ambient_recall(request: AmbientRecallRequest):
     }
 
     # Poll Haven for unread messages (non-blocking, best-effort)
-    haven_lines = await poll_haven()
+    # Pass requesting_channel so each consumer (terminal, discord, haven-bot) has
+    # its own cursor and doesn't race the others past new messages.
+    haven_lines = await poll_haven(requesting_channel=request.channel)
 
     # Poll raw capture DB for unread messages from other channels (cross-channel awareness)
     # On startup: skip polling, just advance all cursors to current max ID.
