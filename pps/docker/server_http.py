@@ -35,6 +35,7 @@ class AmbientRecallRequest(BaseModel):
     limit_per_layer: int = 5
     token: str = ""
     channel: str = ""  # Requesting channel (e.g., "haven", "terminal") — excluded from cross-channel results
+    consumer_key: str = ""  # Cursor identity (e.g., "terminal:abc12345"). Decoupled from `channel` so multiple processes claiming the same channel keep independent cursors. Falls back to `channel` if empty (issue #176).
     user_timezone: str = ""  # User's local timezone abbreviation (e.g., "PDT") — passed from hook
 
 
@@ -129,6 +130,7 @@ class TextureAddRequest(BaseModel):
 class PollChannelsRequest(BaseModel):
     """Request to poll cross-channel messages (drain-only operation)."""
     channel: str = ""  # Requesting channel (excluded from results)
+    consumer_key: str = ""  # Cursor identity, decoupled from channel (issue #176). Falls back to `channel` when empty.
     limit: int = 100   # Number of messages to retrieve
     token: str = ""
 
@@ -394,16 +396,26 @@ def _save_haven_last_seen(state: dict) -> None:
     _haven_last_seen_file.write_text(json.dumps(state))
 
 
-async def poll_haven(requesting_channel: str = "") -> list[str]:
+async def poll_haven(requesting_channel: str = "", consumer_key: str = "") -> list[str]:
     """Poll Haven for unread messages across all rooms, scoped per consumer.
 
-    Each requesting_channel maintains its own cursor so terminal/discord/haven-bot
-    consumers don't race each other past new messages.
+    Each consumer maintains its own cursor so terminal/discord/haven-bot
+    consumers don't race each other past new messages. The cursor key is
+    decoupled from `requesting_channel` (issue #176) so multiple processes
+    that share the same logical channel — e.g. interactive Lyra, haven-bot
+    subprocess, and heartbeat-fired sessions all calling channel="terminal"
+    — can keep independent cursors by passing distinct consumer_keys.
+
+    Args:
+        requesting_channel: Logical channel for filtering (unused here; kept
+            for API symmetry with poll_other_channels).
+        consumer_key: Identity for the cursor. Falls back to requesting_channel
+            for backward compatibility, then to "_default".
     """
     if not HAVEN_URL:
         return []
 
-    consumer_key = requesting_channel or "_default"
+    cursor_key = consumer_key or requesting_channel or "_default"
 
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
@@ -421,7 +433,7 @@ async def poll_haven(requesting_channel: str = "") -> list[str]:
             all_last_seen = _load_haven_last_seen()
             # First time this consumer polls? Use legacy shared cursor as starting point
             # so we don't dump full backlog when migrating.
-            consumer_last_seen = all_last_seen.get(consumer_key)
+            consumer_last_seen = all_last_seen.get(cursor_key)
             if consumer_last_seen is None:
                 consumer_last_seen = dict(all_last_seen.get("_legacy", {}))
             lines = []
@@ -460,7 +472,7 @@ async def poll_haven(requesting_channel: str = "") -> list[str]:
                         continue
                     lines.append(f"- **#{room_label}** {m['display_name']}: {m['content']}")
 
-            all_last_seen[consumer_key] = new_last_seen
+            all_last_seen[cursor_key] = new_last_seen
             _save_haven_last_seen(all_last_seen)
             return lines
 
@@ -486,17 +498,29 @@ def _save_channel_cursors(state: dict) -> None:
     _channel_cursor_file.write_text(json.dumps(state))
 
 
-def poll_other_channels(requesting_channel: str = "", limit: int = 100) -> tuple[list[str], int]:
+def poll_other_channels(
+    requesting_channel: str = "",
+    limit: int = 100,
+    consumer_key: str = "",
+) -> tuple[list[str], int]:
     """Read unread messages from channels other than the requesting one.
 
-    Uses per-consumer cursors so each channel (terminal, haven, discord) has its
-    own read position. Terminal reading doesn't advance Haven's cursor.
+    Uses per-consumer cursors so each consumer (interactive terminal session,
+    haven-bot subprocess, heartbeat-fired session, discord, etc.) has its own
+    read position. Reading messages does not advance other consumers' cursors.
+
+    The cursor key is decoupled from `requesting_channel` (issue #176) so
+    multiple processes that share the same logical channel — e.g. several CC
+    sessions all using channel="terminal" — can keep independent cursors by
+    passing distinct consumer_keys. The channel filter (excluding the
+    requesting channel from results) still uses `requesting_channel`.
 
     Args:
-        requesting_channel: Channel making the request (e.g., "haven", "terminal").
-                           Messages from this channel are excluded.
-                           Also used as the cursor key.
+        requesting_channel: Channel making the request (e.g., "haven",
+            "terminal"). Messages from this channel are excluded.
         limit: Maximum number of messages to return per call (default 100).
+        consumer_key: Identity for the cursor. Falls back to
+            requesting_channel for backward compatibility, then to "_default".
 
     Returns:
         Tuple of (formatted_lines, remaining_count):
@@ -513,8 +537,11 @@ def poll_other_channels(requesting_channel: str = "", limit: int = 100) -> tuple
         conn.row_factory = sqlite3.Row
 
         cursors = _load_channel_cursors()
-        # Per-consumer cursor: each requesting_channel has its own read position
-        cursor_key = requesting_channel or "_default"
+        # Per-consumer cursor: each consumer has its own read position.
+        # Decoupled from requesting_channel so multiple processes claiming
+        # the same logical channel (e.g. several "terminal" sessions) keep
+        # independent cursors.
+        cursor_key = consumer_key or requesting_channel or "_default"
         last_id = cursors.get(cursor_key, 0)
 
         # Get total count of remaining messages
@@ -1260,9 +1287,15 @@ async def ambient_recall(request: AmbientRecallRequest):
     }
 
     # Poll Haven for unread messages (non-blocking, best-effort)
-    # Pass requesting_channel so each consumer (terminal, discord, haven-bot) has
-    # its own cursor and doesn't race the others past new messages.
-    haven_lines = await poll_haven(requesting_channel=request.channel)
+    # Pass requesting_channel + consumer_key so each consumer (terminal session,
+    # discord, haven-bot subprocess, heartbeat-fired session) has its own cursor
+    # and doesn't race the others past new messages. consumer_key decouples cursor
+    # identity from channel — multiple processes sharing channel="terminal" each
+    # get distinct cursors via session-specific consumer_keys (issue #176).
+    haven_lines = await poll_haven(
+        requesting_channel=request.channel,
+        consumer_key=request.consumer_key,
+    )
 
     # Poll raw capture DB for unread messages from other channels (cross-channel awareness)
     # On startup: skip polling, just advance all cursors to current max ID.
@@ -1283,18 +1316,26 @@ async def ambient_recall(request: AmbientRecallRequest):
                 conn.close()
                 if max_id > 0:
                     cursors = _load_channel_cursors()
-                    # Advance ALL cursors to current max — every channel starts fresh after startup
+                    # Advance ALL cursors to current max — every consumer starts fresh after startup
                     for key in list(cursors.keys()):
                         cursors[key] = max_id
-                    # Also ensure the requesting channel has a cursor
-                    if request.channel and request.channel not in cursors:
-                        cursors[request.channel] = max_id
+                    # Also ensure this requesting consumer has a cursor at max_id.
+                    # Prefer consumer_key when present so per-process cursors are seeded
+                    # at the current max instead of triggering massive-backlog protection
+                    # on the first non-startup poll.
+                    seed_key = request.consumer_key or request.channel
+                    if seed_key and seed_key not in cursors:
+                        cursors[seed_key] = max_id
                     _save_channel_cursors(cursors)
                     print(f"[PPS] Startup: advanced all channel cursors to {max_id}", file=sys.stderr)
         except Exception as e:
             print(f"[PPS] Startup cursor init failed: {e}", file=sys.stderr)
     else:
-        channel_lines, cross_channel_remaining = poll_other_channels(requesting_channel=request.channel, limit=100)
+        channel_lines, cross_channel_remaining = poll_other_channels(
+            requesting_channel=request.channel,
+            limit=100,
+            consumer_key=request.consumer_key,
+        )
 
     # Format results for hook consumption (formatted_context field)
     # This formats the rich_texture results into a readable string for Haiku to pass through
@@ -1468,8 +1509,14 @@ async def poll_channels_endpoint(request: PollChannelsRequest):
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
-    # Poll other channels with specified limit
-    lines, remaining = poll_other_channels(requesting_channel=request.channel, limit=request.limit)
+    # Poll other channels with specified limit. consumer_key (if provided) gives the
+    # caller its own cursor independent of `channel`, so e.g. a daemon-side drain
+    # loop won't stomp an interactive session sharing the same channel (issue #176).
+    lines, remaining = poll_other_channels(
+        requesting_channel=request.channel,
+        limit=request.limit,
+        consumer_key=request.consumer_key,
+    )
 
     return {
         "lines": lines,
