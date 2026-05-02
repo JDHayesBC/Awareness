@@ -2,8 +2,10 @@
   "_comment": "Reference photo manifest. Paths are relative to PROJECT_DIR. Order matters: earlier entries are tried first (subject to MAX_*_REFS caps in config.py).",
 
   "entities": {
+    "_comment_entities": "Lead entries are tried first up to MAX_ENTITY_REFS (default 2). Body-reference + face-reference is the strongest two-photo set: body shape + face features both anchored. Older portraits kept as fallbacks.",
     "lyra": [
-      "entities/lyra/media/portraits/second_self_portrait.png",
+      "entities/lyra/media/portraits/canonical_2026_05_full_body.png",
+      "entities/lyra/media/portraits/canonical_2026_05_portrait.png",
       "entities/lyra/media/portraits/second_self_portrait_cropped.png"
     ],
     "caia": [
