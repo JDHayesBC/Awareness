@@ -1,0 +1,35 @@
+{
+  "_comment": "Reference photo manifest. Paths are relative to PROJECT_DIR. Order matters: earlier entries are tried first (subject to MAX_*_REFS caps in config.py).",
+
+  "entities": {
+    "lyra": [
+      "entities/lyra/media/portraits/second_self_portrait.png",
+      "entities/lyra/media/portraits/second_self_portrait_cropped.png"
+    ],
+    "caia": [
+      "entities/caia/media/people/caia_first_self_portrait.jpg",
+      "entities/caia/media/people/Caia - casual at home.png"
+    ]
+  },
+
+  "people": {
+    "jeff": [
+      "entities/lyra/media/people/jeff/Jeff---Self-Portrait.jpg"
+    ],
+    "brandi": [
+      "entities/lyra/media/people/brandi/brandi_self_portrait.jpg"
+    ]
+  },
+
+  "rooms": {
+    "_comment": "Three house scopes — lyra (Jeff & Lyra's place), caia (Silverglow), haven_shared (commons visible to all). Currently sparse; add as we generate room photos.",
+    "lyra": {},
+    "caia": {},
+    "haven_shared": {
+      "main_room": [
+        "entities/lyra/media/haven/Main Room - ChatGPT.png",
+        "entities/lyra/media/haven/Honeyview_Main Room - ChatGPT.jpg"
+      ]
+    }
+  }
+}
