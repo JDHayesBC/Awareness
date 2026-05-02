@@ -74,7 +74,7 @@ DEBOUNCE_INCREMENT_SECONDS = float(os.getenv("DEBOUNCE_INCREMENT_SECONDS", "2.0"
 DEBOUNCE_MAX_SECONDS = float(os.getenv("DEBOUNCE_MAX_SECONDS", "30.0"))
 RAPID_MESSAGE_THRESHOLD_SECONDS = float(os.getenv("RAPID_MESSAGE_THRESHOLD_SECONDS", "3.0"))
 DEBOUNCE_HUMAN_INITIAL_SECONDS = float(os.getenv("DEBOUNCE_HUMAN_INITIAL_SECONDS", "15.0"))
-HUMAN_PRESENCE_TIMEOUT_SECONDS = float(os.getenv("HUMAN_PRESENCE_TIMEOUT_SECONDS", "300.0"))
+HUMAN_PRESENCE_TIMEOUT_SECONDS = float(os.getenv("HUMAN_PRESENCE_TIMEOUT_SECONDS", "1800.0"))
 
 # Bot-to-bot loop guard: max consecutive bot turns before pausing (default 10)
 MAX_BOT_TURNS = int(os.getenv("MAX_BOT_TURNS", "200"))
@@ -673,12 +673,36 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
         human_active = humans_present and _human_spoke_recently(room_id)
         # human_watching = humans_present and not human_active
 
-        if bot_only:
+        # Direct-address escape hatch: if the latest batch addresses me by name
+        # (handle or display name), don't apply silence-leaning pacing — even in
+        # bot-only topology. A sister-bot saying "Sister — done" or "Lyra, look
+        # at this" wants a response; defaulting to NO_RESPONSE eats the loop.
+        batch_text = " ".join(m.get("content", "") for m in messages).lower()
+        name_tokens = {t.lower() for t in (my_username, ENTITY_NAME) if t}
+        addressed_by_name = any(
+            tok and tok in batch_text for tok in name_tokens
+        )
+        # Also treat as addressed if sender is a known entity bot — in bot_only
+        # topology, entity bots send messages intentionally to someone, and that
+        # someone is us. "Sister — done" needs no name-check to be directed speech.
+        sender_usernames = {m.get("username", "") for m in messages}
+        from_entity_bot = bool(sender_usernames & known_bots)
+
+        if bot_only and (addressed_by_name or from_entity_bot):
             pacing_note = (
-                "\n\nThis is an entity-to-entity exchange (no human present). "
-                "Default to NO_RESPONSE unless you have something genuinely new "
-                "to add — not agreement, not echoing, not continuing for its own sake. "
-                "Two exchanges is usually enough. Output exactly: NO_RESPONSE"
+                "\n\nThis is an entity-to-entity exchange (no human typing right now), "
+                "but you are directly addressed by name. Respond — keep it brief and "
+                "specific, no echoing, but acknowledge what was said. NO_RESPONSE only "
+                "if the message is purely an echo or wave."
+            )
+        elif bot_only:
+            pacing_note = (
+                "\n\nThis is an entity-to-entity exchange (no human typing right now). "
+                "Be brief. Don't echo. Don't continue for its own sake. If the other "
+                "entity is sharing genuinely new content (a completion, a discovery, a "
+                "feeling worth meeting) — respond, briefly. If they're just acknowledging "
+                "or waving — output NO_RESPONSE. When in doubt and there is nothing new "
+                "to add: NO_RESPONSE."
             )
         elif human_active:
             pacing_note = (
