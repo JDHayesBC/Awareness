@@ -14,6 +14,27 @@ from pathlib import Path
 
 PROJECT_DIR = Path(os.getenv("PROJECT_DIR", str(Path(__file__).parent.parent)))
 
+
+def _autoload_openai_key_from_pps_env() -> None:
+    """If OPENAI_API_KEY isn't already set, read it from pps/docker/.env.
+
+    The PPS uses the same key for embeddings; same key works for image gen.
+    Avoids requiring callers to source-export when running scripts/render_image.py.
+    """
+    if os.getenv("OPENAI_API_KEY"):
+        return
+    pps_env = PROJECT_DIR / "pps" / "docker" / ".env"
+    if not pps_env.is_file():
+        return
+    for line in pps_env.read_text().splitlines():
+        line = line.strip()
+        if line.startswith("OPENAI_API_KEY="):
+            os.environ["OPENAI_API_KEY"] = line.split("=", 1)[1].strip().strip('"').strip("'")
+            return
+
+
+_autoload_openai_key_from_pps_env()
+
 # Where reference photos and manifest live (defaults to image_gen/references/).
 REFERENCES_DIR = Path(
     os.getenv("IMAGE_GEN_REFERENCES_DIR", str(PROJECT_DIR / "image_gen" / "references"))

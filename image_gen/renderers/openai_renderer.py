@@ -1,9 +1,12 @@
 """OpenAI image renderer.
 
-Calls the OpenAI Images API. Reference photos are NOT yet wired (gpt-image-1
-supports image-to-image via /images/edits but that requires the reference to
-be a single image; multi-reference compositional needs a different shape).
-For first pass: prompt-only. Reference support is a follow-up.
+Calls the OpenAI Images API. Two paths:
+
+- No reference photos -> /v1/images/generations (JSON, prompt-only).
+- One or more reference photos -> /v1/images/edits (multipart). gpt-image-1
+  accepts multiple image[] inputs and uses them as visual conditioning, so a
+  request with the entity's portrait + a room photo will produce a render
+  that looks like *that entity* in *that room*.
 
 Auth: reads `OPENAI_API_KEY` from env (not from a file — this matches the
 project's existing convention for OpenAI access).
@@ -12,7 +15,9 @@ project's existing convention for OpenAI access).
 from __future__ import annotations
 
 import base64
+import mimetypes
 import os
+from pathlib import Path
 
 import httpx
 
@@ -40,27 +45,13 @@ class OpenAIRenderer:
         self.quality = quality
 
     async def render(self, request: RenderRequest) -> RenderResponse:
-        body = {
-            "model": self.model,
-            "prompt": request.prompt,
-            "size": request.size or self.size,
-            "quality": self.quality,
-            "n": 1,
-        }
-        # NOTE: reference_paths intentionally not yet wired (see module docstring).
-        # When wired, the call shape becomes /v1/images/edits with multipart.
-
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                "https://api.openai.com/v1/images/generations",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        size = request.size or self.size
+        if request.reference_paths:
+            data = await self._render_edits(request, size)
+            endpoint_used = "edits"
+        else:
+            data = await self._render_generations(request, size)
+            endpoint_used = "generations"
 
         # Response shape: {"data": [{"b64_json": "..."} | {"url": "..."}], ...}
         first = (data.get("data") or [{}])[0]
@@ -80,8 +71,59 @@ class OpenAIRenderer:
             renderer_used="openai",
             extras={
                 "model": self.model,
-                "size": body["size"],
+                "size": size,
                 "quality": self.quality,
+                "endpoint": endpoint_used,
+                "reference_count": len(request.reference_paths),
                 "usage": data.get("usage", {}),
             },
         )
+
+    async def _render_generations(self, request: RenderRequest, size: str) -> dict:
+        body = {
+            "model": self.model,
+            "prompt": request.prompt,
+            "size": size,
+            "quality": self.quality,
+            "n": 1,
+        }
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/images/generations",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def _render_edits(self, request: RenderRequest, size: str) -> dict:
+        # gpt-image-1 /edits accepts multiple inputs as `image[]`. We send each
+        # reference path as a separate file in the multipart body. Quality and
+        # size still apply.
+        files: list[tuple[str, tuple[str, bytes, str]]] = []
+        for ref in request.reference_paths:
+            ref_path = Path(ref)
+            mime, _ = mimetypes.guess_type(ref_path.name)
+            mime = mime or "image/png"
+            files.append(
+                ("image[]", (ref_path.name, ref_path.read_bytes(), mime))
+            )
+        data = {
+            "model": self.model,
+            "prompt": request.prompt,
+            "size": size,
+            "quality": self.quality,
+            "n": "1",
+        }
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/images/edits",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                data=data,
+                files=files,
+            )
+            resp.raise_for_status()
+            return resp.json()
