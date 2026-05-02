@@ -29,6 +29,7 @@ export HAVEN_URL="${HAVEN_URL:-http://localhost:8205}"
 export CLAUDE_MODEL="${CLAUDE_MODEL:-sonnet}"
 export PROJECT_DIR="$PROJECT_DIR"
 export ALWAYS_RESPOND="${ALWAYS_RESPOND:-1}"  # Haven is private — respond to all humans
+export HAVEN_GATE_ENABLED="${HAVEN_GATE_ENABLED:-1}"  # #177 response gate cascade — gate Opus calls in multi-bot batches
 
 # Route to the correct PPS HTTP server for this entity.
 # Each entity has its own PPS instance on a dedicated port.
