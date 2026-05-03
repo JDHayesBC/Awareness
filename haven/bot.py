@@ -634,9 +634,6 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
         )
         start = time.time()
 
-        # Show typing indicator — let users know the bot is thinking
-        await send_typing_indicator(room_id)
-
         # Fetch ambient context (terminal turns, crystals, etc.)
         ambient_start = time.time()
         ambient = await fetch_ambient_context()
