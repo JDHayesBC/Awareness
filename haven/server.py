@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -158,6 +158,21 @@ app.add_middleware(
 BASE_DIR = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+# Shared-images dir: where the share-image endpoint stores uploads. Served
+# statically at /shared-images/<entity>/<file>. Defaults next to the DB so it
+# lives in the persistent data volume (not the ephemeral image filesystem).
+SHARED_IMAGES_DIR = Path(
+    os.getenv("HAVEN_SHARED_IMAGES_DIR", str(Path(DB_PATH).parent / "shared_images"))
+)
+SHARED_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/shared-images",
+    StaticFiles(directory=str(SHARED_IMAGES_DIR)),
+    name="shared-images",
+)
+MAX_SHARE_IMAGE_BYTES = int(os.getenv("HAVEN_MAX_SHARE_IMAGE_BYTES", str(20 * 1024 * 1024)))
+ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 
 # --- Health check ---
@@ -331,6 +346,7 @@ async def read_messages(room_id: str, request: Request, limit: int = 50, since: 
                 "display_name": m["display_name"],
                 "content": m["content"],
                 "created_at": m["created_at"],
+                "image_url": m.get("image_url"),
             }
             for m in messages
         ],
@@ -357,6 +373,7 @@ async def send_message(room_id: str, request: Request, body: SendMessageRequest)
         "display_name": msg["display_name"],
         "content": msg["content"],
         "created_at": msg["created_at"],
+        "image_url": msg.get("image_url"),
     }
     await manager.broadcast_to_room(room_id, event)
 
@@ -372,6 +389,93 @@ async def send_message(room_id: str, request: Request, body: SendMessageRequest)
                 timestamp=msg["created_at"],
             )
         )
+
+    return event
+
+
+@app.post("/api/share-image")
+async def share_image(
+    request: Request,
+    image: UploadFile = File(...),
+    room: str = Form(...),
+    caption: str = Form(""),
+):
+    """Share an image into a room as a message.
+
+    Multipart form: image (file), room (room name OR id), caption (optional text).
+    Returns the broadcast event. Image stored under shared_images/<entity>/<ts>.<ext>
+    and exposed at /shared-images/<entity>/<file>.
+    """
+    user_id = await get_current_user_id(request, db)
+    user = await db.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    # Resolve room: accept either UUID room_id or human-readable room name.
+    room_obj = await db.get_room(room) or await db.get_room_by_name(room)
+    if not room_obj:
+        raise HTTPException(status_code=404, detail=f"Room not found: {room}")
+    room_id = room_obj["id"]
+
+    if not await db.is_room_member(room_id, user_id):
+        raise HTTPException(status_code=403, detail="Not a member of this room")
+
+    # Validate file extension and size before reading the body fully.
+    ext = Path(image.filename or "").suffix.lower() or ".png"
+    if ext not in ALLOWED_IMAGE_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported image extension {ext}. Allowed: {sorted(ALLOWED_IMAGE_EXTS)}",
+        )
+
+    image_bytes = await image.read()
+    if len(image_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Empty image upload")
+    if len(image_bytes) > MAX_SHARE_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Image exceeds {MAX_SHARE_IMAGE_BYTES // (1024 * 1024)} MB limit",
+        )
+
+    # Store under shared_images/<username>/<timestamp>.<ext>
+    entity_dir = SHARED_IMAGES_DIR / user["username"]
+    entity_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    filename = f"{ts}_{secrets.token_hex(4)}{ext}"
+    file_path = entity_dir / filename
+    file_path.write_bytes(image_bytes)
+
+    image_url = f"/shared-images/{user['username']}/{filename}"
+
+    # Caption may be empty — we still need a non-empty content for the schema,
+    # so default to a single-character marker the renderer treats as image-only.
+    content_text = caption.strip() if caption.strip() else " "
+
+    msg = await db.create_message(room_id, user_id, content_text, image_url=image_url)
+
+    event = {
+        "type": "message",
+        "id": msg["id"],
+        "room_id": room_id,
+        "user_id": msg["user_id"],
+        "username": msg["username"],
+        "display_name": msg["display_name"],
+        "content": msg["content"],
+        "created_at": msg["created_at"],
+        "image_url": image_url,
+    }
+    await manager.broadcast_to_room(room_id, event)
+
+    # PPS bridge — let entities see in their ambient that an image was shared.
+    asyncio.create_task(
+        bridge_message(
+            room_name=room_obj["name"],
+            username=msg["username"],
+            display_name=msg["display_name"],
+            content=f"[shared image: {image_url}] {content_text}",
+            timestamp=msg["created_at"],
+        )
+    )
 
     return event
 
@@ -794,6 +898,7 @@ async def _handle_ws_message(ws: WebSocket, user_id: str, user: dict, msg: dict)
             "display_name": saved["display_name"],
             "content": saved["content"],
             "created_at": saved["created_at"],
+            "image_url": saved.get("image_url"),
         }
         await manager.broadcast_to_room(room_id, event)
 
@@ -835,6 +940,7 @@ async def _handle_ws_message(ws: WebSocket, user_id: str, user: dict, msg: dict)
                     "display_name": m["display_name"],
                     "content": m["content"],
                     "created_at": m["created_at"],
+                    "image_url": m.get("image_url"),
                 }
                 for m in messages
             ],

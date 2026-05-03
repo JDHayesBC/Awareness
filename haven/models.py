@@ -62,6 +62,7 @@ class MessageResponse(BaseModel):
     display_name: str
     content: str
     created_at: str
+    image_url: str | None = None
 
 
 class RoomListResponse(BaseModel):

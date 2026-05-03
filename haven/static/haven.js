@@ -413,10 +413,20 @@ const haven = (() => {
         el.dataset.author = msg.display_name;
         el.dataset.content = msg.content;
 
+        // Caption rendering: empty/whitespace caption + image present means
+        // the image IS the message — don't render a stub paragraph for " ".
+        const hasImage = !!msg.image_url;
+        const captionText = (msg.content || '').trim();
+        const captionHtml = (hasImage && !captionText) ? '' :
+            `<div class="message-content">${marked.parse(msg.content || '')}</div>`;
+        const imageHtml = hasImage ?
+            `<div class="message-image-wrap"><img class="message-image" src="${escapeHtml(msg.image_url)}" alt="shared image" loading="lazy"></div>` : '';
+
         el.innerHTML = `
             <span class="msg-time">${time}</span>
             <span class="msg-author ${authorClass}">${escapeHtml(msg.display_name)}</span>
-            <div class="message-content">${marked.parse(msg.content)}</div>
+            ${captionHtml}
+            ${imageHtml}
             <button class="copy-btn" title="Copy message">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -429,7 +439,24 @@ const haven = (() => {
             copyToClipboard(e.currentTarget, msg.content);
         });
 
+        const imgEl = el.querySelector('.message-image');
+        if (imgEl) {
+            imgEl.addEventListener('click', () => openLightbox(msg.image_url));
+        }
+
         return el;
+    }
+
+    function openLightbox(url) {
+        const overlay = document.createElement('div');
+        overlay.className = 'lightbox-overlay';
+        overlay.innerHTML = `<img class="lightbox-image" src="${escapeHtml(url)}" alt="">`;
+        const close = () => overlay.remove();
+        overlay.addEventListener('click', close);
+        document.addEventListener('keydown', function esc(e) {
+            if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
+        });
+        document.body.appendChild(overlay);
     }
 
     function copyToClipboard(btn, text) {

@@ -69,6 +69,7 @@ class HavenDB:
             "ALTER TABLE users ADD COLUMN token TEXT",
             "ALTER TABLE users ADD COLUMN google_id TEXT",
             "ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE messages ADD COLUMN image_url TEXT",
         ]:
             try:
                 await self._db.execute(col_sql)
@@ -236,11 +237,18 @@ class HavenDB:
 
     # --- Messages ---
 
-    async def create_message(self, room_id: str, user_id: str, content: str) -> dict:
+    async def create_message(
+        self,
+        room_id: str,
+        user_id: str,
+        content: str,
+        image_url: str | None = None,
+    ) -> dict:
         now = datetime.now(timezone.utc).isoformat()
         async with self._db.execute(
-            "INSERT INTO messages (room_id, user_id, content, created_at) VALUES (?, ?, ?, ?)",
-            (room_id, user_id, content, now),
+            "INSERT INTO messages (room_id, user_id, content, created_at, image_url) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (room_id, user_id, content, now, image_url),
         ) as cursor:
             msg_id = cursor.lastrowid
         await self._db.commit()
