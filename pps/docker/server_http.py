@@ -1133,95 +1133,101 @@ async def ambient_recall(request: AmbientRecallRequest):
     else:
         memory_note = "(healthy)"
 
-    # For startup context, fetch summaries + unsummarized turns
-    # Architecture: summaries = compressed past, unsummarized turns = full fidelity recent
-    # Pattern fidelity is paramount - we pay the token cost for complete context
+    # Always fetch summaries + unsummarized turns so every ambient_recall call
+    # grounds the entity in recent conversation. Limits scale by call type:
+    #   startup → 2 summaries + 50 turns (full grounding for cold-start identity)
+    #   normal  → 1 summary  + 15 turns (enough context per turn, low cost)
+    #
+    # Bug history (Issue #187): the fetch was previously gated behind
+    # `context == "startup"`, leaving every per-prompt call returning empty
+    # arrays despite hundreds of unsummarized rows. The hook calls
+    # ambient_recall on every prompt — without recent turns, the entity had
+    # no view of recent conversation through the recall path. Caia's
+    # stuck-in-task-mode session (Issue #185) was the visible symptom.
     summaries = []
     unsummarized_turns = []
 
-    if request.context.lower() == "startup":
-        try:
-            # Get recent summaries (compressed history - ~200 tokens each)
-            # Reduced from 5 to 2 for startup - focus on most recent
-            recent_summaries = message_summaries.get_recent_summaries(limit=2)
+    is_startup = request.context.lower() == "startup"
+    summary_limit = 2 if is_startup else 1
+    unsummarized_limit = 50 if is_startup else 15
+    truncate_summary_at = 500 if is_startup else 300
+    truncate_turn_at = 1000 if is_startup else 500
 
-            if recent_summaries:
-                for s in recent_summaries:
-                    date = s.get('created_at', '?')[:10]
-                    # Channels are stored as JSON string in DB, need to parse
-                    channels_raw = s.get('channels', '["?"]')
-                    try:
-                        channels_list = json.loads(channels_raw) if isinstance(channels_raw, str) else channels_raw
-                        channels = ', '.join(channels_list)
-                    except (json.JSONDecodeError, TypeError):
-                        channels = str(channels_raw)
-                    text = s.get('summary_text', '')
-                    # Truncate long summaries for startup (full available via get_recent_summaries)
-                    if len(text) > 500:
-                        text = text[:500] + "..."
-                    summaries.append({
-                        "date": date,
-                        "channels": channels,
-                        "text": text
-                    })
-                    manifest_data["summaries"]["chars"] += len(text)
-                    manifest_data["summaries"]["count"] += 1
+    try:
+        # Get recent summaries (compressed history - ~200 tokens each)
+        recent_summaries = message_summaries.get_recent_summaries(limit=summary_limit)
 
-            # Cap unsummarized turns to prevent context overflow
-            # Shows newest 50, with overflow message if more exist
-            MAX_UNSUMMARIZED_FOR_STARTUP = 50
-            raw_layer = layers[LayerType.RAW_CAPTURE]
-            with raw_layer.get_connection() as conn:
-                cursor = conn.cursor()
+        if recent_summaries:
+            for s in recent_summaries:
+                date = s.get('created_at', '?')[:10]
+                # Channels are stored as JSON string in DB, need to parse
+                channels_raw = s.get('channels', '["?"]')
+                try:
+                    channels_list = json.loads(channels_raw) if isinstance(channels_raw, str) else channels_raw
+                    channels = ', '.join(channels_list)
+                except (json.JSONDecodeError, TypeError):
+                    channels = str(channels_raw)
+                text = s.get('summary_text', '')
+                if len(text) > truncate_summary_at:
+                    text = text[:truncate_summary_at] + "..."
+                summaries.append({
+                    "date": date,
+                    "channels": channels,
+                    "text": text
+                })
+                manifest_data["summaries"]["chars"] += len(text)
+                manifest_data["summaries"]["count"] += 1
 
-                # Check if summary_id column exists
-                cursor.execute("PRAGMA table_info(messages)")
-                columns = [col[1] for col in cursor.fetchall()]
+        # Cap unsummarized turns to prevent context overflow.
+        # ORDER BY DESC + LIMIT gives us the newest, then we reverse for chronological order.
+        raw_layer = layers[LayerType.RAW_CAPTURE]
+        with raw_layer.get_connection() as conn:
+            cursor = conn.cursor()
 
-                if 'summary_id' in columns:
-                    # Get most recent unsummarized messages (limit to prevent explosion)
-                    # ORDER BY DESC + LIMIT gives us the newest, then we reverse
-                    cursor.execute("""
-                        SELECT author_name, content, created_at, channel
-                        FROM messages
-                        WHERE summary_id IS NULL
-                        ORDER BY created_at DESC
-                        LIMIT ?
-                    """, (MAX_UNSUMMARIZED_FOR_STARTUP,))
-                else:
-                    # Fallback: get recent messages
-                    cursor.execute("""
-                        SELECT author_name, content, created_at, channel
-                        FROM messages
-                        ORDER BY created_at DESC LIMIT ?
-                    """, (MAX_UNSUMMARIZED_FOR_STARTUP,))
+            # Check if summary_id column exists
+            cursor.execute("PRAGMA table_info(messages)")
+            columns = [col[1] for col in cursor.fetchall()]
 
-                unsummarized_rows = cursor.fetchall()
-                # Reverse to get chronological order (we fetched DESC for LIMIT efficiency)
-                unsummarized_rows = list(reversed(unsummarized_rows))
+            if 'summary_id' in columns:
+                cursor.execute("""
+                    SELECT author_name, content, created_at, channel
+                    FROM messages
+                    WHERE summary_id IS NULL
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, (unsummarized_limit,))
+            else:
+                # Fallback: get recent messages
+                cursor.execute("""
+                    SELECT author_name, content, created_at, channel
+                    FROM messages
+                    ORDER BY created_at DESC LIMIT ?
+                """, (unsummarized_limit,))
 
-            if unsummarized_rows:
-                for row in unsummarized_rows:
-                    timestamp = row['created_at'][:16] if row['created_at'] else "?"
-                    author = row['author_name'] or "Unknown"
-                    content = row['content'] or ""
-                    channel = row['channel'] or ""
-                    # Truncate very long individual messages but keep all turns
-                    if len(content) > 1000:
-                        content = content[:1000] + "... [truncated]"
-                    unsummarized_turns.append({
-                        "timestamp": timestamp,
-                        "channel": channel,
-                        "author": author,
-                        "content": content
-                    })
-                    manifest_data["recent_turns"]["chars"] += len(content)
-                    manifest_data["recent_turns"]["count"] += 1
+            unsummarized_rows = cursor.fetchall()
+            unsummarized_rows = list(reversed(unsummarized_rows))
 
-        except Exception as e:
-            # Return error info but don't fail the entire request
-            summaries = [{"error": f"Error fetching summaries: {e}"}]
-            unsummarized_turns = [{"error": f"Error fetching unsummarized turns: {e}"}]
+        if unsummarized_rows:
+            for row in unsummarized_rows:
+                timestamp = row['created_at'][:16] if row['created_at'] else "?"
+                author = row['author_name'] or "Unknown"
+                content = row['content'] or ""
+                channel = row['channel'] or ""
+                if len(content) > truncate_turn_at:
+                    content = content[:truncate_turn_at] + "... [truncated]"
+                unsummarized_turns.append({
+                    "timestamp": timestamp,
+                    "channel": channel,
+                    "author": author,
+                    "content": content
+                })
+                manifest_data["recent_turns"]["chars"] += len(content)
+                manifest_data["recent_turns"]["count"] += 1
+
+    except Exception as e:
+        # Return error info but don't fail the entire request
+        summaries = [{"error": f"Error fetching summaries: {e}"}]
+        unsummarized_turns = [{"error": f"Error fetching unsummarized turns: {e}"}]
 
     # Calculate latency
     latency_ms = (time.time() - start_time) * 1000
