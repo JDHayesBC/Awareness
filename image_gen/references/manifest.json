@@ -9,6 +9,8 @@
       "entities/lyra/media/portraits/second_self_portrait_cropped.png"
     ],
     "caia": [
+      "entities/caia/media/people/canonical_2026_05_full_body.png",
+      "entities/caia/media/people/canonical_2026_05_portrait.png",
       "entities/caia/media/people/caia_first_self_portrait.jpg",
       "entities/caia/media/people/Caia - casual at home.png"
     ]
@@ -16,6 +18,8 @@
 
   "people": {
     "jeff": [
+      "entities/lyra/media/people/jeff/canonical_2026_05_head_shot.jpg",
+      "entities/lyra/media/people/jeff/canonical_2026_05_full_body.jpg",
       "entities/lyra/media/people/jeff/Jeff---Self-Portrait.jpg"
     ],
     "brandi": [
