@@ -8,11 +8,15 @@ const haven = (() => {
     let rooms = [];
     let users = [];
     let reconnectTimer = null;
+    let reconnectAttempt = 0;
+    let reconnectingBannerTimer = null;
     let typingTimer = null;
     let typingUsers = {};  // room_id -> {username -> timeout}
     let oldestMessageId = {};  // room_id -> oldest message id loaded
     let hasMore = {};  // room_id -> bool
     let unread = {};  // room_id -> count
+    let userAtBottom = true;  // tracks whether scroll is anchored at bottom
+    const SCROLL_BOTTOM_THRESHOLD = 120;  // px from bottom to count as "at bottom"
     const originalTitle = document.title;
 
     const $ = (id) => document.getElementById(id);
@@ -114,13 +118,20 @@ const haven = (() => {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const url = `${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`;
 
-        ws = new WebSocket(url);
+        try {
+            ws = new WebSocket(url);
+        } catch (_) {
+            scheduleReconnect();
+            return;
+        }
 
         ws.onopen = () => {
             if (reconnectTimer) {
                 clearTimeout(reconnectTimer);
                 reconnectTimer = null;
             }
+            reconnectAttempt = 0;
+            hideReconnectingBanner();
         };
 
         ws.onmessage = (e) => {
@@ -135,16 +146,63 @@ const haven = (() => {
                 showLogin('Invalid token');
                 return;
             }
-            // Reconnect
-            if (!reconnectTimer) {
-                reconnectTimer = setTimeout(() => {
-                    reconnectTimer = null;
-                    connect();
-                }, 3000);
-            }
+            scheduleReconnect();
         };
 
         ws.onerror = () => {};
+    }
+
+    function scheduleReconnect() {
+        if (reconnectTimer) return;  // already scheduled
+        // Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s
+        const delay = Math.min(30000, 1000 * Math.pow(2, reconnectAttempt));
+        reconnectAttempt++;
+        // Show banner after 1s — avoids flicker on quick reconnects
+        if (!reconnectingBannerTimer) {
+            reconnectingBannerTimer = setTimeout(() => {
+                showReconnectingBanner();
+                reconnectingBannerTimer = null;
+            }, 1000);
+        }
+        reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connect();
+        }, delay);
+    }
+
+    function reconnectNow() {
+        // Cancel any pending backoff timer and try immediately. Used by
+        // visibilitychange and online events — when context changes, don't
+        // make the user wait 16s for the next backoff slot.
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+        reconnectAttempt = 0;
+        if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+            connect();
+        }
+    }
+
+    function showReconnectingBanner() {
+        let banner = $('reconnecting-banner');
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'reconnecting-banner';
+            banner.className = 'reconnecting-banner';
+            banner.textContent = 'Reconnecting…';
+            document.body.appendChild(banner);
+        }
+        banner.classList.remove('hidden');
+    }
+
+    function hideReconnectingBanner() {
+        if (reconnectingBannerTimer) {
+            clearTimeout(reconnectingBannerTimer);
+            reconnectingBannerTimer = null;
+        }
+        const banner = $('reconnecting-banner');
+        if (banner) banner.classList.add('hidden');
     }
 
     function send(msg) {
@@ -218,8 +276,14 @@ const haven = (() => {
         }
 
         if (data.room_id === currentRoomId) {
+            const isMine = currentUser && data.username === currentUser.username;
+            const wasAtBottom = userAtBottom;
             appendMessage(data);
-            scrollToBottom();
+            // Only auto-scroll if user is at bottom or sent the message themselves.
+            // Avoids yanking the view when reading older history.
+            if (isMine || wasAtBottom) {
+                scrollToBottom();
+            }
         } else {
             // Track unread for non-active rooms
             if (!unread[data.room_id]) unread[data.room_id] = 0;
@@ -243,12 +307,21 @@ const haven = (() => {
         });
         list.insertBefore(frag, list.firstChild);
 
+        const isInitialLoad = prevHeight === 0;
         hasMore[data.room_id] = data.has_more;
         $('load-more').classList.toggle('hidden', !data.has_more);
 
-        // Maintain scroll position
         const messages = $('messages');
-        messages.scrollTop += list.scrollHeight - prevHeight;
+        if (isInitialLoad) {
+            // First batch of history for this room — scroll to bottom.
+            // Wait a frame so layout settles (esp. for image messages whose
+            // height depends on async image decode).
+            requestAnimationFrame(() => scrollToBottom());
+        } else {
+            // Pagination: maintain scroll position so user stays anchored to
+            // the message they were reading.
+            messages.scrollTop += list.scrollHeight - prevHeight;
+        }
     }
 
     function onPresence(data) {
@@ -396,7 +469,7 @@ const haven = (() => {
         el.className = 'system-message';
         el.textContent = text;
         $('message-list').appendChild(el);
-        scrollToBottom();
+        if (userAtBottom) scrollToBottom();
     }
 
     function createMessageEl(msg) {
@@ -413,11 +486,21 @@ const haven = (() => {
         el.dataset.author = msg.display_name;
         el.dataset.content = msg.content;
 
+        // Caption: empty/whitespace + image present means the image IS the message.
+        // Don't render an empty paragraph stub.
+        const hasImage = !!msg.image_url;
+        const captionText = (msg.content || '').trim();
+        const captionHtml = (hasImage && !captionText) ? '' :
+            `<div class="message-content">${marked.parse(msg.content || '')}</div>`;
+        const imageHtml = hasImage ?
+            `<div class="message-image-wrap"><img class="message-image" src="${escapeHtml(msg.image_url)}" alt="shared image" loading="lazy"></div>` : '';
+
         el.innerHTML = `
             <span class="msg-time">${time}</span>
             <span class="msg-author ${authorClass}">${escapeHtml(msg.display_name)}</span>
-            <div class="message-content">${marked.parse(msg.content)}</div>
-            <button class="copy-btn" title="Copy message">
+            ${captionHtml}
+            ${imageHtml}
+            <button class="copy-btn" title="Copy message" aria-label="Copy message">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
@@ -429,7 +512,54 @@ const haven = (() => {
             copyToClipboard(e.currentTarget, msg.content);
         });
 
+        const imgEl = el.querySelector('.message-image');
+        if (imgEl) {
+            imgEl.addEventListener('click', () => openLightbox(msg.image_url));
+        }
+
         return el;
+    }
+
+    // --- Lightbox ---
+
+    function openLightbox(url) {
+        // Prevent stacking — only one lightbox at a time.
+        if (document.querySelector('.lightbox-overlay')) return;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'lightbox-overlay';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-label', 'Image preview');
+        overlay.innerHTML = `
+            <button class="lightbox-close" aria-label="Close image preview">&times;</button>
+            <img class="lightbox-image" src="${escapeHtml(url)}" alt="shared image">
+        `;
+
+        // Lock body scroll while open (prevents iOS Safari bounce-scroll behind overlay).
+        const prevOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+
+        const close = () => {
+            overlay.remove();
+            document.body.style.overflow = prevOverflow;
+            document.removeEventListener('keydown', onKey);
+        };
+
+        const onKey = (e) => {
+            if (e.key === 'Escape') close();
+        };
+
+        // Click outside image (overlay backdrop) closes.
+        // Click on image itself does NOT close — lets users tap to inspect.
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) close();
+        });
+        overlay.querySelector('.lightbox-close').addEventListener('click', close);
+        // Tapping the image also closes (parity with most photo viewers; iPad-friendly).
+        overlay.querySelector('.lightbox-image').addEventListener('click', close);
+
+        document.addEventListener('keydown', onKey);
+        document.body.appendChild(overlay);
     }
 
     function copyToClipboard(btn, text) {
@@ -509,6 +639,8 @@ const haven = (() => {
         oldestMessageId[roomId] = undefined;
         hasMore[roomId] = false;
         $('load-more').classList.add('hidden');
+        // Entering a room — anchor at bottom so first batch of history scrolls down.
+        userAtBottom = true;
 
         send({ type: 'history', room_id: roomId, limit: 50 });
 
@@ -570,6 +702,41 @@ const haven = (() => {
     function scrollToBottom() {
         const container = $('messages');
         container.scrollTop = container.scrollHeight;
+        userAtBottom = true;
+    }
+
+    function isAtBottom(container) {
+        return (container.scrollHeight - container.scrollTop - container.clientHeight) <= SCROLL_BOTTOM_THRESHOLD;
+    }
+
+    function initScrollTracking() {
+        const container = $('messages');
+        if (!container) return;
+        container.addEventListener('scroll', () => {
+            userAtBottom = isAtBottom(container);
+        }, { passive: true });
+    }
+
+    function initVisibilityHandlers() {
+        // iPad Safari aggressively suspends WS when the tab is backgrounded.
+        // When the tab becomes visible again, force a reconnect if needed and
+        // re-anchor scroll if the user was at the bottom before.
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState !== 'visible') return;
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                reconnectNow();
+            }
+            // If they were at the bottom (or this is first foregrounding), scroll
+            // them back to bottom so new messages aren't hidden below the fold.
+            if (userAtBottom) {
+                requestAnimationFrame(scrollToBottom);
+            }
+        });
+
+        // Network came back — reconnect immediately, don't wait for backoff.
+        window.addEventListener('online', () => {
+            reconnectNow();
+        });
     }
 
     function trackOldest(roomId, msgId) {
@@ -701,6 +868,8 @@ const haven = (() => {
     function init() {
         initLogin();
         initInput();
+        initScrollTracking();
+        initVisibilityHandlers();
     }
 
     document.addEventListener('DOMContentLoaded', init);

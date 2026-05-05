@@ -763,6 +763,11 @@ Keep it natural - just... be here.'''
             return True
         if self.user and self.user.mentioned_in(message):
             return True
+        # Bot-to-bot: if another entity bot sends a message in a shared channel,
+        # treat it as a mention — entity bots message intentionally, not at random.
+        # This prevents sister-to-sister messages from being silenced by passive mode.
+        if message.author.bot and self.user and message.author.id != self.user.id:
+            return True
         return False
 
     async def _get_conversation_history(self, channel, limit: int = 10, max_chars: int = 2000) -> str:
