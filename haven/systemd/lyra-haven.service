@@ -19,6 +19,7 @@ Environment="PPS_HTTP_URL=http://localhost:8201"
 Environment="CLAUDE_MODEL=sonnet"
 Environment="DEBOUNCE_JITTER_SECONDS=0"
 Environment="ALWAYS_RESPOND=1"
+Environment="HAVEN_GATE_ENABLED=1"
 Environment="PROJECT_DIR=/mnt/c/Users/Jeff/Claude_Projects/Awareness"
 
 ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python3 -m haven.bot

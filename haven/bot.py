@@ -40,6 +40,9 @@ logging.basicConfig(
 sys.path.insert(0, str(Path(__file__).parent.parent / "daemon" / "cc_invoker"))
 from invoker import ClaudeInvoker, get_default_mcp_servers
 
+# Response gate cascade (Issue #177) — short-circuits before Opus when classifier says skip
+from haven import response_gate
+
 # ==================== Configuration ====================
 
 HAVEN_URL = os.getenv("HAVEN_URL", "http://localhost:8205")
@@ -102,6 +105,11 @@ HUMAN_ACTIVE_THRESHOLD_SECONDS = float(os.getenv("HUMAN_ACTIVE_THRESHOLD_SECONDS
 # signal within this window, process immediately. If the human IS typing,
 # fall through to the normal typing-wait logic in _debounce_timer.
 BOT_MSG_TYPING_CHECK_SECONDS = float(os.getenv("BOT_MSG_TYPING_CHECK_SECONDS", "4.0"))
+
+# Issue #177 response gate — short-circuits before Opus when batch contains a
+# sister bot and the classifier says skip. Default OFF: even merged-to-main,
+# behavior in prod is unchanged until this flag flips. Flip and watch logs.
+HAVEN_GATE_ENABLED = os.getenv("HAVEN_GATE_ENABLED", "0").lower() in ("1", "true", "yes")
 
 
 # ==================== State ====================
@@ -742,6 +750,30 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
 
         try:
             await invoker.check_and_restart_if_needed()
+
+            # Issue #177 response gate — only run when a sister bot is in the batch.
+            # Multi-bot rooms are where the wasteful "both bots fire on echo" happens.
+            # Human-only or self-only batches go straight through; pacing prompts
+            # already keep those terse.
+            if HAVEN_GATE_ENABLED:
+                sister_bot_in_batch = any(
+                    m.get("username") in known_bots
+                    and m.get("username") != my_username
+                    for m in messages
+                )
+                if sister_bot_in_batch:
+                    gate_decision = await response_gate.evaluate(
+                        ENTITY_NAME.capitalize(), my_username, messages
+                    )
+                    print(
+                        f"[{ENTITY_NAME}] gate: {gate_decision.layer} -> "
+                        f"{'RESPOND' if gate_decision.respond else 'SKIP'} "
+                        f"({gate_decision.elapsed_ms:.0f}ms) {gate_decision.reason}",
+                        file=sys.stderr,
+                    )
+                    if not gate_decision.respond:
+                        return  # short-circuit before invoker.query — saves the Opus call
+
             # Show typing indicator while Claude is thinking/using tools
             typing_done = asyncio.Event()
             typing_task = asyncio.create_task(_typing_loop(room_id, typing_done))
