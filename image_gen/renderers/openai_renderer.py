@@ -96,7 +96,10 @@ class OpenAIRenderer:
                 },
                 json=body,
             )
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                raise RuntimeError(
+                    f"OpenAI /v1/images/generations {resp.status_code}: {resp.text}"
+                )
             return resp.json()
 
     async def _render_edits(self, request: RenderRequest, size: str) -> dict:
@@ -125,5 +128,8 @@ class OpenAIRenderer:
                 data=data,
                 files=files,
             )
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                raise RuntimeError(
+                    f"OpenAI /v1/images/edits {resp.status_code}: {resp.text}"
+                )
             return resp.json()
