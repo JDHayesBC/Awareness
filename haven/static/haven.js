@@ -690,7 +690,11 @@ const haven = (() => {
         setPendingImage(null);
 
         try {
-            const resp = await fetch('/api/share-image', { method: 'POST', body: fd });
+            const resp = await fetch('/api/share-image', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + getToken() },
+            body: fd,
+        });
             if (!resp.ok) {
                 const err = await resp.text();
                 alert(`Image upload failed: ${resp.status} ${err}`);
