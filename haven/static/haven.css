@@ -742,10 +742,12 @@ body::before {
 /* Hidden utility */
 .hidden { display: none !important; }
 
-/* === NARROW PHONE BREAKPOINT === */
-/* On phones (≤480px) message rows wrap so caption text and images flow under
-   the time/author header instead of cramming sideways. */
-@media (max-width: 480px) {
+/* === NARROW VIEWPORT BREAKPOINT === */
+/* At ≤700px (covers narrow desktop windows down through phones) message rows
+   wrap so caption text and images flow under the time/author header instead
+   of cramming sideways. 700px chosen because Edge desktop's minimum draggable
+   window is ~525px — the 480px threshold left the 481-700px range broken. */
+@media (max-width: 700px) {
     #messages { padding: 0.5rem 0.5rem; }
 
     .message-row {
