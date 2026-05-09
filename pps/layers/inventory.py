@@ -368,6 +368,60 @@ class InventoryLayer(PatternLayer):
             """)
             return [dict(row) for row in cursor.fetchall()]
 
+    async def update_space(
+        self,
+        name: str,
+        description: Optional[str] = None,
+        file_path: Optional[str] = None,
+        emotional_quality: Optional[str] = None,
+    ) -> bool:
+        """
+        Update an existing space's fields.
+
+        Only provided (non-None) fields are updated; omitted fields are left unchanged.
+        Returns True if space was updated, False if space not found.
+        Raises ValueError if no fields are provided (at least one required).
+
+        Use add_space() for upsert semantics; update_space() requires the space to exist.
+        """
+        if description is None and file_path is None and emotional_quality is None:
+            raise ValueError(
+                "at least one field (description, file_path, or emotional_quality) must be provided"
+            )
+
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # Check if space exists first (fail-loud, not silent create)
+                cursor = conn.execute("SELECT id FROM spaces WHERE name = ?", (name,))
+                if not cursor.fetchone():
+                    return False
+
+                # Build dynamic UPDATE based on provided fields
+                updates = []
+                params = []
+                if description is not None:
+                    updates.append("description = ?")
+                    params.append(description)
+                if file_path is not None:
+                    updates.append("file_path = ?")
+                    params.append(file_path)
+                if emotional_quality is not None:
+                    updates.append("emotional_quality = ?")
+                    params.append(emotional_quality)
+
+                params.append(name)
+                update_clause = ", ".join(updates)
+                conn.execute(
+                    f"UPDATE spaces SET {update_clause} WHERE name = ?",
+                    params,
+                )
+                conn.commit()
+                return True
+        except ValueError:
+            raise
+        except Exception:
+            return False
+
     async def enter_space(self, name: str) -> Optional[str]:
         """
         Enter a space - load its description for context injection.
