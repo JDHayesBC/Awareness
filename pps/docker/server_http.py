@@ -216,6 +216,15 @@ class ListSpacesRequest(BaseModel):
     token: str = ""
 
 
+class UpdateSpaceRequest(BaseModel):
+    """Request to update an existing space's fields."""
+    space_name: str
+    description: str | None = None
+    file_path: str | None = None
+    emotional_quality: str | None = None
+    token: str = ""
+
+
 class TokenOnlyRequest(BaseModel):
     """Generic token-only request for endpoints that need auth but no other params."""
     token: str = ""
@@ -2267,6 +2276,44 @@ async def list_spaces(request: ListSpacesRequest):
         ],
         "count": len(spaces)
     }
+
+
+@app.post("/tools/update_space")
+async def update_space(request: UpdateSpaceRequest):
+    """
+    Update an existing space's description, file path, or emotional quality.
+
+    Only provided fields are changed; omitted fields are left unchanged.
+    Returns 404 if the space does not exist.
+    """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "update_space")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
+    if not request.space_name:
+        raise HTTPException(status_code=400, detail="space_name required")
+
+    if request.description is None and request.file_path is None and request.emotional_quality is None:
+        raise HTTPException(
+            status_code=400,
+            detail="at least one field (description, file_path, or emotional_quality) required",
+        )
+
+    success = await inventory.update_space(
+        name=request.space_name,
+        description=request.description,
+        file_path=request.file_path,
+        emotional_quality=request.emotional_quality,
+    )
+
+    if success:
+        return {
+            "success": True,
+            "space_name": request.space_name,
+            "message": f"Updated space '{request.space_name}'",
+        }
+    else:
+        raise HTTPException(status_code=404, detail=f"Space '{request.space_name}' not found")
 
 
 # =============================================================================
