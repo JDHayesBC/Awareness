@@ -37,18 +37,36 @@ PPS_PORT = os.environ.get("PPS_PORT", "8201")
 THRESHOLD = int(os.environ.get("SUMMARIZE_THRESHOLD", "100"))
 BATCH_SIZE = int(os.environ.get("SUMMARIZE_BATCH_SIZE", "50"))
 
+PROJECT_ROOT = Path(__file__).parent.parent
+ENTITY_PATH = Path(os.environ.get("ENTITY_PATH", PROJECT_ROOT / "entities" / "lyra"))
+
+
+def _load_entity_token() -> str:
+    token_file = ENTITY_PATH / ".entity_token"
+    try:
+        return token_file.read_text().strip()
+    except Exception as e:
+        logger.error(f"Failed to read entity token from {token_file}: {e}")
+        return ""
+
+
 def check_unsummarized_count() -> int:
-    """Query PPS for unsummarized message count."""
+    """Query PPS /tools/summary_stats for unsummarized message count."""
     try:
         import requests
-        response = requests.get(f"http://{PPS_HOST}:{PPS_PORT}/health", timeout=5)
+        token = _load_entity_token()
+        response = requests.get(
+            f"http://{PPS_HOST}:{PPS_PORT}/tools/summary_stats",
+            params={"token": token},
+            timeout=5,
+        )
         if response.status_code == 200:
-            health_data = response.json()
-            count = health_data.get("layers", {}).get("raw_capture", {}).get("unsummarized_count", 0)
+            stats = response.json()
+            count = stats.get("unsummarized_messages", 0)
             logger.info(f"Unsummarized count: {count}")
             return count
         else:
-            logger.error(f"PPS health check failed: {response.status_code}")
+            logger.error(f"PPS summary_stats failed: {response.status_code} {response.text[:200]}")
             return 0
     except Exception as e:
         logger.error(f"Failed to check unsummarized count: {e}")
