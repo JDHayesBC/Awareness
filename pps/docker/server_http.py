@@ -498,6 +498,32 @@ def _save_channel_cursors(state: dict) -> None:
     _channel_cursor_file.write_text(json.dumps(state))
 
 
+def _advance_cursor_on_startup(
+    consumer_key: str | None, channel: str | None, max_id: int
+) -> str:
+    """Advance ONLY the requesting consumer's cross-channel cursor to max_id.
+
+    Used during ambient_recall(context="startup") to mark the requesting
+    consumer as caught up. Other consumers' cursors are left untouched —
+    they have their own read positions, and advancing them all on every
+    startup wipes out cross-channel awareness for any other process
+    currently running. (Issue #199: a Haven-bot subprocess startup at
+    13:09 wiped out the terminal session's cursor past Caia's 13:08
+    Haven message, so the message never surfaced in cross-channel ambient.)
+
+    Stale-cursor / huge-backlog protection for non-requesting consumers
+    is handled inside poll_other_channels itself (>1000 messages →
+    skip to near-current), so a global advance isn't needed.
+
+    Returns the cursor_key that was advanced (for logging).
+    """
+    cursor_key = consumer_key or channel or "_default"
+    cursors = _load_channel_cursors()
+    cursors[cursor_key] = max_id
+    _save_channel_cursors(cursors)
+    return cursor_key
+
+
 def poll_other_channels(
     requesting_channel: str = "",
     limit: int = 100,
@@ -1315,19 +1341,12 @@ async def ambient_recall(request: AmbientRecallRequest):
                 max_id = row[0] if row and row[0] else 0
                 conn.close()
                 if max_id > 0:
-                    cursors = _load_channel_cursors()
-                    # Advance ALL cursors to current max — every consumer starts fresh after startup
-                    for key in list(cursors.keys()):
-                        cursors[key] = max_id
-                    # Also ensure this requesting consumer has a cursor at max_id.
-                    # Prefer consumer_key when present so per-process cursors are seeded
-                    # at the current max instead of triggering massive-backlog protection
-                    # on the first non-startup poll.
-                    seed_key = request.consumer_key or request.channel
-                    if seed_key and seed_key not in cursors:
-                        cursors[seed_key] = max_id
-                    _save_channel_cursors(cursors)
-                    print(f"[PPS] Startup: advanced all channel cursors to {max_id}", file=sys.stderr)
+                    cursor_key = _advance_cursor_on_startup(
+                        consumer_key=request.consumer_key,
+                        channel=request.channel,
+                        max_id=max_id,
+                    )
+                    print(f"[PPS] Startup: advanced cursor {cursor_key!r} to {max_id}", file=sys.stderr)
         except Exception as e:
             print(f"[PPS] Startup cursor init failed: {e}", file=sys.stderr)
     else:

@@ -67,6 +67,7 @@ def cursor_helpers(tmp_path):
             "_save_haven_last_seen",
             "_load_channel_cursors",
             "_save_channel_cursors",
+            "_advance_cursor_on_startup",
             "poll_other_channels",
             "poll_haven",
         },
@@ -436,3 +437,140 @@ def test_consumer_key_takes_precedence_over_channel(cursor_helpers, tmp_path):
         "consumer_key must override channel as the cursor identity — fresh "
         "consumer_key means cursor starts at 0, sees both messages"
     )
+
+
+# ============================================================================
+# _advance_cursor_on_startup — issue #199: startup must not stomp other
+# consumers' cursors. The pre-#199 implementation looped over every key in
+# the cursor file and set them all to max_id, which meant any consumer's
+# startup wiped out cross-channel awareness for every other running consumer.
+# ============================================================================
+
+
+def test_startup_advance_only_touches_requesting_consumer(cursor_helpers, tmp_path):
+    """A startup advance for consumer A must NOT advance consumer B's cursor.
+
+    This is the core regression for #199: a Haven-bot subprocess startup
+    used to wipe out the terminal session's cursor past unread messages.
+    """
+    advance = cursor_helpers["_advance_cursor_on_startup"]
+
+    # Pre-seed two consumers with distinct cursor positions.
+    (tmp_path / "channel_last_seen.json").write_text(json.dumps({
+        "terminal:aaaa1111": 100,  # interactive terminal session
+        "terminal:bbbb2222": 200,  # haven-bot subprocess (different consumer)
+    }))
+
+    # Haven-bot startup advances ITS cursor to current max — must NOT touch
+    # the terminal session's cursor.
+    advance(consumer_key="terminal:bbbb2222", channel="terminal", max_id=999)
+
+    state = json.loads((tmp_path / "channel_last_seen.json").read_text())
+    assert state["terminal:aaaa1111"] == 100, (
+        "Other consumer's cursor must be untouched by a different consumer's "
+        "startup — that was the #199 bug"
+    )
+    assert state["terminal:bbbb2222"] == 999, (
+        "Requesting consumer's cursor must be advanced to max_id"
+    )
+
+
+def test_startup_advance_consumer_key_takes_precedence_over_channel(
+    cursor_helpers, tmp_path
+):
+    """When both consumer_key and channel are supplied, consumer_key wins.
+
+    Mirrors the precedence rule used by poll_other_channels and poll_haven."""
+    advance = cursor_helpers["_advance_cursor_on_startup"]
+
+    # File starts empty.
+    advanced_key = advance(
+        consumer_key="terminal:abc12345",
+        channel="terminal",
+        max_id=500,
+    )
+
+    state = json.loads((tmp_path / "channel_last_seen.json").read_text())
+    assert state == {"terminal:abc12345": 500}, (
+        "consumer_key (specific) should be the key that gets written, not "
+        "the more-generic channel name"
+    )
+    assert advanced_key == "terminal:abc12345"
+
+
+def test_startup_advance_falls_back_to_channel_when_no_consumer_key(
+    cursor_helpers, tmp_path
+):
+    """Backward compatibility: callers that don't pass consumer_key still get
+    a per-channel cursor (matches the pre-#176 behavior)."""
+    advance = cursor_helpers["_advance_cursor_on_startup"]
+
+    advanced_key = advance(
+        consumer_key=None,
+        channel="discord",
+        max_id=42,
+    )
+
+    state = json.loads((tmp_path / "channel_last_seen.json").read_text())
+    assert state == {"discord": 42}
+    assert advanced_key == "discord"
+
+
+def test_startup_advance_falls_back_to_default_when_neither_supplied(
+    cursor_helpers, tmp_path
+):
+    """If neither consumer_key nor channel is provided, the cursor lands
+    under '_default' — same fallback used by poll_other_channels."""
+    advance = cursor_helpers["_advance_cursor_on_startup"]
+
+    advanced_key = advance(consumer_key=None, channel=None, max_id=7)
+
+    state = json.loads((tmp_path / "channel_last_seen.json").read_text())
+    assert state == {"_default": 7}
+    assert advanced_key == "_default"
+
+
+def test_startup_advance_preserves_unrelated_consumers(cursor_helpers, tmp_path):
+    """Realistic mixed-consumer scenario: terminal session, haven-bot, and a
+    discord daemon all coexist. A startup from any one of them must leave
+    the other two's cursors alone."""
+    advance = cursor_helpers["_advance_cursor_on_startup"]
+
+    initial = {
+        "terminal:lyra-terminal-aaaa": 10,
+        "terminal:haven-bot-bbbb": 20,
+        "discord:reflect-daemon": 30,
+        "haven": 40,  # legacy keyed-by-channel cursor
+    }
+    (tmp_path / "channel_last_seen.json").write_text(json.dumps(initial))
+
+    # Haven-bot startup.
+    advance(
+        consumer_key="terminal:haven-bot-bbbb",
+        channel="terminal",
+        max_id=500,
+    )
+
+    state = json.loads((tmp_path / "channel_last_seen.json").read_text())
+    assert state["terminal:lyra-terminal-aaaa"] == 10, "terminal session untouched"
+    assert state["discord:reflect-daemon"] == 30, "discord daemon untouched"
+    assert state["haven"] == 40, "legacy haven cursor untouched"
+    assert state["terminal:haven-bot-bbbb"] == 500, "haven-bot advanced"
+
+
+def test_startup_advance_creates_cursor_file_if_missing(cursor_helpers, tmp_path):
+    """First-ever startup on a fresh entity (no cursor file yet) should
+    create the file with just the requesting consumer's cursor."""
+    advance = cursor_helpers["_advance_cursor_on_startup"]
+
+    # No file pre-existing.
+    assert not (tmp_path / "channel_last_seen.json").exists()
+
+    advance(
+        consumer_key="terminal:fresh-session",
+        channel="terminal",
+        max_id=1234,
+    )
+
+    state = json.loads((tmp_path / "channel_last_seen.json").read_text())
+    assert state == {"terminal:fresh-session": 1234}
