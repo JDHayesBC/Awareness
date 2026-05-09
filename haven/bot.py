@@ -201,9 +201,14 @@ async def init_invoker() -> ClaudeInvoker:
         max_turns=100,
         max_idle_seconds=4 * 3600,
         startup_prompt=build_startup_prompt(),
+        # 180s for the full identity-reconstruction startup ritual (read several
+        # entity files, ambient_recall, etc.). Stored on the invoker so restart()
+        # also uses it — pre-#198 the restart path silently fell back to the 60s
+        # default and dropped the first message after long idle.
+        init_timeout=180.0,
     )
 
-    await inv.initialize(timeout=180.0)
+    await inv.initialize()
     elapsed = time.time() - start
     print(f"[{ENTITY_NAME}] Connected in {elapsed:.1f}s", file=sys.stderr)
 

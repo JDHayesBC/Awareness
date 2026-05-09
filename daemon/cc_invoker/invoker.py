@@ -157,6 +157,7 @@ class ClaudeInvoker:
         max_reconnect_attempts: int = 5,
         max_backoff_seconds: float = 30.0,
         startup_prompt: Optional[str] = None,
+        init_timeout: float = 60.0,
     ):
         """
         Initialize invoker configuration.
@@ -186,6 +187,14 @@ class ClaudeInvoker:
             max_backoff_seconds: Maximum backoff time between reconnects (default 30s)
             startup_prompt: Optional prompt to send after initialization for identity
                             reconstruction. Sent automatically after init() and restart().
+            init_timeout: Default timeout (seconds) for the connect+startup sequence
+                          in initialize(). Used by both initial init AND restart().
+                          Default 60s is fine for stateless mode, but agent-mode bots
+                          that read identity files + do ambient_recall on startup need
+                          more (e.g. 180s for Haven/Discord bots). Setting this once at
+                          construction means restart() also uses the generous timeout —
+                          historically restart() fell back to the 60s default and
+                          dropped the first message after long idle (issue #198).
         """
         self.working_dir = working_dir or PROJECT_ROOT
         self.bypass_permissions = bypass_permissions
@@ -212,6 +221,7 @@ class ClaudeInvoker:
 
         # Startup protocol
         self.startup_prompt = startup_prompt
+        self.init_timeout = init_timeout
 
         self._client: Optional[ClaudeSDKClient] = None
         self._connected = False
@@ -364,7 +374,7 @@ class ClaudeInvoker:
             last_error=last_error
         )
 
-    async def initialize(self, timeout: float = 60.0, send_startup: bool = True) -> dict:
+    async def initialize(self, timeout: Optional[float] = None, send_startup: bool = True) -> dict:
         """
         Initialize the persistent connection.
 
@@ -372,7 +382,9 @@ class ClaudeInvoker:
         subsequent queries are fast (~0.6s).
 
         Args:
-            timeout: Maximum time to wait for initialization
+            timeout: Maximum time to wait for initialization. If None (default),
+                     uses self.init_timeout (set in __init__). Pass an explicit
+                     value to override for a single call.
             send_startup: If True and startup_prompt is configured, send it after
                           connection is established (default True)
 
@@ -383,8 +395,10 @@ class ClaudeInvoker:
             TimeoutError: If initialization takes too long
             RuntimeError: If connection fails
         """
+        if timeout is None:
+            timeout = self.init_timeout
         init_type = "fresh start" if send_startup else "reconnection (no startup)"
-        logger.info(f"Initializing Claude Code connection... [{init_type}]")
+        logger.info(f"Initializing Claude Code connection... [{init_type}, timeout={timeout}s]")
 
         # Reset context tracking for fresh session
         self._prompt_tokens = 0
