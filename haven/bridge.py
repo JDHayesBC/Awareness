@@ -49,9 +49,6 @@ async def bridge_message(
 
     tasks = []
     for entity_name, base_url in PPS_ENDPOINTS.items():
-        # Don't bridge a message TO the entity who sent it — they already know
-        if entity_name == username:
-            continue
         tasks.append(_send_to_pps(base_url, channel, content, display_name, entity_name))
 
     if tasks:
