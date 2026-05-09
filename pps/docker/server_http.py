@@ -1223,7 +1223,7 @@ async def ambient_recall(request: AmbientRecallRequest):
     unsummarized_turns = []
 
     is_startup = request.context.lower() == "startup"
-    summary_limit = 2 if is_startup else 1
+    summary_limit = 5 if is_startup else 1
     unsummarized_limit = 50 if is_startup else 15
     truncate_summary_at = 500 if is_startup else 300
     truncate_turn_at = 1000 if is_startup else 500
@@ -1428,7 +1428,10 @@ async def ambient_recall(request: AmbientRecallRequest):
     if summaries:
         formatted_lines.append("\n**[summaries]**")
         for s in summaries:
-            formatted_lines.append(f"- {s}")
+            date = s.get("date", "?")
+            channels = s.get("channels", "?")
+            text = s.get("text", "")
+            formatted_lines.append(f"- [{date}] ({channels}): {text}")
 
     # Format unsummarized turns (for startup context - full fidelity recent)
     if unsummarized_turns and not any("error" in str(t) for t in unsummarized_turns):
