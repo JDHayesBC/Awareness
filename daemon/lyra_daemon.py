@@ -185,6 +185,10 @@ class LyraBot(commands.Bot):
             max_idle_seconds=4 * 3600,  # 4 hours
             max_memory_mb=900,  # restart before hitting 1024M systemd limit
             startup_prompt=self._build_startup_prompt(context="discord"),
+            # 180s for full identity reconstruction at startup AND restart. Per
+            # #198 — restart() previously fell back to the 60s default and
+            # dropped the first message after long idle.
+            init_timeout=180.0,
         )
         self.invoker_ready = False
 
@@ -263,7 +267,7 @@ class LyraBot(commands.Bot):
             })
 
         try:
-            await self.invoker.initialize(timeout=180.0)
+            await self.invoker.initialize()
             self.invoker_ready = True
 
             # Trace: identity reconstruction complete
@@ -343,7 +347,7 @@ Keep it natural - just... be here.'''
             print(f"[{context}] Invoker not ready, attempting initialization...")
             self._init_in_progress = True
             try:
-                await self.invoker.initialize(timeout=180.0)
+                await self.invoker.initialize()
                 self.invoker_ready = True
             except Exception as e:
                 print(f"[{context}] Failed to initialize invoker: {e}")
