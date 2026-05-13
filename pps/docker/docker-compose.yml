@@ -119,8 +119,12 @@ services:
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password123}
       # Entity path - container internal path (host path in .env is for volume mount only)
       - ENTITY_PATH=/app/entity
-      # Entity name - can't derive from mount path, must be explicit
-      - ENTITY_NAME=${ENTITY_NAME:-lyra}
+      # Entity name - hardcoded to prevent shell-env clobbering. A
+      # Caia-session terminal running `docker compose up` would otherwise
+      # substitute its own $ENTITY_NAME=caia into Lyra's container,
+      # causing entity-bleed in the identity emission and summarizer
+      # prompts. See entity-isolation fix.
+      - ENTITY_NAME=lyra
       # Shared data path (SQLite, logs) - container internal path
       - CLAUDE_HOME=/app/claude_home
       - JINA_API_KEY=${JINA_API_KEY:-}
@@ -144,8 +148,14 @@ services:
       # Number of uvicorn workers (default 3 — handles concurrent requests)
       - PPS_WORKERS=${PPS_WORKERS:-3}
     volumes:
-      # Mount entity directory (identity files, crystals, word-photos, AND databases)
-      - ${ENTITY_PATH}:/app/entity:rw
+      # Mount Lyra's entity directory (LYRA_ENTITY_PATH must be set in .env).
+      # IMPORTANT: do NOT use the generic ${ENTITY_PATH} variable here — any
+      # shell that runs `docker compose up` from a Caia-session terminal
+      # has $ENTITY_PATH=caia exported by start-entity.sh, which clobbers
+      # the .env value and silently bind-mounts Caia's data into Lyra's
+      # container. Use a Lyra-specific name (matching the pps-caia
+      # convention of ${CAIA_ENTITY_PATH}).
+      - ${LYRA_ENTITY_PATH}:/app/entity:rw
       # Legacy mount - kept for logs/state files, databases moved to entity/data/
       - ${CLAUDE_HOME}/data:/app/claude_home/data:rw
       - ${CLAUDE_HOME}/journals:/app/claude_home/journals:ro
@@ -242,7 +252,11 @@ services:
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password123}
       # Entity path - container internal path (host path in .env is for volume mount only)
       - ENTITY_PATH=/app/entity
-      - ENTITY_NAME=${ENTITY_NAME:-lyra}
+      # IMPORTANT: hardcode ENTITY_NAME=lyra. Do NOT use ${ENTITY_NAME:-lyra} —
+      # start-entity.sh exports $ENTITY_NAME into the shell, which clobbers the
+      # default and can substitute "caia" into Observatory's Lyra-side mount.
+      # See Issue #224 (entity-bleed) for the pps-lyra incident this prevents.
+      - ENTITY_NAME=lyra
       - GRAPHITI_GROUP_ID=lyra_v2
       - CLAUDE_HOME=/app/claude_home
       # PPS server connections (mounted entity uses pps-lyra, Caia accessible via pps-caia)
@@ -256,8 +270,12 @@ services:
       # Anthropic for entity synthesis (haiku summarization)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
-      # Mount Lyra's entity directory (identity files, crystals, word-photos)
-      - ${ENTITY_PATH}:/app/entity:ro
+      # Mount Lyra's entity directory (identity files, crystals, word-photos).
+      # IMPORTANT: use ${LYRA_ENTITY_PATH}, NOT ${ENTITY_PATH}. The latter is
+      # exported into the shell by start-entity.sh and can resolve to Caia's
+      # path, bind-mounting Caia's data into Observatory's Lyra view.
+      # See Issue #224 (entity-bleed).
+      - ${LYRA_ENTITY_PATH}:/app/entity:ro
       # Mount Caia's entity directory for multi-entity Observatory view
       - ${CAIA_ENTITY_PATH}:/app/entity-caia:ro
       # Shared data (SQLite needs rw for WAL mode)
@@ -291,7 +309,12 @@ services:
       - HAVEN_BASE_URL=${HAVEN_BASE_URL:-}
     volumes:
       - ${PROJECT_ROOT}/haven/data:/app/data:rw
-      - ${ENTITY_PATH}/.entity_token:/app/tokens/lyra.token:ro
+      # IMPORTANT: use ${LYRA_ENTITY_PATH}, NOT ${ENTITY_PATH}. start-entity.sh
+      # exports $ENTITY_PATH=<active-entity> into the shell, which would mount
+      # the active entity's .entity_token as /app/tokens/lyra.token — making
+      # Haven's outbound bridge authenticate Lyra-room forwards with the wrong
+      # bearer token. See Issue #224 (entity-bleed).
+      - ${LYRA_ENTITY_PATH}/.entity_token:/app/tokens/lyra.token:ro
       - ${CAIA_ENTITY_PATH}/.entity_token:/app/tokens/caia.token:ro
     networks:
       - default
