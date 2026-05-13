@@ -80,8 +80,10 @@ class LyraReflectionDaemon:
 
         # ClaudeInvoker - configured but not initialized yet
         # Reflection builds fresh prompts each time, so no startup_prompt here
+        # Issue #226: working_dir is the entity directory; CC walks up from
+        # there for both project (shared) and entity (identity) CLAUDE.md.
         self.invoker = ClaudeInvoker(
-            working_dir=PROJECT_DIR,
+            working_dir=Path(ENTITY_PATH),
             bypass_permissions=True,
             model=REFLECTION_MODEL,
             max_context_tokens=100_000,  # Lower for reflection
