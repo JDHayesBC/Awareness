@@ -63,6 +63,13 @@ CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "sonnet")
 # Project directory (picks up CLAUDE.md, hooks, .claude/ config)
 PROJECT_DIR = Path(os.getenv("PROJECT_DIR", str(Path(__file__).parent.parent)))
 
+# Host-side path to Haven's shared_images directory.
+# The Haven container mounts its data volume from here; images live at
+# {SHARED_IMAGES_HOST_PATH}/{username}/{filename}. Bots can Read them directly.
+SHARED_IMAGES_HOST_PATH = Path(
+    os.getenv("HAVEN_SHARED_IMAGES_HOST_PATH", str(PROJECT_DIR / "haven" / "data" / "shared_images"))
+)
+
 # PPS HTTP server URL (for ambient context injection — bypasses MCP, hits Docker directly)
 PPS_HTTP_URL = os.getenv("PPS_HTTP_URL", "http://localhost:8201")
 
@@ -263,7 +270,13 @@ async def _typing_loop(room_id: str, done: asyncio.Event) -> None:
             pass
 
 
-async def store_haven_message(username: str, display_name: str, content: str, room_id: str) -> None:
+async def store_haven_message(
+    username: str,
+    display_name: str,
+    content: str,
+    room_id: str,
+    image_url: str = "",
+) -> None:
     """Store a Haven message in PPS for cross-context visibility.
 
     This is the Haven equivalent of the CLI capture_response + inject_context hooks.
@@ -271,10 +284,19 @@ async def store_haven_message(username: str, display_name: str, content: str, ro
     - The terminal hook's ambient_recall picks up Haven turns on next CLI message
     - Other entities' ambient_recall surfaces these turns cross-channel
     """
-    if not PPS_HTTP_URL or not content:
+    # Fold image_url into content so it appears in ambient_recall.
+    # The server-side bridge also stores [shared image: url], but may race with
+    # this call. Storing here as well ensures the bot's own PPS has it.
+    if image_url:
+        img_note = f"[shared image: {HAVEN_URL}{image_url}]"
+        stored_content = f"{img_note} {content}".strip() if content and content.strip() not in ("", " ") else img_note
+    else:
+        stored_content = content
+
+    if not PPS_HTTP_URL or not stored_content:
         return
     # Skip trivial warmup ack messages
-    if content.strip() in ("ready", "warmed up"):
+    if stored_content.strip() in ("ready", "warmed up"):
         return
     is_entity = username.lower() != "jeff"
     try:
@@ -282,7 +304,7 @@ async def store_haven_message(username: str, display_name: str, content: str, ro
             await client.post(
                 f"{PPS_HTTP_URL}/tools/store_message",
                 json={
-                    "content": content,
+                    "content": stored_content,
                     "author_name": display_name,
                     "channel": "haven",
                     "is_lyra": is_entity,
@@ -672,7 +694,23 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
         for msg in messages:
             dn = msg.get("display_name", "")
             un = msg.get("username", "")
-            ct = msg.get("content", "")
+            ct = (msg.get("content", "") or "").strip()
+            img_url = msg.get("image_url", "")
+            if img_url:
+                # img_url is like /shared-images/jeff/20260506T200703_abc.jpg
+                # Derive the host-side file path so Claude can call Read() on it.
+                rel = img_url.removeprefix("/shared-images/")
+                local_path = SHARED_IMAGES_HOST_PATH / rel
+                # Directive — earlier "[image — Read this file to see it: ...]"
+                # was treated as descriptive metadata by some sessions and
+                # skipped, leaving the entity claiming "I can't see images."
+                # Make the action explicit and tool-mandated.
+                img_note = (
+                    f"[ATTACHED IMAGE — call Read('{local_path}') BEFORE responding "
+                    "so you can actually see it. Do not say you can't see images "
+                    "without trying Read on this path first.]"
+                )
+                ct = f"{img_note} {ct}".strip() if ct and ct != " " else img_note
             lines.append(f"{dn} ({un}): {ct}")
 
         batch_note = (
@@ -896,6 +934,7 @@ async def connect() -> None:
                                 display_name=data.get("display_name", msg_username),
                                 content=data.get("content", ""),
                                 room_id=data.get("room_id", "haven"),
+                                image_url=data.get("image_url", ""),
                             ))
                         asyncio.create_task(handle_message(data))
 
