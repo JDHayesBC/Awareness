@@ -260,6 +260,7 @@ const haven = (() => {
         // Enable input
         $('message-input').disabled = false;
         $('send-btn').disabled = false;
+        $('attach-btn').disabled = false;
 
         // Select first room
         if (rooms.length > 0) {
@@ -657,13 +658,77 @@ const haven = (() => {
 
     // --- Input handling ---
 
+    let pendingImage = null;
+
+    function setPendingImage(file) {
+        pendingImage = file;
+        const wrap = $('image-preview');
+        const img = $('image-preview-img');
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = (e) => { img.src = e.target.result; };
+            reader.readAsDataURL(file);
+            wrap.classList.remove('hidden');
+        } else {
+            img.src = '';
+            wrap.classList.add('hidden');
+            $('image-input').value = '';
+        }
+    }
+
+    async function uploadPendingImage(caption) {
+        if (!pendingImage || !currentRoomId) return false;
+        const room = rooms.find(r => r.id === currentRoomId);
+        if (!room) return false;
+
+        const fd = new FormData();
+        fd.append('image', pendingImage);
+        fd.append('room', room.name);
+        if (caption) fd.append('caption', caption);
+
+        const file = pendingImage;
+        setPendingImage(null);
+
+        try {
+            const resp = await fetch('/api/share-image', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + getToken() },
+            body: fd,
+        });
+            if (!resp.ok) {
+                const err = await resp.text();
+                alert(`Image upload failed: ${resp.status} ${err}`);
+                setPendingImage(file); // restore so user can retry/clear
+                return false;
+            }
+            return true;
+        } catch (e) {
+            alert(`Image upload failed: ${e.message}`);
+            setPendingImage(file);
+            return false;
+        }
+    }
+
     function initInput() {
         const input = $('message-input');
         const sendBtn = $('send-btn');
+        const attachBtn = $('attach-btn');
+        const fileInput = $('image-input');
+        const previewClear = $('image-preview-clear');
+        const inputWrap = document.querySelector('.chat-input');
 
-        const doSend = () => {
+        const doSend = async () => {
             const content = input.value.trim();
-            if (!content || !currentRoomId) return;
+            if (!currentRoomId) return;
+
+            if (pendingImage) {
+                await uploadPendingImage(content);
+                input.value = '';
+                input.style.height = 'auto';
+                return;
+            }
+
+            if (!content) return;
             send({ type: 'message', room_id: currentRoomId, content });
             input.value = '';
             input.style.height = 'auto';
@@ -676,6 +741,49 @@ const haven = (() => {
                 doSend();
             }
         });
+
+        attachBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files && e.target.files[0];
+            if (file) setPendingImage(file);
+        });
+        previewClear.addEventListener('click', () => setPendingImage(null));
+
+        // Paste image (e.g. screenshot from clipboard)
+        input.addEventListener('paste', (e) => {
+            const items = e.clipboardData && e.clipboardData.items;
+            if (!items) return;
+            for (const item of items) {
+                if (item.type && item.type.startsWith('image/')) {
+                    const file = item.getAsFile();
+                    if (file) {
+                        e.preventDefault();
+                        setPendingImage(file);
+                        return;
+                    }
+                }
+            }
+        });
+
+        // Drag-and-drop into the chat input area
+        const onDragOver = (e) => {
+            if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
+                e.preventDefault();
+                inputWrap.classList.add('drag-over');
+            }
+        };
+        const onDragLeave = () => inputWrap.classList.remove('drag-over');
+        const onDrop = (e) => {
+            inputWrap.classList.remove('drag-over');
+            const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+            if (file && file.type.startsWith('image/')) {
+                e.preventDefault();
+                setPendingImage(file);
+            }
+        };
+        inputWrap.addEventListener('dragover', onDragOver);
+        inputWrap.addEventListener('dragleave', onDragLeave);
+        inputWrap.addEventListener('drop', onDrop);
 
         // Auto-resize textarea and send typing indicator
         input.addEventListener('input', () => {
