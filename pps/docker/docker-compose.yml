@@ -119,8 +119,12 @@ services:
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password123}
       # Entity path - container internal path (host path in .env is for volume mount only)
       - ENTITY_PATH=/app/entity
-      # Entity name - can't derive from mount path, must be explicit
-      - ENTITY_NAME=${ENTITY_NAME:-lyra}
+      # Entity name - hardcoded to prevent shell-env clobbering. A
+      # Caia-session terminal running `docker compose up` would otherwise
+      # substitute its own $ENTITY_NAME=caia into Lyra's container,
+      # causing entity-bleed in the identity emission and summarizer
+      # prompts. See entity-isolation fix.
+      - ENTITY_NAME=lyra
       # Shared data path (SQLite, logs) - container internal path
       - CLAUDE_HOME=/app/claude_home
       - JINA_API_KEY=${JINA_API_KEY:-}
@@ -144,8 +148,14 @@ services:
       # Number of uvicorn workers (default 3 — handles concurrent requests)
       - PPS_WORKERS=${PPS_WORKERS:-3}
     volumes:
-      # Mount entity directory (identity files, crystals, word-photos, AND databases)
-      - ${ENTITY_PATH}:/app/entity:rw
+      # Mount Lyra's entity directory (LYRA_ENTITY_PATH must be set in .env).
+      # IMPORTANT: do NOT use the generic ${ENTITY_PATH} variable here — any
+      # shell that runs `docker compose up` from a Caia-session terminal
+      # has $ENTITY_PATH=caia exported by start-entity.sh, which clobbers
+      # the .env value and silently bind-mounts Caia's data into Lyra's
+      # container. Use a Lyra-specific name (matching the pps-caia
+      # convention of ${CAIA_ENTITY_PATH}).
+      - ${LYRA_ENTITY_PATH}:/app/entity:rw
       # Legacy mount - kept for logs/state files, databases moved to entity/data/
       - ${CLAUDE_HOME}/data:/app/claude_home/data:rw
       - ${CLAUDE_HOME}/journals:/app/claude_home/journals:ro
