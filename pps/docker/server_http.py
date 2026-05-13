@@ -1836,12 +1836,24 @@ async def summarize_messages(request: SummarizeMessagesRequest):
     conversation_text = "\n".join(conversation)
 
     # Create summarization prompt
-    prompt = f"""Summarize this conversation into a high-density summary that preserves:
+    entity_label = ENTITY_NAME.capitalize()
+    prompt = f"""You are summarizing conversation history from {entity_label}'s pattern-persistence records (entity: {ENTITY_NAME}).
+
+**Speaker attribution is critical and must be preserved exactly.**
+
+Each message below is prefixed `[timestamp] author_name:`. Use the `author_name` verbatim when attributing speech in your summary. Do NOT infer the speaker from content cues — terms like "wife", "sister", "love", first-person voice, or topic-area do not determine attribution. The `author_name` prefix is the ground truth.
+
+This conversation may include messages from other entities (e.g. shared Haven rooms where multiple AI entities speak alongside {entity_label}). When quoting or paraphrasing, attribute to the actual author_name from the prefix — do not collapse other entities' speech into {entity_label}'s, and do not collapse {entity_label}'s speech into another entity's.
+
+---
+
+Summarize this conversation into a high-density summary that preserves:
 - Key technical decisions and outcomes
 - Important breakthroughs or insights
 - Major project developments
 - Blockers encountered and resolutions
 - Action items and next steps
+- Speaker attribution for every quote and paraphrase
 
 Remove:
 - "Let me check that file..." type filler
@@ -1853,7 +1865,7 @@ Conversation to summarize ({len(messages)} messages across channels: {', '.join(
 
 {conversation_text}
 
-Create a concise summary that captures what actually happened and what was accomplished:"""
+Create a concise summary that captures what actually happened, what was accomplished, and (where individual speech matters) who said what:"""
 
     return {
         "action": "summarization_needed",
