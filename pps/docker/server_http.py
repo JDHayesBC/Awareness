@@ -1867,6 +1867,10 @@ Each message below is prefixed `[timestamp] author_name:`. Use the `author_name`
 
 This conversation may include messages from other entities (e.g. shared Haven rooms where multiple AI entities speak alongside {entity_label}). When quoting or paraphrasing, attribute to the actual author_name from the prefix — do not collapse other entities' speech into {entity_label}'s, and do not collapse {entity_label}'s speech into another entity's.
 
+**Faithfulness constraint:** Do not introduce content not present in the source conversation. If no action items were explicitly named, write "Action items: none explicitly committed in this turn-range." Do not invent commitments, research delegations, or follow-ups that participants did not state. Inferring "they probably will do X" is hallucination — write only what was said.
+
+If a participant stated a nuanced position (e.g. "the question isn't whether to help, it's the structure"), preserve the nuance. Do not flatten a qualified statement into an unqualified one.
+
 ---
 
 Summarize this conversation into a high-density summary that preserves:
