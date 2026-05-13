@@ -1077,7 +1077,8 @@ async def ambient_recall(request: AmbientRecallRequest):
 
     For startup context, includes:
     - Recent summaries (compressed history)
-    - All unsummarized turns (full fidelity recent)
+    - Up to 50 most recent unsummarized turns (hard cap; addendum in formatted_context
+      instructs caller to fetch remaining turns when more exist beyond the cap)
     """
     auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "ambient_recall")
     if auth_error:
@@ -1434,7 +1435,7 @@ async def ambient_recall(request: AmbientRecallRequest):
             formatted_lines.append(f"- [{date}] ({channels}): {text}")
 
     # Format unsummarized turns (for startup context - full fidelity recent)
-    if unsummarized_turns and not any("error" in str(t) for t in unsummarized_turns):
+    if unsummarized_turns and not any("error" in t for t in unsummarized_turns):
         formatted_lines.append("\n**[recent_turns]**")
         for turn in unsummarized_turns:
             author = turn.get("author", turn.get("author_name", "?"))  # key is "author", not "author_name"
@@ -1447,14 +1448,35 @@ async def ambient_recall(request: AmbientRecallRequest):
                 content = content[:500] + "..."
             formatted_lines.append(f"- [**{channel_prefix}**] {author}: {content}")
 
-        # Add overflow warning if there are more unsummarized turns than shown
-        showing = len(unsummarized_turns)
-        if unsummarized_count > showing:
-            critical_warning = ""
-            if unsummarized_count > 100:
-                critical_warning = f"\n🔥 CRITICAL: Run summarizer immediately — backlog is {unsummarized_count} messages."
-            formatted_lines.append(f"\n⚠️ Showing newest {showing} of {unsummarized_count} unsummarized turns.")
-            formatted_lines.append(f"For chronological catch-up: get_turns_since_summary(limit=50, offset=0, oldest_first=true){critical_warning}")
+        # Overflow warning — only fire on startup, where the 50-cap is a catch-up
+        # boundary. Non-startup ambient ticks use a smaller intentional cap
+        # (limit=15, peripheral vision) where "fetch the rest" is not the right
+        # action — the cap IS the design, not a missing-context signal.
+        if is_startup:
+            showing = len(unsummarized_turns)
+            if unsummarized_count > showing:
+                remaining = unsummarized_count - showing
+                critical_warning = ""
+                if unsummarized_count > 100:
+                    critical_warning = f"\n🔥 CRITICAL: Run summarizer immediately — backlog is {unsummarized_count} messages."
+                formatted_lines.append(
+                    f"\n⚠️ Returned {showing} of {unsummarized_count} unsummarized turns — "
+                    f"{remaining} older turns were NOT loaded."
+                )
+                formatted_lines.append(
+                    f"FETCH BEFORE RESPONDING: call get_turns_since_summary(limit=50, offset=0, oldest_first=true) "
+                    f"to retrieve older turns, advancing offset by 50 each call until all "
+                    f"{unsummarized_count} turns are loaded.{critical_warning}"
+                )
+
+    elif is_startup and unsummarized_count > 0:
+        # unsummarized_turns empty despite count > 0 (edge case: all fetched rows were error entries).
+        # Only relevant on startup — on non-startup ticks the empty turns block is normal.
+        formatted_lines.append(f"\n⚠️ {unsummarized_count} unsummarized turns exist but none were loaded.")
+        formatted_lines.append(
+            "FETCH BEFORE RESPONDING: call get_turns_since_summary(limit=50, offset=0, oldest_first=true) "
+            "to retrieve them."
+        )
 
     # Haven — unread messages from chat rooms (real-time sync)
     if haven_lines:

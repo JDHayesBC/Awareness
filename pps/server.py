@@ -213,7 +213,7 @@ async def list_tools() -> list[Tool]:
                             "or 'startup' for initial identity reconstruction. "
                             "SPECIAL: 'startup' triggers recency-based retrieval (not semantic search) "
                             "and returns: 3 most recent crystals, 2 most recent word-photos, "
-                            "2 summaries, and ALL unsummarized turns. This is a preset PACKAGE OPERATION."
+                            "2 summaries, and up to 50 most recent unsummarized turns. This is a preset PACKAGE OPERATION."
                         )
                     },
                     "limit_per_layer": {
