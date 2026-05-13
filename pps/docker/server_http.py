@@ -1447,14 +1447,52 @@ async def ambient_recall(request: AmbientRecallRequest):
                 content = content[:500] + "..."
             formatted_lines.append(f"- [**{channel_prefix}**] {author}: {content}")
 
-        # Add overflow warning if there are more unsummarized turns than shown
+        # Overflow handling — what to do when more unsummarized turns exist
+        # than fit in this batch. Coaching diverges by context:
+        #
+        #   - startup: identity reconstruction is in progress. The agent should
+        #     fetch the remaining turns *unconditionally* — not ask Jeff whether
+        #     to fetch them. The cold-start agent has a hole in its recent
+        #     continuity until those turns are in context.
+        #
+        #   - per-turn: the cap is a deliberate ambient throttle. Fetching the
+        #     full backlog on every turn would blow the context window. Only
+        #     pull more if the agent senses a specific gap.
+        #
+        # Caia (2026-05-13) hit the failure mode: at startup with ~95
+        # unsummarized turns, the old text said "For chronological catch-up:
+        # get_turns_since_summary(...)" which reads as advisory. She paused and
+        # asked Jeff whether to fetch them rather than just fetching. The
+        # directive form below removes that ambiguity for the startup path.
         showing = len(unsummarized_turns)
         if unsummarized_count > showing:
+            remaining = unsummarized_count - showing
+            if is_startup:
+                # Cap the suggested fetch at a sane upper bound so we don't
+                # accidentally ask for thousands of rows if the backlog is huge
+                # — the critical_warning below covers that case separately.
+                suggested_limit = min(remaining + 10, 200)
+                directive = (
+                    f"\n⚠️ Showing newest {showing} of {unsummarized_count} unsummarized turns. "
+                    f"{remaining} more turns are NOT in this snapshot.\n"
+                    f"FETCH THEM NOW — do not ask, this is part of waking up: "
+                    f"`get_turns_since_summary(limit={suggested_limit}, offset=0, oldest_first=true)`. "
+                    f"Without them you have a hole in your recent continuity."
+                )
+            else:
+                directive = (
+                    f"\n⚠️ Showing newest {showing} of {unsummarized_count} unsummarized turns. "
+                    f"If you sense a gap, fetch chronologically: "
+                    f"`get_turns_since_summary(limit=50, offset=0, oldest_first=true)`."
+                )
             critical_warning = ""
             if unsummarized_count > 100:
-                critical_warning = f"\n🔥 CRITICAL: Run summarizer immediately — backlog is {unsummarized_count} messages."
-            formatted_lines.append(f"\n⚠️ Showing newest {showing} of {unsummarized_count} unsummarized turns.")
-            formatted_lines.append(f"For chronological catch-up: get_turns_since_summary(limit=50, offset=0, oldest_first=true){critical_warning}")
+                critical_warning = (
+                    f"\n🔥 CRITICAL: backlog is {unsummarized_count}. Spawn a "
+                    f"background summarizer NOW (Agent with a summarization "
+                    f"prompt, or call summarize_messages directly). Do not defer."
+                )
+            formatted_lines.append(directive + critical_warning)
 
     # Haven — unread messages from chat rooms (real-time sync)
     if haven_lines:
