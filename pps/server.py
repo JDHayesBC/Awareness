@@ -923,6 +923,37 @@ async def list_tools() -> list[Tool]:
                 }
             }
         ),
+        Tool(
+            name="update_space",
+            description=(
+                "Update an existing space's description, file path, or emotional quality. "
+                "Only provided fields are changed; omitted fields are left unchanged. "
+                "Returns an error if the space does not exist."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "space_name": {
+                        "type": "string",
+                        "description": "Name of the space to update"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "New description (omit to leave unchanged)"
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "New file path to associated .md room file (omit to leave unchanged)"
+                    },
+                    "emotional_quality": {
+                        "type": "string",
+                        "description": "New emotional quality descriptor (omit to leave unchanged)"
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
+                },
+                "required": ["space_name"]
+            }
+        ),
         # === Tech RAG (Layer 6) ===
         Tool(
             name="tech_search",
