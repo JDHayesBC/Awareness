@@ -176,8 +176,12 @@ class LyraBot(commands.Bot):
         self.trace_logger: TraceLogger | None = None
 
         # ClaudeInvoker - configured but not initialized yet
+        # Issue #226: working_dir is the entity directory, not project root.
+        # CC walks up from there to find both project CLAUDE.md (shared) and
+        # entity CLAUDE.md (identity), preventing cross-entity bleed in
+        # concurrent daemon contexts.
         self.invoker = ClaudeInvoker(
-            working_dir=PROJECT_DIR,
+            working_dir=Path(ENTITY_PATH),
             bypass_permissions=True,
             model=CLAUDE_MODEL,
             max_context_tokens=80_000,

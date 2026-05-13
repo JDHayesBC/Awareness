@@ -75,8 +75,10 @@ class CaiaReflectionDaemon:
         # Get MCP config with Caia's entity path (not Lyra's hardcoded default)
         mcp_servers = get_default_mcp_servers(entity_path=Path(ENTITY_PATH))
 
+        # Issue #226: working_dir is the entity directory; CC walks up from
+        # there for both project (shared) and entity (identity) CLAUDE.md.
         self.invoker = ClaudeInvoker(
-            working_dir=PROJECT_DIR,
+            working_dir=Path(ENTITY_PATH),
             bypass_permissions=True,
             model=REFLECTION_MODEL,
             mcp_servers=mcp_servers,

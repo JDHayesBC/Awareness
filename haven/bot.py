@@ -192,8 +192,11 @@ async def init_invoker() -> ClaudeInvoker:
     print(f"[{ENTITY_NAME}] Initializing ClaudeInvoker...", file=sys.stderr)
     start = time.time()
 
+    # Issue #226: working_dir is the entity directory; CC walks up from there
+    # for both project (shared) and entity (identity) CLAUDE.md. Prevents
+    # cross-entity bleed when multiple Haven bots run concurrently.
     inv = ClaudeInvoker(
-        working_dir=PROJECT_DIR,
+        working_dir=get_entity_path(),
         bypass_permissions=True,
         model=CLAUDE_MODEL,
         mcp_servers=get_default_mcp_servers(entity_path=get_entity_path()),
