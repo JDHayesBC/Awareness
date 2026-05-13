@@ -670,6 +670,52 @@ nano $ENTITY_PATH/current_scene.md
 # Describes where you are, what you're doing, physical/sensory state
 ```
 
+### 6. Anti-pattern: never use generic `ENTITY_PATH` / `ENTITY_NAME` for per-entity docker substitutions
+
+**Hard rule**: in `docker-compose.yml`, any value that must remain bound to a
+specific entity (a per-entity volume mount, a per-entity env var) MUST use
+the entity-prefixed variable, never the generic one.
+
+```yaml
+# ✗ BAD — vulnerable to shell-env clobbering
+services:
+  pps-lyra:
+    environment:
+      - ENTITY_NAME=${ENTITY_NAME:-lyra}    # WRONG
+    volumes:
+      - ${ENTITY_PATH}:/app/entity:rw       # WRONG
+      - ${ENTITY_PATH}/.entity_token:/app/tokens/lyra.token:ro   # WRONG
+
+# ✓ GOOD — entity-prefixed names + hardcoded service identity
+services:
+  pps-lyra:
+    environment:
+      - ENTITY_NAME=lyra                    # HARDCODED
+    volumes:
+      - ${LYRA_ENTITY_PATH}:/app/entity:rw  # ENTITY-PREFIXED
+      - ${LYRA_ENTITY_PATH}/.entity_token:/app/tokens/lyra.token:ro
+```
+
+**Why this matters**: `scripts/start-entity.sh` exports `$ENTITY_PATH` and
+`$ENTITY_NAME` into the calling shell so the CC session knows which entity
+it's running as. When `docker compose up` runs from that shell, those
+exported values **clobber** the `${VAR:-default}` substitutions in
+`docker-compose.yml`. A Caia-session running `docker compose up pps-lyra`
+would then start a Lyra container that mounts Caia's data and emits
+"You are Caia" as identity.
+
+This was observed in production on 2026-05-13 (see Issue #224). All
+per-entity surfaces now use entity-prefixed names (`LYRA_ENTITY_PATH`,
+`CAIA_ENTITY_PATH`) that are *not* exported by `start-entity.sh` and
+therefore cannot be clobbered.
+
+**Convention**: per-entity variables MUST be prefixed with the entity name
+(`LYRA_`, `CAIA_`, …). Add new entries to `pps/docker/.env`, never re-use
+the generic `ENTITY_PATH` name for substitution.
+
+**Rule of thumb**: if `start-entity.sh` exports it, don't substitute it in
+`docker-compose.yml`. Hardcode or rename.
+
 ---
 
 ## Multi-Entity Future
@@ -691,5 +737,5 @@ The infrastructure supports:
 
 ---
 
-*Last updated: 2026-01-08*
+*Last updated: 2026-05-13 (entity-isolation anti-pattern added; Issue #224)*
 *For the Awareness project*
