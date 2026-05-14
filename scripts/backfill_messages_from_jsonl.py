@@ -335,6 +335,64 @@ def store_message(
         return False
 
 
+def fix_created_at(
+    db_conn: sqlite3.Connection,
+    channel: str,
+    content: str,
+    real_ts_str: str,
+    verbose: bool = False,
+) -> bool:
+    """
+    After a successful POST, find the just-inserted row by (channel, content)
+    and UPDATE its created_at to the real JSONL event timestamp.
+
+    PPS server defaults created_at to insert-time-now, so backfilled rows
+    would otherwise carry today's timestamp instead of the original event time.
+
+    Identification via channel+content match (most-recent row) is race-safer
+    than MAX(id), since the live capture hook may be inserting concurrently.
+
+    FTS does NOT need updating — messages_fts indexes content/author/channel,
+    not created_at. The UPDATE here is invisible to FTS.
+
+    Args:
+        db_conn: Open writable connection to conversations.db.
+        channel: Full channel string as stored (e.g. "terminal:<session_id>").
+        content: Exact content text that was just inserted.
+        real_ts_str: Timestamp in 'YYYY-MM-DD HH:MM:SS' format (UTC).
+        verbose: Print debug info on failure.
+
+    Returns:
+        True if exactly one row was updated, False otherwise.
+    """
+    try:
+        cur = db_conn.cursor()
+        cur.execute(
+            "SELECT id FROM messages WHERE channel = ? AND content = ? ORDER BY id DESC LIMIT 1",
+            (channel, content),
+        )
+        row = cur.fetchone()
+        if row is None:
+            if verbose:
+                print(
+                    f"  WARN  fix_created_at: no row found for channel={channel!r} content={content[:60]!r}",
+                    file=sys.stderr,
+                )
+            return False
+
+        row_id = row[0]
+        cur.execute(
+            "UPDATE messages SET created_at = ? WHERE id = ?",
+            (real_ts_str, row_id),
+        )
+        db_conn.commit()
+        return cur.rowcount == 1
+    except Exception as exc:
+        if verbose:
+            print(f"  WARN  fix_created_at failed: {exc}", file=sys.stderr)
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -420,63 +478,99 @@ def main() -> None:
     if args.verbose:
         print(f"Loaded {len(existing)} existing row fingerprint(s) from DB.")
 
-    # 3. Process events
+    # 3. Open a persistent DB connection for post-insert timestamp fixups.
+    #    We keep it open for the whole run to avoid per-row open/close overhead.
+    #    The connection is read-write; we only UPDATE created_at after a successful POST.
+    db_conn: sqlite3.Connection | None = None
+    if not args.dry_run and db_path.exists():
+        db_conn = sqlite3.connect(str(db_path))
+        # WAL mode matches what the PPS server uses, reducing lock contention
+        # when the live capture hook is inserting concurrently.
+        db_conn.execute("PRAGMA journal_mode=WAL")
+        db_conn.execute("PRAGMA busy_timeout=5000")
+
+    # 4. Process events
     inserted = 0
+    ts_fixed = 0
     skipped_existing = 0
     skipped_unparseable = 0  # already counted in scan, but track POST failures here too
 
-    for idx, event in enumerate(events, start=1):
-        if idx % PROGRESS_EVERY == 0:
-            print(f"  ... processed {idx}/{len(events)} events (inserted={inserted}, skipped={skipped_existing})")
+    try:
+        for idx, event in enumerate(events, start=1):
+            if idx % PROGRESS_EVERY == 0:
+                print(f"  ... processed {idx}/{len(events)} events (inserted={inserted}, skipped={skipped_existing})")
 
-        etype = event["type"]
-        ts: datetime = event["timestamp"]
-        content: str = event["content"]
-        session_id: str = event["session_id"]
+            etype = event["type"]
+            ts: datetime = event["timestamp"]
+            content: str = event["content"]
+            session_id: str = event["session_id"]
 
-        channel = f"terminal:{session_id}"
-        created_at_str = dt_to_db_str(ts)
-        chash = content_hash(content)
-        fingerprint = (channel, created_at_str, chash)
+            channel = f"terminal:{session_id}"
+            created_at_str = dt_to_db_str(ts)
+            chash = content_hash(content)
+            fingerprint = (channel, created_at_str, chash)
 
-        if fingerprint in existing:
-            skipped_existing += 1
+            if fingerprint in existing:
+                skipped_existing += 1
+                if args.verbose:
+                    print(f"  SKIP  [{ts.isoformat()}] {etype[:4]} {content[:60]!r}")
+                continue
+
+            is_lyra = etype == "assistant"
+            author_name = entity_author if is_lyra else "Jeff"
+
             if args.verbose:
-                print(f"  SKIP  [{ts.isoformat()}] {etype[:4]} {content[:60]!r}")
-            continue
+                print(f"  POST  [{ts.isoformat()}] {etype[:4]} {author_name}: {content[:60]!r}")
 
-        is_lyra = etype == "assistant"
-        author_name = entity_author if is_lyra else "Jeff"
+            if args.dry_run:
+                inserted += 1  # count as "would insert" in dry-run
+                existing.add(fingerprint)  # prevent re-counting duplicates within the batch
+                continue
 
-        if args.verbose:
-            print(f"  POST  [{ts.isoformat()}] {etype[:4]} {author_name}: {content[:60]!r}")
+            ok = store_message(
+                port=port,
+                content=content,
+                author_name=author_name,
+                is_lyra=is_lyra,
+                session_id=session_id,
+            )
+            if ok:
+                inserted += 1
+                existing.add(fingerprint)  # prevent re-counting within batch
 
-        if args.dry_run:
-            inserted += 1  # count as "would insert" in dry-run
-            existing.add(fingerprint)  # prevent re-counting duplicates within the batch
-            continue
+                # Fix the row's created_at: PPS server defaults to insert-time-now.
+                # We immediately UPDATE the just-inserted row to the real JSONL timestamp.
+                # Identify by channel+content (most-recent match) — safe under concurrent
+                # inserts from the live capture hook, unlike MAX(id).
+                if db_conn is not None:
+                    fixed = fix_created_at(
+                        db_conn=db_conn,
+                        channel=channel,
+                        content=content,
+                        real_ts_str=created_at_str,
+                        verbose=args.verbose,
+                    )
+                    if fixed:
+                        ts_fixed += 1
+                    elif args.verbose:
+                        print(
+                            f"  WARN  timestamp fix skipped for {ts.isoformat()} — row not found after POST",
+                            file=sys.stderr,
+                        )
+            else:
+                skipped_unparseable += 1  # POST failure — count as unhandled
+                if args.verbose:
+                    print(f"  FAIL  POST returned error for event at {ts.isoformat()}")
+    finally:
+        if db_conn is not None:
+            db_conn.close()
 
-        ok = store_message(
-            port=port,
-            content=content,
-            author_name=author_name,
-            is_lyra=is_lyra,
-            session_id=session_id,
-        )
-        if ok:
-            inserted += 1
-            existing.add(fingerprint)  # prevent re-counting within batch
-        else:
-            skipped_unparseable += 1  # POST failure — count as unhandled
-            if args.verbose:
-                print(f"  FAIL  POST returned error for event at {ts.isoformat()}")
-
-    # 4. Summary
+    # 5. Summary
     print()
     if args.dry_run:
         print(f"DRY RUN complete — would have inserted={inserted}, skipped_existing={skipped_existing}, skipped_unparseable={skipped_unparseable}")
     else:
-        print(f"Done — inserted={inserted}, skipped_existing={skipped_existing}, skipped_unparseable={skipped_unparseable}")
+        print(f"Done — inserted={inserted}, ts_fixed={ts_fixed}, skipped_existing={skipped_existing}, skipped_unparseable={skipped_unparseable}")
 
 
 if __name__ == "__main__":
