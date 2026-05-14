@@ -22,6 +22,7 @@ COPY layers/ ./layers/
 COPY server.py .
 COPY auth.py .
 COPY docker/server_http.py .
+COPY docker/ha_location.py .
 COPY docker/docker-entrypoint.sh .
 
 # Make entrypoint executable
