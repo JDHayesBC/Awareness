@@ -32,6 +32,22 @@ if [ ! -f "$IDENTITY_FILE" ]; then
     echo "Expected: $IDENTITY_FILE (see entities/_template/README.md)"
 fi
 
+# Ensure CC hooks are discoverable from the entity cwd (Issue #232).
+# CC doesn't walk cwd-ancestors for settings.local.json (only CLAUDE.md does),
+# so we maintain a relative symlink from each entity's .claude/ back to the
+# project root's settings.local.json. Single source of truth; idempotent on
+# each launch; portable across checkout locations.
+PROJECT_SETTINGS="$PROJECT_ROOT/.claude/settings.local.json"
+ENTITY_SETTINGS_DIR="$ENTITY_PATH/.claude"
+ENTITY_SETTINGS="$ENTITY_SETTINGS_DIR/settings.local.json"
+if [ -f "$PROJECT_SETTINGS" ]; then
+    mkdir -p "$ENTITY_SETTINGS_DIR"
+    # Relative path: from entities/<name>/.claude/ three levels up to .claude/
+    if [ ! -L "$ENTITY_SETTINGS" ] || [ "$(readlink "$ENTITY_SETTINGS")" != "../../../.claude/settings.local.json" ]; then
+        ln -sfn "../../../.claude/settings.local.json" "$ENTITY_SETTINGS"
+    fi
+fi
+
 export ENTITY_PATH
 export ENTITY_NAME
 echo "Starting Claude Code as: $ENTITY_NAME"

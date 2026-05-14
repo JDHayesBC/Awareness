@@ -33,6 +33,12 @@ any agent interaction, and survives compaction by the same re-read mechanism. Co
 entity sessions cannot bleed into each other because no shared mutable filesystem state
 communicates per-session identity; the directory boundary IS the entity boundary.
 
+**Hook discovery** (Issue #232): CC walks cwd-ancestors for `CLAUDE.md` but NOT for
+`settings.local.json`. To keep hooks firing from entity-cwd sessions, `start-entity.sh`
+maintains a relative symlink at `entities/<entity>/.claude/settings.local.json` pointing
+back to the project root's `.claude/settings.local.json`. Single source of truth;
+symlink is created idempotently on every launch.
+
 ---
 
 ## II. Startup Checklist
