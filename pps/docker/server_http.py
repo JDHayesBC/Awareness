@@ -1382,6 +1382,15 @@ async def ambient_recall(request: AmbientRecallRequest):
         "when something resonates. You learned wardrobe. You learned rooms. Learn this."
     )
 
+    # Household location (Issue #218) — optional, never breaks ambient_recall
+    try:
+        from ha_location import format_for_ambient as _loc_format
+        _loc_line = _loc_format()
+        if _loc_line:
+            formatted_lines.append(f"**[location]** {_loc_line}")
+    except Exception:
+        pass  # location pipeline is optional; never break ambient_recall on its absence
+
     # Group results by layer for better formatting
     results_by_layer = {}
     for r in all_results:
