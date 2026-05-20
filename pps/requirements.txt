@@ -11,6 +11,9 @@ pydantic>=2.0.0        # For custom entity type definitions
 # Vector store for Layer 2 and Tech RAG
 chromadb>=0.4.0
 
+# HTML→Markdown conversion for scripts/web_grab.py (verbatim web fetch, no AI)
+html2text>=2024.2.26
+
 # Future dependencies (uncomment as layers are implemented):
 # jina-embeddings        # Layer 2: Semantic search for word-photos
 # aiosqlite              # Layer 1: Async SQLite access
