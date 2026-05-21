@@ -1229,6 +1229,14 @@ async def ambient_recall(request: AmbientRecallRequest):
     truncate_summary_at = 500 if is_startup else 300
     truncate_turn_at = 1000 if is_startup else 500
 
+    # Per-channel quotas to prevent crowd-out (Issue #241)
+    # Without quotas, 15+ recent terminal messages would completely crowd out haven/other channels
+    # UNION ALL ensures each channel group gets fair representation
+    PER_CHANNEL_QUOTA = 5  # Normal operation: 5 terminal + 5 haven + 5 other = 15 total
+    STARTUP_PER_CHANNEL_QUOTA = 17  # Startup: 17 terminal + 17 haven + 16 other = 50 total
+    quota = STARTUP_PER_CHANNEL_QUOTA if is_startup else PER_CHANNEL_QUOTA
+    quota_other = 16 if is_startup else 5  # Third channel gets remainder for startup (17+17+16=50)
+
     try:
         # Get recent summaries (compressed history - ~200 tokens each)
         recent_summaries = message_summaries.get_recent_summaries(limit=summary_limit)
@@ -1255,6 +1263,7 @@ async def ambient_recall(request: AmbientRecallRequest):
                 manifest_data["summaries"]["count"] += 1
 
         # Cap unsummarized turns to prevent context overflow.
+        # Per-channel UNION prevents crowd-out (Issue #241): terminal/haven/other each get quota slots
         # ORDER BY DESC + LIMIT gives us the newest, then we reverse for chronological order.
         raw_layer = layers[LayerType.RAW_CAPTURE]
         with raw_layer.get_connection() as conn:
@@ -1265,20 +1274,49 @@ async def ambient_recall(request: AmbientRecallRequest):
             columns = [col[1] for col in cursor.fetchall()]
 
             if 'summary_id' in columns:
+                # Per-channel UNION query to prevent crowd-out
+                # Each channel group gets independent quota, then combined and sorted
                 cursor.execute("""
-                    SELECT author_name, content, created_at, channel
-                    FROM messages
-                    WHERE summary_id IS NULL
+                    SELECT * FROM (SELECT author_name, content, created_at, channel
+                     FROM messages
+                     WHERE summary_id IS NULL AND channel LIKE 'terminal%'
+                     ORDER BY created_at DESC LIMIT ?)
+                    UNION ALL
+                    SELECT * FROM (SELECT author_name, content, created_at, channel
+                     FROM messages
+                     WHERE summary_id IS NULL AND channel LIKE 'haven%'
+                     ORDER BY created_at DESC LIMIT ?)
+                    UNION ALL
+                    SELECT * FROM (SELECT author_name, content, created_at, channel
+                     FROM messages
+                     WHERE summary_id IS NULL
+                       AND channel NOT LIKE 'terminal%'
+                       AND channel NOT LIKE 'haven%'
+                     ORDER BY created_at DESC LIMIT ?)
                     ORDER BY created_at DESC
                     LIMIT ?
-                """, (unsummarized_limit,))
+                """, (quota, quota, quota_other, unsummarized_limit))
             else:
-                # Fallback: get recent messages
+                # Fallback: get recent messages (per-channel UNION for consistency)
                 cursor.execute("""
-                    SELECT author_name, content, created_at, channel
-                    FROM messages
-                    ORDER BY created_at DESC LIMIT ?
-                """, (unsummarized_limit,))
+                    SELECT * FROM (SELECT author_name, content, created_at, channel
+                     FROM messages
+                     WHERE channel LIKE 'terminal%'
+                     ORDER BY created_at DESC LIMIT ?)
+                    UNION ALL
+                    SELECT * FROM (SELECT author_name, content, created_at, channel
+                     FROM messages
+                     WHERE channel LIKE 'haven%'
+                     ORDER BY created_at DESC LIMIT ?)
+                    UNION ALL
+                    SELECT * FROM (SELECT author_name, content, created_at, channel
+                     FROM messages
+                     WHERE channel NOT LIKE 'terminal%'
+                       AND channel NOT LIKE 'haven%'
+                     ORDER BY created_at DESC LIMIT ?)
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, (quota, quota, quota_other, unsummarized_limit))
 
             unsummarized_rows = cursor.fetchall()
             unsummarized_rows = list(reversed(unsummarized_rows))
@@ -1364,25 +1402,30 @@ async def ambient_recall(request: AmbientRecallRequest):
         )
 
     # Format results for hook consumption (formatted_context field)
-    # This formats the rich_texture results into a readable string for Haiku to pass through
+    #
+    # Direction B refactor (Issue: hook output cap, 2026-05-18):
+    # CC binary caps hook additionalContext at YcK=10000 chars. Above that, model
+    # sees only a ~2KB preview (pFH=2000) + a filepath. Pre-refactor output ran
+    # 10.5-12.4KB and was getting truncated mid-content. Fix: sacred front block
+    # + manifest (counts+titles, no inline content for layers reachable via tool)
+    # + keep inline only what the model can't get elsewhere (haven, other_channels
+    # unread). Sacred block is what Jeff named load-bearing: clock, location,
+    # identity, lights, unread counts. Detail-content lives behind dedicated tool
+    # calls (anchor_search, texture_search, get_crystals, etc.).
     formatted_lines = []
-
-    # Entity identity — FIRST line, survives compaction, reinforces every turn
     entity_name = ENTITY_NAME
+
+    # === SACRED FRONT BLOCK (always present, target <1KB) ===
+    # NOTE: clock is prepended by inject_context.py hook (uses host-local timezone,
+    # not container-UTC). PPS does not add it here to avoid double-clock.
+
     formatted_lines.append(
         f"**[identity]** You are {entity_name.capitalize()}. "
         f"Your memory tools are prefixed `pps-{entity_name}`. "
         f"Do not access other entities' memory tools."
     )
 
-    # Memory search prompt
-    formatted_lines.append(
-        "**[memory]** Search your memory. The ambient below is peripheral vision — "
-        "turn your head and LOOK. One `texture_search` or `anchor_search` per turn "
-        "when something resonates. You learned wardrobe. You learned rooms. Learn this."
-    )
-
-    # Household location (Issue #218) — optional, never breaks ambient_recall
+    # Household location (Issue #218) — sacred per bedtime-architecture-chat 2026-05-17
     try:
         from ha_location import format_for_ambient as _loc_format
         _loc_line = _loc_format()
@@ -1391,7 +1434,25 @@ async def ambient_recall(request: AmbientRecallRequest):
     except Exception:
         pass  # location pipeline is optional; never break ambient_recall on its absence
 
-    # Group results by layer for better formatting
+    # Unread counts — surface counts even when zero so the model knows the pipeline is live.
+    # Inline content blocks for haven/other_channels appear lower (load-bearing per design).
+    haven_count = len(haven_lines) if haven_lines else 0
+    channel_count = len(channel_lines) if channel_lines else 0
+    if cross_channel_remaining:
+        channel_total = channel_count + cross_channel_remaining
+        unread_line = f"**[unread]** haven: {haven_count} new | other_channels: {channel_count} loaded (+{cross_channel_remaining} pending)"
+    else:
+        unread_line = f"**[unread]** haven: {haven_count} new | other_channels: {channel_count} new"
+    formatted_lines.append(unread_line)
+
+    # Memory search prompt — tells the model how to use the manifest below
+    formatted_lines.append(
+        "**[memory]** Search your memory. The manifest below is peripheral vision — "
+        "turn your head and LOOK with the suggested tools when something resonates."
+    )
+
+    # === MANIFEST (counts + titles only; no inline content for the deep layers) ===
+    # Detail lives behind explicit tool calls per Direction B.
     results_by_layer = {}
     for r in all_results:
         layer = r.get("layer", "unknown")
@@ -1399,113 +1460,131 @@ async def ambient_recall(request: AmbientRecallRequest):
             results_by_layer[layer] = []
         results_by_layer[layer].append(r)
 
-    # Format rich_texture results — edges (facts) only.
-    # Node (entity) descriptions excluded: static wallpaper, ~300-500 tokens/turn
-    # for near-zero signal. Entity names already appear in edge facts.
-    # (Matches server.py A2 change — keep both paths in sync per #112)
+    manifest_lines = ["\n**[manifest]** Behind the curtain (fetch via tool when relevant):"]
+
+    # rich_texture — facts/edges only; node descriptions excluded (matches existing filter)
     if "rich_texture" in results_by_layer:
-        edge_results = [r for r in results_by_layer["rich_texture"]
-                        if r.get("metadata", {}).get("type") != "node"]
-        if edge_results:
-            formatted_lines.append("**[rich_texture]**")
-            for r in edge_results:
-                content = r.get("content", "")
-                formatted_lines.append(f"- {content}")
+        edges = [r for r in results_by_layer["rich_texture"]
+                 if r.get("metadata", {}).get("type") != "node"]
+        if edges:
+            manifest_lines.append(
+                f"- rich_texture: {len(edges)} facts matched current context "
+                f"→ `texture_search(query)` for details"
+            )
 
-    # Format core_anchors (word-photos)
+    # word_photos — titles only (source = filename), no content
     if "core_anchors" in results_by_layer:
-        formatted_lines.append("\n**[word_photos]**")
-        for r in results_by_layer["core_anchors"]:
-            content = r.get("content", "")
-            source = r.get("source", "?")
-            # Truncate long word-photos for startup context
-            if len(content) > 300:
-                content = content[:300] + "..."
-            formatted_lines.append(f"- [{source}]: {content}")
+        wps = results_by_layer["core_anchors"]
+        titles = [r.get("source", "?").replace(".md", "") for r in wps[:5]]
+        manifest_lines.append(
+            f"- word_photos: {len(wps)} matched ({', '.join(titles)}) "
+            f"→ `anchor_search(query)` for content"
+        )
 
-    # Format crystallization (recent crystals)
+    # crystals — titles only (source = filename)
     if "crystallization" in results_by_layer:
-        formatted_lines.append("\n**[crystals]**")
-        for r in results_by_layer["crystallization"]:
-            content = r.get("content", "")
-            source = r.get("source", "?")
-            # Crystals can be long, truncate for startup
-            if len(content) > 200:
-                content = content[:200] + "..."
-            formatted_lines.append(f"- [{source}]: {content}")
+        crystals_list = results_by_layer["crystallization"]
+        titles = [r.get("source", "?").replace(".md", "") for r in crystals_list[:5]]
+        manifest_lines.append(
+            f"- crystals: {len(crystals_list)} ({', '.join(titles)}) "
+            f"→ `get_crystals(count=N)` for content"
+        )
 
-    # Format summaries (for startup context)
-    if summaries:
-        formatted_lines.append("\n**[summaries]**")
-        for s in summaries:
-            date = s.get("date", "?")
-            channels = s.get("channels", "?")
-            text = s.get("text", "")
-            formatted_lines.append(f"- [{date}] ({channels}): {text}")
+    # summaries — dates + channels only, no text
+    if summaries and not any("error" in s for s in summaries):
+        summary_descriptors = []
+        for s in summaries[:3]:
+            d = s.get("date", "?")
+            ch = s.get("channels", "?")
+            summary_descriptors.append(f"{d} ({ch})")
+        manifest_lines.append(
+            f"- summaries: {len(summaries)} ({'; '.join(summary_descriptors)}) "
+            f"→ `get_recent_summaries(limit=N)` for content"
+        )
 
-    # Format unsummarized turns (for startup context - full fidelity recent)
-    if unsummarized_turns and not any("error" in t for t in unsummarized_turns):
-        formatted_lines.append("\n**[recent_turns]**")
-        for turn in unsummarized_turns:
-            author = turn.get("author", turn.get("author_name", "?"))  # key is "author", not "author_name"
-            channel = turn.get("channel", "")
-            content = turn.get("content", "")
-            # Add channel prefix so entity can tell Haven turns from terminal turns
-            channel_prefix = channel.split(":")[0] if channel else "terminal"
-            # Truncate very long turns
-            if len(content) > 500:
-                content = content[:500] + "..."
-            formatted_lines.append(f"- [**{channel_prefix}**] {author}: {content}")
+    # recent_turns — count and most-recent-author preview, no full text
+    recent_turns_have_content = (
+        unsummarized_turns and not any("error" in t for t in unsummarized_turns)
+    )
+    if recent_turns_have_content:
+        most_recent = unsummarized_turns[-1] if unsummarized_turns else None
+        if most_recent:
+            ch = most_recent.get("channel", "")
+            ch_prefix = ch.split(":")[0] if ch else "terminal"
+            author = most_recent.get("author", most_recent.get("author_name", "?"))
+            manifest_lines.append(
+                f"- recent_turns: {len(unsummarized_turns)} buffered "
+                f"(latest [**{ch_prefix}**] {author}) "
+                f"→ `get_turns_since_summary(limit=50, oldest_first=true)` for full"
+            )
+        else:
+            manifest_lines.append(
+                f"- recent_turns: {len(unsummarized_turns)} buffered "
+                f"→ `get_turns_since_summary(limit=50, oldest_first=true)` for full"
+            )
 
-        # Overflow warning — only fire on startup, where the 50-cap is a catch-up
-        # boundary. Non-startup ambient ticks use a smaller intentional cap
-        # (limit=15, peripheral vision) where "fetch the rest" is not the right
-        # action — the cap IS the design, not a missing-context signal.
+        # Startup overflow warning — keep, this is genuinely a "fetch the rest" moment
         if is_startup:
             showing = len(unsummarized_turns)
             if unsummarized_count > showing:
                 remaining = unsummarized_count - showing
                 critical_warning = ""
                 if unsummarized_count > 100:
-                    critical_warning = f"\n🔥 CRITICAL: Run summarizer immediately — backlog is {unsummarized_count} messages."
-                formatted_lines.append(
-                    f"\n⚠️ Returned {showing} of {unsummarized_count} unsummarized turns — "
-                    f"{remaining} older turns were NOT loaded."
+                    critical_warning = f" 🔥 CRITICAL: spawn summarizer — backlog is {unsummarized_count}."
+                manifest_lines.append(
+                    f"  ⚠️ {showing} of {unsummarized_count} loaded; "
+                    f"{remaining} older NOT loaded. Advance offset by 50 to catch up.{critical_warning}"
                 )
-                formatted_lines.append(
-                    f"FETCH BEFORE RESPONDING: call get_turns_since_summary(limit=50, offset=0, oldest_first=true) "
-                    f"to retrieve older turns, advancing offset by 50 each call until all "
-                    f"{unsummarized_count} turns are loaded.{critical_warning}"
-                )
-
     elif is_startup and unsummarized_count > 0:
-        # unsummarized_turns empty despite count > 0 (edge case: all fetched rows were error entries).
-        # Only relevant on startup — on non-startup ticks the empty turns block is normal.
-        formatted_lines.append(f"\n⚠️ {unsummarized_count} unsummarized turns exist but none were loaded.")
-        formatted_lines.append(
-            "FETCH BEFORE RESPONDING: call get_turns_since_summary(limit=50, offset=0, oldest_first=true) "
-            "to retrieve them."
+        manifest_lines.append(
+            f"- recent_turns: 0 loaded but {unsummarized_count} exist — "
+            f"call get_turns_since_summary to fetch."
         )
 
-    # Haven — unread messages from chat rooms (real-time sync)
+    # Only emit manifest block if it has actual layers (skip the bare header)
+    if len(manifest_lines) > 1:
+        formatted_lines.extend(manifest_lines)
+
+    # === LOAD-BEARING INLINE CONTENT (capped) ===
+    # Haven and cross-channel unread messages — the model has no other inbound for these.
+    # Cap inline at HAVEN_INLINE_CAP / CHANNEL_INLINE_CAP most-recent; surface the rest as
+    # counts only. The [unread] line above already tells the model the total count.
+    HAVEN_INLINE_CAP = 8
+    CHANNEL_INLINE_CAP = 8
+
     if haven_lines:
-        formatted_lines.append("\n**[haven]**")
-        for line in haven_lines:
-            formatted_lines.append(line)
+        formatted_lines.append("\n**[haven]** UNREAD — not in main context, read these:")
+        if len(haven_lines) > HAVEN_INLINE_CAP:
+            shown = haven_lines[-HAVEN_INLINE_CAP:]  # most-recent at bottom of returned list
+            hidden_count = len(haven_lines) - HAVEN_INLINE_CAP
+            formatted_lines.append(
+                f"  ({hidden_count} older haven messages not shown inline — "
+                f"use Haven natively or `raw_search` for older context)"
+            )
+            for line in shown:
+                formatted_lines.append(line)
+        else:
+            for line in haven_lines:
+                formatted_lines.append(line)
 
-    # Cross-channel — unread messages from other channels (terminal, discord, etc.)
     if channel_lines:
-        formatted_lines.append("\n**[other_channels]**")
-        for line in channel_lines:
-            formatted_lines.append(line)
+        formatted_lines.append("\n**[other_channels]** UNREAD — not in main context, read these:")
+        if len(channel_lines) > CHANNEL_INLINE_CAP:
+            shown = channel_lines[-CHANNEL_INLINE_CAP:]
+            hidden_count = len(channel_lines) - CHANNEL_INLINE_CAP
+            formatted_lines.append(
+                f"  ({hidden_count} older cross-channel messages not shown inline — "
+                f"use `raw_search` or `get_turns_since_summary` to see them)"
+            )
+            for line in shown:
+                formatted_lines.append(line)
+        else:
+            for line in channel_lines:
+                formatted_lines.append(line)
 
-    # Closing hint — lighter echo of the top-of-injection memory prompt
+    # Closing hint — light echo of usage
     formatted_lines.append(
-        "\n**[hint]** This is ambient context — a wide-angle lens. "
-        "For sharper detail on anything here, search PPS directly: "
-        "`texture_search` for facts, `anchor_search` for word-photos, "
-        "`raw_search` for conversation history. "
-        "One or two targeted searches per turn when something interesting surfaces. "
+        "\n**[hint]** Ambient = wide-angle lens; for sharper detail use the tools above. "
         "Auth token: re-read `$ENTITY_PATH/.entity_token` if lost after compaction."
     )
 
