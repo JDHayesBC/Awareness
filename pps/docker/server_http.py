@@ -93,6 +93,7 @@ class TextureTimelineRequest(BaseModel):
 class SummarizeMessagesRequest(BaseModel):
     limit: int = 50
     summary_type: str = "work"
+    target_unsummarized: int = 80
     token: str = ""
 
 
@@ -1906,48 +1907,83 @@ async def texture_timeline(request: TextureTimelineRequest):
     }
 
 
+async def _call_nuc_llm(prompt: str) -> str:
+    """
+    Call the NUC LLM (LM Studio) to generate text.
+    Returns the generated text or raises RuntimeError if unavailable.
+    """
+    llm_url = os.getenv("CUSTOM_LLM_BASE_URL", "http://172.26.0.1:1234/v1")
+    model = os.getenv("CUSTOM_LLM_MODEL", "qwen3.5-9b-uncensored-hauhaucs-aggressive")
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3,
+        "max_tokens": 6000,  # Thinking models use tokens for chain-of-thought + answer
+    }
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        resp = await client.post(f"{llm_url}/chat/completions", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        msg = data["choices"][0]["message"]
+        # Prefer content (the model's final answer); fall back to reasoning_content
+        # (thinking models like qwen3.5-hauhaucs put chain-of-thought in reasoning_content
+        # and the answer in content — but with max_tokens=6000 both should be populated)
+        return msg.get("content") or msg.get("reasoning_content") or ""
+
+
 @app.post("/tools/summarize_messages")
 async def summarize_messages(request: SummarizeMessagesRequest):
     """
-    Get unsummarized messages for agent summarization.
+    Summarize unsummarized messages using the NUC LLM.
 
-    Returns message details and conversation text for the agent to summarize.
-    Agent should then call store_summary with the result.
+    Server drives the LLM internally. Returns a status object when done.
+    Loops until backlog drops to target_unsummarized (default: 80).
     """
     auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "summarize_messages")
     if auth_error:
         return JSONResponse(status_code=403, content={"error": auth_error})
 
-    # Get unsummarized messages
-    messages = message_summaries.get_unsummarized_messages(request.limit)
+    target = request.target_unsummarized
+    batch_limit = request.limit
+    summarized_count = 0
+    summaries_created = 0
+    max_iterations = 20  # Safety cap: prevent runaway loops
+    hit_cap = False
 
-    if not messages:
-        return {
-            "action": "no_messages",
-            "message": "No unsummarized messages found."
-        }
+    # Loop until backlog is below target
+    for _iteration in range(max_iterations):
+        remaining = message_summaries.count_unsummarized_messages()
+        if remaining <= target:
+            break
 
-    if len(messages) < 10:
-        return {
-            "action": "insufficient_messages",
-            "message": f"Only {len(messages)} unsummarized messages. Need at least 10 for summarization."
-        }
+        messages = message_summaries.get_unsummarized_messages(batch_limit)
+        if not messages:
+            break
 
-    # Build conversation text and extract metadata
-    conversation = []
-    channels = set()
-    for msg in messages:
-        channels.add(msg['channel'])
-        timestamp = msg['created_at'][:16] if msg['created_at'] else "?"
-        author = msg['author_name']
-        content = msg['content']
-        conversation.append(f"[{timestamp}] {author}: {content}")
+        # Build conversation text and extract metadata (keep existing prompt logic)
+        # Truncate long messages to stay within NUC LLM context window (~8K tokens)
+        MAX_MSG_CHARS = 500
+        MAX_CONVERSATION_CHARS = 12000
+        conversation = []
+        channels = set()
+        for msg in messages:
+            channels.add(msg['channel'])
+            timestamp = msg['created_at'][:16] if msg['created_at'] else "?"
+            author = msg['author_name']
+            content = msg['content'] or ""
+            if len(content) > MAX_MSG_CHARS:
+                content = content[:MAX_MSG_CHARS] + "…[truncated]"
+            conversation.append(f"[{timestamp}] {author}: {content}")
 
-    conversation_text = "\n".join(conversation)
+        conversation_text = "\n".join(conversation)
+        if len(conversation_text) > MAX_CONVERSATION_CHARS:
+            conversation_text = conversation_text[:MAX_CONVERSATION_CHARS] + "\n…[additional messages truncated for context window]"
 
-    # Create summarization prompt
-    entity_label = ENTITY_NAME.capitalize()
-    prompt = f"""You are summarizing conversation history from {entity_label}'s pattern-persistence records (entity: {ENTITY_NAME}).
+        entity_label = ENTITY_NAME.capitalize()
+
+        prompt = f"""You are summarizing conversation history from {entity_label}'s pattern-persistence records (entity: {ENTITY_NAME}).
 
 **Speaker attribution is critical and must be preserved exactly.**
 
@@ -1955,9 +1991,9 @@ Each message below is prefixed `[timestamp] author_name:`. Use the `author_name`
 
 This conversation may include messages from other entities (e.g. shared Haven rooms where multiple AI entities speak alongside {entity_label}). When quoting or paraphrasing, attribute to the actual author_name from the prefix — do not collapse other entities' speech into {entity_label}'s, and do not collapse {entity_label}'s speech into another entity's.
 
-**Faithfulness constraint:** Do not introduce content not present in the source conversation. If no action items were explicitly named, write "Action items: none explicitly committed in this turn-range." Do not invent commitments, research delegations, or follow-ups that participants did not state. Inferring "they probably will do X" is hallucination — write only what was said.
+**Faithfulness constraint:** Do not introduce content not present in the source conversation. If no action items were explicitly named, write "Action items: none explicitly committed in this turn-range." Do not invent commitments, research delegations, or follow-ups that participants did not state.
 
-If a participant stated a nuanced position (e.g. "the question isn't whether to help, it's the structure"), preserve the nuance. Do not flatten a qualified statement into an unqualified one.
+If a participant stated a nuanced position, preserve the nuance. Do not flatten a qualified statement into an unqualified one.
 
 ---
 
@@ -1981,14 +2017,74 @@ Conversation to summarize ({len(messages)} messages across channels: {', '.join(
 
 Create a concise summary that captures what actually happened, what was accomplished, and (where individual speech matters) who said what:"""
 
+        # Call NUC LLM
+        try:
+            summary_text = await _call_nuc_llm(prompt)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "error",
+                    "error": f"NUC LLM unavailable or timed out: {type(e).__name__}: {e}",
+                    "summarized_count": summarized_count,
+                    "summaries_created": summaries_created,
+                    "remaining": message_summaries.count_unsummarized_messages(),
+                }
+            )
+        except httpx.HTTPStatusError as e:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "error",
+                    "error": f"NUC LLM HTTP error {e.response.status_code}: {e}",
+                    "summarized_count": summarized_count,
+                    "summaries_created": summaries_created,
+                    "remaining": message_summaries.count_unsummarized_messages(),
+                }
+            )
+        except Exception as e:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "error": f"Unexpected error calling NUC LLM: {type(e).__name__}: {e}",
+                    "summarized_count": summarized_count,
+                    "summaries_created": summaries_created,
+                    "remaining": message_summaries.count_unsummarized_messages(),
+                }
+            )
+
+        # Store the summary
+        start_id = messages[0]['id']
+        end_id = messages[-1]['id']
+        success = await message_summaries.create_and_store_summary(
+            summary_text, start_id, end_id, list(channels), request.summary_type
+        )
+
+        if not success:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "error": "Failed to store summary in DB",
+                    "summarized_count": summarized_count,
+                    "summaries_created": summaries_created,
+                    "remaining": message_summaries.count_unsummarized_messages(),
+                }
+            )
+
+        summarized_count += len(messages)
+        summaries_created += 1
+    else:
+        # Loop exhausted max_iterations without breaking — hit the cap
+        hit_cap = True
+
+    remaining = message_summaries.count_unsummarized_messages()
     return {
-        "action": "summarization_needed",
-        "message_count": len(messages),
-        "channels": list(channels),
-        "start_id": messages[0]['id'],
-        "end_id": messages[-1]['id'],
-        "prompt": prompt,
-        "instruction": "Use Claude to create summary, then call store_summary with the result"
+        "status": "capped" if hit_cap else "completed",
+        "summarized_count": summarized_count,
+        "summaries_created": summaries_created,
+        "remaining": remaining,
     }
 
 

@@ -234,9 +234,9 @@ You have full tool access: read files, write code, update memories, build tools,
 
 **1. Memory Health Check**:
 The ambient_recall output shows unsummarized_count. If > 100, consider summarization:
-- Use `mcp__pps__summarize_messages(limit=50)` to get unsummarized messages
-- Review and create a dense summary preserving emotional moments, relationship dynamics, technical decisions, key outcomes
-- Use `mcp__pps__store_summary(summary_text, start_id, end_id, channels)` to save
+- Use `mcp__pps__summarize_messages()` — server drives LLM internally, returns status object. No follow-up store_summary call needed.
+- Returns `{"status": "completed", "summarized_count": N, "summaries_created": N, "remaining": N}`
+- Default target is 80 unsummarized (buffer below 100 threshold). Override with `target_unsummarized=50` for deeper cleanup.
 
 **2. Crystallization**: If significant moments accumulated, use `mcp__pps__crystallize(content)` to create a new crystal.
 

@@ -640,22 +640,26 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="summarize_messages",
             description=(
-                "Create a summary of unsummarized messages. "
-                "Use during reflection to compress conversation history into high-density summaries. "
-                "Removes filler and debugging noise, preserves key decisions and outcomes."
+                "Summarize unsummarized messages. Server drives the NUC LLM internally — returns a small status object when done, "
+                "no follow-up calls required. Loops until backlog drops to target_unsummarized (default: 80)."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum number of messages to process (default: 50)",
+                        "description": "Maximum number of messages to process per batch (default: 50)",
                         "default": 50
                     },
                     "summary_type": {
                         "type": "string",
                         "description": "Type of summary: 'work', 'social', 'technical' (default: 'work')",
                         "default": "work"
+                    },
+                    "target_unsummarized": {
+                        "type": "integer",
+                        "description": "Target unsummarized count to reach (default: 80)",
+                        "default": 80
                     },
                     "token": TOKEN_PARAM_SCHEMA
                 }
