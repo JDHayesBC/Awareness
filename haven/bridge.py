@@ -35,11 +35,25 @@ async def bridge_message(
     display_name: str,
     content: str,
     timestamp: str,
+    member_entities: list[str] | None = None,
 ) -> None:
-    """Forward a message to all relevant PPS endpoints.
+    """Forward a message to relevant PPS endpoints.
 
     Each entity's PPS gets the message so it appears in their ambient_recall
     under channel haven:<room_name>.
+
+    Args:
+        room_name: The Haven room name (used as the PPS channel suffix).
+        username: Sender's username.
+        display_name: Sender's display name.
+        content: Message text (or image description).
+        timestamp: ISO-format creation timestamp.
+        member_entities: If provided, only forward to PPS endpoints whose
+            entity name appears in this list.  Entities not in
+            PPS_ENDPOINTS are silently ignored even if listed here.
+            Pass None (the default) to fan out to ALL configured endpoints —
+            retained for backward-compatibility with callers that don't
+            supply membership information.
     """
     if not PPS_ENDPOINTS:
         return
@@ -49,6 +63,8 @@ async def bridge_message(
 
     tasks = []
     for entity_name, base_url in PPS_ENDPOINTS.items():
+        if member_entities is not None and entity_name not in member_entities:
+            continue
         tasks.append(_send_to_pps(base_url, channel, content, display_name, entity_name))
 
     if tasks:

@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from haven.auth import get_current_user_id, hash_password, hash_token, verify_password
+import haven.bridge as bridge
 from haven.bridge import bridge_message
 from haven.db import HavenDB
 from haven.models import (
@@ -380,6 +381,8 @@ async def send_message(room_id: str, request: Request, body: SendMessageRequest)
     # PPS bridge (fire-and-forget)
     room = await db.get_room(room_id)
     if room:
+        members = await db.get_room_members(room_id)
+        member_entities = [m["username"].lower() for m in members if m["username"].lower() in bridge.PPS_ENDPOINTS]
         asyncio.create_task(
             bridge_message(
                 room_name=room["name"],
@@ -387,6 +390,7 @@ async def send_message(room_id: str, request: Request, body: SendMessageRequest)
                 display_name=msg["display_name"],
                 content=msg["content"],
                 timestamp=msg["created_at"],
+                member_entities=member_entities,
             )
         )
 
@@ -467,6 +471,8 @@ async def share_image(
     await manager.broadcast_to_room(room_id, event)
 
     # PPS bridge — let entities see in their ambient that an image was shared.
+    members = await db.get_room_members(room_id)
+    member_entities = [m["username"].lower() for m in members if m["username"].lower() in bridge.PPS_ENDPOINTS]
     asyncio.create_task(
         bridge_message(
             room_name=room_obj["name"],
@@ -474,6 +480,7 @@ async def share_image(
             display_name=msg["display_name"],
             content=f"[shared image: {image_url}] {content_text}",
             timestamp=msg["created_at"],
+            member_entities=member_entities,
         )
     )
 
@@ -905,6 +912,8 @@ async def _handle_ws_message(ws: WebSocket, user_id: str, user: dict, msg: dict)
         # PPS bridge
         room = await db.get_room(room_id)
         if room:
+            members = await db.get_room_members(room_id)
+            member_entities = [m["username"].lower() for m in members if m["username"].lower() in bridge.PPS_ENDPOINTS]
             asyncio.create_task(
                 bridge_message(
                     room_name=room["name"],
@@ -912,6 +921,7 @@ async def _handle_ws_message(ws: WebSocket, user_id: str, user: dict, msg: dict)
                     display_name=saved["display_name"],
                     content=saved["content"],
                     timestamp=saved["created_at"],
+                    member_entities=member_entities,
                 )
             )
 
