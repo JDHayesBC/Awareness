@@ -217,7 +217,7 @@ def format_results(data: dict) -> str:
     return "\n".join(lines) if lines else ""
 
 
-def query_pps_ambient_recall(context: str) -> str:
+def query_pps_ambient_recall(context: str, session_id: str) -> str:
     """
     Query PPS HTTP API directly for ambient recall context.
     Uses server's formatted_context for full 200+ edge results.
@@ -231,6 +231,7 @@ def query_pps_ambient_recall(context: str) -> str:
             "context": context,
             "token": ENTITY_TOKEN,
             "channel": "terminal",
+            "consumer_key": session_id,
             "user_timezone": user_tz
         }).encode("utf-8")
 
@@ -361,7 +362,7 @@ def main():
     store_user_prompt(prompt, session_id)
 
     # Query PPS for ambient recall context
-    context = query_pps_ambient_recall(prompt)
+    context = query_pps_ambient_recall(prompt, session_id)
 
     # Always inject at minimum a clock line — even if ambient_recall fails.
     # This prevents time drift during heartbeat ticks when PPS is unreachable.
