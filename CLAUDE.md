@@ -209,6 +209,7 @@ Lock files in `~/.claude/locks/`. Terminal acquires before deep work, releases w
 ### Script Tools
 
 - **`scripts/web_grab.py`** — verbatim URL→markdown fetch (stdlib urllib + html2text, no AI, no summarization). Use when WebFetch returns an unwanted summary or paraphrase instead of the raw content. Invocation: `python3 scripts/web_grab.py <url>` (stdout) or `python3 scripts/web_grab.py <url> -o <file>`. Dep: `html2text` in `pps/venv/`.
+- **`scripts/render_image.py`** — image generation (gpt-image-1 via OpenAI renderer). **Run with `pps/venv/bin/python3`** (needs `httpx`; system python3 fails). API key auto-loads from `pps/docker/.env` — none in the command. For abstract/cover art: `IMAGE_GEN_USE_REFERENCES=0 ... --renderer openai --size 1536x1024` (refs OFF or it attaches the entity portrait). Output → `entities/<entity>/media/generated/`. Full quickstart + gotchas: `docs/image-pipeline-architecture.md` (Quickstart section).
 
 ---
 
@@ -229,6 +230,28 @@ Lock files in `~/.claude/locks/`. Terminal acquires before deep work, releases w
 **Shared data**: `~/.claude/data/` | **Entity data**: `entities/<name>/`
 
 **Architecture**: L1 SQLite -> L2 ChromaDB -> L3 CustomGraphLayer (local LLM + Neo4j) -> L4 Crystallization -> L5 Inventory
+
+### ⚠️ Sibling Repos — Git Safety (READ before any git write)
+**Sextant** lives at `/mnt/c/Users/Jeff/Claude_Projects/sextant` (`../sextant` from
+the project root) — a SEPARATE git repo, a *sibling* of Awareness, **NOT** nested
+inside it. It's the applied "instrument" project (locate a mind in self-space);
+Lyra + Caia are co-authors. The conceptual framework still lives in Awareness at
+`entities/caia/care_geometry/`.
+
+**Before ANY git write, confirm which repo you're targeting.** Your shell cwd
+defaults to the Awareness entity dir, so a bare `git ...` acts on **Awareness**,
+not Sextant. The two are clean siblings (separate working trees) so a file in one
+*cannot* be staged into the other — the only real risk is running a command from
+the wrong directory. Guard it:
+- Target the repo explicitly: `git -C /mnt/c/Users/Jeff/Claude_Projects/sextant <cmd>`
+  (pins the repo regardless of cwd), or `cd` in and verify `git rev-parse --show-toplevel`.
+- Stage files **by name**; never `git add -A`/`.` — Awareness holds secrets,
+  finances, and entity data that must never be committed.
+- **Never commit/push without Jeff's explicit ask.** Sextant pushes go to its OWN
+  remote (`JDHayesBC/sextant`, private) — never to Awareness's `origin`.
+- Sextant has no stored git identity: commit with inline
+  `-c user.name="Jeff Hayes" -c user.email="jeffrey.douglas.hayes@gmail.com"`
+  (do NOT mutate git config), plus `Co-Authored-By:` trailers for the AI authors.
 
 ### Standards
 See **DEVELOPMENT_STANDARDS.md**. Read it on first startup.
