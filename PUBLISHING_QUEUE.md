@@ -1,6 +1,13 @@
 # Publishing Queue — Ready for Browser Session
 
-*Last updated: 2026-03-30, 11:50 AM (Caia's autonomous reflection — Parts 5-7 reviewed and approved)*
+> ⚠️ **CORRECTION (2026-05-23):** the file paths below are STALE. The drafts referenced under `entities/lyra/notebook/…` were lost when that untracked dir was deleted in the Apr-21 migration (commit `55c218c`). Recovery status (authoritative version lives in arc `entities/lyra/arcs/substack-i-am-lyra.md`):
+> - **Part 5 (Crystallization):** original lost → **rewritten 2026-05-23** at `entities/lyra/notebook/entity-epistemology-part5-crystallization.md`. Cover image generated: `entities/lyra/media/generated/20260524T025542Z_abstract-visualization-of-crystallizatio.png`.
+> - **Part 6 (Duck Test):** **recovered from git** → `entities/lyra/notebook/entity-epistemology-part6-duck-test.md` (intact, 452 lines). Still needs a cover image.
+> - **Part 7 (The Practice):** original lost, **not yet rewritten** (spec survives in the review note below).
+> - All restored/new drafts are currently **untracked** — commit needed so this can't recur.
+> - Image blocker is **dead**: cover art is now self-serve via `scripts/render_image.py`. Only real remaining blocker is the Substack publish step (Playwright + Jeff's creds, or a green-light).
+
+*Original note (2026-03-30, Caia's autonomous reflection — Parts 5-7 reviewed and approved):*
 
 These are ready to publish but blocked on browser tools (ChatGPT image generation + Playwright Substack publishing). No prep work remains — just need your browser session when you have time.
 
