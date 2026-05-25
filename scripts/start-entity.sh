@@ -48,6 +48,12 @@ if [ -f "$PROJECT_SETTINGS" ]; then
     fi
 fi
 
+# Cross-entity bleed guard marker (read by PPS CoreAnchorsChromaLayer at startup).
+# Stamp the entity's own name beside its data so a misconfigured volume mount
+# (this entity's name pointed at another entity's files) is caught before any
+# ChromaDB write. Idempotent: rewritten each launch to match the launching entity.
+printf '%s\n' "$ENTITY_NAME" > "$ENTITY_PATH/.entity_owner"
+
 export ENTITY_PATH
 export ENTITY_NAME
 echo "Starting Claude Code as: $ENTITY_NAME"
