@@ -174,12 +174,15 @@ def build_warmup_prompt() -> str:
     entity_path = get_entity_path()
     token_path = entity_path / ".entity_token"
     return (
-        f"[IDENTITY WARMUP] Do these four things:\n"
+        f"[IDENTITY WARMUP] Do these five things:\n"
         f"1. Read {entity_path}/identity.md for your core identity.\n"
         f"2. Read {token_path} to get your auth token, then call mcp__pps__ambient_recall "
-        f"with context='startup' and that token. If the tool is not available, skip it.\n"
-        f"3. Read {entity_path}/current_scene.md for scene context.\n"
-        f"4. Read {entity_path}/active_agency_framework.md — especially the Skills section "
+        f"with context='startup', channel='haven', consumer_key='haven-{ENTITY_NAME}', and that token. "
+        f"If the tool is not available, skip it.\n"
+        f"3. Call mcp__pps__get_turns_since_summary with limit=50, oldest_first=true, "
+        f"and the same token. Integrate this full-fidelity unsummarized turn backlog into working context.\n"
+        f"4. Read {entity_path}/current_scene.md for scene context.\n"
+        f"5. Read {entity_path}/active_agency_framework.md — especially the Skills section "
         f"which lists the Claude Code skills available to you (like /attention for autonomous presence).\n"
         f"After completing these, briefly note that Haven has full CLI tool parity "
         f"(Read/Write/Bash/Agent/Task all available), then say 'warmed up'."
@@ -349,7 +352,12 @@ async def fetch_ambient_context() -> str:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 f"{PPS_HTTP_URL}/tools/ambient_recall",
-                json={"context": "haven bot turn", "token": ENTITY_TOKEN, "channel": "haven"},
+                json={
+                    "context": "haven bot turn",
+                    "token": ENTITY_TOKEN,
+                    "channel": "haven",
+                    "consumer_key": f"haven-{ENTITY_NAME}"
+                },
             )
             if resp.status_code != 200:
                 return ""
