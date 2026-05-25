@@ -96,3 +96,9 @@ pps/docker/data/
 .claude/data/
 pps/docker/google-chrome-stable_current_amd64.deb
 .claude/settings.local.json
+
+# Personal / financial data — NEVER commit
+jeff_finances_2025/
+# Stray runtime/scratch data dirs (not code)
+data/
+haven/data/shared_images/
