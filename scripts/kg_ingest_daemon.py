@@ -17,7 +17,6 @@ Behavior:
 Venv requirement: pps/venv
 """
 
-import atexit
 import asyncio
 import logging
 import os
@@ -43,6 +42,7 @@ if not (
 
 import httpx  # noqa: E402
 from pps.layers.custom_graph import CustomGraphLayer  # noqa: E402
+from scripts.nuc_lock import NucLock, SUMMARIZER_LOCK, KG_INGEST_LOCK, is_lock_held  # noqa: E402
 
 
 # ─────────────────────────────────────────────
@@ -103,56 +103,15 @@ ENTITY_CONFIG: dict[str, dict] = {
 
 
 # ─────────────────────────────────────────────
-# Lock file (cron overlap prevention)
+# Lock file (cron overlap prevention + NUC coordination)
 # ─────────────────────────────────────────────
-
-LOCK_FILE = Path(os.environ.get("KG_DAEMON_LOCKFILE", "/tmp/kg_ingest_daemon.lock"))
-
-
-def acquire_lock() -> None:
-    """
-    Create a PID lock file.  If a live instance is already running, log and exit.
-    Stale lock files (dead PID) are silently removed before proceeding.
-    The lock is released automatically on exit via atexit.
-    """
-    if LOCK_FILE.exists():
-        try:
-            pid = int(LOCK_FILE.read_text().strip())
-        except (ValueError, OSError):
-            pid = None
-
-        if pid is not None:
-            try:
-                os.kill(pid, 0)  # signal 0 = existence check, no actual signal sent
-                # Process is alive — another instance is running
-                log(f"Lock held by PID {pid} ({LOCK_FILE}) — exiting to avoid overlap")
-                sys.exit(0)
-            except ProcessLookupError:
-                # PID does not exist — stale lock, safe to remove
-                log(f"Removing stale lock file (PID {pid} no longer running)")
-                LOCK_FILE.unlink(missing_ok=True)
-            except PermissionError:
-                # os.kill(pid, 0) raises PermissionError if the process exists but
-                # is owned by a different user — treat as alive to be safe.
-                log(f"Lock held by PID {pid} (different owner) — exiting to avoid overlap")
-                sys.exit(0)
-        else:
-            # Lock file unreadable / malformed — remove and proceed
-            log(f"Removing unreadable lock file at {LOCK_FILE}")
-            LOCK_FILE.unlink(missing_ok=True)
-
-    # Write our PID
-    LOCK_FILE.write_text(str(os.getpid()))
-    atexit.register(_release_lock)
-
-
-def _release_lock() -> None:
-    """Remove the lock file on exit (registered via atexit)."""
-    try:
-        if LOCK_FILE.exists() and LOCK_FILE.read_text().strip() == str(os.getpid()):
-            LOCK_FILE.unlink()
-    except OSError:
-        pass  # best-effort cleanup
+# Lock management is handled by scripts/nuc_lock.py (NucLock context manager).
+# KG_INGEST_LOCK  = ~/.claude/locks/kg_ingest.lock   — own-instance guard
+# SUMMARIZER_LOCK = ~/.claude/locks/summarizer.lock  — defer-when-held check
+#
+# Both locks carry JSON {"pid": ..., "started_at": "..."} and are stale-checked
+# (dead PID or age > 15 min) before acting on them.  Stale locks are removed
+# on read so a crashed daemon can never permanently block the other.
 
 
 # ─────────────────────────────────────────────
@@ -406,48 +365,69 @@ async def ingest_entity(entity: str) -> dict:
 # ─────────────────────────────────────────────
 
 async def main() -> None:
-    run_start = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     log(f"kg_ingest_daemon starting — batch={DAEMON_BATCH} per entity")
 
-    # Prevent cron overlap — exits cleanly if another instance is running
-    acquire_lock()
-
-    # Single LLM pre-flight shared across all entities
-    llm_url = check_llm_reachable()
-    if not llm_url:
-        log("LLM unreachable — exiting cleanly (will retry next cron tick)")
-        sys.exit(0)
-    log(f"LLM reachable at {llm_url}")
-
-    total_processed = 0
-    total_ok = 0
-    total_errors = 0
-    entities_with_work = 0
-
-    for entity in sorted(ENTITY_CONFIG.keys()):
-        try:
-            summary = await ingest_entity(entity)
-        except RuntimeError as exc:
-            # Crossbleed violation — logged inside assert_no_crossbleed; skip entity
-            log(f"[{entity}] Skipped due to safety violation: {exc}")
-            continue
-
-        if summary["processed"] > 0:
-            entities_with_work += 1
-            total_processed += summary["processed"]
-            total_ok += summary["ok"]
-            total_errors += summary["errors"]
-
-    if total_processed == 0:
-        log("No pending messages for any entity — exiting cleanly")
-    else:
+    # Defer to the summarizer if it is actively holding the NUC.
+    # The summarizer runs infrequently and is higher priority; kg_ingest is
+    # fully resumable (rows tracked via kg_ingested_at), so skipping is harmless.
+    if is_lock_held(SUMMARIZER_LOCK):
         log(
-            f"Run complete: {total_processed} total processed "
-            f"({total_ok} ok, {total_errors} errors) "
-            f"across {entities_with_work} entit{'y' if entities_with_work == 1 else 'ies'}"
+            "Deferring: summarizer holds the NUC (summarizer.lock is active) "
+            "— skipping this cycle, will retry next cron tick"
         )
+        sys.exit(0)
 
-    sys.exit(0)
+    # Acquire own-instance guard (JSON PID+timestamp, under ~/.claude/locks/).
+    # NucLock handles stale-detection and try/finally release.
+    with NucLock(KG_INGEST_LOCK, log_fn=log) as kg_lock:
+        if not kg_lock.held:
+            # Another kg_ingest instance is already running — exit cleanly.
+            log("Another kg_ingest_daemon is already running — exiting to avoid overlap")
+            sys.exit(0)
+
+        # Single LLM pre-flight shared across all entities
+        llm_url = check_llm_reachable()
+        if not llm_url:
+            log("LLM unreachable — exiting cleanly (will retry next cron tick)")
+            sys.exit(0)
+        log(f"LLM reachable at {llm_url}")
+
+        total_processed = 0
+        total_ok = 0
+        total_errors = 0
+        entities_with_work = 0
+
+        for entity in sorted(ENTITY_CONFIG.keys()):
+            # Re-check summarizer lock between entities: if the summarizer
+            # started mid-run, yield gracefully for the remaining entities.
+            if is_lock_held(SUMMARIZER_LOCK):
+                log(
+                    f"Summarizer acquired lock mid-run — stopping after current entity "
+                    f"(remaining entities will be processed next cycle)"
+                )
+                break
+
+            try:
+                summary = await ingest_entity(entity)
+            except RuntimeError as exc:
+                # Crossbleed violation — logged inside assert_no_crossbleed; skip entity
+                log(f"[{entity}] Skipped due to safety violation: {exc}")
+                continue
+
+            if summary["processed"] > 0:
+                entities_with_work += 1
+                total_processed += summary["processed"]
+                total_ok += summary["ok"]
+                total_errors += summary["errors"]
+
+        if total_processed == 0:
+            log("No pending messages for any entity — exiting cleanly")
+        else:
+            log(
+                f"Run complete: {total_processed} total processed "
+                f"({total_ok} ok, {total_errors} errors) "
+                f"across {entities_with_work} entit{'y' if entities_with_work == 1 else 'ies'}"
+            )
 
 
 if __name__ == "__main__":

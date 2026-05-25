@@ -26,6 +26,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# nuc_lock imported after PROJECT_ROOT is defined (see below)
+
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 EXPECTED_VENV = PROJECT_ROOT / "pps" / "venv"
 VENV_SYMLINK = PROJECT_ROOT / ".venv"
@@ -42,6 +44,7 @@ if not (
     sys.exit(1)
 
 import httpx  # noqa: E402
+from scripts.nuc_lock import NucLock, SUMMARIZER_LOCK, KG_INGEST_LOCK, is_lock_held  # noqa: E402
 
 
 # ─────────────────────────────────────────────
@@ -67,6 +70,10 @@ def log(msg: str) -> None:
 TARGET_UNSUMMARIZED = int(os.environ.get("SUMMARIZE_TARGET", "80"))
 BATCH_LIMIT = int(os.environ.get("SUMMARIZE_BATCH", "50"))
 SUMMARIZE_THRESHOLD = 100  # Only act if backlog is above this
+
+# How long to wait for an in-flight kg_ingest to finish before proceeding anyway.
+# Summaries are higher priority — we always proceed after this bound.
+KG_INGEST_WAIT_SECONDS = 90
 
 ENTITY_CONFIGS = [
     {"name": "lyra", "pps_url": "http://localhost:8201", "token_file": "entities/lyra/.entity_token"},
@@ -115,6 +122,28 @@ async def run_summarize(client: httpx.AsyncClient, pps_url: str, token: str, ent
     return resp.json()
 
 
+def wait_for_kg_ingest(timeout: int = KG_INGEST_WAIT_SECONDS) -> bool:
+    """
+    Spin-wait for any in-flight kg_ingest to release its lock.
+
+    Returns True if kg_ingest cleared within the timeout, False if we gave up.
+    Caller proceeds either way — summaries are higher priority.
+    """
+    deadline = time.monotonic() + timeout
+    poll_interval = 5  # seconds between checks
+
+    while is_lock_held(KG_INGEST_LOCK):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        log(
+            f"Waiting for kg_ingest to finish (up to {remaining:.0f}s remaining)..."
+        )
+        time.sleep(min(poll_interval, remaining))
+
+    return True
+
+
 async def process_entity(entity: dict) -> None:
     name = entity["name"]
     pps_url = entity["pps_url"]
@@ -140,32 +169,46 @@ async def process_entity(entity: dict) -> None:
             return
 
         log(f"[{name}] Backlog: {count} unsummarized (threshold: {SUMMARIZE_THRESHOLD}). Running summarizer...")
-        t0 = time.monotonic()
 
-        try:
-            result = await run_summarize(client, pps_url, token, name)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 503:
-                log(f"[{name}] NUC LLM unavailable (503) — skipping this cycle")
-            else:
-                log(f"[{name}] ERROR: HTTP {e.response.status_code} from PPS")
-            return
-        except Exception as e:
-            log(f"[{name}] ERROR during summarization: {e}")
-            return
-
-        elapsed = time.monotonic() - t0
-        status = result.get("status", "unknown")
-
-        if status == "completed":
+        # Edge case A: kg_ingest may be mid-run — wait for it to clear before
+        # we drive the NUC hard.  We proceed after KG_INGEST_WAIT_SECONDS even
+        # if it hasn't cleared, because summaries take priority.
+        cleared = wait_for_kg_ingest()
+        if not cleared:
             log(
-                f"[{name}] Done in {elapsed:.1f}s: "
-                f"{result.get('summarized_count', 0)} messages → "
-                f"{result.get('summaries_created', 0)} summaries, "
-                f"{result.get('remaining', '?')} remaining"
+                f"[{name}] kg_ingest did not clear within {KG_INGEST_WAIT_SECONDS}s "
+                "— proceeding anyway (summarizer has NUC priority)"
             )
-        else:
-            log(f"[{name}] WARNING: status={status}, result={json.dumps(result)}")
+
+        # Acquire the summarizer lock for the duration of the LLM call.
+        # try/finally inside NucLock.__exit__ ensures the lock is always released.
+        with NucLock(SUMMARIZER_LOCK, log_fn=log):
+            t0 = time.monotonic()
+
+            try:
+                result = await run_summarize(client, pps_url, token, name)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 503:
+                    log(f"[{name}] NUC LLM unavailable (503) — skipping this cycle")
+                else:
+                    log(f"[{name}] ERROR: HTTP {e.response.status_code} from PPS")
+                return
+            except Exception as e:
+                log(f"[{name}] ERROR during summarization: {e}")
+                return
+
+            elapsed = time.monotonic() - t0
+            status = result.get("status", "unknown")
+
+            if status == "completed":
+                log(
+                    f"[{name}] Done in {elapsed:.1f}s: "
+                    f"{result.get('summarized_count', 0)} messages → "
+                    f"{result.get('summaries_created', 0)} summaries, "
+                    f"{result.get('remaining', '?')} remaining"
+                )
+            else:
+                log(f"[{name}] WARNING: status={status}, result={json.dumps(result)}")
 
 
 async def main() -> None:
