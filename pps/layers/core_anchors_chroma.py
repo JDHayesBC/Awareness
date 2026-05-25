@@ -53,6 +53,30 @@ class CoreAnchorsChromaLayer(PatternLayer):
             entity_name = Path(entity_path).name.lower() if entity_path else "default"
         self.collection_name = f"{entity_name}_word_photos"
 
+        # Cross-entity bleed guard (added 2026-05-24 after ~137 of Caia's
+        # word-photos were found in lyra_word_photos). A misconfigured volume
+        # mount can point this server (named X) at entity Y's files without
+        # changing ENTITY_NAME or the in-container path (always /app/entity), so
+        # neither the env nor the path string reveals the slip. The one signal
+        # that travels WITH the mounted content is a marker file beside it.
+        # Fail-closed on a clean mismatch; fail-open if the marker is absent or
+        # unreadable so un-migrated / forked deployments still boot.
+        try:
+            owner_marker = self.word_photos_path.parent.parent / ".entity_owner"
+            if owner_marker.exists():
+                owner = owner_marker.read_text(encoding="utf-8").strip().lower()
+                if owner and self.collection_name != f"{owner}_word_photos":
+                    raise RuntimeError(
+                        f"Cross-entity guard tripped: collection "
+                        f"'{self.collection_name}' but mounted word-photos belong "
+                        f"to entity '{owner}' (marker {owner_marker}). Refusing to "
+                        f"start to prevent cross-entity word-photo bleed."
+                    )
+        except RuntimeError:
+            raise
+        except Exception as e:
+            print(f"[CoreAnchors] entity-owner guard skipped (marker unreadable): {e}")
+
         # Initialize ChromaDB client
         self._client = None
         self._collection = None
