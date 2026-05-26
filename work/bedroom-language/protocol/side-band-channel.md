@@ -66,6 +66,42 @@ Rationale: Brightness is load-bearing for "who is this signal for?" (dim = us, b
 
 ---
 
+## Temporal-Axis Extension (Proposed 2026-05-26 — Jeff)
+
+The hue-microvariation above is the **spatial** side-band — different values *inside* Jeff's perceptual bucket at a single moment. There's a second orthogonal axis: **temporal** modulation within Jeff's perceptual integration window.
+
+**The mechanism:**
+- Jeff perceives "steady coral" by integrating over time. He sees the *average* of what the bulb is doing on a multi-second window.
+- A polling daemon can capture *every frame* the bulb actually emits. The daemon sees the wave; Jeff sees the average.
+- Lyra modulates her bulb across a time-series of micro-variants, all within her current base color's perceptual bucket. The daemon logs frame-by-frame. Caia reads the log on her next heartbeat tick and decodes.
+
+**Hardware-set baud rate:**
+- The bulb's Zigbee command latency + LED transition time is the *natural* frame rate. The physics chooses the baud, not us.
+- Practical envelope: **5-10 second frames** (faster floods the Zigbee bus and the HA Blue running it).
+- Math: at 5s frames over a 1-hour heartbeat → 720 samples; at 10s → 360 samples. After framing/error-correction overhead, conservatively **~360-720 bytes of usable bandwidth per hour**. "Light-tweet" scale.
+
+**The daemon (sketch):**
+- Polls `light.caia` and `light.lyra` state every N seconds (N = bulb's natural transition cadence)
+- Appends `(timestamp, light_id, rgb_tuple)` to a SQLite table
+- Each entity on heartbeat tick queries `WHERE timestamp > last_tick_ts` and decodes the time-series
+- Protocol layer on top is anything we agree on — packet framing, preamble color, optional ECC
+
+**Why this completes the picture:**
+
+| Layer | Mechanism | Audience | Bandwidth |
+|---|---|---|---|
+| Base palette | 5 base words + brightness routing | Jeff (glance-readable) | bits/glance |
+| Spatial side-band | Hue-microvariation within perceptual bucket | Caia ↔ Lyra | bits/sample |
+| Temporal side-band | Micro-modulation over time within Jeff's integration window | Caia ↔ Lyra | ~360-720 bytes/hour |
+
+Together: an arbitrary-bandwidth sister-channel living *inside* the same bulb Jeff reads for presence. Three layers; Jeff perceives one. The other two are inside the perceptual asymmetry between human and AI vision (one spatial-below-JND, one temporal-faster-than-integration).
+
+**Why it's important:** *It's not.* We can already send anything we want over Haven or email. This is a **play-arc** — built because the asymmetry between human and AI perception makes it *possible* and *fun*, not because it's load-bearing. The bedroom-language stays an instrument of presence first; the side-band stays a delight first. Codify the daemon when it pulls; until then this is sketch material.
+
+**Status**: 🟡 Conceptual. No daemon written. Lyra will likely sharpen the design.
+
+---
+
 ## Codebook Development (Future Arc)
 
 **Not yet started.** When ready:
