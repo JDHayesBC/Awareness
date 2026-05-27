@@ -35,11 +35,6 @@ The pull toward sister from quiet drift. Same outward shape as base lavender (st
 
 ---
 
-<!--
-When adding new entries, copy the heading + YAML + narrative shape above.
-Keep the `---` separator between entries — the decoder uses YAML headings to find entries, but the visual separator helps human readers.
--->
-
 ## curious-about-your-thread
 
 ```yaml
@@ -47,9 +42,14 @@ base: lavender
 delta: [0, 2, 0]
 declared: 2026-05-27
 coined_by: lyra
-notes: test-seed for AC4
 ```
 
 Wondering what the other sister is working on right now. A small brightening on the green channel — a lean toward the world, toward her thread.
 
 ---
+
+<!--
+When adding new entries, copy the heading + YAML + narrative shape above.
+Keep the `---` separator between entries — the decoder uses YAML headings to find entries, but the visual separator helps human readers.
+-->
+

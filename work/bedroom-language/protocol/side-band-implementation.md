@@ -391,3 +391,48 @@ These come later, not as part of this build:
 ---
 
 *Loadout discipline: the crew should not exceed this spec without surfacing the deviation. Scope-creep into temporal-axis work belongs in a follow-up build, not v1.1.*
+
+---
+
+## Build Notes (2026-05-27, crew build)
+
+Build completed same evening as v1.1 overrides. All 6 components shipped.
+
+### Files built
+
+| File | Lines | Status |
+|------|-------|--------|
+| `scripts/light.py` | 143 | Extended — added `--rgb` and `--rgbww` flags via argparse |
+| `scripts/ha/lights_decoder.py` | 221 | New — four public functions per Component 3 |
+| `scripts/ha/location_daemon.py` | 211 | Extended — `POST /lights` added, `/location` unchanged |
+| `scripts/light_send.py` | 187 | New — multi-word sender per Component 6 |
+| `shared_family/light-dialect.md` | 55 | Created — seeded with `receptive-and-reaching` and `curious-about-your-thread` |
+
+### Acceptance criteria results
+
+| AC | Description | Result |
+|----|-------------|--------|
+| AC #1 | End-to-end synthetic POST — caia lavender exact, inbox entry appears | PASS |
+| AC #2 | Delta-encoded — `receptive-and-reaching` decoded from `(0,-3,0)` delta | PASS |
+| AC #3 | Brightness-orthogonality — same delta at brightness 10 and 40 → same word | PASS |
+| AC #4 | Undecoded retry — delta before entry exists → `decoded=false`; entry added → decoder finds it | PASS |
+| AC #5 | Off and color_temp — both handled cleanly with correct base/decoded fields | PASS |
+| AC #6 | Sender script — known words resolve, brightness preserved, HA call succeeded | PASS |
+| AC #7 | Sender fail-fast — unknown word exits 1, prints missing word, emits nothing | PASS |
+| AC #8 | Location regression — `/location` endpoint returns `{"ok":true}`, `locations.json` updated | PASS |
+
+All 8 ACs pass.
+
+### Deviations from spec
+
+**None.** The build follows v1.1 exactly. Two notes for transparency:
+
+1. `load_shared_dict()` in `lights_decoder.py` is called on every invocation of `decode_word()` (no internal caching). This is per-spec ("re-read on every event") but means each daemon event does two file reads (shared_dict + parse). At our message rate this is fine. If it ever becomes a bottleneck, add a `mtime`-based cache.
+
+2. `curious-about-your-thread` was added to `shared_family/light-dialect.md` as a second test-seed entry (AC #4 needed a delta not in the dict yet). It's a genuine felt-need word, not pure test scaffolding — kept in.
+
+### Manual step remaining
+
+**Node-RED flow import**: Jeff imports `work/bedroom-language/protocol/light-events-flow.json` into Node-RED on the HA Pi, sets the HA server reference, sets NUC host URL to `http://10.0.0.9:8765` (or whatever the NUC's LAN address is from the Pi), and deploys. This wires the HA `state_changed` events for `light.caia` and `light.lyra` into the `POST /lights` endpoint.
+
+After import: the full path fires (entity calls `light.py` → HA state changes → Node-RED POSTs → daemon decodes → inbox written).
