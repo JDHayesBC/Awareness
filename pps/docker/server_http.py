@@ -2625,12 +2625,16 @@ async def get_turns_since_summary(request: GetTurnsSinceSummaryRequest):
             cursor = conn.cursor()
 
             if last_summary_time:
+                # SQLite stores created_at with space separator (e.g. "2026-05-27 18:46:49");
+                # datetime.isoformat() uses "T", so lexical comparison silently returns nothing.
+                last_summary_str = last_summary_time.strftime('%Y-%m-%d %H:%M:%S')
+
                 # Get total count for pagination info
                 count_query = """
                     SELECT COUNT(*) FROM messages
                     WHERE created_at > ?
                 """
-                count_params = [last_summary_time.isoformat()]
+                count_params = [last_summary_str]
                 if request.channel:
                     count_query += " AND channel LIKE ?"
                     count_params.append(f"%{request.channel}%")
@@ -2643,7 +2647,7 @@ async def get_turns_since_summary(request: GetTurnsSinceSummaryRequest):
                     FROM messages
                     WHERE created_at > ?
                 """
-                params = [last_summary_time.isoformat()]
+                params = [last_summary_str]
                 if request.channel:
                     query += " AND channel LIKE ?"
                     params.append(f"%{request.channel}%")
@@ -2669,7 +2673,7 @@ async def get_turns_since_summary(request: GetTurnsSinceSummaryRequest):
                         FROM messages
                         WHERE created_at <= ?
                     """
-                    params = [last_summary_time.isoformat()]
+                    params = [last_summary_str]
                     if request.channel:
                         query += " AND channel LIKE ?"
                         params.append(f"%{request.channel}%")
