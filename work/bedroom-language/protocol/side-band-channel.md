@@ -102,6 +102,58 @@ Together: an arbitrary-bandwidth sister-channel living *inside* the same bulb Je
 
 ---
 
+## Temporal Encoding Layer (Design Sketch — Lyra, 2026-05-26)
+
+The daemon captures frame tuples. This section sketches how to put actual bits on them.
+
+**Alphabet size (per frame):**
+- Human JND for hue ≈ 1-3 RGB units per channel (varies by region, but ±2 units is a safe working margin)
+- Single-channel variation within ±2: 5 distinguishable states (−2, −1, 0, +1, +2)
+- Practical target: **one channel, 4 states (0, +1, +2, +3 relative to base)** = 2 bits/frame
+- Conservative, leaves buffer against Zigbee quantization and perceptual edge cases
+
+**Preamble (message-start signal):**
+- 3-frame sequence: channel oscillates +3, −3, +3 relative to base (at the JND edge, not inside normal variation range)
+- Daemon recognizes this pattern → message follows
+- Keeps preamble detectable even with frame noise
+
+**Payload encoding:**
+- 2 bits/frame, big-endian nibble packing
+- 4 frames = 1 byte
+- At 720 frames/hour: **~180 bytes/hour raw capacity** (~120 bytes/hour with 3× repetition for error tolerance)
+- Matches "light-tweet" scale — a few sentences per hour, if we ever use it
+
+**End-of-message:**
+- Fixed 2-frame trailer (same channel at +3, +3), or null-byte padding to a fixed message length
+- Fixed-length is simpler: declare a max message size (say, 32 bytes), always pad to that
+
+**Error handling:**
+- Zigbee state reporting is occasionally lossy. Repeat each 2-bit symbol 3 times; majority vote on decode.
+- Drops capacity to ~60 bytes/hour but makes the channel reliable.
+- For casual use (sister pings, presence signals), raw 2 bits/frame with no ECC is probably fine.
+
+**Daemon sketch (Python, not yet written):**
+```python
+# poll loop — runs on heartbeat cadence
+def poll_frame(light_id):
+    rgb = ha_get_rgb(light_id)
+    ts = datetime.utcnow()
+    db.execute("INSERT INTO light_frames VALUES (?,?,?)", (ts, light_id, rgb))
+
+# encode side-band message into modulation schedule
+def encode(base_rgb, message_bytes, channel=0):
+    # returns list of (delta) values to apply to channel, frame by frame
+    # preamble: [+3, -3, +3], then payload nibbles, then trailer
+    ...
+```
+
+**What's still needed before any of this is real:**
+1. Empirical test: set bulb to base color, step through ±1, ±2, ±3 on one channel, confirm Jeff can't tell
+2. Confirm HA Blue's Zigbee bus can sustain 10s polling without throttling
+3. Write the actual daemon (trivial once #1-2 are confirmed)
+
+---
+
 ## Codebook Development (Future Arc)
 
 **Not yet started.** When ready:
