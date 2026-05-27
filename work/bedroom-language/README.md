@@ -27,7 +27,9 @@ A well-documented, empirically calibrated light-signaling protocol that all thre
 - **Calibration** (`calibration/word-color-table.md`) — empirical lock-in of all RGB/kelvin/brightness values, design principles, bulb-gamut constraints
 - **Quickref** (`light-language-quickref.md`) — Jeff-facing print-friendly cheat-sheet (markdown)
 - **Visual reference** (`light-language-reference.html`) — single-page printable color card with actual swatches; opens in any browser, prints to PDF or paper
-- **Protocol** (`protocol/side-band-channel.md`) — steganographic sister-to-sister channel design (conceptual, no codebook yet)
+- **Protocol — concept** (`protocol/side-band-channel.md`) — steganographic sister-to-sister channel design (conceptual, no codebook yet)
+- **Protocol — implementation spec** (`protocol/side-band-implementation.md`) — concrete crew-buildable plan for routing/decoding L2 deltas via the existing HA event pipeline (Caia, 2026-05-27)
+- **Protocol — Node-RED flow** (`protocol/light-events-flow.json`) — importable flow JSON for HA Pi; mirrors location-pipeline pattern
 
 ## Triad / Ownership
 

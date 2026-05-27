@@ -1,0 +1,103 @@
+[
+  {
+    "id": "light-events-tab",
+    "type": "tab",
+    "label": "Light Events → PPS",
+    "disabled": false,
+    "info": "Listens for state_changed on light.caia and light.lyra; POSTs decoded payload to the NUC receiver (location_daemon /lights endpoint). Pattern mirrors the location pipeline.\n\nAFTER IMPORT: bind the events-state node to your existing HA server reference. Update the http-request URL to your NUC's reachable address.",
+    "env": []
+  },
+  {
+    "id": "light-state-trigger",
+    "type": "server-state-changed",
+    "z": "light-events-tab",
+    "name": "light.caia or light.lyra changed",
+    "server": "REPLACE-WITH-YOUR-HA-SERVER-NODE-ID",
+    "version": 5,
+    "exposeAsEntityConfig": "",
+    "entities": {
+      "entity": ["light.caia", "light.lyra"],
+      "substring": [],
+      "regex": []
+    },
+    "outputProperties": [
+      {
+        "property": "payload",
+        "propertyType": "msg",
+        "value": "",
+        "valueType": "eventData"
+      }
+    ],
+    "eventType": "state_changed",
+    "outputInitially": false,
+    "stateType": "str",
+    "ifState": "",
+    "ifStateType": "str",
+    "ifStateOperator": "is",
+    "outputOnlyOnStateChange": true,
+    "for": "0",
+    "forType": "num",
+    "forUnits": "minutes",
+    "ignorePrevStateNull": false,
+    "ignorePrevStateUnknown": false,
+    "ignorePrevStateUnavailable": false,
+    "ignoreCurrentStateUnknown": false,
+    "ignoreCurrentStateUnavailable": false,
+    "outputProperties_": [],
+    "x": 180,
+    "y": 120,
+    "wires": [["light-format-payload"]]
+  },
+  {
+    "id": "light-format-payload",
+    "type": "function",
+    "z": "light-events-tab",
+    "name": "Format light event for PPS",
+    "func": "// Extract from HA state_changed event\nconst event = msg.payload.event || msg.payload;\nconst newState = event.new_state || {};\nconst entityId = newState.entity_id || event.entity_id || '';\nconst attrs = newState.attributes || {};\n\n// Map entity_id → sender\nlet sender = null;\nif (entityId === 'light.caia') sender = 'caia';\nelse if (entityId === 'light.lyra') sender = 'lyra';\nelse {\n    node.warn('Unexpected entity: ' + entityId);\n    return null;\n}\n\n// Build payload\nconst out = {\n    sender: sender,\n    rgb: attrs.rgb_color || null,                       // [r, g, b] or null\n    brightness: (typeof attrs.brightness === 'number') ? attrs.brightness : null,\n    color_temp: attrs.color_temp_kelvin || null,        // kelvin if in CT mode\n    state: newState.state || 'unknown',                 // 'on' | 'off'\n    ts: newState.last_updated || new Date().toISOString()\n};\n\nmsg.payload = out;\nmsg.headers = { 'Content-Type': 'application/json' };\nreturn msg;\n",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 460,
+    "y": 120,
+    "wires": [["light-http-post"]]
+  },
+  {
+    "id": "light-http-post",
+    "type": "http request",
+    "z": "light-events-tab",
+    "name": "POST /lights → NUC receiver",
+    "method": "POST",
+    "ret": "txt",
+    "paytoqs": "ignore",
+    "url": "http://REPLACE-WITH-NUC-HOST:8765/lights",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 740,
+    "y": 120,
+    "wires": [["light-debug"]]
+  },
+  {
+    "id": "light-debug",
+    "type": "debug",
+    "z": "light-events-tab",
+    "name": "receiver response",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 990,
+    "y": 120,
+    "wires": []
+  }
+]
