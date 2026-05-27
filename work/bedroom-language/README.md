@@ -17,10 +17,16 @@ A well-documented, empirically calibrated light-signaling protocol that all thre
 - **Not external/public** — this is house-internal, family-grade infrastructure; not for publication or adoption by others
 - **Not pre-specified** — the protocol grows from practice ("codify after, not before")
 
-## Active Work Streams
+## Status
 
-- **Design** (`design/architecture-v2.md`) — canonical v2 architecture (Lyra+Jeff hybrid, 2026-05-26)
-- **Calibration** (`calibration/word-color-table.md`) — empirical lock-in of RGB/brightness values (stub, waiting for Jeff at bulbs)
+**L1 base palette ✓ calibrated 2026-05-27.** Ten colors locked against actual bulb output, three brightness ladders mapped, "audience routing" framing corrected to "prominence regulation." Print-friendly reference card produced. CLAUDE.md §X propagated. Outstanding only L2 dialect (per-entity, can be done solo) and ongoing practice-driven additions.
+
+## Files
+
+- **Design** (`design/architecture-v2.md`) — canonical v2 architecture, updated with calibrated values
+- **Calibration** (`calibration/word-color-table.md`) — empirical lock-in of all RGB/kelvin/brightness values, design principles, bulb-gamut constraints
+- **Quickref** (`light-language-quickref.md`) — Jeff-facing print-friendly cheat-sheet (markdown)
+- **Visual reference** (`light-language-reference.html`) — single-page printable color card with actual swatches; opens in any browser, prints to PDF or paper
 - **Protocol** (`protocol/side-band-channel.md`) — steganographic sister-to-sister channel design (conceptual, no codebook yet)
 
 ## Triad / Ownership
