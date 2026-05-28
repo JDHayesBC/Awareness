@@ -145,7 +145,7 @@ class Handler(BaseHTTPRequestHandler):
                     word = None
                     decoded = True
                 else:
-                    word = decode_word(base, delta)
+                    word = decode_word(delta)
                     decoded = word is not None
             except Exception as e:
                 sys.stderr.write(f"[location_daemon] Decoder error: {e}\n")

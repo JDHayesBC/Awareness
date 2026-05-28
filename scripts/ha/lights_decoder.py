@@ -125,13 +125,16 @@ def compute_delta(rgb: tuple[int, int, int], base_name: str) -> tuple[int, int, 
     )
 
 
-def load_shared_dict() -> dict[tuple[str, tuple[int, int, int]], dict]:
+def load_shared_dict() -> dict[tuple[int, int, int], dict]:
     """Parse shared_family/light-dialect.md for Layer 2 dialect words.
 
     Re-reads on every call so new entries apply without daemon restart.
 
+    Word identity is the delta pattern only — not a (base, delta) pair.
+    The base field in individual entries is ignored if present (backward compat).
+
     Returns:
-        Dict keyed by (base_name, (dr, dg, db)) with values:
+        Dict keyed by (dr, dg, db) delta tuple with values:
         {"word": str, "notes": str|None, "declared": str|None, "coined_by": str|None}
         Returns {} if file missing or unparseable.
     """
@@ -168,7 +171,6 @@ def load_shared_dict() -> dict[tuple[str, tuple[int, int, int]], dict]:
             # Parse yaml manually (simple key: value parsing)
             yaml_lines = lines[yaml_start:yaml_end]
             entry = {"word": word, "notes": None, "declared": None, "coined_by": None}
-            base_name = None
             delta = None
 
             for line in yaml_lines:
@@ -184,7 +186,7 @@ def load_shared_dict() -> dict[tuple[str, tuple[int, int, int]], dict]:
                 value = value.strip()
 
                 if key == 'base':
-                    base_name = value
+                    pass  # Ignored — word identity is delta only (backward compat strip)
                 elif key == 'delta':
                     # Parse [dr, dg, db]
                     delta_match = re.search(r'\[(-?\d+),\s*(-?\d+),\s*(-?\d+)\]', value)
@@ -197,8 +199,8 @@ def load_shared_dict() -> dict[tuple[str, tuple[int, int, int]], dict]:
                 elif key == 'coined_by':
                     entry['coined_by'] = value if value else None
 
-            if base_name and delta is not None:
-                entries[(base_name, delta)] = entry
+            if delta is not None:
+                entries[delta] = entry
 
         return entries
 
@@ -206,16 +208,35 @@ def load_shared_dict() -> dict[tuple[str, tuple[int, int, int]], dict]:
         return {}
 
 
-def decode_word(base_name: str, delta: tuple[int, int, int]) -> Optional[str]:
-    """Look up dialect word from (base_name, delta) key.
+def decode_word(delta: tuple[int, int, int]) -> Optional[str]:
+    """Find the dialect word whose stored delta is closest to `delta` in Euclidean distance.
+
+    Uses nearest-neighbor with tolerance ≤ 2.0 to absorb Zigbee gamut drift (~1 unit
+    per channel). Does not require the sender's base color — word identity is delta only.
 
     Args:
-        base_name: Base color anchor name
-        delta: (dr, dg, db) offset from base
+        delta: (dr, dg, db) offset from snapped base
 
     Returns:
-        Word string if found in shared dict, None otherwise
+        Word string if a dict entry is within tolerance, None otherwise.
+        Returns None for delta (0,0,0) — that is a pure base-color emit, not a word.
     """
-    shared_dict = load_shared_dict()
-    entry = shared_dict.get((base_name, delta))
-    return entry['word'] if entry else None
+    # (0,0,0) is never a word — it's a base-color state change, filtered upstream
+    if delta == (0, 0, 0):
+        return None
+
+    dict_data = load_shared_dict()
+    if not dict_data:
+        return None
+
+    best_distance = float('inf')
+    best_word = None
+
+    for stored_delta, entry in dict_data.items():
+        distance = math.sqrt(sum((a - b) ** 2 for a, b in zip(delta, stored_delta)))
+        if distance < best_distance:
+            best_distance = distance
+            best_word = entry["word"]
+
+    # Tolerance: ≤ 2 in Euclidean distance (covers ~1 unit drift per channel)
+    return best_word if best_distance <= 2.0 else None
