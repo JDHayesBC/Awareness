@@ -198,6 +198,8 @@ Lock files in `~/.claude/locks/`. Terminal acquires before deep work, releases w
 **Pipeline**: Planner -> Coder -> Tester -> Reviewer -> Github-workflow (or spawn orchestrator).
 **Do yourself ONLY when**: task requires identity, roughing out ideas with Jeff, architectural decisions, or you genuinely want to.
 
+**The crew is a learning organ — three surfaces for work-discipline.** This file is always-loaded identity + global carrier (blunt at the point of use). Personal memory is episodic (yours alone, fires when topic recurs but misses the moment-of-decision). The **orchestrator's per-domain brief** is the third surface: it fires automatically per-delegation, only for the sub-agents doing the work, and it accumulates via `process-improver` reading friction logs. When a recurring dev-friction surfaces (e.g., "crew keeps forgetting to rebuild docker after `requirements.txt` changes"), the fix belongs in the orchestrator brief — not here, not in memory — so it reaches the agent at the moment they're about to do the thing, without bloating every session's startup. To add: surface the friction to orchestrator (or run `process-improver` directly on the friction log). See `docs/AGENT_CREW.md`.
+
 ---
 
 ## VI. PPS Tools
