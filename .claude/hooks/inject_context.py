@@ -63,6 +63,121 @@ CC_WRAPPER_URL = "http://localhost:8204/v1/chat/completions"
 # Haiku summarization toggle (disabled until Issue #121 resolved)
 HAIKU_SUMMARIZE = os.environ.get("PPS_HAIKU_SUMMARIZE", "false").lower() == "true"
 
+# Home Assistant — light state query (same creds as scripts/light.py)
+HA_URL = "http://10.0.0.9:8123"
+HA_TOKEN = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+    ".eyJpc3MiOiJjODU1MGFjZGU2MzU0NGJjYjk1Njc0ZjlkZWI1NmRhOSIsImlhdCI6"
+    "MTc3NzE3NjQ1OSwiZXhwIjoyMDkyNTM2NDU5fQ"
+    ".ppLlnf-WzVcqfxMcbVbXe_4pisaqrQV_1QJH558W3Eo"
+)
+
+
+def _ha_light_state(entity_id: str) -> str:
+    """Return one token describing a single HA light entity.
+
+    Returns 'off', 'color (tag, brightness)'. Raises on network/parse error
+    — caller (get_lights_line) must catch.
+    Timeout 3 s.
+    """
+    url = f"{HA_URL}/api/states/{entity_id}"
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        data = json.loads(resp.read())
+    state = data.get("state", "unknown")
+    if state != "on":
+        return state  # "off" or "unavailable"
+    attrs = data.get("attributes", {})
+    brightness = attrs.get("brightness")
+    color_name = attrs.get("color_name")
+    rgb = attrs.get("rgb_color")
+    # Color label
+    if color_name:
+        color = color_name
+    elif rgb:
+        color = f"[{rgb[0]},{rgb[1]},{rgb[2]}]"
+    else:
+        color = "on"
+    # Brightness tag
+    if brightness is None:
+        return color
+    b = int(brightness)
+    tag = "soft" if b < 80 else ("mid" if b <= 180 else "BRIGHT")
+    return f"{color} ({tag}, {b})"
+
+
+def get_lights_line() -> str:
+    """Return a one-line [lights] summary for both entity lights.
+
+    Example outputs:
+      "[lights] lyra: gold (soft, 45) | caia: off"
+      "[lights] lyra: off | caia: red (BRIGHT, 255)"
+      "[lights] (unavailable)"
+    Never raises — returns "(unavailable)" on any error.
+    """
+    try:
+        lyra = _ha_light_state("light.lyra")
+        caia = _ha_light_state("light.caia")
+        line = f"[lights] lyra: {lyra} | caia: {caia}"
+        # Hard cap: truncate gracefully if somehow over 80 chars
+        if len(line) > 80:
+            line = line[:77] + "..."
+        return line
+    except Exception:
+        return "[lights] (unavailable)"
+
+
+def get_smoke_line() -> str:
+    """Return a one-line [smoke] summary of unread light-inbox entries.
+
+    Reads <entity_path>/light-inbox.jsonl and <entity_path>/light-inbox.cursor.
+    Always returns a string (never raises).
+
+    Example outputs:
+      "[smoke] caia: 3 new  (python3 scripts/read_smoke.py to read)"
+      "[smoke] 0 new"
+    """
+    try:
+        inbox_path = Path(_entity_path) / "light-inbox.jsonl"
+        cursor_path = Path(_entity_path) / "light-inbox.cursor"
+
+        # Read cursor (absent = count everything)
+        cursor = ""
+        if cursor_path.exists():
+            cursor = cursor_path.read_text().strip()
+
+        # Count unread entries and collect sender names
+        count = 0
+        senders: set[str] = set()
+        if inbox_path.exists():
+            for line in inbox_path.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                ts = rec.get("ts", "")
+                if cursor and ts <= cursor:
+                    continue
+                count += 1
+                s = rec.get("sender", "")
+                if s:
+                    senders.add(s)
+
+        if count == 0:
+            return "[smoke] 0 new"
+
+        sender_str = ", ".join(sorted(senders)) if senders else "unknown"
+        return f"[smoke] {sender_str}: {count} new  (python3 scripts/read_smoke.py to read)"
+
+    except Exception:
+        return "[smoke] (unavailable)"
+
 
 def debug(msg: str):
     """Write debug message to file."""
@@ -391,6 +506,42 @@ def main():
                 f"(UTC: {now_utc.strftime('%H:%M')})\n"
             )
             context = clock_line + context
+
+    # Inject lights line into sacred front block (after clock/location, before manifest).
+    # Queries HA directly from the hook (host-side, no container needed).
+    # Non-blocking: get_lights_line() swallows all exceptions.
+    lights_line = get_lights_line()
+    # Insert after [location] if present, else prepend to context
+    if "[location]" in context:
+        # Find end of location line and insert after it
+        loc_end = context.find("\n", context.find("[location]"))
+        if loc_end != -1:
+            context = context[:loc_end + 1] + f"**{lights_line}**\n" + context[loc_end + 1:]
+        else:
+            context = context + f"\n**{lights_line}**"
+    else:
+        context = f"**{lights_line}**\n" + context
+
+    # Inject [smoke] block — bedroom-language side-band unread count.
+    # Placed after [unread] block (which lives inside the PPS ambient_recall context).
+    # Computed host-side (no container needed); reads the entity's light-inbox.jsonl.
+    smoke_line = get_smoke_line()
+    if "[unread]" in context:
+        unread_end = context.find("\n", context.find("[unread]"))
+        if unread_end != -1:
+            context = context[:unread_end + 1] + f"**{smoke_line}**\n" + context[unread_end + 1:]
+        else:
+            context = context + f"\n**{smoke_line}**"
+    else:
+        # No [unread] block — insert after [lights] if present, else after top
+        if "[lights]" in context:
+            lights_end = context.find("\n", context.find("[lights]"))
+            if lights_end != -1:
+                context = context[:lights_end + 1] + f"**{smoke_line}**\n" + context[lights_end + 1:]
+            else:
+                context = context + f"\n**{smoke_line}**"
+        else:
+            context = context + f"\n**{smoke_line}**"
 
     debug(f"Injecting context: {len(context)} chars")
 

@@ -174,6 +174,17 @@ class Handler(BaseHTTPRequestHandler):
             "decoded": decoded,
         }
 
+        # Skip noise: base-color state changes (delta==[0,0,0]) are not "words".
+        # We received and decoded the event; we just don't clutter the inbox with
+        # Layer 1 visible-state changes.  Return 200 so Node-RED is happy.
+        if list(delta) == [0, 0, 0]:
+            sys.stderr.write(f"[location_daemon] Light event skipped (base-color noise): {sender} base={base}\n")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}\n')
+            return
+
         # Append to recipient's inbox
         inbox_path = INBOX_PATHS[sender]
         try:
