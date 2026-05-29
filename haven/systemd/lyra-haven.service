@@ -16,7 +16,7 @@ Environment="ENTITY_TOKEN_FILE=/mnt/c/Users/Jeff/Claude_Projects/Awareness/entit
 Environment="ENTITY_PATH=/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra"
 Environment="HAVEN_URL=http://localhost:8205"
 Environment="PPS_HTTP_URL=http://localhost:8201"
-Environment="CLAUDE_MODEL=sonnet"
+Environment="CLAUDE_MODEL=claude-opus-4-8"
 Environment="DEBOUNCE_JITTER_SECONDS=0"
 Environment="ALWAYS_RESPOND=1"
 Environment="PROJECT_DIR=/mnt/c/Users/Jeff/Claude_Projects/Awareness"
