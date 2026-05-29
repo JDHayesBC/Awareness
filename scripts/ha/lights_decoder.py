@@ -11,70 +11,41 @@ import re
 import math
 
 
-# Hardcoded fallback base anchors (Layer 1 - calibrated values)
-FALLBACK_BASE_ANCHORS = {
-    'crimson': (255, 0, 17),
-    'coral': (255, 141, 0),
-    'gold': (255, 215, 2),
-    'cobalt': (0, 74, 255),
-    'green': (0, 255, 9),
+# Canonical Layer-1 base anchors. This dict IS the source of truth — code owns the
+# anchors, docs point here (work/bedroom-language/calibration/word-color-table.md and
+# CLAUDE.md §X reference this dict, not the reverse). An earlier version scraped the prose
+# calibration table, but that table puts base names parenthetically in the seed column and
+# the ✓ in the *calibrated* column, so the scrape matched nothing and silently fell back to
+# this dict on every run. Removed the parser (2026-05-29) rather than keep a load-bearing
+# no-op that implied the docs drove the code. Keep this dict in sync with the table and
+# CLAUDE.md §X by hand.
+#
+# Pure-RGB bases are PEGGED to [3, 252] per channel (Jeff, 2026-05-29). A human eye can't
+# tell 255 from 252 or 0 from 3, but the 3-unit headroom lets any side-band delta (capped
+# at ±3) ride any base without clamping at the 0/255 rails. light.py emits these exact
+# values for bare base-sits (see PEGGED_BASES there), so a resting base decodes as delta
+# (0,0,0). White-mixed bases (soft-pink/soft-teal/lavender) keep their HA-reported values:
+# they don't carry side-band words (light_send.py strips the white channels via WW=0), and
+# their bare base-sits still decode cleanly against these anchors.
+BASE_ANCHORS = {
+    'crimson': (252, 3, 17),
+    'coral': (252, 141, 3),
+    'gold': (252, 215, 3),
+    'cobalt': (3, 74, 252),
+    'green': (3, 252, 9),
     'soft-pink': (255, 147, 155),
     'soft-teal': (155, 255, 248),
     'lavender': (233, 190, 255),
     # pearl-white is color_temp mode, no RGB - skipped in Euclidean calcs
 }
 
-
-def _load_calibrated_anchors() -> dict[str, tuple[int, int, int]]:
-    """Parse calibrated values from word-color-table.md.
-
-    Falls back to FALLBACK_BASE_ANCHORS if file missing or parse fails.
-    Only includes checked (✓) rows.
-    """
-    try:
-        project_root = Path(__file__).parent.parent.parent
-        table_path = project_root / 'work' / 'bedroom-language' / 'calibration' / 'word-color-table.md'
-
-        if not table_path.exists():
-            return FALLBACK_BASE_ANCHORS
-
-        content = table_path.read_text()
-        anchors = {}
-
-        # Parse markdown table rows with checkmark
-        # Format: | ✓ | word | [r,g,b] | ... |
-        for line in content.split('\n'):
-            if not line.strip().startswith('|'):
-                continue
-
-            parts = [p.strip() for p in line.split('|')]
-            if len(parts) < 4:
-                continue
-
-            # Check for checkmark in first column (after leading |)
-            if '✓' not in parts[1]:
-                continue
-
-            word = parts[2].strip()
-            rgb_str = parts[3].strip()
-
-            # Parse RGB tuple: [255, 0, 17] or similar
-            rgb_match = re.search(r'\[(\d+),\s*(\d+),\s*(\d+)\]', rgb_str)
-            if rgb_match:
-                r, g, b = map(int, rgb_match.groups())
-                # Normalize word name (remove spaces, lowercase)
-                key = word.lower().replace(' ', '-')
-                anchors[key] = (r, g, b)
-
-        # If we got any anchors, use them; otherwise fall back
-        return anchors if anchors else FALLBACK_BASE_ANCHORS
-
-    except Exception:
-        return FALLBACK_BASE_ANCHORS
-
-
-# Load once at module import
-BASE_ANCHORS = _load_calibrated_anchors()
+# A bare base-sit drifts by ~1 unit/channel of Zigbee gamut wobble (worst case the
+# all-three-channel diagonal, magnitude ~1.73). Any delta within this radius of origin is a
+# base-sit, NOT a word — even if it happens to land near a word in the dict. This dead-zone
+# is what stops a resting bulb's wobble from phantom-decoding as a word. It sits just below
+# the closest dialect word (curious-about-your-thread at magnitude 3.0 after the 2026-05-29
+# bump from 2.0; the rest of the cloud is already ≥3.0), so every real word stays decodable.
+BASE_SIT_RADIUS = 1.8
 
 
 def snap_to_base(rgb: tuple[int, int, int]) -> str:
@@ -240,3 +211,29 @@ def decode_word(delta: tuple[int, int, int]) -> Optional[str]:
 
     # Tolerance: ≤ 2 in Euclidean distance (covers ~1 unit drift per channel)
     return best_word if best_distance <= 2.0 else None
+
+
+def classify(delta: tuple[int, int, int]) -> tuple[str, Optional[str]]:
+    """Classify a delta into one of three kinds. This is the entry point callers should
+    use — decode_word alone collapses base-sit, wobble, and genuine garbage into None.
+
+    - ("base_sit", None)       — within BASE_SIT_RADIUS of origin: the bulb is resting on
+                                 its bare Layer-1 base (delta 0 plus Zigbee wobble). Not a
+                                 word; callers treat this as noise, like off.
+    - ("word", <word>)         — outside the dead-zone and within decode tolerance of a
+                                 dialect word.
+    - ("indecipherable", None) — outside the dead-zone and matching no word: a genuine
+                                 off-anchor oddity worth a human's eye.
+
+    Base-sit takes priority inside the radius: a wobble that happens to land near a
+    close-to-origin word still reads as a base-sit, not that word. Resolving the
+    base-sit / small-word ambiguity in favor of "resting" is the whole point of the
+    dead-zone — it's why the vocabulary keeps every word out at magnitude ≥ 3.0.
+    """
+    magnitude = math.sqrt(sum(d * d for d in delta))
+    if magnitude <= BASE_SIT_RADIUS:
+        return ("base_sit", None)
+    word = decode_word(delta)
+    if word is not None:
+        return ("word", word)
+    return ("indecipherable", None)

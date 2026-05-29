@@ -103,6 +103,7 @@ def _format_entry(rec: dict) -> str:
     delta = rec.get("delta", [0, 0, 0])
     brightness = rec.get("brightness")
     word = rec.get("word")
+    kind = rec.get("kind")
     state = rec.get("state", "?")
 
     # Delta string
@@ -111,12 +112,18 @@ def _format_entry(rec: dict) -> str:
     # Brightness string
     b_str = f"brightness {brightness}" if brightness is not None else "brightness unknown"
 
-    # Word/decode annotation
-    if state == "off":
+    # Word/decode annotation. Prefer the daemon's `kind`; fall back to the old word/None
+    # logic for legacy records written before classification existed.
+    if state == "off" or kind == "off":
         annotation = "— light off"
     elif word:
         annotation = f'— "{word}"'
+    elif kind == "base_sit":
+        annotation = f"— resting on {base} (no word)"
+    elif kind == "indecipherable":
+        annotation = "— off-anchor, no matching word (indecipherable)"
     else:
+        # Legacy record without `kind`
         annotation = "— undecoded (no matching word in shared dict)"
 
     return f"[{ts}] {sender} → {base} + {delta_str} ({b_str}) {annotation}"

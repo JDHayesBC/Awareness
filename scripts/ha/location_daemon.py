@@ -16,7 +16,7 @@ from pathlib import Path
 
 # Optional decoder import — fallback gracefully if not yet built
 try:
-    from lights_decoder import snap_to_base, compute_delta, decode_word
+    from lights_decoder import snap_to_base, compute_delta, classify
     _DECODER_AVAILABLE = True
 except ImportError:
     _DECODER_AVAILABLE = False
@@ -124,41 +124,31 @@ class Handler(BaseHTTPRequestHandler):
         brightness = payload.get("brightness")
         color_temp = payload.get("color_temp")
 
-        # Decode pipeline
+        # Decode pipeline. `kind` is the authoritative classification:
+        #   off            — bulb off (absent/sleeping); skipped as noise
+        #   base_sit       — resting on a bare Layer-1 base (delta 0 ± Zigbee wobble); skipped
+        #   word           — a Layer-2 dialect word rode the base; written to inbox
+        #   indecipherable — off-anchor, no matching word; written so a human notices
         if state == "off":
-            base = "off"
-            delta = (0, 0, 0)
-            word = None
-            decoded = True
+            base, delta, word, kind = "off", (0, 0, 0), None, "off"
         elif rgb is None and color_temp is not None:
-            # Color temp mode (pearl-white base)
-            base = "pearl-white"
-            delta = (color_temp - 4115, 0, 0)
-            word = None
-            decoded = True
+            # Color temp mode (pearl-white base) — a bare base, never a word channel.
+            base, delta, word, kind = "pearl-white", (color_temp - 4115, 0, 0), None, "base_sit"
         elif rgb is not None and _DECODER_AVAILABLE:
             try:
                 base = snap_to_base(tuple(rgb))
                 delta = compute_delta(tuple(rgb), base)
-                # Pure base color (delta == 0,0,0) doesn't need dict lookup
-                if delta == (0, 0, 0):
-                    word = None
-                    decoded = True
-                else:
-                    word = decode_word(delta)
-                    decoded = word is not None
+                kind, word = classify(delta)
             except Exception as e:
                 sys.stderr.write(f"[location_daemon] Decoder error: {e}\n")
-                base = "unknown"
-                delta = (0, 0, 0)
-                word = None
-                decoded = False
+                base, delta, word, kind = "unknown", (0, 0, 0), None, "indecipherable"
         else:
-            # No decoder available or no RGB
-            base = "unknown"
-            delta = (0, 0, 0)
-            word = None
-            decoded = False
+            # No decoder available or no RGB — can't classify; surface as indecipherable.
+            base, delta, word, kind = "unknown", (0, 0, 0), None, "indecipherable"
+
+        # `decoded` retained for backward compat: True iff we understood the state
+        # (word OR a recognized base-sit/off), False only for genuine indecipherable.
+        decoded = kind != "indecipherable"
 
         # Build inbox record
         record = {
@@ -171,14 +161,15 @@ class Handler(BaseHTTPRequestHandler):
             "color_temp": color_temp,
             "state": state,
             "word": word,
+            "kind": kind,
             "decoded": decoded,
         }
 
-        # Skip noise: base-color state changes (delta==[0,0,0]) are not "words".
-        # We received and decoded the event; we just don't clutter the inbox with
-        # Layer 1 visible-state changes.  Return 200 so Node-RED is happy.
-        if list(delta) == [0, 0, 0]:
-            sys.stderr.write(f"[location_daemon] Light event skipped (base-color noise): {sender} base={base}\n")
+        # Skip noise: off and bare base-sits (incl. drift-wobble) are visible Layer-1 state,
+        # not words. We received and classified the event; we just don't clutter the inbox.
+        # Only words and genuine indecipherables reach the recipient. Return 200 for Node-RED.
+        if kind in ("off", "base_sit"):
+            sys.stderr.write(f"[location_daemon] Light event skipped ({kind}): {sender} base={base} delta={list(delta)}\n")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()

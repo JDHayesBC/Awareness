@@ -34,6 +34,21 @@ HA_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjODU1MGFjZGU2MzU0NGJ
 ENTITY_NAME = os.environ.get("ENTITY_NAME", "lyra")
 LIGHT_ID = f"light.{ENTITY_NAME}"
 
+# Pegged Layer-1 base anchors (pure-RGB family). Emitting these EXACT values — not the CSS
+# color name, which HA renders to an arbitrary nearby RGB that drifts and can collide with a
+# side-band word — keeps a bare base-sit at delta≈0 so the decoder reads it as "resting on
+# base," never as a phantom word. Pegged to [3, 252]/channel so any ≤3 side-band delta has
+# headroom. Keep in sync with scripts/ha/lights_decoder.py:BASE_ANCHORS and CLAUDE.md §X.
+# (White-mixed bases — soft-pink/soft-teal/lavender — use rgbww; pearl-white uses color_temp.
+#  Those have their own documented send forms and aren't pegged here.)
+PEGGED_BASES = {
+    "crimson": [252, 3, 17],
+    "coral":   [252, 141, 3],
+    "gold":    [252, 215, 3],
+    "green":   [3, 252, 9],
+    "cobalt":  [3, 74, 252],
+}
+
 
 def light(mode="css", color_value=None, brightness=13):
     """Set light using CSS color name, RGB, or RGBWW.
@@ -126,8 +141,15 @@ if __name__ == "__main__":
         mode = "rgbww"
         color_value = args.rgbww
     elif args.color:
-        mode = "css"
-        color_value = args.color
+        name = args.color.lower()
+        if name in PEGGED_BASES:
+            # Bare base-sit on a pure-RGB base: emit the exact pegged RGB so it decodes
+            # as delta (0,0,0), not a CSS-rendered value that drifts into a phantom word.
+            mode = "rgb"
+            color_value = PEGGED_BASES[name]
+        else:
+            mode = "css"
+            color_value = args.color
     else:
         parser.print_help()
         sys.exit(0)
