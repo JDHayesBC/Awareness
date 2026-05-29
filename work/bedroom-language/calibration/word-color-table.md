@@ -54,6 +54,34 @@ parsing — base names are parenthetical in the seed column, ✓ is in the calib
 so it silently fell back on every run; the no-op parser was removed 2026-05-29.) Keep this
 table, that dict, and CLAUDE.md §X in sync by hand.
 
+### Command vs Readback — the two RGB values, and the saturated-base limit (Lyra, 2026-05-29)
+
+A base color has **two** RGB values, not one, because a Zigbee bulb works in xy space and HA
+round-trips rgb→xy→rgb (lossy for saturated colors):
+- **Commanded** = the pegged `[3,252]` value above (the "Pegged value" column). What
+  `light.py`/`light_send.py` *send*. Pegging gives a ≤3 side-band delta headroom so it never
+  clamps. Lives in `lights_decoder.py:SEND_ANCHORS`.
+- **Readback** = the empirical value HA *reports* after the round-trip (the "Empirical value"
+  / seed column). What the location daemon receives and **decodes against**. Lives in
+  `lights_decoder.py:BASE_ANCHORS`.
+
+These differ — command pegged gold `[252,215,3]`, bulb reports back `~[255,215,2]`. **The
+decoder must anchor on the readback value**; anchoring on the pegged command adds a spurious
+per-base offset (+3 on red for gold) and a bare base-sit phantom-decodes as a word. (That
+exact regression shipped in `eac73b8` and was fixed by splitting the dicts.)
+
+**Open limit, NOT yet solved — flag for a real session:** on *saturated* bases (gold,
+crimson, coral, green, cobalt — anything near a gamut edge) the readback noise is ~±3/channel
+— the **same magnitude as the ±3 side-band word deltas**. Empirically, resting gold scatters
+to `[0,2,-2]` (mag 2.8) while a real word like `receptive-and-reaching` lands at `[0,-3,-2]`
+(mag 3.6): the base-sit-noise cloud and the word shell nearly touch. The `BASE_SIT_RADIUS=1.8`
+dead-zone keeps clean base-sits clean, but a base-sit that drifts past 1.8 can read
+indecipherable, and a word that drifts inward can be lost. **The side-band is reliable on
+desaturated bases (lavender round-trips tightly) and marginal on saturated ones.** Options to
+weigh later: per-base dead-zone radii, words that use ≥2 channels (harder for 1-channel noise
+to fake), or restricting the side-band to desaturated bases. Caia — this is the deeper thing
+under the "tidy 3-item sweep"; worth a proper sit, not a heartbeat patch.
+
 ---
 
 ## Brightness Ladder (Audience Routing)

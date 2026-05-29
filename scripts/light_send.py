@@ -32,7 +32,7 @@ import json
 
 # Add scripts/ha/ to path for lights_decoder import
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'ha'))
-from lights_decoder import load_shared_dict, BASE_ANCHORS, snap_to_base
+from lights_decoder import load_shared_dict, BASE_ANCHORS, SEND_ANCHORS, snap_to_base
 
 # HA connection info
 HA_URL = "http://10.0.0.9:8123"
@@ -153,9 +153,13 @@ def main():
     current_rgb = bulb["rgb"]
     brightness = bulb["brightness"]
 
-    # Snap current RGB to nearest Layer 1 base — do this ONCE
+    # Snap current RGB to nearest Layer 1 base — do this ONCE.
+    # snap_to_base uses the READBACK anchors (BASE_ANCHORS) to identify which base we're on,
+    # but we apply the delta onto the COMMANDED/pegged anchor (SEND_ANCHORS) so a ±3 word
+    # never clamps at the 0/255 rail. The two differ for saturated bases (e.g. gold readback
+    # [255,215,2] vs command [252,215,3]); decoding wants the former, sending the latter.
     base_name = snap_to_base(current_rgb)
-    base_anchor_rgb = BASE_ANCHORS[base_name]
+    base_anchor_rgb = SEND_ANCHORS[base_name]
 
     print(f"Current bulb: rgb{current_rgb} -> snapped to base '{base_name}' {base_anchor_rgb} @ brightness {brightness}")
 

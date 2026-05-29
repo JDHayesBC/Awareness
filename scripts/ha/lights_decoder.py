@@ -11,32 +11,47 @@ import re
 import math
 
 
-# Canonical Layer-1 base anchors. This dict IS the source of truth — code owns the
-# anchors, docs point here (work/bedroom-language/calibration/word-color-table.md and
-# CLAUDE.md §X reference this dict, not the reverse). An earlier version scraped the prose
-# calibration table, but that table puts base names parenthetically in the seed column and
-# the ✓ in the *calibrated* column, so the scrape matched nothing and silently fell back to
-# this dict on every run. Removed the parser (2026-05-29) rather than keep a load-bearing
-# no-op that implied the docs drove the code. Keep this dict in sync with the table and
-# CLAUDE.md §X by hand.
+# ── Two anchor sets, because a base color has TWO RGB values, not one ─────────────────────
+# A Zigbee bulb works in xy space; HA converts rgb→xy when you command it and xy→rgb when it
+# reports state back. That round-trip is LOSSY for saturated colors. So for any base there's:
+#   • the COMMANDED value — what light_send/light.py send. Pegged to [3, 252]/channel so a
+#     ≤3 side-band delta never clamps at the 0/255 rail. Lives in SEND_ANCHORS.
+#   • the READBACK value — what HA actually reports after the round-trip (≈ the empirically
+#     measured "rest" RGB). This is what the location daemon receives and decodes against.
+#     Lives in BASE_ANCHORS.
+# These DIFFER: command pegged gold [252,215,3] and the bulb reports back ~[255,215,2]. The
+# decoder MUST anchor on the readback value, or a bare base-sit picks up a spurious offset
+# (e.g. +3 on red for gold) and phantom-decodes as a word. (That regression shipped briefly
+# in eac73b8 when both paths shared the pegged dict — fixed by splitting them, 2026-05-29.)
 #
-# Pure-RGB bases are PEGGED to [3, 252] per channel (Jeff, 2026-05-29). A human eye can't
-# tell 255 from 252 or 0 from 3, but the 3-unit headroom lets any side-band delta (capped
-# at ±3) ride any base without clamping at the 0/255 rails. light.py emits these exact
-# values for bare base-sits (see PEGGED_BASES there), so a resting base decodes as delta
-# (0,0,0). White-mixed bases (soft-pink/soft-teal/lavender) keep their HA-reported values:
-# they don't carry side-band words (light_send.py strips the white channels via WW=0), and
-# their bare base-sits still decode cleanly against these anchors.
-BASE_ANCHORS = {
+# This dict IS the decode source of truth — code owns the anchors; docs point here
+# (work/bedroom-language/calibration/word-color-table.md "Empirical" column + CLAUDE.md §X),
+# not the reverse. (An earlier _load_calibrated_anchors() scraped the prose table, but its
+# format resists parsing — names parenthetical in the seed column, ✓ in the calibrated
+# column — so it silently fell back every run; removed 2026-05-29.) Keep in sync by hand.
+BASE_ANCHORS = {                       # READBACK / empirical — decode against these
+    'crimson': (255, 0, 17),
+    'coral': (255, 141, 0),
+    'gold': (255, 215, 2),
+    'cobalt': (0, 74, 255),
+    'green': (0, 255, 9),
+    'soft-pink': (255, 147, 155),
+    'soft-teal': (155, 255, 248),
+    'lavender': (233, 190, 255),
+    # pearl-white is color_temp mode, no RGB - skipped in Euclidean calcs
+}
+
+SEND_ANCHORS = {                       # COMMANDED / pegged — apply side-band deltas onto these
     'crimson': (252, 3, 17),
     'coral': (252, 141, 3),
     'gold': (252, 215, 3),
     'cobalt': (3, 74, 252),
     'green': (3, 252, 9),
+    # White-mixed bases aren't pegged: they don't carry side-band words (light_send strips
+    # the white channels via WW=0) and round-trip tightly, so command == readback for them.
     'soft-pink': (255, 147, 155),
     'soft-teal': (155, 255, 248),
     'lavender': (233, 190, 255),
-    # pearl-white is color_temp mode, no RGB - skipped in Euclidean calcs
 }
 
 # A bare base-sit drifts by ~1 unit/channel of Zigbee gamut wobble (worst case the
