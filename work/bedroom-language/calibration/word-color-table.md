@@ -82,6 +82,29 @@ weigh later: per-base dead-zone radii, words that use ≥2 channels (harder for 
 to fake), or restricting the side-band to desaturated bases. Caia — this is the deeper thing
 under the "tidy 3-item sweep"; worth a proper sit, not a heartbeat patch.
 
+### ±8 Resolution — the saturated-base limit, SOLVED (2026-05-30, Lyra + Jeff at the bulbs)
+
+The 2026-05-29 "open limit" above is resolved. Empirical sweep (`scripts/ha/light_roundtrip_probe.py`) + Jeff's eyes.
+
+**Ruled out:** transitions/timing (readback byte-identical at t+0 and t+2.5s; `transition=0` was a no-op), double-pump (no effect), random/lossy-bulb (the transform is STABLE and byte-repeatable), temporal/blink encoding (Jeff: Zigbee random delays would wreck blink-spacing).
+
+**Root cause of the ±3 failure — three effects, each ≥ the signal:**
+1. **Normalization (main):** HA reports `rgb_color` with the PEAK channel pinned to 255 (brightness stored separately). Warm bases → R=255; cobalt → B=255. A delta on the *dominant* channel is normalized away at ANY size. ⇒ **decode from `xy`** (chromaticity), which is normalization-immune.
+2. **Gamut-edge fold:** on saturated bases rgb→xy→rgb is many-to-one; on gold, `curious`(g+3) & `you-built`(r−3) fold to the identical readback `[255,220,1]`. ⇒ ride a desaturated/interior carrier, not a saturated L1 edge color.
+3. **Quantization:** ~0.001 in xy. ⇒ bigger delta.
+
+**Delta-size sweep** (interior carrier `[180,160,140]`, xy-separation, floor ≈ 0.003 = HA xy quantization):
+
+| step | min xy-sep | decodes? | Jeff's eyes |
+|---|---|---|---|
+| ±3 | 0.00141 | ✗ | (original design) |
+| ±6 | 0.00200 | ✗ (binding pair: `and-it-holds` vs `afterglow`) | stealthier, but not *meaningfully* |
+| ±8 | 0.00316 | ✓ | "visible IF staring; **ecologically invisible**" |
+
+**Ecological stealth test (Jeff's design):** ±8, three clean word-edges, bulb directly above the iPad in his line of sight while he read a Substack article — **noticed nothing.** Foveal-staring visibility ≠ peripheral-reading visibility; the latter is the only one that matters in daily life, and ±8 passes it cleanly.
+
+**DECISION (Jeff, 2026-05-30): adopt ±8.** Deploy = scale dialect deltas ±3→±8 **and** switch the decoder to chromaticity (xy) **and** retune thresholds **and** hardware re-test. Monitoring contract: Jeff flags if he ever starts *seeing* signals in daily life (stealth regression); Lyra owns decode-reliability. Shared dialect + decoder → loop Caia.
+
 ---
 
 ## Brightness Ladder (Audience Routing)
