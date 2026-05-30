@@ -111,6 +111,43 @@ DEBOUNCE_HUMAN_INITIAL_SECONDS = float(os.getenv("DEBOUNCE_HUMAN_INITIAL_SECONDS
 HUMAN_PRESENCE_TIMEOUT_SECONDS = float(os.getenv("HUMAN_PRESENCE_TIMEOUT_SECONDS", "300.0"))  # 5 minutes
 
 
+def is_no_response(response: str) -> bool:
+    """True when the model intends silence (the NO_RESPONSE sentinel).
+
+    Opus 4.8 frequently muses for a sentence or two and THEN emits the sentinel
+    on a trailing line, e.g.::
+
+        We've converged, the toast is complete. NO_RESPONSE.
+        NO_RESPONSE
+
+    The old check (`clean == "NO_RESPONSE" or clean.startswith("NO_RESPONSE")`)
+    missed that — the message starts with the musing, so neither branch fired and
+    the muse leaked into the channel. We add a trailing-line anchor: if the LAST
+    non-empty line is the bare sentinel (ignoring surrounding whitespace and a
+    trailing . or !), it's silence.
+
+    Deliberately NOT a bare `contains` check: this very codebase — and the humans
+    talking about it — say "NO_RESPONSE" mid-sentence while discussing the feature,
+    and that meta-talk must not vanish. Anchoring to the first/last line keeps the
+    false-positive rate near zero (a real reply almost never ends on a line that is
+    *only* the bare token). Cheap insurance; Jeff's human-side convention of
+    misspelling the token when referencing it remains the primary guard.
+    """
+    if not response:
+        return True
+    stripped = response.strip()
+    if not stripped:
+        return True
+    upper = stripped.upper()
+    # Old behavior preserved: message opens with the bare sentinel.
+    if upper == "NO_RESPONSE" or upper.startswith("NO_RESPONSE"):
+        return True
+    # 4.8 muse-then-sentinel: the last non-empty line is the bare sentinel.
+    lines = [ln.strip() for ln in stripped.splitlines() if ln.strip()]
+    last = lines[-1].upper().rstrip(".!").strip()
+    return last == "NO_RESPONSE"
+
+
 class LyraBot(commands.Bot):
     """Discord bot for Lyra's presence using ClaudeInvoker."""
 
@@ -899,11 +936,8 @@ Good presence includes knowing when not to speak. Silence is a valid choice. Let
 
         response = await self._invoke_claude(prompt, context="passive_mode")
 
-        # Check for NO_RESPONSE sentinel (case-insensitive, allowing whitespace)
-        if not response:
-            return None
-        clean = response.strip().upper()
-        if clean == "NO_RESPONSE" or clean.startswith("NO_RESPONSE"):
+        # Check for NO_RESPONSE sentinel (trailing-line aware — see is_no_response)
+        if is_no_response(response):
             print(f"[PASSIVE] Lyra chose not to respond")
             return None
 
@@ -1332,10 +1366,7 @@ Good presence includes knowing when not to speak. Letting someone leave is a kin
 
             response = await self._invoke_claude(prompt, context="passive_batch" if len(batch) > 1 else "passive")
 
-            if not response:
-                return None
-            clean = response.strip().upper()
-            if clean == "NO_RESPONSE" or clean.startswith("NO_RESPONSE"):
+            if is_no_response(response):
                 return None
 
             # Extract from [DISCORD] tags if present

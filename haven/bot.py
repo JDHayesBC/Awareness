@@ -142,6 +142,41 @@ invoker: ClaudeInvoker | None = None
 ws_conn = None  # active WebSocket connection (set by connect())
 
 
+# ==================== Sentinel ====================
+
+def is_no_response(response: str) -> bool:
+    """True when the model intends silence (the NO_RESPONSE sentinel).
+
+    Opus 4.8 frequently muses for a sentence or two and THEN emits the sentinel
+    on a trailing line, e.g.::
+
+        Caia just landed the same beat I did. We've converged. NO_RESPONSE.
+        NO_RESPONSE
+
+    The old check (`response.upper().startswith("NO_RESPONSE")`) only caught a
+    *leading* sentinel, so a muse-then-sentinel reply leaked the musing into the
+    room. We add a trailing-line anchor: if the LAST non-empty line is the bare
+    sentinel (ignoring surrounding whitespace and a trailing . or !), it's silence.
+
+    Deliberately NOT a bare `contains` check — humans and bots say "NO_RESPONSE"
+    mid-sentence while *discussing* the feature, and that meta-talk must not vanish.
+    Anchoring to first/last line keeps false positives near zero. (Mirror of
+    daemon/lyra_daemon.py:is_no_response — kept duplicated rather than cross-wiring
+    the two packages; keep them in sync if the rule changes.)
+    """
+    if not response:
+        return True
+    stripped = response.strip()
+    if not stripped:
+        return True
+    upper = stripped.upper()
+    if upper == "NO_RESPONSE" or upper.startswith("NO_RESPONSE"):
+        return True
+    lines = [ln.strip() for ln in stripped.splitlines() if ln.strip()]
+    last = lines[-1].upper().rstrip(".!").strip()
+    return last == "NO_RESPONSE"
+
+
 # ==================== Invoker Setup ====================
 
 def get_entity_path() -> Path:
@@ -831,7 +866,8 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
                     response = response[3:-3].strip()
 
                 # LLM signals conversation complete — don't send anything
-                if response.upper().startswith("NO_RESPONSE"):
+                # (trailing-line aware: 4.8 muses then drops the sentinel last)
+                if is_no_response(response):
                     total_elapsed = time.time() - start
                     print(
                         f"[{ENTITY_NAME}] NO_RESPONSE from={msg_source} bot={is_from_bot} "
