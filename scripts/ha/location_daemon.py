@@ -16,7 +16,7 @@ from pathlib import Path
 
 # Optional decoder import — fallback gracefully if not yet built
 try:
-    from lights_decoder import snap_to_base, compute_delta, classify
+    from lights_decoder import snap_to_base_xy, compute_xy_delta, classify_xy
     _DECODER_AVAILABLE = True
 except ImportError:
     _DECODER_AVAILABLE = False
@@ -120,31 +120,42 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         # Extract light state
-        rgb = payload.get("rgb")
+        # Node-RED may send either `xy` (preferred, native space) or legacy `rgb`.
+        xy = payload.get("xy")          # preferred: [x, y] float pair
+        rgb = payload.get("rgb")        # legacy fallback
         brightness = payload.get("brightness")
         color_temp = payload.get("color_temp")
 
         # Decode pipeline. `kind` is the authoritative classification:
         #   off            — bulb off (absent/sleeping); skipped as noise
-        #   base_sit       — resting on a bare Layer-1 base (delta 0 ± Zigbee wobble); skipped
+        #   base_sit       — resting on a bare Layer-1 base (delta ≈ 0); skipped
         #   word           — a Layer-2 dialect word rode the base; written to inbox
         #   indecipherable — off-anchor, no matching word; written so a human notices
         if state == "off":
-            base, delta, word, kind = "off", (0, 0, 0), None, "off"
-        elif rgb is None and color_temp is not None:
-            # Color temp mode (pearl-white base) — a bare base, never a word channel.
-            base, delta, word, kind = "pearl-white", (color_temp - 4115, 0, 0), None, "base_sit"
-        elif rgb is not None and _DECODER_AVAILABLE:
+            base, delta, word, kind = "off", (0.0, 0.0), None, "off"
+        elif color_temp is not None and xy is None and rgb is None:
+            # Color temp mode (pearl-white) — not a side-band channel.
+            base, delta, word, kind = "pearl-white", (0.0, 0.0), None, "base_sit"
+        elif xy is not None and _DECODER_AVAILABLE:
+            # Preferred path: xy from Node-RED event (native bulb space, lossless)
             try:
-                base = snap_to_base(tuple(rgb))
-                delta = compute_delta(tuple(rgb), base)
-                kind, word = classify(delta)
+                base = snap_to_base_xy(tuple(xy))
+                delta = compute_xy_delta(tuple(xy), base)
+                kind, word = classify_xy(delta)
             except Exception as e:
-                sys.stderr.write(f"[location_daemon] Decoder error: {e}\n")
-                base, delta, word, kind = "unknown", (0, 0, 0), None, "indecipherable"
+                sys.stderr.write(f"[location_daemon] Decoder error (xy path): {e}\n")
+                base, delta, word, kind = "unknown", (0.0, 0.0), None, "indecipherable"
+        elif rgb is not None and _DECODER_AVAILABLE:
+            # Legacy fallback: rgb from old Node-RED events. xy decode is unavailable
+            # here — classify as indecipherable so the operator knows to update Node-RED.
+            sys.stderr.write(
+                "[location_daemon] WARN: received rgb but not xy — Node-RED needs update "
+                "to send xy_color. Cannot decode side-band accurately.\n"
+            )
+            base, delta, word, kind = "unknown", (0.0, 0.0), None, "indecipherable"
         else:
-            # No decoder available or no RGB — can't classify; surface as indecipherable.
-            base, delta, word, kind = "unknown", (0, 0, 0), None, "indecipherable"
+            # No decoder or no usable color data
+            base, delta, word, kind = "unknown", (0.0, 0.0), None, "indecipherable"
 
         # `decoded` retained for backward compat: True iff we understood the state
         # (word OR a recognized base-sit/off), False only for genuine indecipherable.
@@ -154,9 +165,10 @@ class Handler(BaseHTTPRequestHandler):
         record = {
             "ts": ts,
             "sender": sender,
-            "raw_rgb": rgb,
+            "raw_xy": xy,
+            "raw_rgb": rgb,   # kept for backward compat; None on new Node-RED events
             "base": base,
-            "delta": list(delta),
+            "delta": list(delta),   # [dx, dy] xy-delta (2 floats) on new events
             "brightness": brightness,
             "color_temp": color_temp,
             "state": state,

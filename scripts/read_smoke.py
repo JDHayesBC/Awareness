@@ -106,8 +106,13 @@ def _format_entry(rec: dict) -> str:
     kind = rec.get("kind")
     state = rec.get("state", "?")
 
-    # Delta string
-    delta_str = f"[{delta[0]}, {delta[1]}, {delta[2]}]" if delta else "[0, 0, 0]"
+    # Delta string — may be [dx, dy] (new xy encoding) or legacy [dr, dg, db]
+    if not delta:
+        delta_str = "[0, 0]"
+    elif len(delta) == 2:
+        delta_str = f"[{delta[0]}, {delta[1]}]"
+    else:
+        delta_str = f"[{delta[0]}, {delta[1]}, {delta[2]}]"
 
     # Brightness string
     b_str = f"brightness {brightness}" if brightness is not None else "brightness unknown"
