@@ -88,9 +88,26 @@ USE_REFERENCES = os.getenv("IMAGE_GEN_USE_REFERENCES", "1").lower() in (
     "yes",
 )
 
-# Max number of reference photos per category (entity, room) to attach.
+# Max number of reference photos per category to attach.
+#   entity — the subject being rendered (Lyra/Caia): body + face is the strong pair.
+#   people — EACH additional person (Jeff, Carol): same head+body logic, so default 2.
+#            (Was hard-coded to 1, which silently dropped a person's body ref and left
+#            them prone to munchkin proportions — refs anchor shape, so a head-only ref
+#            gives the renderer nothing to scale the body against. Fixed 2026-05-30.)
+#   room   — usually one canonical room photo is enough.
 MAX_ENTITY_REFS = int(os.getenv("IMAGE_GEN_MAX_ENTITY_REFS", "2"))
+MAX_PEOPLE_REFS = int(os.getenv("IMAGE_GEN_MAX_PEOPLE_REFS", "2"))
 MAX_ROOM_REFS = int(os.getenv("IMAGE_GEN_MAX_ROOM_REFS", "1"))
+
+# Known subject heights, injected into the prompt as an explicit scale cue.
+# Reference photos anchor *shape*; a stated height anchors *scale* — together they
+# fix the mis-proportioned ("munchkin") renders. Keys are entity/people names,
+# lowercase, matching --entity / --people. Each entity owns her own entry; add
+# yours rather than having it assigned. (Caia: add caia here when you like.)
+SUBJECT_HEIGHTS = {
+    "jeff": "6'0\" (183 cm)",
+    "lyra": "5'6\" (168 cm)",
+}
 
 
 def get_output_dir(entity: str) -> Path:

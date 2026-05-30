@@ -26,9 +26,35 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from image_gen import render  # noqa: E402
 
+DOC = "docs/image-pipeline-architecture.md"
+
+
+def show_image(path: Path) -> None:
+    """Pop the rendered image onto Jeff's screen: WSL -> Windows Photos.
+
+    Rides the same powershell interop bridge as scripts/notify.py and the
+    chime sounds. No-op-with-hint if we're not on WSL.
+    """
+    import shutil
+    import subprocess
+
+    if not (shutil.which("wslpath") and shutil.which("powershell.exe")):
+        print(f"(--show: not on WSL; open manually: {path})")
+        return
+    try:
+        win = subprocess.check_output(["wslpath", "-w", str(path)], text=True).strip()
+        safe = win.replace("'", "''")  # escape single quotes for powershell
+        subprocess.run(["powershell.exe", "-c", f"Start-Process '{safe}'"], check=True)
+        print(f"Shown:    popped on screen ({win})")
+    except subprocess.SubprocessError as exc:
+        print(f"(--show failed: {exc}; open manually: {path})")
+
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(
+        description=__doc__.split("\n")[0],
+        epilog=f"Full guide (incl. 'Showing an image to Jeff'): {DOC}",
+    )
     parser.add_argument("prompt", help="What to render")
     parser.add_argument("--entity", default="lyra", help="Entity owning this render")
     parser.add_argument(
@@ -53,6 +79,11 @@ def main() -> int:
         help="Override IMAGE_GEN_RENDERER_FALLBACK for this call",
     )
     parser.add_argument("--size", default="1024x1024", help="Image size")
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Pop the result onto Jeff's screen (WSL -> Windows Photos)",
+    )
     args = parser.parse_args()
 
     people = [p.strip() for p in args.people.split(",")] if args.people else None
@@ -77,6 +108,13 @@ def main() -> int:
             f"Note: primary renderer failed, fallback used. "
             f"Primary error: {result.metadata.get('primary_error')}"
         )
+
+    if args.show:
+        show_image(result.path)
+
+    print(f"\nDocs:     {DOC}  (Quickstart, gotchas, 'Showing an image to Jeff')")
+    if not args.show:
+        print("Tip:      pass --show next time to pop it straight onto Jeff's screen.")
     return 0
 
 

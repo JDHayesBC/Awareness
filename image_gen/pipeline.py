@@ -72,12 +72,15 @@ def _compose_prompt(
     house: str | None,
     room: str | None,
     refs: references.ReferenceSet,
+    people: list[str] | None = None,
 ) -> str:
     """Compose the final prompt text from the user prompt + scene context.
 
     The pipeline does NOT inject visual references as text descriptions — that's
     the renderer's job (image-to-image, IPAdapter, etc.). What this function
-    does is contextualize: if we know we're in Lyra's bedroom, mention that.
+    does is contextualize: if we know we're in Lyra's bedroom, mention that; and
+    state known subject heights so the renderer has an explicit scale cue (refs
+    anchor shape, heights anchor scale — together they fix munchkin proportions).
     """
     parts: list[str] = [user_prompt.strip()]
     scene_bits: list[str] = []
@@ -87,6 +90,15 @@ def _compose_prompt(
         scene_bits.append(f"Scene: {room}.")
     if entity:
         scene_bits.append(f"Subject: {entity}.")
+    # Explicit height/scale cue for any named subjects we know heights for.
+    named = ([entity] if entity else []) + list(people or [])
+    height_bits = [
+        f"{n} is {config.SUBJECT_HEIGHTS[n]}"
+        for n in dict.fromkeys(named)  # de-dupe, preserve order
+        if n in config.SUBJECT_HEIGHTS
+    ]
+    if height_bits:
+        scene_bits.append("Heights for scale: " + "; ".join(height_bits) + ".")
     if scene_bits:
         parts.append(" ".join(scene_bits))
     if refs.entity_paths or refs.room_paths or refs.people_paths:
@@ -161,6 +173,7 @@ async def render_async(
         house=scene_house,
         room=scene_room,
         refs=refs,
+        people=people,
     )
 
     request = RenderRequest(

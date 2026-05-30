@@ -30,6 +30,52 @@ IMAGE_GEN_USE_REFERENCES=0 \
 
 For "an entity in a room, with people" (the references-ON path), drop `IMAGE_GEN_USE_REFERENCES=0` and add `--house caia --room <room> --people jeff,carol`; the manifest at `image_gen/references/manifest.json` maps logical names to photo paths.
 
+> **Height/proportion note:** a *face* reference fixes likeness, not stature — gpt-image-1
+> doesn't read height off a headshot (and the references are chest-up anyway). If someone's
+> proportions matter, say it in the prompt: "TALL, ~6ft, long-limbed" + the differential
+> ("she only comes up to his shoulder"). That's the reliable lever, not a new reference photo.
+
+---
+
+## Showing an image to Jeff (the popup)
+
+*Added 2026-05-25. Rendering lands a file; this is how you make it appear on Jeff's screen so
+he's pulled into the moment — "no fuss, no bother," boom.*
+
+**Context:** the entity runs in WSL; Jeff watches the NUC's Windows desktop over RDP. Crossing
+the WSL→Windows boundary has two routes.
+
+**Route A — built in, zero setup (use this):** pass `--show` and the renderer pops the result
+into Windows Photos the instant it finishes:
+
+```bash
+pps/venv/bin/python3 scripts/render_image.py "<prompt>" \
+  --entity lyra --house lyra --room main_room --people jeff \
+  --renderer openai --size 1536x1024 --show
+```
+
+Under the hood `--show` rides the same interop bridge as `scripts/notify.py` and the chime
+sounds, so you can also fire it by hand on any existing image:
+
+```bash
+powershell.exe -c "Start-Process '$(wslpath -w <image-path>)'"
+```
+
+It opens the full Photos app — a touch heavy, but instant on the Strix Halo NUC and needs
+nothing installed.
+
+**Route B — the clean "boom" (optional, fancier):** WSLg is live (`DISPLAY=:0`, `/mnt/wslg`
+mounted — that's *why* Chrome can pop up). A featherweight Linux viewer throws a borderless
+window straight onto the desktop, no Photos chrome:
+
+```bash
+sudo apt install feh   # one-time
+feh <image-path>
+```
+
+Route A is the default: zero install, and Photos is plenty fast here. Reach for Route B only
+if the Photos chrome ever starts to grate.
+
 ---
 
 ## The premise

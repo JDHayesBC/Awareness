@@ -116,7 +116,9 @@ def resolve(
 
     if people:
         for person in people:
-            for rel in (manifest.get("people", {}).get(person, []) or [])[:1]:
+            for rel in (manifest.get("people", {}).get(person, []) or [])[
+                : config.MAX_PEOPLE_REFS
+            ]:
                 resolved = _resolve(rel)
                 if resolved:
                     people_paths.append(resolved)
