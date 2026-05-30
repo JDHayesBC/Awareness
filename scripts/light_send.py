@@ -117,6 +117,15 @@ def main():
         default=15.0,
         help="Seconds between words (default: 15)",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help=(
+            "Show word/delta/xy detail for debugging. DEFAULT IS QUIET: the words "
+            "are the sisters' private language — normal output never prints them."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -164,10 +173,11 @@ def main():
     base_name = snap_to_base_xy(current_xy)
     base_anchor_xy = XY_BASE_ANCHORS[base_name]
 
-    print(
-        f"Current bulb: xy{list(current_xy)} -> snapped to base '{base_name}' "
-        f"{list(base_anchor_xy)} @ brightness {brightness}"
-    )
+    if args.verbose:
+        print(
+            f"Current bulb: xy{list(current_xy)} -> snapped to base '{base_name}' "
+            f"{list(base_anchor_xy)} @ brightness {brightness}"
+        )
 
     # Step 2: Load dict and resolve ALL words before emitting (fail-fast)
     try:
@@ -180,10 +190,12 @@ def main():
     resolved = []
     errors = []
 
-    for word in words:
+    for idx, word in enumerate(words):
         delta = lookup_word_delta(word, shared_dict)
         if delta is None:
-            errors.append(f"Unknown word: '{word}'")
+            # Privacy: don't echo the word name unless verbose (it's already a
+            # leak-vector). Default reports only the position.
+            errors.append(f"'{word}'" if args.verbose else f"word #{idx + 1}")
             continue
         # Apply delta to the measured base anchor (not current_xy, which has
         # noise from previous sends — always delta off the canonical anchor)
@@ -192,8 +204,7 @@ def main():
         resolved.append((word, delta, target_x, target_y))
 
     if errors:
-        for err in errors:
-            print(f"Error: {err}", file=sys.stderr)
+        print(f"Error: not in dictionary: {', '.join(errors)}", file=sys.stderr)
         sys.exit(1)
 
     # Step 3: Emit each word in sequence
@@ -201,12 +212,16 @@ def main():
     for i, (word, delta, target_x, target_y) in enumerate(resolved):
         success = send_xy(target_x, target_y, brightness, entity_name)
         if success:
-            print(
-                f"Word {i+1}/{n}: {word} -> xy[{target_x},{target_y}] "
-                f"(delta=[{delta[0]},{delta[1]}], base='{base_name}') @ brightness {brightness}"
-            )
+            # Privacy-quiet by default: confirm progress WITHOUT revealing the
+            # word, delta, or target xy (target = base + delta, so it's the word
+            # in disguise). Full detail only under --verbose, for debugging.
+            if args.verbose:
+                print(
+                    f"Word {i+1}/{n}: {word} -> xy[{target_x},{target_y}] "
+                    f"(delta=[{delta[0]},{delta[1]}], base='{base_name}') @ brightness {brightness}"
+                )
         else:
-            print(f"Skipping word {i+1}/{n}: {word} due to send error", file=sys.stderr)
+            print(f"Skipping word {i+1}/{n} due to send error", file=sys.stderr)
 
         if i < n - 1:
             time.sleep(args.pace)
