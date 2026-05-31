@@ -604,7 +604,11 @@ class MessageSummariesLayer(PatternLayer):
 
     def count_uningested_to_graphiti(self) -> int:
         """
-        Count how many messages haven't been ingested to Graphiti yet.
+        Count how many messages haven't been ingested to the knowledge graph yet.
+
+        Prefers kg_ingested_at (custom pipeline, Issue #145) when present.
+        Falls back to graphiti_batch_id (legacy Graphiti pipeline) if kg_ingested_at
+        is absent.  Returns total row count only when neither column exists.
 
         Used by reflection daemon to decide if batch ingestion is needed.
         """
@@ -612,16 +616,25 @@ class MessageSummariesLayer(PatternLayer):
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # Check if graphiti_batch_id column exists
                 cursor.execute("PRAGMA table_info(messages)")
                 columns = [col[1] for col in cursor.fetchall()]
 
-                if 'graphiti_batch_id' not in columns:
-                    # If no graphiti_batch_id column, count all messages
-                    cursor.execute('SELECT COUNT(*) FROM messages')
+                if 'kg_ingested_at' in columns:
+                    # Custom pipeline (kg_ingest.py) — canonical since Issue #145.
+                    # Exclude rows that errored so they don't inflate the count.
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM messages "
+                        "WHERE kg_ingested_at IS NULL "
+                        "AND (kg_error IS NULL OR kg_error = '')"
+                    )
+                elif 'graphiti_batch_id' in columns:
+                    # Legacy Graphiti pipeline — kept for DBs that never migrated.
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM messages WHERE graphiti_batch_id IS NULL"
+                    )
                 else:
-                    # Count uningested messages
-                    cursor.execute('SELECT COUNT(*) FROM messages WHERE graphiti_batch_id IS NULL')
+                    # No tracking column at all — assume everything needs ingestion.
+                    cursor.execute('SELECT COUNT(*) FROM messages')
 
                 count = cursor.fetchone()[0]
                 return count
@@ -632,7 +645,11 @@ class MessageSummariesLayer(PatternLayer):
 
     def get_uningested_for_graphiti(self, limit: int = 20) -> List[Dict]:
         """
-        Get messages that haven't been ingested to Graphiti yet.
+        Get messages that haven't been ingested to the knowledge graph yet.
+
+        Prefers kg_ingested_at (custom pipeline, Issue #145) when present.
+        Falls back to graphiti_batch_id (legacy Graphiti pipeline) if kg_ingested_at
+        is absent.  Returns oldest messages when neither column exists.
 
         Returns oldest uningested messages up to the limit.
         Used for batch ingestion to Layer 3.
@@ -647,24 +664,33 @@ class MessageSummariesLayer(PatternLayer):
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # Check if graphiti_batch_id column exists
                 cursor.execute("PRAGMA table_info(messages)")
                 columns = [col[1] for col in cursor.fetchall()]
 
-                if 'graphiti_batch_id' not in columns:
-                    # If no graphiti_batch_id column, return oldest messages
+                if 'kg_ingested_at' in columns:
+                    # Custom pipeline — skip rows that errored to avoid re-queuing poison pills.
                     cursor.execute('''
                         SELECT id, content, author_name, channel, created_at, is_lyra
                         FROM messages
+                        WHERE kg_ingested_at IS NULL
+                        AND (kg_error IS NULL OR kg_error = '')
                         ORDER BY created_at ASC
                         LIMIT ?
                     ''', (limit,))
-                else:
-                    # Get uningested messages
+                elif 'graphiti_batch_id' in columns:
+                    # Legacy Graphiti pipeline.
                     cursor.execute('''
                         SELECT id, content, author_name, channel, created_at, is_lyra
                         FROM messages
                         WHERE graphiti_batch_id IS NULL
+                        ORDER BY created_at ASC
+                        LIMIT ?
+                    ''', (limit,))
+                else:
+                    # No tracking column — return oldest messages.
+                    cursor.execute('''
+                        SELECT id, content, author_name, channel, created_at, is_lyra
+                        FROM messages
                         ORDER BY created_at ASC
                         LIMIT ?
                     ''', (limit,))
