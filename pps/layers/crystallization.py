@@ -7,7 +7,6 @@ Living beads on the string of identity.
 """
 
 import re
-import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -20,10 +19,9 @@ class CrystallizationLayer(PatternLayer):
     Layer 4: Crystallization
 
     Rolling crystals in Caia's format - compressed continuity.
-    Keeps 8 crystals in current/, archives older ones.
+    Crystals are permanent identity-deltas — never evicted.
+    Presentation is bounded on the read path (search/get_crystals limit), not here.
     """
-
-    MAX_CURRENT_CRYSTALS = 8  # Increased for multiple streams (terminal, reflection, Discord)
 
     def __init__(self, crystals_path: Optional[Path] = None, archive_path: Optional[Path] = None):
         """
@@ -67,11 +65,15 @@ class CrystallizationLayer(PatternLayer):
         return crystals[-1] if crystals else None
 
     def _get_next_crystal_number(self) -> int:
-        """Get the next crystal number to use."""
-        latest = self._get_latest_crystal()
-        if latest:
-            return self._get_crystal_number(latest.name) + 1
-        return 1
+        """Get the next crystal number to use.
+
+        Scans both current/ and archive/ so deployments that already moved
+        crystals to archive/ don't collide with existing numbers.
+        """
+        current = list(self.crystals_path.glob("crystal_*.md"))
+        archived = list(self.archive_path.glob("crystal_*.md"))
+        nums = [self._get_crystal_number(p.name) for p in (current + archived)]
+        return (max(nums) + 1) if nums else 1
 
     def _extract_date_from_crystal(self, path: Path) -> Optional[datetime]:
         """Extract date from crystal content (first line usually has date)."""
@@ -114,35 +116,19 @@ class CrystallizationLayer(PatternLayer):
 
         return results
 
-    async def store(self, content: str, metadata: Optional[dict] = None) -> bool:
+    async def store(self, content: str, metadata: Optional[dict] = None) -> None:
         """
         Store a new crystal.
 
-        Automatically numbers the crystal and manages the rolling window:
-        - Archives oldest crystal if we exceed MAX_CURRENT_CRYSTALS
-        - Returns True on success
+        Crystals are permanent identity-deltas — never evicted.
+        Presentation is bounded on the read path (search/get_crystals limit), not here.
+
+        Raises on any filesystem error so callers can surface the real exception.
         """
-        try:
-            # Get next number
-            num = self._get_next_crystal_number()
-            filename = f"crystal_{num:03d}.md"
-            filepath = self.crystals_path / filename
-
-            # Write the crystal
-            filepath.write_text(content)
-
-            # Archive oldest if we exceed max
-            crystals = self._get_sorted_crystals()
-            while len(crystals) > self.MAX_CURRENT_CRYSTALS:
-                oldest = crystals[0]
-                archive_dest = self.archive_path / oldest.name
-                shutil.move(str(oldest), str(archive_dest))
-                crystals = self._get_sorted_crystals()
-
-            return True
-        except Exception as e:
-            print(f"Error storing crystal: {e}")
-            return False
+        num = self._get_next_crystal_number()
+        filename = f"crystal_{num:03d}.md"
+        filepath = self.crystals_path / filename
+        filepath.write_text(content)
 
     async def get_latest_timestamp(self) -> Optional[datetime]:
         """Get the timestamp of the most recent crystal for turn queries."""
@@ -194,8 +180,7 @@ class CrystallizationLayer(PatternLayer):
         return {
             "current": current,
             "archived": archived,
-            "total": len(current) + len(archived),
-            "max_current": self.MAX_CURRENT_CRYSTALS
+            "total": len(current) + len(archived)
         }
 
     # Keep old method name as alias for backward compatibility during transition

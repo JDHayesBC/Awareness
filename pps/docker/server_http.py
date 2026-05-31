@@ -2167,7 +2167,7 @@ async def crystallize(request: CrystallizeRequest):
     Save a new crystal (Layer 4: Crystallization).
 
     Use for conscious crystallization - when a crystallization moment has occurred.
-    Automatically numbers the crystal and manages the rolling window.
+    Crystals are permanent — automatically numbered, never evicted.
     """
     auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "crystallize")
     if auth_error:
@@ -2177,19 +2177,22 @@ async def crystallize(request: CrystallizeRequest):
         raise HTTPException(status_code=400, detail="content is required")
 
     layer = layers[LayerType.CRYSTALLIZATION]
-    success = await layer.store(request.content)
+    try:
+        await layer.store(request.content)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save crystal: {type(e).__name__}: {e}"
+        )
 
-    if success:
-        # Get the filename of the just-saved crystal
-        latest = layer._get_latest_crystal()
-        filename = latest.name if latest else "unknown"
-        return {
-            "success": True,
-            "filename": filename,
-            "message": f"Crystal saved: {filename}"
-        }
-    else:
-        raise HTTPException(status_code=500, detail="Failed to save crystal")
+    # Get the filename of the just-saved crystal
+    latest = layer._get_latest_crystal()
+    filename = latest.name if latest else "unknown"
+    return {
+        "success": True,
+        "filename": filename,
+        "message": f"Crystal saved: {filename}"
+    }
 
 
 @app.post("/tools/get_crystals")
