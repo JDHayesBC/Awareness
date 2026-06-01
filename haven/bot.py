@@ -312,52 +312,6 @@ async def _typing_loop(room_id: str, done: asyncio.Event) -> None:
             pass
 
 
-async def store_haven_message(
-    username: str,
-    display_name: str,
-    content: str,
-    room_id: str,
-    image_url: str = "",
-) -> None:
-    """Store a Haven message in PPS for cross-context visibility.
-
-    This is the Haven equivalent of the CLI capture_response + inject_context hooks.
-    Storing with channel="haven" means:
-    - The terminal hook's ambient_recall picks up Haven turns on next CLI message
-    - Other entities' ambient_recall surfaces these turns cross-channel
-    """
-    # Fold image_url into content so it appears in ambient_recall.
-    # The server-side bridge also stores [shared image: url], but may race with
-    # this call. Storing here as well ensures the bot's own PPS has it.
-    if image_url:
-        img_note = f"[shared image: {HAVEN_URL}{image_url}]"
-        stored_content = f"{img_note} {content}".strip() if content and content.strip() not in ("", " ") else img_note
-    else:
-        stored_content = content
-
-    if not PPS_HTTP_URL or not stored_content:
-        return
-    # Skip trivial warmup ack messages
-    if stored_content.strip() in ("ready", "warmed up"):
-        return
-    is_entity = username.lower() != "jeff"
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(
-                f"{PPS_HTTP_URL}/tools/store_message",
-                json={
-                    "content": stored_content,
-                    "author_name": display_name,
-                    "channel": "haven",
-                    "is_lyra": is_entity,
-                    "session_id": room_id,
-                    "token": ENTITY_TOKEN,
-                },
-            )
-    except Exception as e:
-        print(f"[{ENTITY_NAME}] Haven→PPS store failed: {e}", file=sys.stderr)
-
-
 async def send_typing_indicator(room_id: str) -> None:
     """Send a typing indicator to Haven so users see the bot is thinking."""
     try:
@@ -890,13 +844,6 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
                     # Track when we last responded for post-response human hold
                     if humans_present:
                         last_response_sent[room_id] = time.time()
-                    # Store our response in PPS so terminal CLI sees Haven turns
-                    asyncio.create_task(store_haven_message(
-                        username=my_username,
-                        display_name=ENTITY_NAME.capitalize(),
-                        content=response,
-                        room_id=room_id,
-                    ))
                 else:
                     print(f"[{ENTITY_NAME}] Failed to send response", file=sys.stderr)
             else:
@@ -949,20 +896,6 @@ async def connect() -> None:
                         )
 
                     elif event_type == "message":
-                        # Store all Haven messages in PPS (cross-context visibility).
-                        # Skip own messages — they're already stored explicitly in
-                        # _process_batch after send. Storing via WebSocket echo too
-                        # would create duplicates (discord_message_id is NULL for
-                        # Haven, so INSERT OR IGNORE can't deduplicate them).
-                        msg_username = data.get("username", "")
-                        if msg_username != my_username:
-                            asyncio.create_task(store_haven_message(
-                                username=msg_username,
-                                display_name=data.get("display_name", msg_username),
-                                content=data.get("content", ""),
-                                room_id=data.get("room_id", "haven"),
-                                image_url=data.get("image_url", ""),
-                            ))
                         asyncio.create_task(handle_message(data))
 
                     elif event_type == "typing":

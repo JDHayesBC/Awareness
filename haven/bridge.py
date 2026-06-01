@@ -58,6 +58,10 @@ async def bridge_message(
     if not PPS_ENDPOINTS:
         return
 
+    # Skip warmup sentinels
+    if content.strip() in ("ready", "warmed up"):
+        return
+
     channel = f"haven:{room_name}"
     formatted = f"{display_name}: {content}"
 

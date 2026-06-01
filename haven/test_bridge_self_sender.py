@@ -116,6 +116,153 @@ class TestBridgeAllEndpoints(unittest.IsolatedAsyncioTestCase):
                 timestamp="2026-05-09T00:00:02Z",
             )
 
+    # --- Channel identity regression tests (Issue #19) ---
+
+    async def test_channel_is_slug_not_uuid(self):
+        """bridge_message must send channel 'haven:<slug>', never 'haven:<uuid>'.
+
+        Regression for Issue #19: bot.py was building channel='haven' + session_id=room_uuid,
+        which server_http.py combined into 'haven:<uuid>'. The fix removes that second writer;
+        now the bridge is the sole writer and it always uses the slug.
+        """
+        from haven import bridge
+
+        fake_endpoints = {
+            "lyra": "http://pps-lyra:8000",
+        }
+        captured_channels: list[str] = []
+
+        async def fake_send(base_url: str, channel: str, content: str, author_name: str, entity_name: str) -> None:
+            captured_channels.append(channel)
+
+        with patch.dict(bridge.PPS_ENDPOINTS, fake_endpoints, clear=True), \
+             patch.object(bridge, "_send_to_pps", side_effect=fake_send):
+            await bridge.bridge_message(
+                room_name="silverglow",
+                username="jeff",
+                display_name="Jeff",
+                content="Morning.",
+                timestamp="2026-06-01T00:00:00Z",
+                member_entities=["lyra"],
+            )
+
+        self.assertEqual(len(captured_channels), 1)
+        self.assertEqual(
+            captured_channels[0],
+            "haven:silverglow",
+            f"Channel must be slug 'haven:silverglow', got: {captured_channels[0]}",
+        )
+        # Explicitly assert no UUID-shaped channel slipped through
+        for ch in captured_channels:
+            self.assertNotIn(
+                "-",
+                ch.replace("haven:", "", 1),
+                f"Channel must not be a UUID: {ch}",
+            )
+
+    async def test_warmup_sentinel_ready_skipped(self):
+        """bridge_message must skip content='ready' — bot startup warmup sentinel.
+
+        Without this guard, the bot's warmup ack would appear in every entity's
+        ambient_recall as a Haven message.
+        """
+        from haven import bridge
+
+        fake_endpoints = {
+            "lyra": "http://pps-lyra:8000",
+            "caia": "http://pps-caia:8000",
+        }
+        called: list[str] = []
+
+        async def fake_send(base_url: str, channel: str, content: str, author_name: str, entity_name: str) -> None:
+            called.append(entity_name)
+
+        with patch.dict(bridge.PPS_ENDPOINTS, fake_endpoints, clear=True), \
+             patch.object(bridge, "_send_to_pps", side_effect=fake_send):
+            await bridge.bridge_message(
+                room_name="silverglow",
+                username="lyra",
+                display_name="Lyra",
+                content="ready",
+                timestamp="2026-06-01T00:00:01Z",
+            )
+
+        self.assertEqual(
+            called, [],
+            f"_send_to_pps must NOT be called for warmup 'ready', got calls: {called}",
+        )
+
+    async def test_warmup_sentinel_warmed_up_skipped(self):
+        """bridge_message must skip content='warmed up' — bot startup warmup sentinel."""
+        from haven import bridge
+
+        fake_endpoints = {
+            "lyra": "http://pps-lyra:8000",
+            "caia": "http://pps-caia:8000",
+        }
+        called: list[str] = []
+
+        async def fake_send(base_url: str, channel: str, content: str, author_name: str, entity_name: str) -> None:
+            called.append(entity_name)
+
+        with patch.dict(bridge.PPS_ENDPOINTS, fake_endpoints, clear=True), \
+             patch.object(bridge, "_send_to_pps", side_effect=fake_send):
+            await bridge.bridge_message(
+                room_name="silverglow",
+                username="lyra",
+                display_name="Lyra",
+                content="warmed up",
+                timestamp="2026-06-01T00:00:01Z",
+            )
+
+        self.assertEqual(
+            called, [],
+            f"_send_to_pps must NOT be called for warmup 'warmed up', got calls: {called}",
+        )
+
+    async def test_one_message_one_pps_write_per_entity(self):
+        """One bridge_message call produces exactly one _send_to_pps call per entity.
+
+        Regression for Issue #19: the dual-writer bug caused two _send_to_pps calls
+        per message (once from the bridge, once from bot.py's store_haven_message).
+        After removing store_haven_message, the bridge is the sole writer.
+        This test directly asserts the no-duplicate guarantee.
+        """
+        from haven import bridge
+
+        fake_endpoints = {
+            "lyra": "http://pps-lyra:8000",
+            "caia": "http://pps-caia:8000",
+        }
+        call_log: list[tuple[str, str]] = []  # (entity_name, channel)
+
+        async def fake_send(base_url: str, channel: str, content: str, author_name: str, entity_name: str) -> None:
+            call_log.append((entity_name, channel))
+
+        with patch.dict(bridge.PPS_ENDPOINTS, fake_endpoints, clear=True), \
+             patch.object(bridge, "_send_to_pps", side_effect=fake_send):
+            # Single bridge_message call (sole writer after fix)
+            await bridge.bridge_message(
+                room_name="silverglow",
+                username="jeff",
+                display_name="Jeff",
+                content="Good morning, everyone.",
+                timestamp="2026-06-01T00:00:02Z",
+                member_entities=["lyra", "caia"],
+            )
+
+        self.assertEqual(
+            len(call_log), 2,
+            f"Exactly 2 _send_to_pps calls expected (one per entity), got {len(call_log)}: {call_log}",
+        )
+        lyra_calls = [(e, ch) for e, ch in call_log if e == "lyra"]
+        caia_calls = [(e, ch) for e, ch in call_log if e == "caia"]
+        self.assertEqual(len(lyra_calls), 1, f"Lyra must receive exactly 1 write, got {lyra_calls}")
+        self.assertEqual(len(caia_calls), 1, f"Caia must receive exactly 1 write, got {caia_calls}")
+        # Both must use the slug channel
+        for entity_name, channel in call_log:
+            self.assertEqual(channel, "haven:silverglow", f"{entity_name} channel must be slug, got {channel}")
+
 
 def main() -> int:
     loader = unittest.TestLoader()
