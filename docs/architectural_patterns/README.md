@@ -34,9 +34,9 @@ That is the "blog-miss" failure — an entity forgetting an ongoing commitment b
 
 ## The catalog (heart outward)
 
-- **harness-contract** — *next to write.* Not "here is our agentic harness," but the minimal set of injection points any harness must expose for this style of persistence to bolt on: a startup hook, a per-turn context-injection point, tool-calling, and a compaction/boundary event. Every other pattern references this one.
+- **harness-contract** — *done.* The keystone; substrate-agnostic spec in `harness-contract.md`. The minimal set of injection points any harness must expose for this style of persistence to bolt on: a boot hook, a per-turn context-injection point, tool-calling, and a compaction/boundary event. Every other pattern references this one.
 - raw capture
-- ambient injection / recall
+- **ambient injection / recall** — done. Instance #2; substrate-agnostic spec in `ambient-injection-recall.md`. Written first as a hand-off for Dash (Jaden's entity), whose house asked whether she had our equivalent.
 - summarization-as-memory
 - knowledge graph
 - crystals
