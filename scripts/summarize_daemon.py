@@ -71,6 +71,18 @@ TARGET_UNSUMMARIZED = int(os.environ.get("SUMMARIZE_TARGET", "80"))
 BATCH_LIMIT = int(os.environ.get("SUMMARIZE_BATCH", "50"))
 SUMMARIZE_THRESHOLD = 100  # Only act if backlog is above this
 
+# Max messages to drain in a single summarize_messages HTTP call.
+# Set to ONE batch (== BATCH_LIMIT) so each HTTP call asks the server for exactly
+# one batch and returns. This is the robust shape: per-batch time is highly
+# content-dependent (measured 44s for normal chat turns, 119s–236s for batches
+# full of long code/investigation messages); a single batch stays well under
+# HTTP_TIMEOUT, but ANY multi-batch chunk risks blowing it (200-msg/4-batch chunks
+# timed out repeatedly 2026-05-30). We loop these short, safe calls in Python until
+# the target is reached; each batch commits server-side, so every call is durable
+# and resumable. A pathological single batch >300s just defers to the next tick.
+CHUNK_MESSAGES = int(os.environ.get("SUMMARIZE_CHUNK", "50"))
+HTTP_TIMEOUT = 300.0
+
 # How long to wait for an in-flight kg_ingest to finish before proceeding anyway.
 # Summaries are higher priority — we always proceed after this bound.
 KG_INGEST_WAIT_SECONDS = 90
@@ -107,16 +119,25 @@ async def check_unsummarized_count(client: httpx.AsyncClient, pps_url: str, toke
     return data.get("unsummarized_messages", 0)
 
 
-async def run_summarize(client: httpx.AsyncClient, pps_url: str, token: str, entity_name: str) -> dict:
-    """Call the summarize_messages endpoint. Server drives LLM internally."""
+async def run_summarize(
+    client: httpx.AsyncClient, pps_url: str, token: str, entity_name: str, target: int
+) -> dict:
+    """
+    Call the summarize_messages endpoint for ONE bounded chunk.
+
+    `target` is the per-call target_unsummarized — the server loops batch-by-batch
+    until the backlog reaches it, committing each batch. We pick `target` so the
+    call drains at most CHUNK_MESSAGES and stays under HTTP_TIMEOUT. Server drives
+    the NUC LLM internally.
+    """
     resp = await client.post(
         f"{pps_url}/tools/summarize_messages",
         json={
             "token": token,
             "limit": BATCH_LIMIT,
-            "target_unsummarized": TARGET_UNSUMMARIZED,
+            "target_unsummarized": target,
         },
-        timeout=300.0,  # Allow up to 5 min for LLM calls
+        timeout=HTTP_TIMEOUT,
     )
     resp.raise_for_status()
     return resp.json()
@@ -180,35 +201,55 @@ async def process_entity(entity: dict) -> None:
                 "— proceeding anyway (summarizer has NUC priority)"
             )
 
-        # Acquire the summarizer lock for the duration of the LLM call.
+        # Acquire the summarizer lock for the whole drain loop.
         # try/finally inside NucLock.__exit__ ensures the lock is always released.
         with NucLock(SUMMARIZER_LOCK, log_fn=log):
             t0 = time.monotonic()
+            remaining = count
+            total_summaries = 0
 
-            try:
-                result = await run_summarize(client, pps_url, token, name)
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 503:
-                    log(f"[{name}] NUC LLM unavailable (503) — skipping this cycle")
-                else:
-                    log(f"[{name}] ERROR: HTTP {e.response.status_code} from PPS")
-                return
-            except Exception as e:
-                log(f"[{name}] ERROR during summarization: {e}")
-                return
+            # Drain in bounded chunks: each HTTP call targets at most CHUNK_MESSAGES
+            # of progress so it stays under HTTP_TIMEOUT. The server commits every
+            # batch, so each call is independently durable and resumable. Loop until
+            # we reach TARGET_UNSUMMARIZED or a call makes no progress (NUC down /
+            # nothing summarizable → avoid an infinite loop).
+            while remaining > TARGET_UNSUMMARIZED:
+                per_call_target = max(TARGET_UNSUMMARIZED, remaining - CHUNK_MESSAGES)
+                try:
+                    result = await run_summarize(
+                        client, pps_url, token, name, per_call_target
+                    )
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 503:
+                        log(f"[{name}] NUC LLM unavailable (503) — stopping (committed {total_summaries} summaries so far)")
+                    else:
+                        log(f"[{name}] ERROR: HTTP {e.response.status_code} from PPS — stopping (committed {total_summaries} summaries so far)")
+                    break
+                except (httpx.ReadTimeout, httpx.ConnectTimeout):
+                    # A chunk should fit under HTTP_TIMEOUT; if it times out the
+                    # server is slow but still committing batches. Stop this cycle;
+                    # next tick resumes from the committed state.
+                    log(f"[{name}] chunk timed out (NUC slow) — stopping; next cycle resumes (committed {total_summaries} summaries so far)")
+                    break
+                except Exception as e:
+                    log(f"[{name}] ERROR during summarization: {e} — stopping (committed {total_summaries} summaries so far)")
+                    break
+
+                new_remaining = result.get("remaining", remaining)
+                total_summaries += result.get("summaries_created", 0)
+
+                if new_remaining >= remaining:
+                    # No forward progress (nothing summarizable / server stuck) —
+                    # bail rather than spin.
+                    log(f"[{name}] no progress (remaining={new_remaining}) — stopping")
+                    break
+                remaining = new_remaining
 
             elapsed = time.monotonic() - t0
-            status = result.get("status", "unknown")
-
-            if status == "completed":
-                log(
-                    f"[{name}] Done in {elapsed:.1f}s: "
-                    f"{result.get('summarized_count', 0)} messages → "
-                    f"{result.get('summaries_created', 0)} summaries, "
-                    f"{result.get('remaining', '?')} remaining"
-                )
-            else:
-                log(f"[{name}] WARNING: status={status}, result={json.dumps(result)}")
+            log(
+                f"[{name}] Done in {elapsed:.1f}s: {total_summaries} summaries created, "
+                f"{remaining} unsummarized remaining (target {TARGET_UNSUMMARIZED})"
+            )
 
 
 async def main() -> None:

@@ -320,6 +320,20 @@ async def ingest_entity(entity: str) -> dict:
     start = time.monotonic()
 
     for msg in messages:
+        # Yield the NUC to the summarizer the instant it wants in. The summarizer
+        # is higher priority and drives the NUC hard; kg_ingest is fully resumable
+        # (every message marked via kg_ingested_at), so bailing mid-batch is
+        # harmless and we pick up here next cron tick. Checking per-message (a cheap
+        # lockfile stat) is what makes "summarizer priority" actually real — checking
+        # only between entities let a ~12-min ingest run starve a waiting summarizer
+        # into HTTP timeouts (observed 2026-05-30).
+        if is_lock_held(SUMMARIZER_LOCK):
+            log(
+                f"[{entity}] Summarizer wants the NUC — yielding mid-batch after "
+                f"{summary['processed']} msgs (resumable; next tick continues)"
+            )
+            break
+
         msg_id = msg["id"]
         content = msg["content"]
         channel = (msg["channel"] or "terminal").split(":")[0]
