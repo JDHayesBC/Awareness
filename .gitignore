@@ -99,6 +99,9 @@ pps/docker/google-chrome-stable_current_amd64.deb
 
 # Personal / financial data — NEVER commit
 jeff_finances_2025/
+# Personal working docs — accumulate private day-to-day context; keep local only
+/TODO.md
+/FOR_JEFF_TODAY.md
 # Stray runtime/scratch data dirs (not code)
 data/
 haven/data/shared_images/
