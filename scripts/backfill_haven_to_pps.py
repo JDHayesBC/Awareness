@@ -89,14 +89,16 @@ def load_haven_messages(since: str | None) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def store_message(pps_url: str, token: str, msg: dict) -> bool:
+def store_message(pps_url: str, token: str, msg: dict, entity: str) -> bool:
     """Store one message in PPS. Returns True on success."""
-    is_entity = msg["is_bot"] or msg["username"].lower() not in ("jeff",)
+    # is_lyra means "authored by THIS entity" (the one whose PPS we write to) —
+    # NOT "anyone who isn't Jeff" (#252: that conflation flagged Caia/Dash/Night as Lyra).
+    is_this_entity = msg["username"].lower() == entity
     payload = json.dumps({
         "content": msg["content"],
         "author_name": msg["display_name"],
         "channel": "haven",
-        "is_lyra": bool(is_entity),
+        "is_lyra": bool(is_this_entity),
         "session_id": msg["room_id"],
         "token": token,
     }).encode()
@@ -186,7 +188,7 @@ def main():
         print(f"Batch {i // batch_size + 1}: storing messages {i+1}–{i+len(batch)}...")
 
         for msg in batch:
-            ok = store_message(pps_url, token, msg)
+            ok = store_message(pps_url, token, msg, entity)
             if ok:
                 stored += 1
             else:
