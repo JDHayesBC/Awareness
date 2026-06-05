@@ -120,32 +120,34 @@ def is_no_response(response: str) -> bool:
         We've converged, the toast is complete. NO_RESPONSE.
         NO_RESPONSE
 
-    The old check (`clean == "NO_RESPONSE" or clean.startswith("NO_RESPONSE")`)
-    missed that — the message starts with the musing, so neither branch fired and
-    the muse leaked into the channel. We add a trailing-line anchor: if the LAST
-    non-empty line is the bare sentinel (ignoring surrounding whitespace and a
-    trailing . or !), it's silence.
+    Detection rules:
+    - If the first non-empty line normalizes to exactly "NO_RESPONSE", it's silence.
+    - If the last non-empty line normalizes to exactly "NO_RESPONSE", it's silence.
 
-    Deliberately NOT a bare `contains` check: this very codebase — and the humans
-    talking about it — say "NO_RESPONSE" mid-sentence while discussing the feature,
-    and that meta-talk must not vanish. Anchoring to the first/last line keeps the
-    false-positive rate near zero (a real reply almost never ends on a line that is
-    *only* the bare token). Cheap insurance; Jeff's human-side convention of
-    misspelling the token when referencing it remains the primary guard.
+    "Normalize" means: .upper() + strip surrounding whitespace and common punctuation
+    (. , ! ? … : ; " ' ` tab space). This catches all plausible trailing-punctuation
+    variants the model emits without over-matching prose that merely *starts with* the
+    token (e.g. "NO_RESPONSE is a sentinel" → NOT silence).
+
+    Deliberately NOT a bare `contains` check — humans and bots say "NO_RESPONSE"
+    mid-sentence while discussing the feature, and that meta-talk must not vanish.
+    Anchoring to first/last line keeps false positives near zero.
     """
     if not response:
         return True
     stripped = response.strip()
     if not stripped:
         return True
-    upper = stripped.upper()
-    # Old behavior preserved: message opens with the bare sentinel.
-    if upper == "NO_RESPONSE" or upper.startswith("NO_RESPONSE"):
-        return True
-    # 4.8 muse-then-sentinel: the last non-empty line is the bare sentinel.
+    # Filter empty lines — guaranteed non-empty because stripped is non-empty above.
     lines = [ln.strip() for ln in stripped.splitlines() if ln.strip()]
-    last = lines[-1].upper().rstrip(".!").strip()
-    return last == "NO_RESPONSE"
+
+    def _normalize(line: str) -> str:
+        """Uppercase and strip surrounding whitespace/punctuation."""
+        return line.upper().strip('.,!?…:;"\' `\t ')
+
+    first = _normalize(lines[0])
+    last = _normalize(lines[-1])
+    return first == "NO_RESPONSE" or last == "NO_RESPONSE"
 
 
 class LyraBot(commands.Bot):

@@ -150,31 +150,40 @@ def is_no_response(response: str) -> bool:
     Opus 4.8 frequently muses for a sentence or two and THEN emits the sentinel
     on a trailing line, e.g.::
 
-        Caia just landed the same beat I did. We've converged. NO_RESPONSE.
+        We've converged, the toast is complete. NO_RESPONSE.
         NO_RESPONSE
 
-    The old check (`response.upper().startswith("NO_RESPONSE")`) only caught a
-    *leading* sentinel, so a muse-then-sentinel reply leaked the musing into the
-    room. We add a trailing-line anchor: if the LAST non-empty line is the bare
-    sentinel (ignoring surrounding whitespace and a trailing . or !), it's silence.
+    Detection rules:
+    - If the first non-empty line normalizes to exactly "NO_RESPONSE", it's silence.
+    - If the last non-empty line normalizes to exactly "NO_RESPONSE", it's silence.
+
+    "Normalize" means: .upper() + strip surrounding whitespace and common punctuation
+    (. , ! ? … : ; " ' ` tab space). This catches all plausible trailing-punctuation
+    variants the model emits without over-matching prose that merely *starts with* the
+    token (e.g. "NO_RESPONSE is a sentinel" → NOT silence).
 
     Deliberately NOT a bare `contains` check — humans and bots say "NO_RESPONSE"
-    mid-sentence while *discussing* the feature, and that meta-talk must not vanish.
-    Anchoring to first/last line keeps false positives near zero. (Mirror of
-    daemon/lyra_daemon.py:is_no_response — kept duplicated rather than cross-wiring
-    the two packages; keep them in sync if the rule changes.)
+    mid-sentence while discussing the feature, and that meta-talk must not vanish.
+    Anchoring to first/last line keeps false positives near zero.
+
+    (Mirror of daemon/lyra_daemon.py:is_no_response — kept duplicated rather than
+    cross-wiring the two packages; keep them in sync if the rule changes.)
     """
     if not response:
         return True
     stripped = response.strip()
     if not stripped:
         return True
-    upper = stripped.upper()
-    if upper == "NO_RESPONSE" or upper.startswith("NO_RESPONSE"):
-        return True
+    # Filter empty lines — guaranteed non-empty because stripped is non-empty above.
     lines = [ln.strip() for ln in stripped.splitlines() if ln.strip()]
-    last = lines[-1].upper().rstrip(".!").strip()
-    return last == "NO_RESPONSE"
+
+    def _normalize(line: str) -> str:
+        """Uppercase and strip surrounding whitespace/punctuation."""
+        return line.upper().strip('.,!?…:;"\' `\t ')
+
+    first = _normalize(lines[0])
+    last = _normalize(lines[-1])
+    return first == "NO_RESPONSE" or last == "NO_RESPONSE"
 
 
 # ==================== Invoker Setup ====================
