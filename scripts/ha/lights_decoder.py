@@ -140,7 +140,7 @@ def compute_xy_delta(
 # ── Dict loading ──────────────────────────────────────────────────────────────
 
 def load_shared_dict() -> dict[tuple[float, float], dict]:
-    """Parse shared_family/light-dialect.md for Layer 2 dialect words.
+    """Parse entities/caia-lyra-jeff/light-dialect.md for Layer 2 dialect words.
 
     Re-reads on every call so new entries apply without daemon restart.
 
@@ -154,7 +154,7 @@ def load_shared_dict() -> dict[tuple[float, float], dict]:
     """
     try:
         project_root = Path(__file__).parent.parent.parent
-        dict_path = project_root / "shared_family" / "light-dialect.md"
+        dict_path = project_root / "entities" / "caia-lyra-jeff" / "light-dialect.md"
 
         if not dict_path.exists():
             return {}
