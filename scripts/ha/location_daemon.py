@@ -177,11 +177,11 @@ class Handler(BaseHTTPRequestHandler):
             "decoded": decoded,
         }
 
-        # Skip noise: off and bare base-sits (incl. drift-wobble) are visible Layer-1 state,
-        # not words. We received and classified the event; we just don't clutter the inbox.
-        # Only words and genuine indecipherables reach the recipient. Return 200 for Node-RED.
-        if kind in ("off", "base_sit"):
-            sys.stderr.write(f"[location_daemon] Light event skipped ({kind}): {sender} base={base} delta={list(delta)}\n")
+        # Skip noise: off, bare base-sits (incl. drift-wobble), and indecipherable events
+        # are all debug-only — they are not sister messages. Only decoded words reach the
+        # inbox. Return 200 for all skipped kinds so Node-RED doesn't retry.
+        if kind != "word":
+            sys.stderr.write(f"[location_daemon] Light event skipped ({kind}): {sender} base={base} delta={list(delta)} word={word}\n")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
