@@ -1,8 +1,10 @@
 # CC OpenAI Wrapper Architecture
 
+> **⚠️ RETIRED 2026-06-06 (issue #1).** This component (`pps/docker/cc_openai_wrapper.py`, the `pps-haiku-wrapper` container on `:8204`) has been removed from the active tree. Both its jobs are superseded — Graphiti entity-extraction now runs on the local NUC LLM (`172.26.0.1:1234`), and the ambient-recall Haiku-compression path is gated off (`PPS_HAIKU_SUMMARIZE=false`). Retained as historical reference. Revive via `git log -- pps/docker/cc_openai_wrapper.py` if OpenAI-compatible routing is ever needed again. See `docs/sdk-model-audit-2026-06-06.md`.
+
 **Version**: 0.2.0
-**Last Updated**: 2026-01-28
-**Status**: Production (memory-safe after 69ce950)
+**Last Updated**: 2026-06-06 (retired)
+**Status**: RETIRED — superseded by NUC LLM (Graphiti extraction) + gated-off ambient compression
 
 ---
 

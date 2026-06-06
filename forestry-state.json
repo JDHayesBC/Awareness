@@ -1,13 +1,13 @@
 {
   "version": "1.0",
-  "last_updated": "2026-03-10T21:00:00Z",
-  "last_canopy_run": "2026-02-20T14:20:00Z",
-  "last_deadwood_run": "2026-02-20T14:25:00Z",
+  "last_updated": "2026-06-06T20:30:00Z",
+  "last_canopy_run": "2026-06-06T19:30:00Z",
+  "last_deadwood_run": "2026-06-06T20:00:00Z",
   "last_coppice_run": "2026-02-20T14:28:00Z",
-  "last_grove_run": "2026-02-21T01:15:00Z",
-  "session_count": 5,
+  "last_grove_run": "2026-06-06T20:30:00Z",
+  "session_count": 6,
   "growth_sessions": 3,
-  "maintenance_sessions": 2,
+  "maintenance_sessions": 3,
   "fire_sessions": 0,
   "current_season": "growth",
   "fire_scheduled": false,
@@ -20,17 +20,22 @@
     "work/hook-based-friction/",
     "scripts/rollback_entity_migration.sh",
     "scripts/graphiti_ingest_stub.py",
-    "work/graphiti-schema-redesign/"
+    "work/graphiti-schema-redesign/",
+    "daemon/lyra_discord.py",
+    "simple_discord_daemon/"
   ],
   "retired": [
     "pps/web/templates/observatory.html",
     "scripts/migrate_summaries_to_crystals.py",
     "work/ambient-recall-optimization/artifacts/lyra-dedup/",
-    "work/cc-invoker-openai-wrapper/"
+    "work/cc-invoker-openai-wrapper/",
+    "pps/docker/cc_openai_wrapper.py (+ Dockerfile.cc-wrapper, requirements-cc-wrapper.txt, test_cc_wrapper_local.py, pps-haiku-wrapper compose service) — SDK audit #1",
+    "pps/docker/server_http.py :/tools/synthesize_entity endpoint + SynthesizeEntityRequest model — orphaned, superseded by app.py /api/graph/synthesize — SDK audit #1",
+    "hooks/inject_context.py — duplicate of canonical .claude/hooks/inject_context.py — SDK audit #1"
   ],
   "deadwood_proposed": [
     "scripts/import_caia_data.py",
     "backups/pre-phase1-20260106-102849/"
   ],
-  "notes": "First full Forestry cycle: canopy→deadwood→coppice completed 2026-02-18. 13 suspects identified, 3 retired (clean removal, -511 lines), 2 deadwood proposed (pending Jeff review). Hook-based-friction noted as partial overlap with live friction injection system. Growth season — rapid skill development and orchestration hooks deployed. CORRECTION (2026-02-18 reflection): scripts/paced_ingestion.py removed from deadwood_proposed — it was the canonical ingestion tool, fixed (PROJECT_ROOT path corrected) and validated by Jeff this session. work/graphiti-schema-redesign/paced_ingestion.py has the old broken path. Also: pre-phase1 backup name corrected (102849 not 102648). | GROVE RUN (2026-02-19 AM reflection): post-sprint coherence check after MCP proxy migration + v0.8.0 tag. Forest mostly coherent. | COPPICE CLEANUP (2026-02-19 PM reflection): 6 dirs folded into docs/completed/. | FULL CYCLE (2026-02-20 terminal with Jeff): prescribe→canopy→deadwood→coppice→grove. Researcher audit revealed stale data (closed issues #117/#118/#126 reported as open, completed work dirs reported as active). Cleared 7 DEADWOOD work dirs, summaries preserved in docs/completed/. Retired cc-invoker-openai-wrapper from SUSPECT. Fixed TODO.md (stale Active Work Streams), CLAUDE.md (stale Known Issues #126), 2 dangling path references. Root bank: 8 items, 0 promotions. Forest coherent. | GROWTH SESSION (2026-02-20 evening terminal): Built unified RAG engine (port 8206, JINA embeddings+reranker, 57 docs/804 chunks). Renamed Docker services (pps-lyra, pps-caia, observatory). Fixed haiku wrapper crash (rate_limit_event). Rewired tech RAG to use new engine. Created /tidy skill. 12 issues closed. Forest coherent — new growth integrates cleanly."
+  "notes": "First full Forestry cycle: canopy→deadwood→coppice completed 2026-02-18. 13 suspects identified, 3 retired (clean removal, -511 lines), 2 deadwood proposed (pending Jeff review). Hook-based-friction noted as partial overlap with live friction injection system. Growth season — rapid skill development and orchestration hooks deployed. CORRECTION (2026-02-18 reflection): scripts/paced_ingestion.py removed from deadwood_proposed — it was the canonical ingestion tool, fixed (PROJECT_ROOT path corrected) and validated by Jeff this session. work/graphiti-schema-redesign/paced_ingestion.py has the old broken path. Also: pre-phase1 backup name corrected (102849 not 102648). | GROVE RUN (2026-02-19 AM reflection): post-sprint coherence check after MCP proxy migration + v0.8.0 tag. Forest mostly coherent. | COPPICE CLEANUP (2026-02-19 PM reflection): 6 dirs folded into docs/completed/. | FULL CYCLE (2026-02-20 terminal with Jeff): prescribe→canopy→deadwood→coppice→grove. Researcher audit revealed stale data (closed issues #117/#118/#126 reported as open, completed work dirs reported as active). Cleared 7 DEADWOOD work dirs, summaries preserved in docs/completed/. Retired cc-invoker-openai-wrapper from SUSPECT. Fixed TODO.md (stale Active Work Streams), CLAUDE.md (stale Known Issues #126), 2 dangling path references. Root bank: 8 items, 0 promotions. Forest coherent. | GROWTH SESSION (2026-02-20 evening terminal): Built unified RAG engine (port 8206, JINA embeddings+reranker, 57 docs/804 chunks). Renamed Docker services (pps-lyra, pps-caia, observatory). Fixed haiku wrapper crash (rate_limit_event). Rewired tech RAG to use new engine. Created /tidy skill. 12 issues closed. Forest coherent — new growth integrates cleanly. | SDK AUDIT + DEADWOOD (2026-06-06 terminal with Jeff, issue #1): prescribe→canopy→deadwood→reconcile-vs-live-Anthropic-deprecation-page→grove. Finding: the 'June-15 billing cliff' was illusory — the two June-15 retirees (claude-sonnet-4-20250514, claude-opus-4-20250514) appear ONLY in a doc snippet, zero live exposure; the REAL issue was claude-3-haiku-20240307 (RETIRED Apr 20 2026, 'requests will fail') still referenced in 2 live spots. Retired the idle pps-haiku-wrapper (0 prod callers; Graphiti moved to NUC LLM 172.26.0.1:1234, ambient Haiku-compression gated off) and removed the orphaned /tools/synthesize_entity endpoint — both deletions eliminated the stale-model refs with ZERO code model-swaps. Also removed duplicate hooks/inject_context.py; flagged daemon/lyra_discord.py + simple_discord_daemon/ as new SUSPECT (possible alt Discord impls). Artifact: docs/sdk-model-audit-2026-06-06.md. C3 (centralize model IDs into a registry) noted as a #266 architectural-pattern candidate, not built. Forest coherent: server_http.py py_compile OK, docker compose config valid, pps-lyra healthy (source-only change, no rebuild forced). NOTE: canonical .claude/hooks/inject_context.py retains an inert (PPS_HAIKU_SUMMARIZE=false) call path to the now-retired :8204 — left intentionally to avoid risky edits to the live context hook; revive-or-remove if compression is ever wanted."
 }

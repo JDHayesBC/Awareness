@@ -333,32 +333,6 @@ services:
       retries: 3
       start_period: 5s
 
-  # OpenAI-compatible wrapper for ClaudeInvoker
-  # Provides /v1/chat/completions endpoint for Graphiti to eliminate OpenAI costs
-  pps-haiku-wrapper:
-    build:
-      context: ../..
-      dockerfile: pps/docker/Dockerfile.cc-wrapper
-    container_name: pps-haiku-wrapper
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8204:8000"
-    volumes:
-      # Mount Claude CLI credentials from host
-      - ${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro
-    environment:
-      - WRAPPER_MODEL=${WRAPPER_MODEL:-haiku}
-      - WRAPPER_VERBOSE=${WRAPPER_VERBOSE:-0}  # Set to 1 to log full prompts/responses
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}  # For json_schema tool-use enforcement
-    networks:
-      - default
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s  # ClaudeInvoker init takes ~33s
-
   # Unified RAG Engine - standalone retrieval-augmented generation service
   rag-engine:
     build:

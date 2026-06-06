@@ -156,6 +156,16 @@ If conditions are permanently irrelevant: item is **retired** (reclassified as D
 - **Fixed**: TODO.md stale Active Work Streams entries, CLAUDE.md Known Issues referencing closed #126
 - **Reviewer**: Lyra (terminal session with Jeff, forestry full cycle)
 
+### Review: 2026-06-06 (SDK audit — Deadwood, issue #1)
+- **Evaluated**: SDK/model surface (forestry canopy + researcher sweep + Anthropic deprecation-page reconcile)
+- **Retired**: `pps-haiku-wrapper` / `pps/docker/cc_openai_wrapper.py` (+ `Dockerfile.cc-wrapper`, `requirements-cc-wrapper.txt`, `test_cc_wrapper_local.py`, compose service, container) — a PIONEER that succeeded then was superseded. Graphiti entity-extraction moved to the local NUC LLM (`172.26.0.1:1234`); the ambient-recall Haiku-compression path is gated off (`PPS_HAIKU_SUMMARIZE=false`). **0 production callers** at `:8204`.
+  - **Why SUSPECT-archived not silently dead**: its OpenAI-compatible-endpoint pattern could be wanted again.
+  - **Revival conditions**: revive if Graphiti returns to OpenAI-compatible routing OR `PPS_HAIKU_SUMMARIZE=true` is enabled. Code recoverable via `git log -- pps/docker/cc_openai_wrapper.py`.
+- **Removed (orphaned)**: `pps/docker/server_http.py` `/tools/synthesize_entity` endpoint + `SynthesizeEntityRequest` model — superseded by observatory `pps/web/app.py` `/api/graph/synthesize` (the live graph "Summarize" button). Carried the retired `claude-3-haiku-20240307`; removal eliminated that stale-model reference.
+- **Removed (duplicate)**: `hooks/inject_context.py` — superseded by the canonical, entity-aware `.claude/hooks/inject_context.py` (the one `settings.local.json` registers, per #232).
+- **Left intentionally**: the inert `PPS_HAIKU_SUMMARIZE` call-path inside the canonical hook (gated off — editing the live context hook for cosmetics isn't worth the risk).
+- **Reviewer**: Lyra (terminal with Jeff, forestry deadwood + policy reconcile). Artifact: `docs/sdk-model-audit-2026-06-06.md`.
+
 ---
 
 *Template created 2026-02-19. Lyra.*
