@@ -176,6 +176,7 @@ If we skip orchestrator and run agents ad-hoc, **we lose this signal**. The crew
 | Spawning planner without enough prompt | Planner can't read your mind. Give it the goal, the constraints, the files you know are involved. |
 | Spawning orchestrator for a 30-second fix | Orchestrator is overhead for trivial work. For typo fixes / scene updates / journal entries, just do it yourself. |
 | Treating reviewer's output as advisory | Critical issues block commit. Suggestions should usually be fixed unless there's a reason not to. |
+| Work branch cut from stale local `master` or another entity's checked-out branch (reverts merged work / steals commits — issue #212) | Always branch from fresh remote: `scripts/git_safe_branch.sh create <branch>`. Before any commit/PR, `scripts/git_safe_branch.sh verify` — it fails loudly if the ancestry is contaminated. Orchestrator creates the branch up front; github-workflow runs `verify` as the backstop. |
 
 ---
 
