@@ -132,11 +132,26 @@ async def delete_repo(name: str):
 
 
 async def _ingest_single(repo_name: str, text: str, source: str, metadata: dict, config: dict) -> dict:
-    """Chunk, embed, store in ChromaDB and SQLite. Returns doc info."""
+    """Chunk, embed, store in ChromaDB and SQLite. Returns doc info.
+
+    Idempotent on ``source`` (#138): re-ingesting a document that was already
+    indexed under the same source replaces it rather than accumulating a fresh
+    set of chunks alongside the stale ones. Any pre-existing document(s) for the
+    same source are removed (SQLite rows + their ChromaDB chunks) before the new
+    version is stored, reusing the same deletion path as ``delete_document``.
+    """
     result = await rag_engine.ingest_text(repo_name, text, source, metadata, config)
     chunks = result['chunks']
     embeddings = result['embeddings']
     chunk_data = result['chunk_data']
+
+    # Idempotency: drop any prior version(s) of this source before re-indexing.
+    # (Embedding succeeded above, so we won't delete the old copy on a failed
+    # re-ingest.) Same delete logic used by the delete_document endpoint.
+    existing = await storage.get_documents_by_source(repo_name, source)
+    for old in existing:
+        await storage.delete_document(old['id'])
+        rag_engine.delete_by_doc_id(repo_name, old['id'])
 
     # Store original in SQLite first to get doc_id
     doc_id = await storage.store_document(repo_name, source, text, metadata, chunks)
@@ -144,7 +159,7 @@ async def _ingest_single(repo_name: str, text: str, source: str, metadata: dict,
     # Add to ChromaDB with doc_id
     rag_engine.add_chunks(repo_name, chunk_data, embeddings, doc_id, metadata)
 
-    return {'doc_id': doc_id, 'chunks': chunks, 'source': source}
+    return {'doc_id': doc_id, 'chunks': chunks, 'source': source, 'replaced': len(existing)}
 
 
 @app.post("/api/repos/{name}/ingest")

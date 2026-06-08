@@ -112,6 +112,31 @@ class Storage:
                     for row in rows
                 ]
 
+    async def get_documents_by_source(self, repo_name: str, source: str):
+        """Return all documents in a repo matching a given source.
+
+        Used to make ingest idempotent: a re-ingest of the same source should
+        replace prior versions rather than accumulate duplicates (#138).
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                'SELECT * FROM documents WHERE repo_name = ? AND source = ?',
+                (repo_name, source)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [
+                    {
+                        'id': row['id'],
+                        'repo_name': row['repo_name'],
+                        'source': row['source'],
+                        'chunk_count': row['chunk_count'],
+                        'created_at': row['created_at'],
+                        'metadata': json.loads(row['metadata'])
+                    }
+                    for row in rows
+                ]
+
     async def get_document(self, doc_id: str):
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
