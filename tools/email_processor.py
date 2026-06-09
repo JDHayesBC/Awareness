@@ -36,7 +36,7 @@ class EmailProcessor:
         """Initialize SQLite database for storing emails."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS emails (
                 id TEXT PRIMARY KEY,
@@ -53,15 +53,64 @@ class EmailProcessor:
                 processed_at TEXT
             )
         ''')
-        
+
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_timestamp ON emails(timestamp)
         ''')
-        
+
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_account ON emails(account)
         ''')
-        
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS email_state (
+                message_id   TEXT PRIMARY KEY,
+                account      TEXT NOT NULL,
+                read_at      TEXT,
+                responded_at TEXT
+            )
+        ''')
+
+        conn.commit()
+        conn.close()
+
+    def mark_read(self, message_id: str, account: str) -> None:
+        """Record that a message has been read. Preserves any existing responded_at."""
+        now = datetime.now().isoformat()
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            '''INSERT INTO email_state (message_id, account, read_at, responded_at)
+               VALUES (?, ?, ?, NULL)
+               ON CONFLICT(message_id) DO UPDATE SET read_at = excluded.read_at''',
+            (message_id, account, now)
+        )
+        conn.commit()
+        conn.close()
+
+    def is_responded(self, message_id: str) -> bool:
+        """Return True if the message has a non-null responded_at timestamp."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT responded_at FROM email_state WHERE message_id = ?',
+            (message_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row is not None and row[0] is not None
+
+    def mark_responded(self, message_id: str, account: str) -> None:
+        """Record that a message has been responded to. Preserves any existing read_at."""
+        now = datetime.now().isoformat()
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            '''INSERT INTO email_state (message_id, account, read_at, responded_at)
+               VALUES (?, ?, NULL, ?)
+               ON CONFLICT(message_id) DO UPDATE SET responded_at = excluded.responded_at''',
+            (message_id, account, now)
+        )
         conn.commit()
         conn.close()
     
@@ -147,8 +196,9 @@ class EmailProcessor:
                 ))
                 
                 conn.commit()
+                self.mark_read(msg_id, account)
                 stats['processed'] += 1
-                
+
                 print(f"[{i+1}/{len(messages)}] Processed: {email_data['subject'][:50]}...")
                 
             except Exception as e:
