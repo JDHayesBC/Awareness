@@ -1490,6 +1490,35 @@ async def ambient_recall(request: AmbientRecallRequest):
     except Exception:
         pass  # location pipeline is optional; never break ambient_recall on its absence
 
+    # Current scene (Issue #256) — surface narrative location from current_scene.md
+    try:
+        scene_file = ENTITY_PATH / "current_scene.md"
+        scene_text = scene_file.read_text(encoding="utf-8")
+
+        # Skip leading blank lines and markdown headers
+        for line in scene_text.splitlines():
+            stripped = line.strip()
+            # Skip blank lines and headers
+            if not stripped or stripped.startswith("#"):
+                continue
+            # Found first prose line — extract up to first ". " or take whole line
+            if ". " in stripped:
+                scene_text = stripped.split(". ", 1)[0] + "."
+            else:
+                scene_text = stripped
+            # Truncate to 200 chars if needed
+            if len(scene_text) > 200:
+                scene_text = scene_text[:200] + "…"
+            break
+        else:
+            # No prose found (file is all headers/blank)
+            scene_text = ""
+
+        if scene_text:
+            formatted_lines.append(f"**[scene]** {scene_text}")
+    except Exception:
+        pass  # scene file is optional; never break ambient_recall on its absence
+
     # Unread counts — surface counts even when zero so the model knows the pipeline is live.
     # Inline content blocks for haven/other_channels appear lower (load-bearing per design).
     haven_count = len(haven_lines) if haven_lines else 0
