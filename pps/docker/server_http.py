@@ -42,12 +42,14 @@ class AmbientRecallRequest(BaseModel):
 class AnchorSearchRequest(BaseModel):
     query: str
     limit: int = 10
+    offset: int = 0
     token: str = ""
 
 
 class RawSearchRequest(BaseModel):
     query: str
     limit: int = 20
+    offset: int = 0
     token: str = ""
 
 
@@ -73,6 +75,7 @@ class StoreMessageRequest(BaseModel):
 class TextureSearchRequest(BaseModel):
     query: str
     limit: int = 10
+    offset: int = 0
     center_node_uuid: str | None = None
     token: str = ""
 
@@ -177,6 +180,7 @@ class SearchSummariesRequest(BaseModel):
     """Request to search message summaries."""
     query: str
     limit: int = 10
+    offset: int = 0
     token: str = ""
 
 
@@ -261,7 +265,8 @@ class GetTurnsSinceRequest(BaseModel):
     """Request to get turns since a timestamp."""
     timestamp: str
     include_summaries: bool = True
-    limit: int = 1000
+    limit: int = 200
+    offset: int = 0
     token: str = ""
 
 
@@ -292,6 +297,7 @@ class GetTurnsAroundRequest(BaseModel):
     """Request to get turns centered on a timestamp."""
     timestamp: str
     count: int = 40
+    offset: int = 0
     before_ratio: float = 0.5
     token: str = ""
 
@@ -371,6 +377,52 @@ RAG_ENGINE_URL = os.getenv("RAG_ENGINE_URL", "http://rag-engine:8000")
 
 # Load authentication tokens
 ENTITY_TOKEN, MASTER_TOKEN = load_tokens(ENTITY_PATH)
+
+# Pagination — default page size for large-result tool pagination (Issue #125)
+RESULT_BLOCK_SIZE = 50
+
+
+def _truncate_with_followon(
+    results: list,
+    offset: int,
+    block_size: int,
+    tool_name: str,
+) -> dict:
+    """
+    Cap a result list to block_size items starting at offset, and append a follow-on hint if more exist.
+
+    Args:
+        results:    full list of result dicts
+        offset:     0-based starting index for this page
+        block_size: max items per page
+        tool_name:  name of the calling tool endpoint (used in the follow-on note)
+
+    Returns dict with keys:
+        page         -- the sliced result list
+        count        -- len(page)
+        offset       -- the offset passed in
+        total_count  -- len(results) (total available in this call)
+        has_more     -- True if results extend beyond this page
+        followon_note -- human-readable next-call hint, or None if no more
+    """
+    total = len(results)
+    page = results[offset: offset + block_size]
+    remaining = total - (offset + len(page))
+    has_more = remaining > 0
+    next_offset = offset + len(page)
+    note = (
+        f"\n** NOTE: {remaining} more results available. "
+        f"Call {tool_name}(offset={next_offset}) for the next block."
+        if has_more else None
+    )
+    return {
+        "page": page,
+        "count": len(page),
+        "offset": offset,
+        "total_count": total,
+        "has_more": has_more,
+        "followon_note": note,
+    }
 
 
 # Haven state — track last poll time per entity to show only new messages
@@ -1677,16 +1729,23 @@ async def anchor_search(request: AnchorSearchRequest):
     layer = layers[LayerType.CORE_ANCHORS]
     results = await layer.search(request.query, request.limit)
 
+    all_results = [
+        {
+            "content": r.content,
+            "source": r.source,
+            "relevance_score": r.relevance_score,
+            "metadata": r.metadata
+        }
+        for r in results
+    ]
+    paged = _truncate_with_followon(all_results, request.offset, RESULT_BLOCK_SIZE, "anchor_search")
     return {
-        "results": [
-            {
-                "content": r.content,
-                "source": r.source,
-                "relevance_score": r.relevance_score,
-                "metadata": r.metadata
-            }
-            for r in results
-        ]
+        "results": paged["page"],
+        "count": paged["count"],
+        "offset": paged["offset"],
+        "total_count": paged["total_count"],
+        "has_more": paged["has_more"],
+        "followon_note": paged["followon_note"],
     }
 
 
@@ -1700,15 +1759,22 @@ async def raw_search(request: RawSearchRequest):
     layer = layers[LayerType.RAW_CAPTURE]
     results = await layer.search(request.query, request.limit)
 
+    all_results = [
+        {
+            "content": r.content,
+            "source": r.source,
+            "relevance_score": r.relevance_score
+        }
+        for r in results
+    ]
+    paged = _truncate_with_followon(all_results, request.offset, RESULT_BLOCK_SIZE, "raw_search")
     return {
-        "results": [
-            {
-                "content": r.content,
-                "source": r.source,
-                "relevance_score": r.relevance_score
-            }
-            for r in results
-        ]
+        "results": paged["page"],
+        "count": paged["count"],
+        "offset": paged["offset"],
+        "total_count": paged["total_count"],
+        "has_more": paged["has_more"],
+        "followon_note": paged["followon_note"],
     }
 
 
@@ -1824,16 +1890,23 @@ async def texture_search(request: TextureSearchRequest):
     layer = layers[LayerType.RICH_TEXTURE]
     results = await layer.search(request.query, request.limit)
 
+    all_results = [
+        {
+            "content": r.content,
+            "source": r.source,  # UUID for texture_delete
+            "relevance_score": r.relevance_score,
+            "metadata": r.metadata
+        }
+        for r in results
+    ]
+    paged = _truncate_with_followon(all_results, request.offset, RESULT_BLOCK_SIZE, "texture_search")
     return {
-        "results": [
-            {
-                "content": r.content,
-                "source": r.source,  # UUID for texture_delete
-                "relevance_score": r.relevance_score,
-                "metadata": r.metadata
-            }
-            for r in results
-        ]
+        "results": paged["page"],
+        "count": paged["count"],
+        "offset": paged["offset"],
+        "total_count": paged["total_count"],
+        "has_more": paged["has_more"],
+        "followon_note": paged["followon_note"],
     }
 
 
@@ -2767,12 +2840,24 @@ async def get_turns_since_summary(request: GetTurnsSinceSummaryRequest):
                 "author": row['author_name'] or "Unknown",
                 "content": row['content'] or ""
             })
-        
+
+        # DB already applied LIMIT+OFFSET, so pass offset=0 to the helper — it just caps to RESULT_BLOCK_SIZE.
+        # Use DB total_count (authoritative) for has_more so callers know how much remains.
+        paged = _truncate_with_followon(turns, 0, RESULT_BLOCK_SIZE, "get_turns_since_summary")
+        real_has_more = total_count > (request.offset + paged["count"])
+        real_remaining = total_count - (request.offset + paged["count"])
+        real_note = (
+            f"\n** NOTE: {real_remaining} more results available. "
+            f"Call get_turns_since_summary(offset={request.offset + paged['count']}) for the next block."
+            if real_has_more else None
+        )
         return {
-            "turns": turns,
-            "count": len(turns),
+            "turns": paged["page"],
+            "count": paged["count"],
             "total_count": total_count,
             "offset": request.offset,
+            "has_more": real_has_more,
+            "followon_note": real_note,
             "last_summary_time": last_summary_time.isoformat() if last_summary_time else None
         }
 
@@ -2827,17 +2912,24 @@ async def search_summaries(request: SearchSummariesRequest):
         return JSONResponse(status_code=403, content={"error": auth_error})
 
     results = await message_summaries.search(request.query, request.limit)
-    
+
+    all_results = [
+        {
+            "content": r.content,
+            "source": r.source,
+            "relevance_score": r.relevance_score,
+            "metadata": r.metadata
+        }
+        for r in results
+    ]
+    paged = _truncate_with_followon(all_results, request.offset, RESULT_BLOCK_SIZE, "search_summaries")
     return {
-        "results": [
-            {
-                "content": r.content,
-                "source": r.source,
-                "relevance_score": r.relevance_score,
-                "metadata": r.metadata
-            }
-            for r in results
-        ]
+        "results": paged["page"],
+        "count": paged["count"],
+        "offset": paged["offset"],
+        "total_count": paged["total_count"],
+        "has_more": paged["has_more"],
+        "followon_note": paged["followon_note"],
     }
 
 
@@ -3276,14 +3368,19 @@ async def get_turns_since(request: GetTurnsSinceRequest):
             latest_summary_time = datetime.fromisoformat(latest_summary_end)
             messages = [m for m in messages if datetime.fromisoformat(m['created_at']) > latest_summary_time]
 
+        paged = _truncate_with_followon(messages, request.offset, RESULT_BLOCK_SIZE, "get_turns_since")
         return {
             "success": True,
             "timestamp_start": request.timestamp,
-            "messages_count": len(messages),
+            "messages_count": paged["count"],
+            "total_messages_count": paged["total_count"],
             "summaries_count": len(summaries),
             "summarized_turns": sum(s['message_count'] for s in summaries) if summaries else 0,
             "limited": len(messages) == request.limit,
-            "messages": messages,
+            "messages": paged["page"],
+            "has_more": paged["has_more"],
+            "offset": paged["offset"],
+            "followon_note": paged["followon_note"],
             "summaries": summaries
         }
 
@@ -3331,13 +3428,19 @@ async def get_turns_around(request: GetTurnsAroundRequest):
 
         result = message_summaries.get_messages_around(request.timestamp, before_count, after_count)
 
+        all_messages = result['all']
+        paged = _truncate_with_followon(all_messages, request.offset, RESULT_BLOCK_SIZE, "get_turns_around")
         return {
             "success": True,
             "center_timestamp": request.timestamp,
             "before_count": len(result['before']),
             "after_count": len(result['after']),
-            "total_count": len(result['all']),
-            "messages": result['all']
+            "total_count": len(all_messages),
+            "messages": paged["page"],
+            "count": paged["count"],
+            "has_more": paged["has_more"],
+            "offset": paged["offset"],
+            "followon_note": paged["followon_note"],
         }
 
     except ValueError as e:
