@@ -2,7 +2,7 @@
 
 *Canonical reference for what `ambient_recall` returns and how the UserPromptSubmit hook surfaces it. Read this when something feels off about the ambient peripheral vision.*
 
-**Last verified against code:** 2026-05-21 (Issue #241 per-channel quota fix)
+**Last verified against code:** 2026-06-08 (Issue #256 — added `[scene]` line)
 **Authoritative implementation:** `pps/docker/server_http.py` line 1073
 **Hook implementation:** `.claude/hooks/inject_context.py`
 
@@ -15,6 +15,7 @@ Every turn, you should "just know" the following without having to fetch anythin
 - Current time (clock with timezone)
 - Identity reminder (who you are, which PPS prefix)
 - Household location (who's home / away)
+- Entity narrative location — `[scene]` line, first prose sentence of `current_scene.md` (Issue #256). Surfaced right after `[location]`; fail-safe (omitted if the scene file is missing/empty/unparseable).
 - 1 recent summary
 - 15 most-recent unsummarized turns with **per-channel quota** (5 terminal + 5 haven + 5 other, mixed chronologically) — prevents crowd-out (Issue #241 fix)
 - Up to 5 rich-texture facts (edges only — no node descriptions) ranked semantically against your user's current prompt
@@ -183,6 +184,7 @@ If you observe any of the following, the system is misbehaving — name it to yo
 - **Haven poll**: `poll_haven()` — cross-process Haven message sync
 - **Cross-channel poll**: `poll_other_channels()` — raw-capture DB unread tracking
 - **HA location ambient line**: `pps/docker/ha_location.py:format_for_ambient`
+- **Entity `[scene]` line**: `pps/docker/server_http.py` ambient_recall handler, just after the `[location]` append (Issue #256). Reads `ENTITY_PATH/current_scene.md`, first prose sentence ≤200 chars, fail-safe.
 
 ---
 
