@@ -227,12 +227,15 @@ class TestPPSIntegration:
             print(f"\nSecond call (offset={next_offset}) returned {data2['count']} turns")
             print(f"has_more: {data2['has_more']}")
 
-            # Verify we got different data
+            # Verify we got different data. Turn dicts have no stable "id"
+            # field — their shape is {timestamp, channel, author, content} —
+            # so identify a page by the (timestamp, content) of its first turn.
             if data["turns"] and data2["turns"]:
-                # Compare first turn ID to ensure different pages
-                first_page_first_id = data["turns"][0]["id"]
-                second_page_first_id = data2["turns"][0]["id"]
-                assert first_page_first_id != second_page_first_id, \
+                def _turn_key(t):
+                    return (t.get("timestamp"), t.get("content"))
+                first_page_key = _turn_key(data["turns"][0])
+                second_page_key = _turn_key(data2["turns"][0])
+                assert first_page_key != second_page_key, \
                     "Second page returned same data as first page"
         else:
             # If no more results, followon_note should be None
