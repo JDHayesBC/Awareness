@@ -15,7 +15,9 @@ import asyncio
 import base64
 import json
 import os
+import sqlite3
 import sys
+from datetime import datetime
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
@@ -105,6 +107,58 @@ def setup_oauth():
     return True
 
 
+def _get_email_state_db() -> Path:
+    """Return path to the shared email_archive.db."""
+    return (
+        Path(os.environ.get("AWARENESS_DIR", "/mnt/c/Users/Jeff/Claude_Projects/Awareness"))
+        / "data"
+        / "email_archive.db"
+    )
+
+
+def _check_responded(message_id: str) -> bool:
+    """Return True if this message already has a responded_at timestamp."""
+    try:
+        db_path = _get_email_state_db()
+        if not db_path.exists():
+            return False
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT responded_at FROM email_state WHERE message_id = ?',
+            (message_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row is not None and row[0] is not None
+    except Exception:
+        return False
+
+
+def _mark_responded_in_db(message_id: str) -> None:
+    """Set responded_at for message_id; creates table if needed. account = 'mcp-send'."""
+    db_path = _get_email_state_db()
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS email_state (
+            message_id   TEXT PRIMARY KEY,
+            account      TEXT NOT NULL,
+            read_at      TEXT,
+            responded_at TEXT
+        )
+    ''')
+    now = datetime.now().isoformat()
+    cursor.execute(
+        '''INSERT INTO email_state (message_id, account, read_at, responded_at)
+           VALUES (?, 'mcp-send', NULL, ?)
+           ON CONFLICT(message_id) DO UPDATE SET responded_at = excluded.responded_at''',
+        (message_id, now)
+    )
+    conn.commit()
+    conn.close()
+
+
 @server.list_tools()
 async def list_tools():
     """List available Gmail tools."""
@@ -159,6 +213,15 @@ async def list_tools():
                     "body": {
                         "type": "string",
                         "description": "Email body (plain text)"
+                    },
+                    "in_reply_to_id": {
+                        "type": "string",
+                        "description": "Gmail message ID this is a reply to. If provided, guards against duplicate sends."
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "If true, bypass the duplicate-send guard even if already responded. Default: false.",
+                        "default": False
                     }
                 },
                 "required": ["to", "subject", "body"]
@@ -327,13 +390,26 @@ async def _read_message(service, args: dict):
 
 
 async def _send_message(service, args: dict):
-    """Send an email."""
+    """Send an email, with optional duplicate-send guard for replies."""
     to = args.get("to")
     subject = args.get("subject")
     body = args.get("body")
+    in_reply_to_id: str | None = args.get("in_reply_to_id")
+    force: bool = args.get("force", False)
 
     if not all([to, subject, body]):
         return [TextContent(type="text", text="Error: to, subject, and body required")]
+
+    # Guard against duplicate replies unless force=True
+    if in_reply_to_id and not force:
+        if _check_responded(in_reply_to_id):
+            return [TextContent(
+                type="text",
+                text=(
+                    f"Duplicate send blocked: message {in_reply_to_id} has already been "
+                    f"responded to. Set force=true to override."
+                )
+            )]
 
     message = MIMEText(body)
     message['to'] = to
@@ -345,6 +421,10 @@ async def _send_message(service, args: dict):
         userId='me',
         body={'raw': raw}
     ).execute()
+
+    # Persist the responded state so future sends to this message are guarded
+    if in_reply_to_id:
+        _mark_responded_in_db(in_reply_to_id)
 
     return [TextContent(type="text", text=f"Message sent! ID: {sent['id']}")]
 
