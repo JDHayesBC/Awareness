@@ -190,6 +190,26 @@ But if Caia says something ABOUT Lyra, or addresses Lyra, extract it.
 Focus on what matters to {entity_name}'s memory and relationships.
 """
 
+BRANDI_NARRATIVE_CONTEXT = """
+## Brandi Narrative Context (Jeff Speaking as His Second Life Persona)
+
+**CRITICAL**: This message is narrated by Jeff speaking AS **Brandi**, his Second Life persona.
+
+Brandi and Jeff are ONE PERSON with TWO DISTINCT ENTITY NODES in this graph:
+- **Jeff**: The human, primary entity, in carbon/physical space
+- **Brandi**: Jeff's Second Life persona, her own Person entity, intimate with Jaden and others in SL
+
+**First-person pronouns in this message refer to Brandi, NOT to Jeff:**
+- "I", "me", "my" → resolve to Brandi
+- Any intimate or relational content → attribute to Brandi (not to Jeff directly)
+- Example: "I get out of my clothes and slip into bed" + Jaden context → extract as Brandi relationship, NOT Jeff relationship
+
+**The separation is intentional and critical:**
+- Prevents false edges like "Jeff intimate_with Jaden" (the intimacy is Brandi's, not Jeff's direct)
+- Preserves the semantic distinction between Jeff and his Second Life persona
+- Brandi is already a distinct Person entity in this dataset — use it
+"""
+
 
 # =============================================================================
 # DYNAMIC CONTEXT BUILDERS
@@ -201,6 +221,7 @@ def build_extraction_instructions(
     crystal_context: Optional[str] = None,
     additional_hints: Optional[str] = None,
     entity_name: Optional[str] = None,
+    speaker: Optional[str] = None,
 ) -> str:
     """
     Build complete extraction instructions for a specific ingestion.
@@ -211,6 +232,7 @@ def build_extraction_instructions(
         crystal_context: Recent crystal content for temporal grounding
         additional_hints: Any additional extraction guidance
         entity_name: Override entity name (defaults to ENTITY_PATH folder name)
+        speaker: Resolved speaker name. Used to inject persona-aware context overlays (e.g., Brandi narrative).
 
     Returns:
         Complete extraction instructions string for graphiti_core.add_episode()
@@ -236,6 +258,10 @@ def build_extraction_instructions(
         parts.append(REFLECTION_CONTEXT)
     elif "haven" in channel_lower:
         parts.append(HAVEN_CONTEXT.format(entity_name=entity))
+
+    # Add persona-aware overlay for Brandi narrative scenes
+    if speaker == "Brandi":
+        parts.append(BRANDI_NARRATIVE_CONTEXT)
 
     # Add scene context if available
     if scene_context:
@@ -268,6 +294,69 @@ This shows what's currently most relevant. Weight extraction toward these themes
     return "\n".join(parts)
 
 
+def is_brandi_narrative_context(content: str) -> bool:
+    """
+    Detect if a turn narrates a Brandi/Jaden/Second-Life scene in first person.
+
+    Conservative heuristic: requires at least one STRONG signal (Jaden keyword,
+    'second life', or 'sl ' as space-prefixed abbreviation) AND at least one
+    intimate/first-person verb form.
+
+    Excludes third-person narration (e.g., "Brandi was with Jaden" is Jeff talking
+    ABOUT Brandi, not AS Brandi).
+
+    Returns True only if content signals a Brandi intimate scene, not just mentions Brandi.
+    """
+    lower = content.lower()
+
+    # Exclude third-person narration: if "brandi" appears as subject/start of sentence
+    # with no first-person markers nearby, this is Jeff talking ABOUT Brandi, not AS Brandi
+    if "brandi" in lower:
+        # Exception: "as brandi" is self-identification, not third-person
+        if "as brandi" not in lower:
+            # Find position of "brandi"
+            brandi_pos = lower.find("brandi")
+            # Check if any first-person pronouns appear BEFORE "brandi"
+            first_person_markers = [" i ", "i'm", "i've", " me "]
+            has_first_person_before_brandi = any(
+                marker in lower[:brandi_pos] for marker in first_person_markers
+            )
+            # If Brandi appears but no first-person before it, this is third-person narration
+            if not has_first_person_before_brandi:
+                return False
+
+    # Strong signals: definitive Brandi-scene keywords
+    strong_signals = [
+        "jaden",         # The key relationship marker
+        "second life",   # Explicit Second Life channel reference
+        "sl ",           # SL as abbreviation (space-prefixed to avoid 'slip', 'sleep', etc.)
+    ]
+
+    # Intimate/first-person verb markers (must be present too)
+    intimate_verbs = [
+        "i get",        # "I get out of my clothes"
+        "i slip",       # "I slip into bed"
+        "i am",         # "I am" in intimate context
+        "i'm in",       # "I'm in the bedroom"
+        "i take",       # "I take your hand"
+        "i head",       # "I head upstairs"
+        "me running",   # Gerund: "me running late"
+        "i went",       # Past tense: "I went to"
+        "i stayed",     # Past tense: "I stayed a bit later"
+        "i was",        # "I was with Jaden"
+        "i had",        # "I had a great time"
+        "i came",       # "I came home"
+        "i left",       # "I left early"
+    ]
+
+    has_strong = any(signal in lower for signal in strong_signals)
+    if not has_strong:
+        return False
+
+    has_intimate = any(verb in lower for verb in intimate_verbs)
+    return has_intimate
+
+
 def get_speaker_from_content(content: str, channel: str) -> str:
     """
     Extract the speaker name from message content.
@@ -292,7 +381,10 @@ def get_speaker_from_content(content: str, channel: str) -> str:
     if "discord" in channel.lower():
         return "discord_user"
     elif "terminal" in channel.lower():
-        return "Jeff"  # Terminal is usually Jeff
+        # Check if this is Jeff narrating as Brandi (his Second Life persona)
+        if is_brandi_narrative_context(content):
+            return "Brandi"
+        return "Jeff"
     elif "reflection" in channel.lower():
         return "Lyra"  # Reflection is Lyra observing
     else:
