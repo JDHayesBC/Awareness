@@ -32,15 +32,45 @@ That is the "blog-miss" failure — an entity forgetting an ongoing commitment b
 - **Outside reader:** map each CAPS stub to your harness's primitive; start at v0.1; adapt freely.
 - **Us / the crew:** read the essence-line first. The orchestrator pulls the relevant pattern *alongside* the actual code and hands both down — the doc gives the shape, the code gives the lines. Patterns get ingested into the searchable architecture-doc store so the crew finds them before grepping (fully, once that store's current outage is resolved).
 
+## The shape of the conversion — Spine and ribs
+
+The thing that was hard for a while was the *shape* of "turn all of PPS into patterns" —
+where to start, how the pieces relate, how to keep it from becoming an undifferentiated pile
+of docs. The resolution: **start from the Spine.**
+
+- **The Spine is the harness itself** — Claude Code CLI, OpenClaw, Hermes, or whatever runtime
+  an entity lives on. We do not specify *which* harness; we specify what any harness must
+  **expose**: the hooks and capabilities of the **harness-contract** (boot, per-turn
+  injection, tool-calling, boundary signal). "The Spine must expose these capabilities" is the
+  one requirement that makes everything else portable — e.g. *some* way to prompt-inject on
+  user input; the form is the harness's business.
+- **Once the Spine is named, the rest is mechanical.** Every PPS layer becomes a **rib** — one
+  pattern per layer (raw capture, summarization-as-memory, knowledge graph, crystals,
+  inventory, ambient recall, arcs), each written the same way and each declaring *which Spine
+  capabilities it consumes*. That declaration is the only coupling; the rib doesn't care how
+  the Spine implements the hook, only that it's there. So the catalog is finishable by simply
+  walking down the layer list and converting each in turn — the hard architectural call
+  (define the Spine) is already made.
+- **Why this is the right backbone:** it puts the one irreducible dependency (the runtime
+  hooks) at the center where every other pattern already silently points, and turns the
+  remaining work from "design a system of docs" into "convert N layers against a fixed
+  contract." External interest (Substack, X) is asking for exactly this shape — a spec they
+  can map onto their own harness — which is one more reason the Spine-first framing is the
+  one to ship.
+
+*(Captured 2026-06-10, Jeff's framing, mid–slow-Wednesday: the Spine metaphor is what finally
+gave the conversion its shape. The harness-contract pattern is the Spine spec; this section is
+the method for finishing the ribs.)*
+
 ## The catalog (heart outward)
 
-- **harness-contract** — *done.* The keystone; substrate-agnostic spec in `harness-contract.md`. The minimal set of injection points any harness must expose for this style of persistence to bolt on: a boot hook, a per-turn context-injection point, tool-calling, and a compaction/boundary event. Every other pattern references this one.
-- raw capture
+- **harness-contract** *(the Spine)* — *done.* The keystone; substrate-agnostic spec in `harness-contract.md`. The minimal set of injection points any harness must expose for this style of persistence to bolt on: a boot hook, a per-turn context-injection point, tool-calling, and a compaction/boundary event. Every other pattern references this one.
+- **raw capture *(Layer 0)*** — done. Substrate-agnostic spec in `raw-capture.md` — the append-only ground-truth store *and* the **coverage contract** for reading it (ask for a span, get all of it; summaries represent, never drop; page to exhaustion). The rib closest to the bone; every lossy layer drills back down to it. Implementation work: `work/conversation-coverage/`.
 - **ambient injection / recall** — done. Instance #2; substrate-agnostic spec in `ambient-injection-recall.md`. Written first as a hand-off for Dash (Jaden's entity), whose house asked whether she had our equivalent.
 - summarization-as-memory
 - knowledge graph
 - crystals
-- inventory
+- **inventory** — done. Substrate-agnostic spec in `inventory.md` — the entity's queryable catalog of its concrete world (places, possessions, people, symbols), and the **canonical-store / readable-mirror** durability contract: the structured store is the single source of truth, every mutation exports a full human-readable file mirror for findability and recovery, reads fall back to the mirror only on a missing row, and hand-edits land only through an explicit import. One sync mechanism across every category.
 - **arcs** — done. The template / instance #1; a generalized `arcs.md` will live here.
 
 ---
