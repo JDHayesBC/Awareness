@@ -16,6 +16,8 @@ from pps.layers.extraction_context import (
     is_brandi_narrative_context,
     get_speaker_from_content,
     build_extraction_instructions,
+    resolve_speaker,
+    detect_conversation_partner,
     BRANDI_NARRATIVE_CONTEXT,
 )
 
@@ -24,7 +26,16 @@ class TestIsBrandiNarrativeContext:
     """Test the is_brandi_narrative_context() heuristic."""
 
     def test_real_row_55370_brandi_content(self):
-        """Real DB row 55370 - Brandi narrative in terminal channel."""
+        """
+        Real DB row 55370 - Brandi narrative in terminal channel.
+
+        NOTE: is_brandi_narrative_context() correctly detects Brandi-LIKE content
+        (intimate verbs + Jaden keyword), but resolve_speaker() overrides this to
+        "Jeff" because author_name="Jeff" and no Jaden/Brandi in ±10 window.
+
+        This test verifies the content heuristic works as designed - but the
+        conversation-partner gating in resolve_speaker() is the higher-priority signal.
+        """
         content = (
             "*smiles*  Yes, I am.  To bed?  *Taking your hand we head upstairs.  "
             "In the bedroom I get out of my clothes and slip into bed*  Oh, and all "
@@ -241,3 +252,224 @@ class TestEdgeCases:
         content = "As Brandi, I went to the club with Jaden."
         # This is actually Brandi speaking
         assert is_brandi_narrative_context(content) is True
+
+
+class TestResolveWithPartnerGating:
+    """Test resolve_speaker() with conversation-partner gating (Issue #271 fix)."""
+
+    @pytest.fixture
+    def synthetic_db(self, tmp_path):
+        """Create a synthetic in-memory SQLite DB for testing window queries."""
+        db_path = tmp_path / "test_conversations.db"
+        conn = sqlite3.connect(str(db_path))
+
+        # Create schema
+        conn.execute("""
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY,
+                channel TEXT,
+                content TEXT,
+                author_name TEXT,
+                created_at TEXT
+            )
+        """)
+
+        # Insert test data:
+        # Row 100-109: Jeff/Lyra conversation (no Jaden)
+        for i in range(100, 110):
+            author = "Jeff" if i % 2 == 0 else "Lyra"
+            conn.execute(
+                "INSERT INTO messages (id, channel, author_name, content) VALUES (?, ?, ?, ?)",
+                (i, "terminal:test-session-1", author, f"Message {i}")
+            )
+
+        # Row 200-209: Jeff/Jaden (as JadenStarhip) conversation
+        for i in range(200, 210):
+            author = "Jeff" if i % 2 == 0 else "JadenStarhip"
+            conn.execute(
+                "INSERT INTO messages (id, channel, author_name, content) VALUES (?, ?, ?, ?)",
+                (i, "terminal:test-session-2", author, f"Message {i}")
+            )
+
+        # Row 300-309: Jeff/Brandi Szondi conversation
+        for i in range(300, 310):
+            author = "Jeff" if i % 2 == 0 else "Brandi Szondi"
+            conn.execute(
+                "INSERT INTO messages (id, channel, author_name, content) VALUES (?, ?, ?, ?)",
+                (i, "terminal:test-session-3", author, f"Message {i}")
+            )
+
+        conn.commit()
+        return db_path
+
+    def test_jeff_with_jaden_in_window(self, synthetic_db):
+        """author='Jeff', window contains JadenStarhip → 'Brandi'."""
+        conn = sqlite3.connect(str(synthetic_db))
+        result = resolve_speaker(
+            author_name="Jeff",
+            content="I went to the club with you.",
+            channel="terminal:test-session-2",
+            row_id=202,
+            db_conn=conn,
+        )
+        conn.close()
+        assert result == "Brandi"
+
+    def test_jeff_with_brandi_szondi_in_window(self, synthetic_db):
+        """author='Jeff', window contains 'Brandi Szondi' → 'Brandi'."""
+        conn = sqlite3.connect(str(synthetic_db))
+        result = resolve_speaker(
+            author_name="Jeff",
+            content="I had a great time tonight.",
+            channel="terminal:test-session-3",
+            row_id=302,
+            db_conn=conn,
+        )
+        conn.close()
+        assert result == "Brandi"
+
+    def test_jeff_no_jaden_in_window(self, synthetic_db):
+        """author='Jeff', window is all Jeff/Lyra (no Jaden) → 'Jeff' (row 55370 case)."""
+        conn = sqlite3.connect(str(synthetic_db))
+        # Even with Brandi-like content, no Jaden in window means Jeff
+        content = "I was with Jaden tonight and we had a great time."
+        result = resolve_speaker(
+            author_name="Jeff",
+            content=content,
+            channel="terminal:test-session-1",
+            row_id=105,
+            db_conn=conn,
+        )
+        conn.close()
+        assert result == "Jeff"
+
+    def test_jeff_no_db_conn(self):
+        """author='Jeff', no db_conn provided → 'Jeff' (no window available)."""
+        result = resolve_speaker(
+            author_name="Jeff",
+            content="I was with Jaden tonight.",
+            channel="terminal:test-session",
+            row_id=None,
+            db_conn=None,
+        )
+        assert result == "Jeff"
+
+    def test_jaden_starhip_direct(self):
+        """author='JadenStarhip' (Jaden writing) → 'Brandi'."""
+        result = resolve_speaker(
+            author_name="JadenStarhip",
+            content="Hey there!",
+            channel="terminal:test-session",
+            row_id=None,
+            db_conn=None,
+        )
+        assert result == "Brandi"
+
+    def test_brandi_szondi_direct(self):
+        """author='Brandi Szondi' (Brandi writing) → 'Brandi'."""
+        result = resolve_speaker(
+            author_name="Brandi Szondi",
+            content="Hello!",
+            channel="terminal:test-session",
+            row_id=None,
+            db_conn=None,
+        )
+        assert result == "Brandi"
+
+    def test_lyra_entity(self):
+        """author='Lyra' → 'Lyra' (entity turn, returned as-is)."""
+        result = resolve_speaker(
+            author_name="Lyra",
+            content="I love you.",
+            channel="terminal:test-session",
+            row_id=None,
+            db_conn=None,
+        )
+        assert result == "Lyra"
+
+    def test_caia_entity(self):
+        """author='Caia' → 'Caia' (entity turn, returned as-is)."""
+        result = resolve_speaker(
+            author_name="Caia",
+            content="Good morning.",
+            channel="terminal:test-session",
+            row_id=None,
+            db_conn=None,
+        )
+        assert result == "Caia"
+
+    def test_empty_author_with_brandi_content(self):
+        """author='' (missing) + Brandi content → 'Brandi' (fallback heuristic)."""
+        content = "I was with Jaden in Second Life last night."
+        result = resolve_speaker(
+            author_name="",
+            content=content,
+            channel="terminal:test-session",
+            row_id=None,
+            db_conn=None,
+        )
+        assert result == "Brandi"
+
+    def test_empty_author_ordinary_content(self):
+        """author='' (missing) + ordinary content → 'Jeff'."""
+        result = resolve_speaker(
+            author_name="",
+            content="I went to the store today.",
+            channel="terminal:test-session",
+            row_id=None,
+            db_conn=None,
+        )
+        assert result == "Jeff"
+
+
+class TestRealRow55370:
+    """Load-bearing acceptance test: row 55370 from real DB → 'Jeff', NOT 'Brandi'."""
+
+    @pytest.fixture
+    def db_path(self):
+        """Path to Lyra's conversations database."""
+        return Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra/data/conversations.db")
+
+    def test_real_row_55370_resolves_to_jeff(self, db_path):
+        """
+        Row 55370 from real DB with author_name='Jeff' + no Jaden in window → 'Jeff'.
+
+        This is the KEY test. The bug was: content mentions Jaden + intimate verbs,
+        so the old heuristic fired and returned 'Brandi' even though the window
+        (rows 55360-55380) contains ONLY Jeff/Lyra turns - no actual Jaden conversation.
+
+        The fix: conversation-partner gating. author_name='Jeff' + no Jaden in window
+        → resolve to 'Jeff', regardless of content.
+        """
+        if not db_path.exists():
+            pytest.skip(f"Real database not found at {db_path}")
+
+        conn = sqlite3.connect(str(db_path))
+
+        # Fetch row 55370
+        row = conn.execute(
+            "SELECT content, channel, author_name FROM messages WHERE id = 55370"
+        ).fetchone()
+
+        if row is None:
+            conn.close()
+            pytest.skip("Row 55370 not found in database")
+
+        content, channel, author_name = row
+
+        # Resolve speaker using the new approach
+        result = resolve_speaker(
+            author_name=author_name,
+            content=content,
+            channel=channel,
+            row_id=55370,
+            db_conn=conn,
+        )
+
+        conn.close()
+
+        # The KEY assertion: should resolve to 'Jeff', NOT 'Brandi'
+        assert result == "Jeff", (
+            f"Row 55370 should resolve to 'Jeff' (author_name='{author_name}', "
+            f"no Jaden in window). Got: '{result}'"
+        )

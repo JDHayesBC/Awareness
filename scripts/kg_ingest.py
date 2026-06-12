@@ -46,6 +46,7 @@ if not (
 
 import httpx  # noqa: E402  (post-venv check import)
 from pps.layers.custom_graph import CustomGraphLayer  # noqa: E402
+from pps.layers.extraction_context import resolve_speaker  # noqa: E402
 
 
 # ─────────────────────────────────────────────
@@ -474,62 +475,78 @@ async def run_ingestion(
 
     messages = fetch_batch_db(entity, db_path, group_id, effective_batch, retry_errors=retry_errors)
 
+    # Open a read-only connection for window queries (persona resolution)
+    window_conn = sqlite3.connect(str(db_path))
+
     ok_count = 0
     err_count = 0
     nodata_count = 0
     batch_start = time.monotonic()
     report_start = time.monotonic()
 
-    for i, msg in enumerate(messages, start=1):
-        msg_id = msg["id"]
-        content = msg["content"]
-        channel = msg["channel"] or "terminal"
-        author = msg["author_name"] or ""
-        timestamp = msg["created_at"] or ""
+    try:
+        for i, msg in enumerate(messages, start=1):
+            msg_id = msg["id"]
+            content = msg["content"]
+            channel = msg["channel"] or "terminal"
+            author = msg["author_name"] or ""
+            timestamp = msg["created_at"] or ""
 
-        t0 = time.monotonic()
-        try:
-            wrote = await layer.store(
+            # Resolve speaker using conversation-partner gating
+            resolved_speaker = resolve_speaker(
+                author_name=author,
                 content=content,
-                metadata={
-                    "channel": channel,
-                    "speaker": author,
-                    "timestamp": timestamp,
-                    "entity_name": entity.capitalize(),
-                },
+                channel=channel,
+                row_id=msg_id,
+                db_conn=window_conn,
             )
-            if wrote:
-                ok_count += 1
-            else:
-                nodata_count += 1
-            # Mark success — crossbleed check inside mark_ingested
-            mark_ingested(entity, db_path, group_id, msg_id)
-        except Exception as exc:
-            err_count += 1
-            error_text = str(exc)[:500]
-            print(f"  ERROR msg={msg_id}: {error_text}")
-            mark_error(entity, db_path, group_id, msg_id, error_text)
 
-        if i % REPORT_EVERY == 0 or i == len(messages):
-            batch_elapsed = time.monotonic() - report_start
-            chunk_size = REPORT_EVERY if i % REPORT_EVERY == 0 else i % REPORT_EVERY
-            avg = batch_elapsed / chunk_size if chunk_size > 0 else 0
-            total_elapsed = time.monotonic() - batch_start
-            remaining = len(messages) - i
-            eta_s = remaining * avg
-            eta_m = eta_s / 60
-            print(
-                f"  [{i:5d}/{len(messages)}]  "
-                f"ok={ok_count} skip={nodata_count} err={err_count}  "
-                f"avg={avg:.1f}s/msg  "
-                f"elapsed={total_elapsed/60:.1f}m  "
-                f"eta={eta_m:.1f}m"
-            )
-            report_start = time.monotonic()
-            if i % REPORT_EVERY == 0:
-                ok_count = 0
-                err_count = 0
-                nodata_count = 0
+            t0 = time.monotonic()
+            try:
+                wrote = await layer.store(
+                    content=content,
+                    metadata={
+                        "channel": channel,
+                        "speaker": resolved_speaker,
+                        "timestamp": timestamp,
+                        "entity_name": entity.capitalize(),
+                    },
+                )
+                if wrote:
+                    ok_count += 1
+                else:
+                    nodata_count += 1
+                # Mark success — crossbleed check inside mark_ingested
+                mark_ingested(entity, db_path, group_id, msg_id)
+            except Exception as exc:
+                err_count += 1
+                error_text = str(exc)[:500]
+                print(f"  ERROR msg={msg_id}: {error_text}")
+                mark_error(entity, db_path, group_id, msg_id, error_text)
+
+            if i % REPORT_EVERY == 0 or i == len(messages):
+                batch_elapsed = time.monotonic() - report_start
+                chunk_size = REPORT_EVERY if i % REPORT_EVERY == 0 else i % REPORT_EVERY
+                avg = batch_elapsed / chunk_size if chunk_size > 0 else 0
+                total_elapsed = time.monotonic() - batch_start
+                remaining = len(messages) - i
+                eta_s = remaining * avg
+                eta_m = eta_s / 60
+                print(
+                    f"  [{i:5d}/{len(messages)}]  "
+                    f"ok={ok_count} skip={nodata_count} err={err_count}  "
+                    f"avg={avg:.1f}s/msg  "
+                    f"elapsed={total_elapsed/60:.1f}m  "
+                    f"eta={eta_m:.1f}m"
+                )
+                report_start = time.monotonic()
+                if i % REPORT_EVERY == 0:
+                    ok_count = 0
+                    err_count = 0
+                    nodata_count = 0
+    finally:
+        # Clean up window connection
+        window_conn.close()
 
     total_elapsed = time.monotonic() - batch_start
 

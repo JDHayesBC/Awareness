@@ -9,6 +9,7 @@ entity extraction, but semantic understanding of my world.
 """
 
 import os
+import sqlite3
 from pathlib import Path
 from typing import Optional, Literal
 
@@ -355,6 +356,99 @@ def is_brandi_narrative_context(content: str) -> bool:
 
     has_intimate = any(verb in lower for verb in intimate_verbs)
     return has_intimate
+
+
+def detect_conversation_partner(
+    row_id: int,
+    db_conn: sqlite3.Connection,
+    channel: str,
+    window_size: int = 10,
+) -> str | None:
+    """
+    Detect if Jeff is in active conversation with Jaden or Brandi by checking
+    author_name in ±window_size rows in the same channel.
+
+    Args:
+        row_id: Current message ID
+        db_conn: Open SQLite connection (read-only is fine)
+        channel: Current message's channel string (must match for window)
+        window_size: How many rows before/after to check (default 10)
+
+    Returns:
+        "Jaden" if JadenStarhip is in window,
+        "Brandi" if Brandi Szondi is in window,
+        None if neither found or on error.
+    """
+    try:
+        rows = db_conn.execute(
+            """SELECT DISTINCT author_name FROM messages
+               WHERE channel = ?
+                 AND id BETWEEN ? AND ?
+                 AND author_name IN ('JadenStarhip', 'Brandi Szondi')
+               LIMIT 1""",
+            (channel, row_id - window_size, row_id + window_size),
+        ).fetchall()
+        if rows:
+            name = rows[0][0]
+            if name == "JadenStarhip":
+                return "Jaden"
+            elif name == "Brandi Szondi":
+                return "Brandi"
+    except Exception:
+        pass
+    return None
+
+
+def resolve_speaker(
+    author_name: str,
+    content: str,
+    channel: str,
+    row_id: int | None = None,
+    db_conn: sqlite3.Connection | None = None,
+) -> str:
+    """
+    Resolve the speaker for a message using conversation-partner gating.
+
+    This replaces the old approach of passing raw author_name + letting
+    get_speaker_from_content() do content-verb heuristics. Partner identity
+    (who Jeff is talking TO) is the correct discriminating signal.
+
+    Priority:
+    1. Entity turns (Lyra, Caia, etc.) → return as-is
+    2. Known Jaden/Brandi Discord usernames → "Brandi"
+    3. "Jeff" + Jaden/Brandi in conversation window → "Brandi"
+    4. "Jeff" + no window hit → "Jeff" (safe default; content heuristic NOT used for known author)
+    5. Missing/unknown author + is_brandi_narrative_context(content) → "Brandi" (fallback)
+    6. Default → "Jeff"
+    """
+    # Normalize
+    name = (author_name or "").strip()
+    name_lower = name.lower()
+
+    # Priority 1: Entity turns — return as-is
+    entity_names = {"lyra", "caia", "nexus", "dash"}
+    if name_lower in entity_names:
+        return name
+
+    # Priority 2: Known Jaden/Brandi Discord usernames
+    if name in ("JadenStarhip", "Brandi Szondi"):
+        return "Brandi"
+
+    # Priority 3 & 4: Jeff with window query
+    if name_lower == "jeff":
+        if row_id is not None and db_conn is not None:
+            partner = detect_conversation_partner(row_id, db_conn, channel)
+            if partner in ("Jaden", "Brandi"):
+                return "Brandi"
+        # Priority 4: No window hit (or no DB) — return Jeff, do NOT use content heuristic
+        return "Jeff"
+
+    # Priority 5: Unknown author — fall back to content heuristic
+    if not name and is_brandi_narrative_context(content):
+        return "Brandi"
+
+    # Priority 6: Default
+    return "Jeff"
 
 
 def get_speaker_from_content(content: str, channel: str) -> str:

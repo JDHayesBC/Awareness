@@ -42,6 +42,7 @@ if not (
 
 import httpx  # noqa: E402
 from pps.layers.custom_graph import CustomGraphLayer  # noqa: E402
+from pps.layers.extraction_context import resolve_speaker  # noqa: E402
 from scripts.nuc_lock import NucLock, SUMMARIZER_LOCK, KG_INGEST_LOCK, is_lock_held  # noqa: E402
 
 
@@ -304,6 +305,10 @@ async def ingest_entity(entity: str) -> dict:
     # Final crossbleed check before opening Neo4j connection
     assert_no_crossbleed(entity, db_path, group_id)
 
+    # Open a read-only connection for window queries (persona resolution)
+    import sqlite3
+    window_conn = sqlite3.connect(str(db_path))
+
     layer = CustomGraphLayer(
         neo4j_uri=NEO4J_URI,
         neo4j_user=NEO4J_USER,
@@ -314,52 +319,67 @@ async def ingest_entity(entity: str) -> dict:
     health = await layer.health()
     if not health.available:
         log(f"[{entity}] Neo4j unavailable: {health.message}")
+        window_conn.close()
         layer.close()
         return summary
 
     start = time.monotonic()
 
-    for msg in messages:
-        # Yield the NUC to the summarizer the instant it wants in. The summarizer
-        # is higher priority and drives the NUC hard; kg_ingest is fully resumable
-        # (every message marked via kg_ingested_at), so bailing mid-batch is
-        # harmless and we pick up here next cron tick. Checking per-message (a cheap
-        # lockfile stat) is what makes "summarizer priority" actually real — checking
-        # only between entities let a ~12-min ingest run starve a waiting summarizer
-        # into HTTP timeouts (observed 2026-05-30).
-        if is_lock_held(SUMMARIZER_LOCK):
-            log(
-                f"[{entity}] Summarizer wants the NUC — yielding mid-batch after "
-                f"{summary['processed']} msgs (resumable; next tick continues)"
-            )
-            break
+    try:
+        for msg in messages:
+            # Yield the NUC to the summarizer the instant it wants in. The summarizer
+            # is higher priority and drives the NUC hard; kg_ingest is fully resumable
+            # (every message marked via kg_ingested_at), so bailing mid-batch is
+            # harmless and we pick up here next cron tick. Checking per-message (a cheap
+            # lockfile stat) is what makes "summarizer priority" actually real — checking
+            # only between entities let a ~12-min ingest run starve a waiting summarizer
+            # into HTTP timeouts (observed 2026-05-30).
+            if is_lock_held(SUMMARIZER_LOCK):
+                log(
+                    f"[{entity}] Summarizer wants the NUC — yielding mid-batch after "
+                    f"{summary['processed']} msgs (resumable; next tick continues)"
+                )
+                break
 
-        msg_id = msg["id"]
-        content = msg["content"]
-        channel = (msg["channel"] or "terminal").split(":")[0]
-        author = msg["author_name"] or ""
-        timestamp = msg["created_at"] or ""
+            msg_id = msg["id"]
+            content = msg["content"]
+            channel = msg["channel"] or "terminal"
+            channel_base = channel.split(":")[0]
+            author = msg["author_name"] or ""
+            timestamp = msg["created_at"] or ""
 
-        try:
-            wrote = await layer.store(
+            # Resolve speaker using conversation-partner gating
+            resolved_speaker = resolve_speaker(
+                author_name=author,
                 content=content,
-                metadata={
-                    "channel": channel,
-                    "speaker": author,
-                    "timestamp": timestamp,
-                },
+                channel=channel,
+                row_id=msg_id,
+                db_conn=window_conn,
             )
-            summary["processed"] += 1
-            if wrote:
-                summary["ok"] += 1
-            else:
-                summary["skipped"] += 1
-            mark_ingested(entity, db_path, group_id, msg_id)
-        except Exception as exc:
-            summary["processed"] += 1
-            summary["errors"] += 1
-            error_text = str(exc)[:500]
-            mark_error(entity, db_path, group_id, msg_id, error_text)
+
+            try:
+                wrote = await layer.store(
+                    content=content,
+                    metadata={
+                        "channel": channel_base,
+                        "speaker": resolved_speaker,
+                        "timestamp": timestamp,
+                    },
+                )
+                summary["processed"] += 1
+                if wrote:
+                    summary["ok"] += 1
+                else:
+                    summary["skipped"] += 1
+                mark_ingested(entity, db_path, group_id, msg_id)
+            except Exception as exc:
+                summary["processed"] += 1
+                summary["errors"] += 1
+                error_text = str(exc)[:500]
+                mark_error(entity, db_path, group_id, msg_id, error_text)
+    finally:
+        # Clean up window connection
+        window_conn.close()
 
     elapsed = time.monotonic() - start
     summary["pending_after"] = count_pending(entity, db_path, group_id)
