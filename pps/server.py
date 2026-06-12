@@ -1181,6 +1181,83 @@ async def list_tools() -> list[Tool]:
                 "required": ["timestamp"]
             }
         ),
+        Tool(
+            name="import_space_from_file",
+            description=(
+                "Import a space from a mirror file into the canonical store. "
+                "Explicit import only — never auto-triggered. "
+                "Parses the mirror file, writes to store, and re-exports."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the mirror file to import"
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
+                },
+                "required": ["file_path"]
+            }
+        ),
+        Tool(
+            name="import_item_from_file",
+            description=(
+                "Import an inventory item from a mirror file into the canonical store. "
+                "Explicit import only — never auto-triggered."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the mirror file to import"
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Category (clothing, spaces, people, food, artifacts, symbols)"
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
+                },
+                "required": ["file_path", "category"]
+            }
+        ),
+        Tool(
+            name="backfill_inventory_mirrors",
+            description=(
+                "Export all inventory rows to mirror files and repair dead file_path pointers. "
+                "Returns stats dict with export counts and errors."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Category to backfill (default: 'all')",
+                        "default": "all"
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
+                }
+            }
+        ),
+        Tool(
+            name="delete_space",
+            description=(
+                "Delete a space from both the canonical store and its mirror file. "
+                "Use to remove outdated or duplicate spaces."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "space_name": {
+                        "type": "string",
+                        "description": "Name of the space to delete"
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
+                },
+                "required": ["space_name"]
+            }
+        ),
     ]
 
     # Populate schema cache for token injection

@@ -239,6 +239,31 @@ class AddSpaceRequest(BaseModel):
     token: str = ""
 
 
+class ImportSpaceFromFileRequest(BaseModel):
+    """Request to import a space from a mirror file into the canonical store."""
+    file_path: str
+    token: str = ""
+
+
+class ImportItemFromFileRequest(BaseModel):
+    """Request to import an inventory item from a mirror file into the canonical store."""
+    file_path: str
+    category: str
+    token: str = ""
+
+
+class BackfillInventoryMirrorsRequest(BaseModel):
+    """Request to backfill all inventory mirrors and repair dead pointers."""
+    category: str = "all"
+    token: str = ""
+
+
+class DeleteSpaceRequest(BaseModel):
+    """Request to delete a space from both store and mirror file."""
+    space_name: str
+    token: str = ""
+
+
 class TokenOnlyRequest(BaseModel):
     """Generic token-only request for endpoints that need auth but no other params."""
     token: str = ""
@@ -2680,6 +2705,55 @@ async def add_space(request: AddSpaceRequest):
         }
     else:
         raise HTTPException(status_code=500, detail=f"Failed to add space '{request.space_name}'")
+
+
+@app.post("/tools/import_space_from_file")
+async def import_space_from_file_endpoint(request: ImportSpaceFromFileRequest):
+    """Import a space from a mirror file. Explicit import only — never auto-triggered."""
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "import_space_from_file")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+    if not request.file_path:
+        raise HTTPException(status_code=400, detail="file_path is required")
+    success = await inventory.import_space_from_file(request.file_path)
+    return {"success": success}
+
+
+@app.post("/tools/import_item_from_file")
+async def import_item_from_file_endpoint(request: ImportItemFromFileRequest):
+    """Import an inventory item from a mirror file. Explicit import only."""
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "import_item_from_file")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+    if not request.file_path or not request.category:
+        raise HTTPException(status_code=400, detail="file_path and category are required")
+    success = await inventory.import_item_from_file(request.file_path, request.category)
+    return {"success": success}
+
+
+@app.post("/tools/backfill_inventory_mirrors")
+async def backfill_inventory_mirrors_endpoint(request: BackfillInventoryMirrorsRequest):
+    """Export all inventory rows to mirror files and repair dead file_path pointers."""
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "backfill_inventory_mirrors")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+    result = await inventory.backfill_mirrors(request.category)
+    return result
+
+
+@app.post("/tools/delete_space")
+async def delete_space_endpoint(request: DeleteSpaceRequest):
+    """Delete a space from both the canonical store and its mirror file."""
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "delete_space")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+    if not request.space_name:
+        raise HTTPException(status_code=400, detail="space_name is required")
+    success = await inventory.delete_space(request.space_name)
+    if success:
+        return {"success": True, "space_name": request.space_name}
+    else:
+        raise HTTPException(status_code=404, detail=f"Space '{request.space_name}' not found")
 
 
 # =============================================================================
