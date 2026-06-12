@@ -958,6 +958,39 @@ async def list_tools() -> list[Tool]:
                 "required": ["space_name"]
             }
         ),
+        Tool(
+            name="add_space",
+            description=(
+                "Create a new space or update an existing one (upsert). "
+                "Use this to register a new room, location, or area. "
+                "Unlike update_space, this does not require the space to pre-exist — "
+                "it creates if missing, updates if present. "
+                "Only provided optional fields are set; omitted fields are left unchanged on update."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "space_name": {
+                        "type": "string",
+                        "description": "Name of the space to create or update"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Short description of the space (omit to leave unchanged on update)"
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to associated .md room file (omit to leave unchanged on update)"
+                    },
+                    "emotional_quality": {
+                        "type": "string",
+                        "description": "Emotional quality descriptor for the space (omit to leave unchanged on update)"
+                    },
+                    "token": TOKEN_PARAM_SCHEMA
+                },
+                "required": ["space_name"]
+            }
+        ),
         # === Tech RAG (Layer 6) ===
         Tool(
             name="tech_search",

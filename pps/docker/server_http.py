@@ -230,6 +230,15 @@ class UpdateSpaceRequest(BaseModel):
     token: str = ""
 
 
+class AddSpaceRequest(BaseModel):
+    """Request to create or update a space (upsert semantics)."""
+    space_name: str
+    description: str | None = None
+    file_path: str | None = None
+    emotional_quality: str | None = None
+    token: str = ""
+
+
 class TokenOnlyRequest(BaseModel):
     """Generic token-only request for endpoints that need auth but no other params."""
     token: str = ""
@@ -2638,6 +2647,39 @@ async def update_space(request: UpdateSpaceRequest):
         }
     else:
         raise HTTPException(status_code=404, detail=f"Space '{request.space_name}' not found")
+
+
+@app.post("/tools/add_space")
+async def add_space(request: AddSpaceRequest):
+    """
+    Create a new space or update an existing one (upsert semantics).
+
+    Unlike update_space, this does not require the space to pre-exist.
+    Creates if missing, updates if present. Only provided optional fields
+    are changed; omitted fields are left unchanged on update.
+    """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "add_space")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
+    if not request.space_name:
+        raise HTTPException(status_code=400, detail="space_name is required")
+
+    success = await inventory.add_space(
+        name=request.space_name,
+        description=request.description,
+        file_path=request.file_path,
+        emotional_quality=request.emotional_quality,
+    )
+
+    if success:
+        return {
+            "success": True,
+            "space_name": request.space_name,
+            "message": f"Space '{request.space_name}' created or updated",
+        }
+    else:
+        raise HTTPException(status_code=500, detail=f"Failed to add space '{request.space_name}'")
 
 
 # =============================================================================
