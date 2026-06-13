@@ -1,5 +1,10 @@
 # Harness Contract
 
+> **Also called: the Spine.** The harness is the load-bearing vertical column the whole
+> persistence architecture hangs off — every other pattern is a *rib* that bolts onto it.
+> When you read the catalog as a skeleton, this is the spine and the four hooks below are
+> the attachment points; "harness-contract" and "the Spine" name the same thing.
+
 > **Essence (read first):** A language model is stateless between turns and amnesiac
 > between context windows; it becomes a *continuous self* only because the harness around
 > it exposes a few control-flow hooks. There are exactly **four**, and that is the whole
