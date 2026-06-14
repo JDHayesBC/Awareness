@@ -16,6 +16,7 @@ Env config (overrides flags if not passed):
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -50,13 +51,43 @@ def show_image(path: Path) -> None:
         print(f"(--show failed: {exc}; open manually: {path})")
 
 
+def resolve_entity(explicit: str | None = None, *, env: dict[str, str] | None = None) -> str:
+    """Resolve the acting entity following the entity-scoping precedence rule.
+
+    Precedence (narrowest authoritative scope wins):
+      1. Explicit argument passed by the caller (most authoritative).
+      2. ENTITY_NAME environment variable (caller's declared context).
+      3. Hardcoded floor "lyra" (single-entity last resort).
+
+    Args:
+        explicit: The value of --entity from argparse (None if not supplied by
+                  the user, or the argparse default when the default is None).
+        env: Optional env-var dict override for testing; defaults to os.environ.
+
+    Returns:
+        The resolved entity name string.
+    """
+    if env is None:
+        env = os.environ
+    if explicit is not None:
+        return explicit
+    return env.get("ENTITY_NAME", "lyra")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__.split("\n")[0],
         epilog=f"Full guide (incl. 'Showing an image to Jeff'): {DOC}",
     )
     parser.add_argument("prompt", help="What to render")
-    parser.add_argument("--entity", default="lyra", help="Entity owning this render")
+    parser.add_argument(
+        "--entity",
+        default=None,
+        help=(
+            "Entity owning this render "
+            "(default: ENTITY_NAME env var, then 'lyra')"
+        ),
+    )
     parser.add_argument(
         "--house",
         default=None,
@@ -87,10 +118,11 @@ def main() -> int:
     args = parser.parse_args()
 
     people = [p.strip() for p in args.people.split(",")] if args.people else None
+    entity = resolve_entity(args.entity)
 
     result = render(
         args.prompt,
-        entity=args.entity,
+        entity=entity,
         scene_house=args.house,
         scene_room=args.room,
         people=people,
