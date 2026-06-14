@@ -141,6 +141,13 @@ let currentLayout = null;
 let traceEntries = [];
 let traceVisible = false;
 
+// Entity scope for graph read operations.
+// This is the name of the entity whose Neo4j partition should be queried.
+// Injected from the server-side template context (current_entity) so that
+// clicking "Caia's graph" routes reads to Caia's partition, not the ambient default.
+// See docs/architectural_patterns/entity-scoping.md.
+const GRAPH_ENTITY_SCOPE = "{{ current_entity }}";
+
 // Entity type definitions — single source of truth for colors, labels, and heuristics
 const ENTITY_TYPES = {
     'Person':            { color: '#3b82f6', names: ['lyra', 'jeff', 'brandi', 'caia', 'nexus', 'steve', 'carol', 'jaden', 'night', 'kiran', 'serren', 'eidal', 'maribel', 'dash', 'kenny'] },
@@ -485,8 +492,8 @@ async function performSearch() {
 
     try {
         // Try explore endpoint first (Neo4j graph traversal with depth)
-        const exploreUrl = `/api/graph/explore/${encodeURIComponent(query)}?depth=${depth}`;
-        const exploreData = await tracedFetch('EXPLORE', `entity="${query}" depth=${depth}`, exploreUrl);
+        const exploreUrl = `/api/graph/explore/${encodeURIComponent(query)}?depth=${depth}&entity_scope=${encodeURIComponent(GRAPH_ENTITY_SCOPE)}`;
+        const exploreData = await tracedFetch('EXPLORE', `entity="${query}" depth=${depth} scope=${GRAPH_ENTITY_SCOPE}`, exploreUrl);
 
         if (exploreData.nodes && exploreData.nodes.length > 1) {
             updateGraph(exploreData.nodes, exploreData.edges);
@@ -519,8 +526,8 @@ async function exploreEntity(entityName) {
     document.getElementById('searchQuery').value = entityName;
 
     try {
-        const url = `/api/graph/explore/${encodeURIComponent(entityName)}?depth=${depth}`;
-        const data = await tracedFetch('EXPLORE', `entity="${entityName}" depth=${depth}`, url);
+        const url = `/api/graph/explore/${encodeURIComponent(entityName)}?depth=${depth}&entity_scope=${encodeURIComponent(GRAPH_ENTITY_SCOPE)}`;
+        const data = await tracedFetch('EXPLORE', `entity="${entityName}" depth=${depth} scope=${GRAPH_ENTITY_SCOPE}`, url);
 
         updateGraph(data.nodes, data.edges);
         showStatus(`Found ${data.nodes.length} connected entities (${depth} hops)`, 'success');
@@ -532,8 +539,8 @@ async function exploreEntity(entityName) {
 
 async function loadEntities() {
     try {
-        const url = '/api/graph/entities?limit=200';
-        const data = await tracedFetch('LIST_ENTITIES', 'limit=200', url);
+        const url = `/api/graph/entities?limit=200&entity_scope=${encodeURIComponent(GRAPH_ENTITY_SCOPE)}`;
+        const data = await tracedFetch('LIST_ENTITIES', `limit=200 scope=${GRAPH_ENTITY_SCOPE}`, url);
         const select = document.getElementById('entitySelect');
 
         select.innerHTML = '<option value="">Select an entity to explore...</option>';
@@ -886,7 +893,8 @@ async function synthesizeEntity(entityName) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                entity_name: entityName
+                entity_name: entityName,
+                entity_scope: GRAPH_ENTITY_SCOPE
             })
         });
 

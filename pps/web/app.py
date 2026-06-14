@@ -48,9 +48,25 @@ MOUNTED_ENTITY_NAME = os.getenv("ENTITY_NAME", ENTITY_PATH.name).lower()
 # Example: ENTITY_CAIA_PPS_URL=http://pps-server-caia:8000
 # Additional entity filesystem access via ENTITY_<NAME>_PATH env vars.
 # Example: ENTITY_CAIA_PATH=/app/entity-caia
+# Per-entity Neo4j group_id for graph reads via ENTITY_<NAME>_GROUP_ID env vars.
+# Example: ENTITY_CAIA_GROUP_ID=caia
+# The mounted entity's group_id comes from GRAPHITI_GROUP_ID (same env the PPS server uses).
 def _build_entity_registry() -> dict[str, dict]:
-    """Build registry of known entities with their PPS server URLs and mount status."""
+    """Build registry of known entities with their PPS server URLs and mount status.
+
+    Each entry now includes a ``group_id`` key — the Neo4j partition label used for
+    graph read operations.  This is the authoritative per-entity value and is used
+    instead of the process-level GRAPHITI_GROUP_ID when routing multi-entity graph
+    reads.  (The process-level GRAPHITI_GROUP_ID is still used on the WRITE side /
+    for non-graph operations; we do not touch it here.)
+    """
     registry = {}
+
+    # The mounted entity's group_id: GRAPHITI_GROUP_ID env wins; fall back to entity
+    # name itself.  In production the Observatory container sets GRAPHITI_GROUP_ID=lyra_v2
+    # for Lyra — so a bare entity-name fallback would be wrong for Lyra; always prefer
+    # the explicit env value.
+    mounted_group_id = os.getenv("GRAPHITI_GROUP_ID", MOUNTED_ENTITY_NAME).strip() or MOUNTED_ENTITY_NAME
 
     # The mounted entity is always available
     mounted_url = f"http://{PPS_SERVER_HOST}:{PPS_SERVER_PORT}"
@@ -60,6 +76,7 @@ def _build_entity_registry() -> dict[str, dict]:
         "pps_url": mounted_url,
         "mounted": True,  # Filesystem data available
         "entity_path": ENTITY_PATH,
+        "group_id": mounted_group_id,
     }
 
     # Look for additional entities via env vars: ENTITY_<NAME>_PPS_URL
@@ -73,12 +90,16 @@ def _build_entity_registry() -> dict[str, dict]:
                 entity_path_str = os.getenv(path_env_key)
                 entity_path = Path(entity_path_str) if entity_path_str else None
                 is_mounted = entity_path is not None and entity_path.exists()
+                # group_id: prefer explicit ENTITY_<NAME>_GROUP_ID, fall back to name
+                group_id_key = f"ENTITY_{entity_name.upper()}_GROUP_ID"
+                group_id = os.getenv(group_id_key, entity_name).strip() or entity_name
                 registry[entity_name] = {
                     "name": entity_name,
                     "display_name": entity_name.capitalize(),
                     "pps_url": value,
                     "mounted": is_mounted,
                     "entity_path": entity_path if is_mounted else None,
+                    "group_id": group_id,
                 }
 
     # Fallback: if Caia's PPS URL is not configured but we know about her,
@@ -88,12 +109,14 @@ def _build_entity_registry() -> dict[str, dict]:
         caia_path_str = os.getenv("ENTITY_CAIA_PATH")
         caia_path = Path(caia_path_str) if caia_path_str else None
         is_mounted = caia_path is not None and caia_path.exists()
+        caia_group_id = os.getenv("ENTITY_CAIA_GROUP_ID", "caia").strip() or "caia"
         registry["caia"] = {
             "name": "caia",
             "display_name": "Caia",
             "pps_url": caia_url,
             "mounted": is_mounted,
             "entity_path": caia_path if is_mounted else None,
+            "group_id": caia_group_id,
         }
 
     return registry
@@ -117,6 +140,38 @@ def get_pps_url(entity_name: str | None = None) -> str:
 def is_entity_mounted(entity_name: str | None = None) -> bool:
     """Return True if the entity's filesystem data is accessible."""
     return get_entity_config(entity_name)["mounted"]
+
+
+def resolve_graph_group_id(entity_scope: str | None) -> str:
+    """Resolve the Neo4j group_id for a graph READ operation from the request's entity scope.
+
+    This implements the entity-scoping pattern (docs/architectural_patterns/entity-scoping.md):
+    the request's own scope — the ``entity_scope`` parameter naming which entity's graph to
+    query — overrides the process-level GRAPHITI_GROUP_ID.
+
+    Raises HTTPException(422) rather than silently falling through to the ambient default
+    when the requested entity is unknown.  This keeps the failure loud and avoids rendering
+    one self's graph under another self's label.
+
+    For genuinely single-entity contexts (entity_scope is None / empty), falls back to the
+    process-level default (the mounted entity's group_id) as the floor.
+    """
+    if not entity_scope:
+        # No scope specified: use the mounted entity's group_id (legitimate single-entity floor)
+        return ENTITY_REGISTRY[DEFAULT_ENTITY]["group_id"]
+
+    key = entity_scope.lower().strip()
+    if key not in ENTITY_REGISTRY:
+        known = ", ".join(sorted(ENTITY_REGISTRY.keys()))
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown entity scope '{entity_scope}' for graph read. "
+                f"Known entities: {known}. "
+                "The requested entity is not registered — cannot resolve its graph partition."
+            ),
+        )
+    return ENTITY_REGISTRY[key]["group_id"]
 
 
 def get_entity_path(entity_name: str | None = None) -> Optional[Path]:
@@ -917,28 +972,27 @@ async def api_graph_search(query: str, limit: int = 20):
 
 
 @app.get("/api/graph/explore/{entity}")
-async def api_graph_explore(entity: str, depth: int = 2):
+async def api_graph_explore(entity: str, depth: int = 2, entity_scope: str | None = None):
     """
-    Get relationships for a specific entity.
+    Get relationships for a specific entity node in the knowledge graph.
 
-    Explores the knowledge graph from a specific entity,
-    returning connected entities and relationships.
+    ``entity`` is the graph-node NAME to explore (e.g. "Caia", "Jeff").
+    ``entity_scope`` is WHICH entity's graph partition to query (e.g. "caia", "lyra").
+    If ``entity_scope`` is omitted the mounted entity's partition is used.
 
     Uses Neo4j direct query for real graph traversal. Falls back to
     RichTextureLayer.explore() (semantic search) if Neo4j is unavailable.
+
+    entity-scoping: group_id is resolved PER-REQUEST from entity_scope via the
+    registry — overriding the process-level GRAPHITI_GROUP_ID for read operations.
+    See docs/architectural_patterns/entity-scoping.md.
     """
     start_time = time.time()
     depth = max(1, min(depth, 5))  # Cap to 1-5 for safety
+    # Resolve group_id from the request's entity_scope, not the process env.
+    # resolve_graph_group_id raises HTTPException(422) for unknown scopes.
+    group_id = resolve_graph_group_id(entity_scope)
     try:
-        # Resolve group_id (same logic as /api/graph/entities)
-        entity_name_env = os.getenv("ENTITY_NAME", "")
-        if entity_name_env:
-            default_group_id = entity_name_env.lower()
-        else:
-            entity_path_env = os.getenv("ENTITY_PATH", "")
-            from pathlib import Path as _Path
-            default_group_id = _Path(entity_path_env).name.lower() if entity_path_env else "default"
-        group_id = os.getenv("GRAPHITI_GROUP_ID", default_group_id)
 
         nodes = {}
         edges = []
@@ -1140,12 +1194,16 @@ async def api_graph_explore(entity: str, depth: int = 2):
 
 
 @app.get("/api/graph/entities")
-async def api_graph_entities(limit: int = 100):
+async def api_graph_entities(limit: int = 100, entity_scope: str | None = None):
     """
-    List all entities with metadata.
+    List all entities with metadata from a specific entity's graph partition.
 
-    Returns a list of all entities in the knowledge graph.
-    This is useful for populating entity selectors or getting an overview.
+    ``entity_scope`` names which entity's partition to list (e.g. "caia", "lyra").
+    If omitted, the mounted entity's partition is used.
+
+    entity-scoping: group_id is resolved PER-REQUEST from entity_scope via the
+    registry — overriding the process-level GRAPHITI_GROUP_ID for read operations.
+    See docs/architectural_patterns/entity-scoping.md.
     """
     import re
 
@@ -1167,16 +1225,11 @@ async def api_graph_entities(limit: int = 100):
 
         return found
 
+    # Resolve group_id from the request's entity_scope, not the process env.
+    # resolve_graph_group_id raises HTTPException(422) for unknown scopes.
+    group_id = resolve_graph_group_id(entity_scope)
+
     try:
-        # Resolve group_id
-        entity_name_env = os.getenv("ENTITY_NAME", "")
-        if entity_name_env:
-            default_group_id = entity_name_env.lower()
-        else:
-            entity_path = os.getenv("ENTITY_PATH", "")
-            from pathlib import Path
-            default_group_id = Path(entity_path).name.lower() if entity_path else "default"
-        group_id = os.getenv("GRAPHITI_GROUP_ID", default_group_id)
 
         # Query Neo4j directly for entities (works with both Graphiti and custom pipeline)
         neo4j_uri = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
@@ -1247,11 +1300,26 @@ async def api_graph_entities(limit: int = 100):
 
 @app.post("/api/graph/synthesize")
 async def api_graph_synthesize(request: Request):
-    """Synthesize a prose summary for an entity using Claude + Neo4j edges."""
+    """Synthesize a prose summary for an entity using Claude + Neo4j edges.
+
+    Request body fields:
+      entity_name (str, required): the graph-node NAME to summarise (e.g. "Jeff").
+      entity_scope (str, optional): which entity's graph partition to query
+          (e.g. "caia", "lyra").  If omitted the mounted entity's partition is used.
+
+    entity-scoping: group_id is resolved PER-REQUEST from entity_scope via the
+    registry — overriding the process-level GRAPHITI_GROUP_ID for read operations.
+    See docs/architectural_patterns/entity-scoping.md.
+    """
     body = await request.json()
     entity_name = body.get("entity_name", "")
     if not entity_name:
         raise HTTPException(status_code=400, detail="entity_name required")
+
+    # Resolve group_id from the request's entity_scope, not the process env.
+    # resolve_graph_group_id raises HTTPException(422) for unknown scopes.
+    entity_scope = body.get("entity_scope") or None
+    group_id = resolve_graph_group_id(entity_scope)
 
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
     if not anthropic_key:
@@ -1260,9 +1328,6 @@ async def api_graph_synthesize(request: Request):
     neo4j_uri = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
     neo4j_user = os.getenv("NEO4J_USER", "neo4j")
     neo4j_password = os.getenv("NEO4J_PASSWORD", "password123")
-    entity_name_env = os.getenv("ENTITY_NAME", "")
-    default_group_id = entity_name_env if entity_name_env else "default"
-    group_id = os.getenv("GRAPHITI_GROUP_ID", default_group_id)
 
     from neo4j import GraphDatabase as _GraphDatabase
 

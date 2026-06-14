@@ -273,6 +273,11 @@ services:
       - ENTITY_CAIA_PPS_URL=http://pps-caia:8000
       # Caia's entity filesystem mount path (enables Raw Capture + Crystals for Caia view)
       - ENTITY_CAIA_PATH=/app/entity-caia
+      # Caia's Neo4j group_id for graph read routing (Issue #272).
+      # Must match GRAPHITI_GROUP_ID in the pps-caia container (currently "caia").
+      # Without this, Observatory's graph reads for Caia silently fall through to
+      # lyra_v2, rendering Lyra's graph under Caia's label.
+      - ENTITY_CAIA_GROUP_ID=caia
       # OpenAI for graphiti_core embeddings
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       # Anthropic for entity synthesis (haiku summarization)
