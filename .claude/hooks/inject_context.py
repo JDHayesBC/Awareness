@@ -64,7 +64,7 @@ CC_WRAPPER_URL = "http://localhost:8204/v1/chat/completions"
 HAIKU_SUMMARIZE = os.environ.get("PPS_HAIKU_SUMMARIZE", "false").lower() == "true"
 
 # Home Assistant — light state query (same creds as scripts/light.py)
-HA_URL = "http://10.0.0.9:8123"
+HA_URL = "http://10.0.0.50:8123"
 HA_TOKEN = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
     ".eyJpc3MiOiJjODU1MGFjZGU2MzU0NGJjYjk1Njc0ZjlkZWI1NmRhOSIsImlhdCI6"

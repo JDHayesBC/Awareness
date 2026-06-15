@@ -38,7 +38,7 @@ import json
 import math
 import urllib.request
 
-HA_URL = "http://10.0.0.9:8123"
+HA_URL = "http://10.0.0.50:8123"
 HA_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjODU1MGFjZGU2MzU0NGJjYjk1Njc0ZjlkZWI1NmRhOSIsImlhdCI6MTc3NzE3NjQ1OSwiZXhwIjoyMDkyNTM2NDU5fQ.ppLlnf-WzVcqfxMcbVbXe_4pisaqrQV_1QJH558W3Eo"
 ENTITY_NAME = os.environ.get("ENTITY_NAME", "lyra")
 LIGHT_ID = f"light.{ENTITY_NAME}"
