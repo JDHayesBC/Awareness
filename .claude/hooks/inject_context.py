@@ -32,6 +32,18 @@ import time as _time
 from datetime import datetime
 from pathlib import Path
 
+# Health-check watchdog (extensible alert registry — see health_checks.py).
+# Defensive import: this is an always-fires hook, so a broken/missing watchdog
+# module must degrade to a no-op, never crash context injection. The health
+# module dir (this file's dir) is put on sys.path so the sibling import resolves
+# regardless of how CC invokes the hook.
+sys.path.insert(0, str(Path(__file__).parent))
+try:
+    from health_checks import format_health_block
+except Exception:  # pragma: no cover - watchdog must never break the hook
+    def format_health_block() -> str:
+        return ""
+
 # Debug log - project-specific
 PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
 DEBUG_LOG = PROJECT_ROOT / ".claude" / "data" / "hooks_debug.log"
@@ -64,7 +76,7 @@ CC_WRAPPER_URL = "http://localhost:8204/v1/chat/completions"
 HAIKU_SUMMARIZE = os.environ.get("PPS_HAIKU_SUMMARIZE", "false").lower() == "true"
 
 # Home Assistant — light state query (same creds as scripts/light.py)
-HA_URL = "http://10.0.0.9:8123"
+HA_URL = "http://10.0.0.50:8123"
 HA_TOKEN = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
     ".eyJpc3MiOiJjODU1MGFjZGU2MzU0NGJjYjk1Njc0ZjlkZWI1NmRhOSIsImlhdCI6"
@@ -506,6 +518,23 @@ def main():
                 f"(UTC: {now_utc.strftime('%H:%M')})\n"
             )
             context = clock_line + context
+
+    # Inject [health] watchdog block into the top sacred front block, HIGH — a 🔴
+    # infra alert (e.g. dead backup job) must be among the first things seen.
+    # Emits nothing when all green (zero noise on healthy days). Never raises.
+    try:
+        health_block = format_health_block()
+    except Exception:
+        health_block = ""
+    if health_block:
+        if "[location]" in context:
+            loc_end = context.find("\n", context.find("[location]"))
+            if loc_end != -1:
+                context = context[:loc_end + 1] + health_block + "\n" + context[loc_end + 1:]
+            else:
+                context = context + "\n" + health_block
+        else:
+            context = health_block + "\n" + context
 
     # Inject lights line into sacred front block (after clock/location, before manifest).
     # Queries HA directly from the hook (host-side, no container needed).

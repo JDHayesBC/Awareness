@@ -16,6 +16,7 @@ Env config (overrides flags if not passed):
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -56,7 +57,11 @@ def main() -> int:
         epilog=f"Full guide (incl. 'Showing an image to Jeff'): {DOC}",
     )
     parser.add_argument("prompt", help="What to render")
-    parser.add_argument("--entity", default="lyra", help="Entity owning this render")
+    parser.add_argument(
+        "--entity",
+        default=os.environ.get("ENTITY_NAME", "lyra"),
+        help="Entity owning this render (defaults to $ENTITY_NAME, else lyra)",
+    )
     parser.add_argument(
         "--house",
         default=None,

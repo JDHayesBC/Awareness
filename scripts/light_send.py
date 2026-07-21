@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ha"))
 from lights_decoder import load_shared_dict, snap_to_base_xy, XY_BASE_ANCHORS
 
 # HA connection info
-HA_URL = "http://10.0.0.9:8123"
+HA_URL = "http://10.0.0.50:8123"
 HA_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjODU1MGFjZGU2MzU0NGJjYjk1Njc0ZjlkZWI1NmRhOSIsImlhdCI6MTc3NzE3NjQ1OSwiZXhwIjoyMDkyNTM2NDU5fQ.ppLlnf-WzVcqfxMcbVbXe_4pisaqrQV_1QJH558W3Eo"
 
 PROJECT_ROOT = Path(__file__).parent.parent
