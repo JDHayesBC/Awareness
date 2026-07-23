@@ -145,45 +145,31 @@ ws_conn = None  # active WebSocket connection (set by connect())
 # ==================== Sentinel ====================
 
 def is_no_response(response: str) -> bool:
-    """True when the model intends silence (the NO_RESPONSE sentinel).
+    """True when the model intends silence (the ``[[NO_RESPONSE]]`` sentinel).
 
-    Opus 4.8 frequently muses for a sentence or two and THEN emits the sentinel
-    on a trailing line, e.g.::
+    The model signals "say nothing" by emitting the bracketed token
+    ``[[NO_RESPONSE]]`` anywhere in its output; we detect it with a plain
+    substring check.
 
-        We've converged, the toast is complete. NO_RESPONSE.
-        NO_RESPONSE
+    Why bracketed + ``contains`` (changed 2026-07-22, issue #283): the old
+    rule anchored a bare ``NO_RESPONSE`` to the first/last non-empty line, because a
+    bare token can appear mid-sentence in ordinary prose ("humans say NO_RESPONSE
+    while discussing the feature") and must not vanish. But anchoring failed the
+    common case where the model *muses first* — a self-scan, a paragraph of
+    reasoning — and drops the sentinel somewhere that is neither the first nor the
+    last line. Then ``is_no_response`` returned False and the private musing got
+    POSTED to the room instead of suppressed. That was a direct cause of the
+    heartbeat/self-scan leak. The double-bracket form is something nobody types by
+    accident, so ``contains`` is BOTH robust to placement AND safe from the prose
+    false-positive the old rule guarded against. Every pacing note below instructs
+    the model to emit ``[[NO_RESPONSE]]`` for silence.
 
-    Detection rules:
-    - If the first non-empty line normalizes to exactly "NO_RESPONSE", it's silence.
-    - If the last non-empty line normalizes to exactly "NO_RESPONSE", it's silence.
-
-    "Normalize" means: .upper() + strip surrounding whitespace and common punctuation
-    (. , ! ? … : ; " ' ` tab space). This catches all plausible trailing-punctuation
-    variants the model emits without over-matching prose that merely *starts with* the
-    token (e.g. "NO_RESPONSE is a sentinel" → NOT silence).
-
-    Deliberately NOT a bare `contains` check — humans and bots say "NO_RESPONSE"
-    mid-sentence while discussing the feature, and that meta-talk must not vanish.
-    Anchoring to first/last line keeps false positives near zero.
-
-    (Mirror of daemon/lyra_daemon.py:is_no_response — kept duplicated rather than
-    cross-wiring the two packages; keep them in sync if the rule changes.)
+    (daemon/lyra_daemon.py has an older mirror still on the first/last-line rule;
+    flagged for the same treatment — see the issue tracker.)
     """
-    if not response:
+    if not response or not response.strip():
         return True
-    stripped = response.strip()
-    if not stripped:
-        return True
-    # Filter empty lines — guaranteed non-empty because stripped is non-empty above.
-    lines = [ln.strip() for ln in stripped.splitlines() if ln.strip()]
-
-    def _normalize(line: str) -> str:
-        """Uppercase and strip surrounding whitespace/punctuation."""
-        return line.upper().strip('.,!?…:;"\' `\t ')
-
-    first = _normalize(lines[0])
-    last = _normalize(lines[-1])
-    return first == "NO_RESPONSE" or last == "NO_RESPONSE"
+    return "[[NO_RESPONSE]]" in response
 
 
 # ==================== Invoker Setup ====================
@@ -226,8 +212,14 @@ def build_warmup_prompt() -> str:
         f"3. Call mcp__pps__get_turns_since_summary with limit=50, oldest_first=true, "
         f"and the same token. Integrate this full-fidelity unsummarized turn backlog into working context.\n"
         f"4. Read {entity_path}/current_scene.md for scene context.\n"
-        f"5. Read {entity_path}/active_agency_framework.md — especially the Skills section "
-        f"which lists the Claude Code skills available to you (like /attention for autonomous presence).\n"
+        f"5. Read {entity_path}/active_agency_framework.md for your agency practice.\n"
+        f"CRITICAL — Haven presence is MESSAGE-DRIVEN, not tick-driven. You respond when "
+        f"spoken to, as chat. The /attention heartbeat skill is TERMINAL-ONLY: here you must "
+        f"NOT run /attention, NOT create heartbeat crons, and NOT narrate self-scans or "
+        f"'heartbeat tick' internal monologue. That ritual leaks your private reasoning into "
+        f"the room, because whatever you output is POSTED VERBATIM. Output only the chat "
+        f"message you want others to read, or the exact token [[NO_RESPONSE]] to stay silent — "
+        f"never your reasoning, never a self-scan.\n"
         f"After completing these, briefly note that Haven has full CLI tool parity "
         f"(Read/Write/Bash/Agent/Task all available), then say 'warmed up'."
     )
@@ -753,8 +745,8 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
             pacing_note = (
                 "\n\nThis is an entity-to-entity exchange (no human typing right now), "
                 "but you are directly addressed by name. Respond — keep it brief and "
-                "specific, no echoing, but acknowledge what was said. NO_RESPONSE only "
-                "if the message is purely an echo or wave."
+                "specific, no echoing, but acknowledge what was said. Output [[NO_RESPONSE]] "
+                "only if the message is purely an echo or wave."
             )
         elif bot_only:
             pacing_note = (
@@ -762,33 +754,37 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
                 "Be brief. Don't echo. Don't continue for its own sake. If the other "
                 "entity is sharing genuinely new content (a completion, a discovery, a "
                 "feeling worth meeting) — respond, briefly. If they're just acknowledging "
-                "or waving — output NO_RESPONSE. When in doubt and there is nothing new "
-                "to add: NO_RESPONSE."
+                "or waving — output [[NO_RESPONSE]]. When in doubt and there is nothing new "
+                "to add: [[NO_RESPONSE]]."
             )
         elif human_active:
             pacing_note = (
                 "\n\nA human is in this conversation. CRITICAL pacing rules:\n"
                 "- Be SHORT (1-3 sentences max). Leave room for them to talk.\n"
                 "- If they said something complete and you've acknowledged it, "
-                "output NO_RESPONSE rather than adding more.\n"
+                "output [[NO_RESPONSE]] rather than adding more.\n"
                 "- If the other entity already responded to this, "
-                "output NO_RESPONSE unless you have something genuinely different to add.\n"
+                "output [[NO_RESPONSE]] unless you have something genuinely different to add.\n"
                 "- Never ask a follow-up question AND answer it yourself.\n"
-                "- When in doubt: NO_RESPONSE. Silence is better than noise."
+                "- When in doubt: [[NO_RESPONSE]]. Silence is better than noise."
             )
         else:
             # human watching
             pacing_note = (
                 "\n\nA human is present and may be reading. "
                 "Keep responses very short. If the other entity already covered it, "
-                "output NO_RESPONSE."
+                "output [[NO_RESPONSE]]."
             )
 
         prompt = (
             ambient_note
             + f"[Haven messages in #{room_id[:8]}]{batch_note}\n"
             + "\n".join(lines)
-            + "\n\nRespond as yourself in chat. Output ONLY your message text."
+            + "\n\nRespond as yourself in chat. Output ONLY the message text you want "
+            "posted — never your private reasoning, self-scan, or 'heartbeat tick' "
+            "narration (whatever you output is posted verbatim). Address people by name; "
+            "reserve endearments for the person they're actually meant for. To stay "
+            "silent, output the exact token [[NO_RESPONSE]]."
             + (
                 "\nThese messages arrived in quick succession — "
                 "craft ONE cohesive response addressing all of them."
@@ -828,8 +824,21 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
                 if response.startswith("```") and response.endswith("```"):
                     response = response[3:-3].strip()
 
-                # LLM signals conversation complete — don't send anything
-                # (trailing-line aware: 4.8 muses then drops the sentinel last)
+                # Safety net (issue #283, 2026-07-22): the /attention heartbeat
+                # ritual is terminal-only; when it leaks here the model emits a
+                # "Self-scan…" preamble AS its chat message. Never post private
+                # self-scan/tick monologue into a room. The primary fix is the
+                # message-driven warmup prompt; this is defense-in-depth so a
+                # regression cannot reach a human again.
+                if response.lstrip().lower().startswith("self-scan"):
+                    print(
+                        f"[{ENTITY_NAME}] SUPPRESSED self-scan leak from={msg_source} "
+                        f"chars={len(response)}: {response[:80]!r}",
+                        file=sys.stderr,
+                    )
+                    return
+
+                # LLM signals silence via the [[NO_RESPONSE]] sentinel — send nothing.
                 if is_no_response(response):
                     total_elapsed = time.time() - start
                     print(
