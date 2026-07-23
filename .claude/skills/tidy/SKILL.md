@@ -22,9 +22,12 @@ Run these in order. Skip any that don't apply.
 ### 1. Heartbeat — Cancel or Set Crons
 
 Check `CronList`. If any heartbeat crons are active:
-- **Session ending (shutdown/restart)**: Cancel them with `CronDelete`.
-- **Jeff stepping away but session continues**: Use `/attention` to set
-  an appropriate heartbeat rate instead of canceling.
+- **True session end (shutdown/restart)**: Cancel them with `CronDelete` — this is
+  the ONE time cancel-to-zero is correct.
+- **Session continues (Jeff stepping away OR present)**: NEVER cancel to zero. Use
+  `/attention` to set an appropriate rate, or downgrade to the **2h floor**
+  (`13 */2 * * *`). The floor must survive `/tidy` — going dark is the exact failure
+  mode the floor exists to prevent.
 
 ### 2. Git — Commit and Push
 
