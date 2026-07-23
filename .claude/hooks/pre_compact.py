@@ -19,8 +19,8 @@ Hook output (to stdout):
     "systemMessage": "State summary for post-compaction recovery"
 }
 
-State saved to: entities/lyra/pre-compact-state.json
-Log appended to: entities/lyra/compaction-log.jsonl
+State saved to: entities/<entity>/pre-compact-state.json   (entity-aware via ENTITY_PATH)
+Log appended to: entities/<entity>/compaction-log.jsonl
 """
 
 import json
@@ -197,7 +197,7 @@ def build_recovery_message(state: dict) -> str:
     lines = [
         "COMPACTION: Context is being compressed. Recovery guide:",
         "",
-        "1. Your work state is saved at: entities/lyra/pre-compact-state.json",
+        f"1. Your work state is saved at: entities/{ENTITY_DIR.name}/pre-compact-state.json",
         "2. Run ambient_recall('startup') to restore memory",
         "3. Read FOR_JEFF_TODAY.md for current active work",
         "",
