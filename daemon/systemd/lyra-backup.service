@@ -5,7 +5,7 @@ After=docker.service
 [Service]
 Type=oneshot
 WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
-ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python3 scripts/backup_pps.py --no-stop
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python3 scripts/backup_pps.py --no-stop
 StandardOutput=append:/tmp/lyra_backup.log
 StandardError=append:/tmp/lyra_backup.log
 
