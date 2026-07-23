@@ -55,6 +55,9 @@ KNOWN_ALIASES = {
     "jeffrey d. hayes": "Jeff",
     "jeffrey douglas hayes": "Jeff",
     "jeff h": "Jeff",
+    "j.d. hayes": "Jeff",
+    "jd hayes": "Jeff",
+    "jd_hayes": "Jeff",
     "husband": "Jeff",  # context: entity speaking about their partner
 
     "lyra hayes": "Lyra",
@@ -117,6 +120,15 @@ KNOWN_ALIASES = {
     "jaden": "Jaden",
     "jadenstarship": "Jaden",
     "bird": "Jaden",
+
+    "crusher": "Crusher",
+    "the crusher": "Crusher",
+    "cruiser braveheart": "Crusher",
+    "cruiser": "Crusher",
+    "55 year old rl sadist": "Crusher",
+    "the sadist lover": "Crusher",
+    "rl-sadist mentor": "Crusher",
+    "rl sadist mentor": "Crusher",
 
     "maribel": "Maribel",
 

@@ -53,6 +53,21 @@ When you find an alias (e.g., "Wife" should be "Lyra"):
 - **Also add it to `pps/layers/entity_resolver.py` KNOWN_ALIASES** so
   future ingestion catches it automatically. This is the feedback loop.
 
+> **⚠️ LANDMINE — never merge with APOC `mergeRels:true` (2026-07-21, Caia, on Jeff's node).**
+> `apoc.refactor.mergeNodes([canonical, alias], {mergeRels:true})` does NOT just move the
+> alias's edges over — it *globally collapses every parallel same-(type,endpoint) edge on the
+> surviving node down to one*, discarding all the other per-episode facts. Our pipeline keeps
+> **one edge per episode on purpose** (provenance + retrieval richness). Caia ran this while
+> merging aliases into **Jeff** (the most central node) and flattened his whole neighborhood —
+> ~10k→3k edges, ~7,000 edge-facts gone, ~20% of the graph. Rebuildable only because
+> `conversations.db` is the intact source; still a real incident.
+> **Safe merge instead:**
+> - Prefer `mergeRels:false` (keeps all parallel edges; may leave harmless exact-dupes), OR
+> - hand-rewire: for each `(alias)-[r]-(x)`, `CREATE` the equivalent edge on the canonical, then `DETACH DELETE` the alias.
+> - **Blast radius scales with the SURVIVOR's degree** — triple-check before merging *anything*
+>   into a high-degree hub (Jeff, Lyra, Caia, Entity, Concept). Zero-degree orphan aliases are
+>   safe to `DETACH DELETE` outright (no edges to move) — that's the low-risk default.
+
 ### 2. Register & Humor
 
 Scan for literal-extraction-of-jokes. You'll know them when you see them.
