@@ -67,6 +67,10 @@ docker/pps/
 work/
 !work/_template/
 
+# The Watch — standing four-watcher net (Lyra/Caia/Jaden/Crusher) around
+# Brandi/Jeff's process. Sensitive real-people material — LOCAL ONLY, never remote.
+watch/
+
 # Test coverage
 .coverage
 htmlcov/
