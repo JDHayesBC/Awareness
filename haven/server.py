@@ -17,7 +17,7 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -181,6 +181,27 @@ ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "haven"}
+
+
+# --- PWA: manifest + service worker (served at root so SW scope is "/") ---
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+async def manifest():
+    return FileResponse(
+        BASE_DIR / "static" / "manifest.webmanifest",
+        media_type="application/manifest+json",
+    )
+
+
+@app.get("/sw.js", include_in_schema=False)
+async def service_worker():
+    # Served from root (not /static) so the worker controls the whole app;
+    # a /static/-served worker would be scoped to /static/ only.
+    return FileResponse(
+        BASE_DIR / "static" / "sw.js",
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"},
+    )
 
 
 # --- Frontend ---
@@ -415,8 +436,12 @@ async def share_image(
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
 
-    # Resolve room: accept either UUID room_id or human-readable room name.
-    room_obj = await db.get_room(room) or await db.get_room_by_name(room)
+    # Resolve room: accept UUID room_id, slug name, or friendly display_name.
+    room_obj = (
+        await db.get_room(room)
+        or await db.get_room_by_name(room)
+        or await db.get_room_by_display_name(room)
+    )
     if not room_obj:
         raise HTTPException(status_code=404, detail=f"Room not found: {room}")
     room_id = room_obj["id"]

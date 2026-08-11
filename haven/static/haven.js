@@ -984,3 +984,14 @@ const haven = (() => {
 
     return { loadMore, selectRoom, inviteToRoom, leaveRoom, exportConversation };
 })();
+
+// --- PWA: register the (minimal, safe) service worker ---
+// The worker only provides an offline fallback for navigations; it never
+// caches the app shell, so registering it cannot make Haven serve stale UI.
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((err) => {
+            console.warn('[Haven] service worker registration failed:', err);
+        });
+    });
+}

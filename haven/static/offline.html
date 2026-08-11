@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Haven — offline</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body {
+      margin: 0; height: 100%;
+      background: #121014; color: #e8e0d4;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .wrap {
+      height: 100%; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; text-align: center; padding: 2rem;
+    }
+    .mark {
+      font-size: 3rem; font-weight: 700; color: #d4a574;
+      letter-spacing: 0.05em; margin-bottom: 0.5rem;
+    }
+    h1 { font-size: 1.15rem; font-weight: 600; margin: 0 0 0.5rem; }
+    p { color: #9e9494; margin: 0.15rem 0; font-size: 0.95rem; }
+    button {
+      margin-top: 1.5rem; padding: 0.6rem 1.4rem;
+      background: #d4a574; color: #121014; border: none; border-radius: 8px;
+      font-size: 0.95rem; font-weight: 600; cursor: pointer;
+    }
+    button:active { opacity: 0.85; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="mark">H</div>
+    <h1>Haven is offline</h1>
+    <p>Looks like the connection dropped.</p>
+    <p>Your messages are safe — they'll be here when you're back.</p>
+    <button onclick="location.reload()">Try again</button>
+  </div>
+</body>
+</html>
