@@ -971,6 +971,135 @@ const haven = (() => {
         URL.revokeObjectURL(url);
     }
 
+    // --- Push notifications ---
+
+    // Converts a URL-safe base64 string (VAPID public key) to a Uint8Array
+    // that the browser's pushManager.subscribe() API expects.
+    function _urlBase64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+        const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        const rawData = atob(base64);
+        return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
+    }
+
+    // True once we've successfully registered a subscription this session,
+    // so the button state stays consistent without re-fetching.
+    let _pushSubscribed = false;
+
+    async function enableNotifications() {
+        // Guard: push requires a service worker registration.
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+            alert('Push notifications are not supported in this browser.');
+            return;
+        }
+
+        // Step 1: request permission — browsers REQUIRE this to follow a user
+        // gesture, which is why we never auto-prompt on load.
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+            console.warn('[Haven] push: permission denied or dismissed');
+            return;
+        }
+
+        // Step 2: fetch the VAPID public key from the server.
+        // If the server returns 503, push is not configured — hide the button.
+        let vapidKey;
+        try {
+            const res = await fetch('/api/push/vapid-public-key');
+            if (res.status === 503) {
+                const btn = $('push-notify-btn');
+                if (btn) btn.style.display = 'none';
+                return;
+            }
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const json = await res.json();
+            vapidKey = json.publicKey;
+        } catch (e) {
+            console.error('[Haven] push: failed to fetch VAPID key:', e);
+            return;
+        }
+
+        // Step 3: create the PushSubscription via the service worker.
+        let subscription;
+        try {
+            const registration = await navigator.serviceWorker.ready;
+            subscription = await registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: _urlBase64ToUint8Array(vapidKey),
+            });
+        } catch (e) {
+            console.error('[Haven] push: subscribe failed:', e);
+            return;
+        }
+
+        // Step 4: POST the subscription JSON to the server, authenticated with
+        // the same Bearer token the rest of the app uses.
+        try {
+            const subJson = subscription.toJSON();
+            const token = getToken();
+            const res = await fetch('/api/push/subscribe', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    endpoint: subJson.endpoint,
+                    keys: {
+                        p256dh: subJson.keys.p256dh,
+                        auth: subJson.keys.auth,
+                    },
+                }),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        } catch (e) {
+            console.error('[Haven] push: failed to register subscription with server:', e);
+            return;
+        }
+
+        _pushSubscribed = true;
+        _updatePushButton();
+        console.log('[Haven] push: notifications enabled');
+    }
+
+    function _updatePushButton() {
+        const btn = $('push-notify-btn');
+        if (!btn) return;
+        if (_pushSubscribed || Notification.permission === 'granted') {
+            btn.textContent = 'Notifications on';
+            btn.disabled = true;
+        }
+    }
+
+    async function initPushNotifications() {
+        // Only show the button if the browser supports push at all.
+        if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+            const btn = $('push-notify-btn');
+            if (btn) btn.style.display = 'none';
+            return;
+        }
+
+        // Check if the server has push configured — hide button if not.
+        try {
+            const res = await fetch('/api/push/vapid-public-key');
+            if (res.status === 503) {
+                const btn = $('push-notify-btn');
+                if (btn) btn.style.display = 'none';
+                return;
+            }
+        } catch (_) {
+            // Network error — leave button visible so user can try
+        }
+
+        // If permission is already granted (e.g. returning user), reflect that.
+        _updatePushButton();
+
+        const btn = $('push-notify-btn');
+        if (btn) {
+            btn.addEventListener('click', enableNotifications);
+        }
+    }
+
     // --- Init ---
 
     function init() {
@@ -978,11 +1107,12 @@ const haven = (() => {
         initInput();
         initScrollTracking();
         initVisibilityHandlers();
+        initPushNotifications();
     }
 
     document.addEventListener('DOMContentLoaded', init);
 
-    return { loadMore, selectRoom, inviteToRoom, leaveRoom, exportConversation };
+    return { loadMore, selectRoom, inviteToRoom, leaveRoom, exportConversation, enableNotifications };
 })();
 
 // --- PWA: register the (minimal, safe) service worker ---

@@ -41,10 +41,21 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_room_time
     ON messages(room_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_users_token_hash
     ON users(token_hash);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
+    ON push_subscriptions(user_id);
 """
 
 
@@ -181,6 +192,18 @@ class HavenDB:
     async def get_room_by_name(self, name: str) -> dict | None:
         async with self._db.execute(
             "SELECT * FROM rooms WHERE name = ?", (name,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_room_by_display_name(self, display_name: str) -> dict | None:
+        """Resolve a room by its human-readable display_name.
+
+        Fallback for callers who pass the friendly title (e.g.
+        "Crusher Braveheart's Room") rather than the slug ("crusher-room").
+        """
+        async with self._db.execute(
+            "SELECT * FROM rooms WHERE display_name = ?", (display_name,)
         ) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
@@ -359,3 +382,52 @@ class HavenDB:
         ) as cursor:
             row = await cursor.fetchone()
             return row["cnt"] if row else 0
+
+    # --- Push subscriptions ---
+
+    async def add_push_subscription(
+        self, user_id: str, endpoint: str, p256dh: str, auth: str
+    ) -> None:
+        """Upsert a push subscription for a user, keyed by endpoint.
+
+        If the endpoint already exists (same device re-subscribing), update the
+        p256dh/auth keys so the record stays current.
+        """
+        await self._db.execute(
+            """INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(endpoint) DO UPDATE SET
+                   user_id = excluded.user_id,
+                   p256dh  = excluded.p256dh,
+                   auth    = excluded.auth""",
+            (user_id, endpoint, p256dh, auth),
+        )
+        await self._db.commit()
+
+    async def get_push_subscriptions_for_user(self, user_id: str) -> list[dict]:
+        """Return all active push subscriptions for a given user."""
+        async with self._db.execute(
+            "SELECT * FROM push_subscriptions WHERE user_id = ? ORDER BY created_at",
+            (user_id,),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_push_subscriptions_for_users(
+        self, user_ids: list[str]
+    ) -> list[dict]:
+        """Return all push subscriptions for a list of user IDs in one query."""
+        if not user_ids:
+            return []
+        placeholders = ",".join("?" * len(user_ids))
+        async with self._db.execute(
+            f"SELECT * FROM push_subscriptions WHERE user_id IN ({placeholders})",
+            user_ids,
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def delete_push_subscription(self, endpoint: str) -> None:
+        """Delete a push subscription by endpoint (used to prune expired/gone subs)."""
+        await self._db.execute(
+            "DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,)
+        )
+        await self._db.commit()

@@ -293,6 +293,29 @@ body::before {
 }
 .admin-link:hover { opacity: 1; color: var(--accent); }
 
+/* Push notifications opt-in button */
+.push-notify-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-left: auto;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.2s, color 0.2s;
+    white-space: nowrap;
+}
+.push-notify-btn:hover:not(:disabled) { opacity: 1; color: var(--accent); }
+.push-notify-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
 /* === MAIN CHAT === */
 
 .chat-main {
@@ -684,7 +707,7 @@ body::before {
 @media (max-width: 768px) {
     #sidebar { width: 60px; }
     .sidebar-title, .sidebar-section-label, .sidebar-footer span,
-    .room-item span, .admin-link { display: none; }
+    .room-item span, .admin-link, .push-notify-btn { display: none; }
     .room-item { justify-content: center; padding: 8px; }
     #users-panel { display: none !important; }
 }
