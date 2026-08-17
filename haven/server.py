@@ -17,7 +17,7 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -38,6 +38,30 @@ from haven.models import (
     TypingRequest,
     UserResponse,
 )
+
+# --- Web push (VAPID) config ---
+# These must be set in the environment to enable push notifications.
+# If unset, the feature is a clean no-op: endpoints return 503 and no pushes
+# are ever attempted. No secrets are ever written to disk.
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
+VAPID_SUBJECT = os.getenv("VAPID_SUBJECT", "")  # e.g. "mailto:admin@example.com"
+PUSH_ENABLED = bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY and VAPID_SUBJECT)
+
+# Lazy import: pywebpush is optional at import time — if it fails to import
+# (e.g. not yet installed in the running container), push stays disabled.
+_webpusher = None
+if PUSH_ENABLED:
+    try:
+        from pywebpush import webpush, WebPushException
+        _webpusher = webpush  # store the callable for use in helpers
+    except ImportError:
+        print(
+            "[Haven] WARNING: VAPID env vars set but pywebpush not installed — "
+            "push disabled. Add pywebpush to requirements.txt and rebuild.",
+            file=sys.stderr,
+        )
+        PUSH_ENABLED = False
 
 DB_PATH = os.getenv("HAVEN_DB_PATH", str(Path(__file__).parent / "data" / "haven.db"))
 HOST = os.getenv("HAVEN_HOST", "0.0.0.0")
@@ -130,6 +154,10 @@ async def lifespan(app: FastAPI):
     print("[Haven] Starting up...", file=sys.stderr)
     await db.initialize()
     print(f"[Haven] Database ready at {DB_PATH}", file=sys.stderr)
+    if PUSH_ENABLED:
+        print("[Haven] Web push enabled (VAPID configured)", file=sys.stderr)
+    else:
+        print("[Haven] Web push disabled (VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY/VAPID_SUBJECT not set)", file=sys.stderr)
 
     # Populate plaintext token for human users from their token files
     # This enables password/OAuth login to return the token.
@@ -181,6 +209,184 @@ ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "haven"}
+
+
+# --- PWA: manifest + service worker (served at root so SW scope is "/") ---
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+async def manifest():
+    return FileResponse(
+        BASE_DIR / "static" / "manifest.webmanifest",
+        media_type="application/manifest+json",
+    )
+
+
+@app.get("/sw.js", include_in_schema=False)
+async def service_worker():
+    # Served from root (not /static) so the worker controls the whole app;
+    # a /static/-served worker would be scoped to /static/ only.
+    return FileResponse(
+        BASE_DIR / "static" / "sw.js",
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"},
+    )
+
+
+# --- Push notification helpers ---
+
+async def _send_push_to_offline_room_members(
+    room_id: str,
+    sender_user_id: str,
+    sender_display_name: str,
+    content: str,
+) -> None:
+    """Fan out a web push notification to room members who are NOT connected via WS.
+
+    This is intentionally fail-safe: a push failure of any kind (including
+    expired subscriptions and network errors) is caught, logged, and pruned if
+    appropriate — it NEVER propagates up to break message delivery.
+    """
+    if not PUSH_ENABLED:
+        return
+
+    members = await db.get_room_members(room_id)
+    # Only notify members who are offline (no active WS connection) and who
+    # are not the sender — they don't need a push for their own message.
+    offline_user_ids = [
+        m["id"]
+        for m in members
+        if m["id"] != sender_user_id and not manager.is_online(m["id"])
+    ]
+    if not offline_user_ids:
+        return
+
+    subscriptions = await db.get_push_subscriptions_for_users(offline_user_ids)
+    if not subscriptions:
+        return
+
+    # Truncate content preview to 120 chars to keep the notification snappy.
+    preview = content[:120] + ("…" if len(content) > 120 else "")
+    payload = json.dumps({
+        "title": sender_display_name,
+        "body": preview,
+        "icon": "/static/icons/icon-192.png",
+        "badge": "/static/icons/icon-192.png",
+        "data": {"url": "/"},
+    })
+
+    from pywebpush import WebPushException  # always available when PUSH_ENABLED
+
+    dead_endpoints: list[str] = []
+
+    for sub in subscriptions:
+        try:
+            # webpush() is synchronous (uses requests internally); run it in a
+            # thread pool so we don't block the event loop during network I/O.
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda s=sub: _webpusher(
+                    subscription_info={
+                        "endpoint": s["endpoint"],
+                        "keys": {
+                            "p256dh": s["p256dh"],
+                            "auth": s["auth"],
+                        },
+                    },
+                    data=payload,
+                    vapid_private_key=VAPID_PRIVATE_KEY,
+                    vapid_claims={"sub": VAPID_SUBJECT},
+                    content_encoding="aes128gcm",
+                ),
+            )
+        except WebPushException as exc:
+            status = getattr(exc.response, "status_code", None) if exc.response else None
+            if status in (404, 410):
+                # Subscription is expired or unregistered on the push service —
+                # prune it so we don't waste effort on dead endpoints.
+                dead_endpoints.append(sub["endpoint"])
+                print(
+                    f"[Haven] push: pruning dead subscription {sub['endpoint'][:40]}... "
+                    f"(HTTP {status})",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"[Haven] push: delivery failed for {sub['endpoint'][:40]}... "
+                    f"(WebPushException: {exc})",
+                    file=sys.stderr,
+                )
+        except Exception as exc:
+            # Any other error (network, timeout, etc.) — log and continue; never
+            # let a push failure surface to the caller.
+            print(
+                f"[Haven] push: unexpected error for {sub['endpoint'][:40]}...: {exc}",
+                file=sys.stderr,
+            )
+
+    # Prune dead subscriptions outside the loop so we don't mutate while iterating.
+    for endpoint in dead_endpoints:
+        try:
+            await db.delete_push_subscription(endpoint)
+        except Exception as exc:
+            print(f"[Haven] push: failed to delete dead sub: {exc}", file=sys.stderr)
+
+
+# --- Push API endpoints ---
+
+@app.get("/api/push/vapid-public-key")
+async def get_vapid_public_key():
+    """Return the VAPID public key for client-side subscription.
+
+    Returns 503 when push is not configured — the client uses this to
+    decide whether to show the "Enable notifications" button.
+    """
+    if not PUSH_ENABLED:
+        raise HTTPException(status_code=503, detail="Push notifications not configured")
+    return {"publicKey": VAPID_PUBLIC_KEY}
+
+
+@app.post("/api/push/subscribe")
+async def push_subscribe(request: Request):
+    """Store a push subscription for the authenticated user.
+
+    Expects JSON body matching the PushSubscription object from the browser:
+      { "endpoint": "...", "keys": { "p256dh": "...", "auth": "..." } }
+    """
+    if not PUSH_ENABLED:
+        raise HTTPException(status_code=503, detail="Push notifications not configured")
+
+    user_id = await get_current_user_id(request, db)
+    body = await request.json()
+
+    endpoint = body.get("endpoint", "").strip()
+    keys = body.get("keys", {})
+    p256dh = keys.get("p256dh", "").strip()
+    auth = keys.get("auth", "").strip()
+
+    if not endpoint or not p256dh or not auth:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required fields: endpoint, keys.p256dh, keys.auth",
+        )
+
+    await db.add_push_subscription(user_id, endpoint, p256dh, auth)
+    return {"ok": True}
+
+
+@app.post("/api/push/unsubscribe")
+async def push_unsubscribe(request: Request):
+    """Delete a push subscription by endpoint for the authenticated user."""
+    if not PUSH_ENABLED:
+        raise HTTPException(status_code=503, detail="Push notifications not configured")
+
+    user_id = await get_current_user_id(request, db)
+    body = await request.json()
+    endpoint = body.get("endpoint", "").strip()
+    if not endpoint:
+        raise HTTPException(status_code=400, detail="Missing endpoint")
+
+    await db.delete_push_subscription(endpoint)
+    return {"ok": True}
 
 
 # --- Frontend ---
@@ -378,6 +584,16 @@ async def send_message(room_id: str, request: Request, body: SendMessageRequest)
     }
     await manager.broadcast_to_room(room_id, event)
 
+    # Web push: notify offline room members (fire-and-forget, fail-safe)
+    asyncio.create_task(
+        _send_push_to_offline_room_members(
+            room_id=room_id,
+            sender_user_id=user_id,
+            sender_display_name=msg["display_name"],
+            content=msg["content"],
+        )
+    )
+
     # PPS bridge (fire-and-forget)
     room = await db.get_room(room_id)
     if room:
@@ -415,8 +631,12 @@ async def share_image(
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
 
-    # Resolve room: accept either UUID room_id or human-readable room name.
-    room_obj = await db.get_room(room) or await db.get_room_by_name(room)
+    # Resolve room: accept UUID room_id, slug name, or friendly display_name.
+    room_obj = (
+        await db.get_room(room)
+        or await db.get_room_by_name(room)
+        or await db.get_room_by_display_name(room)
+    )
     if not room_obj:
         raise HTTPException(status_code=404, detail=f"Room not found: {room}")
     room_id = room_obj["id"]
@@ -908,6 +1128,16 @@ async def _handle_ws_message(ws: WebSocket, user_id: str, user: dict, msg: dict)
             "image_url": saved.get("image_url"),
         }
         await manager.broadcast_to_room(room_id, event)
+
+        # Web push: notify offline room members (fire-and-forget, fail-safe)
+        asyncio.create_task(
+            _send_push_to_offline_room_members(
+                room_id=room_id,
+                sender_user_id=user_id,
+                sender_display_name=saved["display_name"],
+                content=saved["content"],
+            )
+        )
 
         # PPS bridge
         room = await db.get_room(room_id)
