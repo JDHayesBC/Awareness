@@ -1,0 +1,26 @@
+[Unit]
+Description=Heartbeat watchdog — alert Jeff if a CC entity session goes dark (no heartbeat tick >3h)
+Documentation=file:///mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/heartbeat_watchdog.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
+
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python3 /mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/heartbeat_watchdog.py
+
+# Oneshot: a run that finds nothing (the common case) exits 0. Detection failures
+# (e.g. ntfy unreachable) also exit 0 — the next run 30 min later retries.
+SuccessExitStatus=0
+
+MemoryMax=128M
+CPUQuota=25%
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=heartbeat-watchdog

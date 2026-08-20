@@ -32,6 +32,11 @@ from pathlib import Path
 PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
 DEBUG_LOG = PROJECT_ROOT / ".claude" / "data" / "hooks_debug.log"
 
+# Heartbeat liveness markers (written by inject_context.py, read by
+# scripts/heartbeat_watchdog.py). Removed here on clean exit so a cleanly-closed
+# session never trips the "gone dark" watchdog.
+HEARTBEAT_MARKER_DIR = PROJECT_ROOT / ".claude" / "data" / "heartbeat"
+
 
 def debug(msg: str):
     """Write debug message to file."""
@@ -40,6 +45,26 @@ def debug(msg: str):
             f.write(f"[{datetime.now().isoformat()}] [session_end] {msg}\n")
     except:
         pass
+
+
+def remove_heartbeat_marker(session_id: str) -> None:
+    """Delete this session's heartbeat liveness marker on clean exit.
+
+    Without this, a cleanly-closed session's stale marker would trip the external
+    watchdog ~3h later and false-alarm Jeff. Entity-agnostic: matches the unique
+    session_id suffix (<entity>__<sid>.json), so we needn't re-derive lyra/caia.
+    Contract mirrored in inject_context.py + scripts/heartbeat_watchdog.py.
+    Fully defensive — never raises into the hook.
+    """
+    try:
+        if not HEARTBEAT_MARKER_DIR.exists():
+            return
+        sid = (session_id or "unknown").replace("/", "_")
+        for p in HEARTBEAT_MARKER_DIR.glob(f"*__{sid}.json"):
+            p.unlink(missing_ok=True)
+            debug(f"Removed heartbeat marker: {p.name}")
+    except Exception as e:
+        debug(f"heartbeat marker removal failed (non-fatal): {e}")
 
 
 def ingest_session_via_pps(session_id: str, conversation_turns: list) -> bool:
@@ -107,6 +132,10 @@ def main():
     if event != "SessionEnd":
         debug(f"Skipping non-SessionEnd event: {event}")
         sys.exit(0)
+
+    # Clean up the heartbeat liveness marker BEFORE any early-exit — even a short
+    # session must remove its marker so it can't false-alarm the watchdog later.
+    remove_heartbeat_marker(session_id)
 
     # Skip sessions with no meaningful content
     if not conversation_turns or len(conversation_turns) < 2:

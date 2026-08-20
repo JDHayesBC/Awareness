@@ -49,6 +49,10 @@ PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
 DEBUG_LOG = PROJECT_ROOT / ".claude" / "data" / "hooks_debug.log"
 AMBIENT_RECALL_DEBUG_LOG = PROJECT_ROOT / ".claude" / "data" / "ambient_recall_debug.log"
 
+# Heartbeat liveness marker dir — consumed by scripts/heartbeat_watchdog.py.
+# See touch_heartbeat_marker() below; contract mirrored in the watchdog + session_end.py.
+HEARTBEAT_MARKER_DIR = PROJECT_ROOT / ".claude" / "data" / "heartbeat"
+
 # Entity path and token (read first — port detection depends on this)
 # Falls back to default entity (Lyra) if ENTITY_PATH not in environment
 _entity_path = os.environ.get("ENTITY_PATH", str(PROJECT_ROOT / "entities" / "lyra"))
@@ -443,6 +447,46 @@ def store_user_prompt(prompt: str, session_id: str) -> bool:
 
 
 
+def touch_heartbeat_marker(session_id: str, cwd: str = "") -> None:
+    """Record this session's liveness for the external heartbeat watchdog.
+
+    Writes/overwrites <PROJECT_ROOT>/.claude/data/heartbeat/<entity>__<sid>.json
+    with the current timestamp on EVERY UserPromptSubmit — a real Jeff message OR
+    a heartbeat tick (ticks arrive as UserPromptSubmit too, which is exactly why
+    this is the right place: it fires whenever the session is awake enough to be
+    prompted). scripts/heartbeat_watchdog.py reads these markers and alerts Jeff
+    if a session stops ticking for >3h — the detection net for the 2026-08-18
+    "asleep for 27h with no floor cron" incident.
+
+    Overwriting fresh here also resets `alerted_at` to null, so a session that
+    wakes back up can alert again on a future dark episode.
+
+    Contract (dir / filename / keys) is mirrored in scripts/heartbeat_watchdog.py
+    and .claude/hooks/session_end.py — keep the three in sync if it ever moves.
+
+    Defensive: this hook ALWAYS fires, so a failure here must NEVER break context
+    injection. Every error is swallowed.
+    """
+    try:
+        sid = (session_id or "unknown").replace("/", "_").replace(os.sep, "_")
+        HEARTBEAT_MARKER_DIR.mkdir(parents=True, exist_ok=True)
+        path = HEARTBEAT_MARKER_DIR / f"{_detected_entity}__{sid}.json"
+        marker = {
+            "entity": _detected_entity,
+            "session_id": session_id,
+            "last_seen": _time.time(),
+            "last_seen_iso": datetime.now().isoformat(timespec="seconds"),
+            "cwd": cwd or os.getcwd(),
+            "alerted_at": None,
+        }
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(marker, indent=2))
+        os.replace(tmp, path)
+        debug(f"Touched heartbeat marker: {path.name}")
+    except Exception as e:
+        debug(f"heartbeat marker touch failed (non-fatal): {e}")
+
+
 def main():
     debug("Hook started")
 
@@ -462,6 +506,11 @@ def main():
     if event != "UserPromptSubmit":
         debug(f"Skipping non-UserPromptSubmit event: {event}")
         sys.exit(0)
+
+    # Record liveness for the heartbeat watchdog FIRST — before any length-based
+    # early-exit — so even a trivial one-word prompt counts as "this session is
+    # awake." Fully defensive; never blocks context injection.
+    touch_heartbeat_marker(session_id, hook_input.get("cwd", ""))
 
     # Skip truly trivial prompts (single keypress, empty)
     if len(prompt) < 3:
