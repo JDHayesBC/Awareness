@@ -703,12 +703,49 @@ body::before {
     margin-left: auto;
 }
 
+/* Mobile sidebar drawer controls (hamburger + backdrop) — hidden on desktop */
+.sidebar-toggle {
+    display: none;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    margin-right: 8px;
+    align-items: center;
+}
+.sidebar-toggle:hover { color: var(--accent); }
+.sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 150;
+}
+
 /* === RESPONSIVE === */
 @media (max-width: 768px) {
-    #sidebar { width: 60px; }
-    .sidebar-title, .sidebar-section-label, .sidebar-footer span,
-    .room-item span, .admin-link, .push-notify-btn { display: none; }
-    .room-item { justify-content: center; padding: 8px; }
+    /* The sidebar becomes an off-canvas DRAWER that swipes in over the chat,
+       shown at readable width with its FULL contents — room names, username,
+       admin link, and the notifications button all legible and tappable.
+       (Replaces the old 60px icon-strip that clipped the footer off-screen.) */
+    #sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: min(82vw, 300px);
+        z-index: 200;
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+        box-shadow: 2px 0 14px rgba(0, 0, 0, 0.45);
+    }
+    #chat-app.drawer-open #sidebar { transform: translateX(0); }
+    #chat-app.drawer-open .sidebar-backdrop { display: block; }
+
+    /* Hamburger lives in the chat header on mobile; chat fills the screen. */
+    .sidebar-toggle { display: inline-flex; }
+    .chat-main { width: 100%; }
     #users-panel { display: none !important; }
 }
 

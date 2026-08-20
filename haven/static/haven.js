@@ -15,6 +15,9 @@ const haven = (() => {
     let oldestMessageId = {};  // room_id -> oldest message id loaded
     let hasMore = {};  // room_id -> bool
     let unread = {};  // room_id -> count
+    let pendingRoomId = null;  // deep-link target from a notification, applied once connected
+    let lastActivity = Date.now();  // last real user interaction with this tab
+    const IDLE_MS = 60000;  // visible-but-untouched this long => not actively "viewing"
     let userAtBottom = true;  // tracks whether scroll is anchored at bottom
     const SCROLL_BOTTOM_THRESHOLD = 120;  // px from bottom to count as "at bottom"
     const originalTitle = document.title;
@@ -132,6 +135,9 @@ const haven = (() => {
             }
             reconnectAttempt = 0;
             hideReconnectingBanner();
+            // Tell the server whether this tab is actively being viewed, so it
+            // knows whether we still need a push for new messages.
+            sendActive();
         };
 
         ws.onmessage = (e) => {
@@ -154,6 +160,10 @@ const haven = (() => {
 
     function scheduleReconnect() {
         if (reconnectTimer) return;  // already scheduled
+        // We keep the socket even while hidden/idle (real-time stays ready); the
+        // server relies on our active/idle report, not on us disconnecting, to
+        // decide push eligibility. So it's safe to reconnect regardless of tab
+        // visibility. On a truly frozen mobile tab this loop simply won't run.
         // Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s
         const delay = Math.min(30000, 1000 * Math.pow(2, reconnectAttempt));
         reconnectAttempt++;
@@ -211,10 +221,40 @@ const haven = (() => {
         }
     }
 
+    // --- Active/idle reporting ---
+    // A device only suppresses push on the user's OTHER devices while it's
+    // genuinely being looked at: tab visible AND interacted-with recently. An
+    // open-but-idle tab (e.g. Haven sitting behind the terminal) reports
+    // inactive, so the phone still rings.
+
+    function isActive() {
+        return document.visibilityState === 'visible' && (Date.now() - lastActivity) < IDLE_MS;
+    }
+
+    function sendActive() {
+        send({ type: 'active', active: isActive() });
+    }
+
+    function markActivity() {
+        const wasInactive = !isActive();
+        lastActivity = Date.now();
+        // Only ping the server on an idle/hidden -> active transition. Steady
+        // state rides the 30s pong; active -> idle is purely time-based.
+        if (wasInactive && isActive()) sendActive();
+    }
+
     // --- Event handlers ---
 
     function handleEvent(data) {
         switch (data.type) {
+            case 'ping':
+                // Server liveness probe. Answering proves this tab is really
+                // running (not frozen/suspended by the OS), and piggybacks our
+                // current active/idle state so the server knows whether we're
+                // actually being looked at. A backgrounded/locked device stops
+                // answering (liveness) and reports inactive when it can.
+                send({ type: 'pong', active: isActive() });
+                break;
             case 'connected':
                 onConnected(data);
                 break;
@@ -243,6 +283,8 @@ const haven = (() => {
         currentUser = data.user;
         rooms = data.rooms;
         users = data.users;
+        // Seed per-room unread badges from the server (durable across reconnects).
+        unread = data.unread || {};
 
         $('login-screen').classList.add('hidden');
         $('chat-app').classList.remove('hidden');
@@ -262,9 +304,22 @@ const haven = (() => {
         $('send-btn').disabled = false;
         $('attach-btn').disabled = false;
 
-        // Select first room
-        if (rooms.length > 0) {
-            selectRoom(rooms[0].id);
+        // Choose which room to land in. Priority: a deep-link target (from a
+        // tapped notification — via ?room= on a cold open, or a stashed
+        // postMessage), else the first room.
+        const urlRoom = new URLSearchParams(location.search).get('room');
+        const wanted = pendingRoomId || urlRoom;
+        pendingRoomId = null;
+        let target = null;
+        if (wanted && rooms.some(r => r.id === wanted)) {
+            target = wanted;
+        } else if (rooms.length > 0) {
+            target = rooms[0].id;
+        }
+        if (target) selectRoom(target);
+        // Strip the ?room= param so a manual refresh doesn't re-force it.
+        if (urlRoom && location.search) {
+            history.replaceState(null, '', location.pathname);
         }
     }
 
@@ -285,6 +340,9 @@ const haven = (() => {
             if (isMine || wasAtBottom) {
                 scrollToBottom();
             }
+            // We're viewing this room — keep the server read marker current so a
+            // reconnect doesn't resurrect an already-seen message as unread.
+            send({ type: 'read', room_id: data.room_id });
         } else {
             // Track unread for non-active rooms
             if (!unread[data.room_id]) unread[data.room_id] = 0;
@@ -630,8 +688,9 @@ const haven = (() => {
         const room = rooms.find(r => r.id === roomId);
         $('room-name').textContent = room ? (room.is_dm ? room.display_name : `# ${room.display_name}`) : '';
 
-        // Clear unread for this room
+        // Clear unread for this room (locally + persist the read marker server-side)
         delete unread[roomId];
+        send({ type: 'read', room_id: roomId });
         updateTitle();
         renderRooms();
 
@@ -826,19 +885,27 @@ const haven = (() => {
     }
 
     function initVisibilityHandlers() {
-        // iPad Safari aggressively suspends WS when the tab is backgrounded.
-        // When the tab becomes visible again, force a reconnect if needed and
-        // re-anchor scroll if the user was at the bottom before.
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState !== 'visible') return;
-            if (!ws || ws.readyState !== WebSocket.OPEN) {
-                reconnectNow();
+            // Report the change immediately (hidden => inactive => push-eligible;
+            // visible => active). We do NOT tear down the socket — the server
+            // uses our active/idle report, so real-time delivery stays ready.
+            sendActive();
+            if (document.visibilityState === 'visible') {
+                markActivity();       // returning to the tab counts as interaction
+                reconnectNow();       // iPad Safari etc. may have suspended the WS
+                if (userAtBottom) requestAnimationFrame(scrollToBottom);
             }
-            // If they were at the bottom (or this is first foregrounding), scroll
-            // them back to bottom so new messages aren't hidden below the fold.
-            if (userAtBottom) {
-                requestAnimationFrame(scrollToBottom);
-            }
+        });
+
+        // Real interaction resets the idle clock (and re-activates if we'd gone
+        // idle). Cheap: markActivity only messages the server on a transition.
+        ['mousedown', 'mousemove', 'keydown', 'touchstart', 'scroll', 'focus'].forEach((ev) => {
+            window.addEventListener(ev, markActivity, { passive: true });
+        });
+
+        // Page is actually being unloaded — a clean teardown here is fine.
+        window.addEventListener('pagehide', () => {
+            if (ws) { try { ws.close(); } catch (_) {} }
         });
 
         // Network came back — reconnect immediately, don't wait for backoff.
@@ -986,18 +1053,27 @@ const haven = (() => {
     // so the button state stays consistent without re-fetching.
     let _pushSubscribed = false;
 
-    async function enableNotifications() {
+    async function enableNotifications({ verbose = false } = {}) {
+        // When verbose (a real button tap), surface every failure ON-SCREEN — a
+        // phone has no dev console, so a silent console.error is why push bugs
+        // stay invisible. An alert lets the user read the exact cause back to us.
+        const report = (msg) => {
+            console.error('[Haven] push:', msg);
+            if (verbose) alert('Notifications: ' + msg);
+        };
+
         // Guard: push requires a service worker registration.
         if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-            alert('Push notifications are not supported in this browser.');
+            report('not supported in this browser.');
             return;
         }
 
         // Step 1: request permission — browsers REQUIRE this to follow a user
-        // gesture, which is why we never auto-prompt on load.
+        // gesture the first time, which is why we never auto-prompt on load.
+        // Resolves instantly when already granted.
         const permission = await Notification.requestPermission();
         if (permission !== 'granted') {
-            console.warn('[Haven] push: permission denied or dismissed');
+            report('permission not granted (' + permission + ').');
             return;
         }
 
@@ -1015,20 +1091,29 @@ const haven = (() => {
             const json = await res.json();
             vapidKey = json.publicKey;
         } catch (e) {
-            console.error('[Haven] push: failed to fetch VAPID key:', e);
+            report('could not fetch the server key — ' + e.message);
             return;
         }
 
-        // Step 3: create the PushSubscription via the service worker.
+        // Step 3: create the PushSubscription via the service worker. FIRST clear
+        // any stale subscription: if the SW already holds one made with a DIFFERENT
+        // VAPID key (a leftover from an earlier build), the browser throws
+        // InvalidStateError and refuses a new one until the old is unsubscribed.
+        // That is the single most common "key fetched, then nothing happens" bug,
+        // so we always start clean.
         let subscription;
         try {
             const registration = await navigator.serviceWorker.ready;
+            const existing = await registration.pushManager.getSubscription();
+            if (existing) {
+                await existing.unsubscribe();
+            }
             subscription = await registration.pushManager.subscribe({
                 userVisibleOnly: true,
                 applicationServerKey: _urlBase64ToUint8Array(vapidKey),
             });
         } catch (e) {
-            console.error('[Haven] push: subscribe failed:', e);
+            report('the browser refused the subscription — ' + e.name + ': ' + e.message);
             return;
         }
 
@@ -1053,21 +1138,29 @@ const haven = (() => {
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
         } catch (e) {
-            console.error('[Haven] push: failed to register subscription with server:', e);
+            report('the server rejected the subscription — ' + e.message);
             return;
         }
 
         _pushSubscribed = true;
         _updatePushButton();
         console.log('[Haven] push: notifications enabled');
+        if (verbose) alert('Notifications enabled! 🔔');
     }
 
     function _updatePushButton() {
         const btn = $('push-notify-btn');
         if (!btn) return;
-        if (_pushSubscribed || Notification.permission === 'granted') {
+        // Only reflect "on" once we've ACTUALLY registered a subscription. Do NOT
+        // disable merely because OS permission is granted — a user who granted
+        // permission before ever registering (e.g. via system settings) would
+        // otherwise be locked out of the subscribe flow behind a dead button.
+        if (_pushSubscribed) {
             btn.textContent = 'Notifications on';
             btn.disabled = true;
+        } else {
+            btn.textContent = 'Enable notifications';
+            btn.disabled = false;
         }
     }
 
@@ -1091,16 +1184,62 @@ const haven = (() => {
             // Network error — leave button visible so user can try
         }
 
-        // If permission is already granted (e.g. returning user), reflect that.
+        // Reflect current state on the button (enabled until we've subscribed).
         _updatePushButton();
 
         const btn = $('push-notify-btn');
         if (btn) {
-            btn.addEventListener('click', enableNotifications);
+            // Verbose on a real tap: any failure pops an on-screen alert the user
+            // can read back to us (no dev console on a phone).
+            btn.addEventListener('click', () => enableNotifications({ verbose: true }));
+        }
+
+        // Auto-heal: if permission is already granted (returning user, or granted
+        // via OS settings before ever tapping the button), register/refresh the
+        // subscription now — no tap needed. requestPermission() resolves instantly
+        // when already granted, and pushManager.subscribe() needs no user gesture
+        // in that state, so this is safe to run on load.
+        if (Notification.permission === 'granted') {
+            enableNotifications();
         }
     }
 
+    // Mobile: the sidebar is an off-canvas drawer. The hamburger toggles it; the
+    // backdrop and picking a room close it. No-ops on desktop (toggle is hidden).
+    function initSidebarDrawer() {
+        const app = $('chat-app');
+        const toggle = $('sidebar-toggle');
+        const backdrop = $('sidebar-backdrop');
+        const sidebar = $('sidebar');
+        if (!app || !toggle) return;
+        const close = () => app.classList.remove('drawer-open');
+        toggle.addEventListener('click', () => app.classList.toggle('drawer-open'));
+        if (backdrop) backdrop.addEventListener('click', close);
+        // Close after tapping a room/DM so the conversation is visible right away.
+        if (sidebar) sidebar.addEventListener('click', (e) => {
+            if (e.target.closest('.room-item')) close();
+        });
+    }
+
     // --- Init ---
+
+    // Notification deep-link: the service worker postMessages the room to open
+    // when a notification is tapped on an already-running tab. If we're not
+    // connected yet (cold open), stash it for onConnected to apply.
+    function initDeepLink() {
+        if (!('serviceWorker' in navigator)) return;
+        navigator.serviceWorker.addEventListener('message', (e) => {
+            const d = e.data || {};
+            if (d.type === 'navigate' && d.room_id) {
+                if (currentUser && rooms.some(r => r.id === d.room_id)) {
+                    selectRoom(d.room_id);
+                    $('chat-app').classList.remove('drawer-open');
+                } else {
+                    pendingRoomId = d.room_id;
+                }
+            }
+        });
+    }
 
     function init() {
         initLogin();
@@ -1108,6 +1247,8 @@ const haven = (() => {
         initScrollTracking();
         initVisibilityHandlers();
         initPushNotifications();
+        initSidebarDrawer();
+        initDeepLink();
     }
 
     document.addEventListener('DOMContentLoaded', init);

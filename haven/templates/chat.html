@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Haven</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <link rel="stylesheet" href="/static/haven.css">
+    <link rel="stylesheet" href="/static/haven.css?v=20260818d">
     <!-- PWA: installable app -->
     <link rel="manifest" href="/manifest.webmanifest">
     <meta name="theme-color" content="#121014">
@@ -68,10 +68,13 @@
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
                     </svg>
-                    Notifications
+                    <span class="push-notify-label">Notifications</span>
                 </button>
             </div>
         </div>
+
+        <!-- Mobile drawer backdrop (tap to close the sidebar) -->
+        <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
 
         <!-- Main chat area -->
         <div class="chat-main">
@@ -79,6 +82,11 @@
             <!-- Room header -->
             <div class="chat-header">
                 <div style="display:flex;align-items:center">
+                    <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Open menu" title="Menu">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+                        </svg>
+                    </button>
                     <span id="room-name" class="room-name"></span>
                     <span id="typing-indicator" class="typing-indicator"></span>
                 </div>
@@ -135,6 +143,6 @@
         </div>
     </div>
 
-    <script src="/static/haven.js?v=20260506b"></script>
+    <script src="/static/haven.js?v=20260818i"></script>
 </body>
 </html>

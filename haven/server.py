@@ -83,18 +83,51 @@ db = HavenDB(DB_PATH)
 class ConnectionManager:
     """Manages WebSocket connections for real-time messaging."""
 
+    # A connection that hasn't checked in (pong/any message) within this many
+    # seconds is treated as NOT viewing — its user becomes push-eligible, and
+    # the ping loop reaps it. The client pongs on every 30s server ping, so a
+    # live foreground tab refreshes well inside this window; only a frozen /
+    # backgrounded / OS-suspended tab goes silent long enough to trip it. Set
+    # above 2x the ping interval so a single dropped pong can't false-trip a
+    # genuinely-foreground user.
+    FOREGROUND_TTL = 65.0
+
     def __init__(self):
         # user_id -> list of active websocket connections
         self.active: dict[str, list[WebSocket]] = {}
+        # Connections that are NOT actively being viewed right now — the client
+        # reports itself inactive when its tab is hidden OR it's been idle (no
+        # interaction) past a threshold. Such a connection stays live for
+        # real-time delivery, but its user isn't *looking*, so they remain
+        # eligible for a push. This is what stops one open-but-idle device (e.g.
+        # a desktop tab sitting behind another window) from silencing the user's
+        # other devices. Populated from the client's active/pong signal.
+        self.inactive: set[WebSocket] = set()
+        # ws -> monotonic timestamp of last inbound activity (pong or message).
+        # This is the robust liveness signal: the client's visibility report can
+        # be lost when the OS freezes the tab before it can send, but a frozen
+        # tab ALSO stops answering pings, so a stale timestamp catches it.
+        self.last_seen: dict[WebSocket, float] = {}
 
     async def connect(self, ws: WebSocket, user_id: str) -> None:
         await ws.accept()
         if user_id not in self.active:
             self.active[user_id] = []
         self.active[user_id].append(ws)
+        self.last_seen[ws] = time.monotonic()
         await db.update_last_seen(user_id)
 
+    def mark_alive(self, ws: WebSocket) -> None:
+        """Record inbound activity (a pong or any message) as proof of life."""
+        self.last_seen[ws] = time.monotonic()
+
+    def is_stale(self, ws: WebSocket) -> bool:
+        """True if this connection hasn't checked in within FOREGROUND_TTL."""
+        return (time.monotonic() - self.last_seen.get(ws, 0.0)) > self.FOREGROUND_TTL
+
     async def disconnect(self, ws: WebSocket, user_id: str) -> None:
+        self.inactive.discard(ws)
+        self.last_seen.pop(ws, None)
         if user_id in self.active:
             self.active[user_id] = [c for c in self.active[user_id] if c is not ws]
             if not self.active[user_id]:
@@ -103,6 +136,33 @@ class ConnectionManager:
 
     def is_online(self, user_id: str) -> bool:
         return user_id in self.active and len(self.active[user_id]) > 0
+
+    def set_active(self, ws: WebSocket, active: bool) -> None:
+        """Record whether a connection is actively being viewed (visible + not idle)."""
+        if active:
+            self.inactive.discard(ws)
+        else:
+            self.inactive.add(ws)
+
+    def is_foreground(self, user_id: str) -> bool:
+        """True if the user has at least one FOREGROUNDED (visible) connection.
+
+        Push eligibility hinges on this, not on is_online: a user who is connected
+        but has the app backgrounded is NOT foreground, so they should still be
+        notified — matching how mainstream chat apps behave ("notify unless you're
+        actively viewing the app"). A user with no connections is trivially not
+        foreground.
+        """
+        conns = self.active.get(user_id, [])
+        # Viewing = connected AND active (visible + not idle) AND recently-alive.
+        # The liveness check makes this robust to OS-frozen tabs that never got
+        # to report inactive (the zombie case); the active flag stops an
+        # open-but-idle device from silencing the user's other devices.
+        viewing = [
+            c for c in conns
+            if c not in self.inactive and not self.is_stale(c)
+        ]
+        return len(viewing) > 0
 
     async def broadcast_to_room(self, room_id: str, event: dict) -> None:
         """Send event to all WebSocket clients who are members of a room."""
@@ -247,20 +307,28 @@ async def _send_push_to_offline_room_members(
     appropriate — it NEVER propagates up to break message delivery.
     """
     if not PUSH_ENABLED:
+        print("[Haven] push: PUSH_ENABLED is False — VAPID not configured, not sending", file=sys.stderr)
         return
 
     members = await db.get_room_members(room_id)
-    # Only notify members who are offline (no active WS connection) and who
-    # are not the sender — they don't need a push for their own message.
+    # Notify members who are NOT actively viewing the app (no foreground/visible
+    # connection) and who are not the sender. Backgrounded-but-connected counts as
+    # "not viewing" => still notify, exactly like mainstream chat apps.
     offline_user_ids = [
         m["id"]
         for m in members
-        if m["id"] != sender_user_id and not manager.is_online(m["id"])
+        if m["id"] != sender_user_id and not manager.is_foreground(m["id"])
     ]
+    print(
+        f"[Haven] push: room {room_id[:8]} — {len(members)} member(s); "
+        f"not-viewing (push-eligible)={[u[:8] for u in offline_user_ids]}",
+        file=sys.stderr,
+    )
     if not offline_user_ids:
         return
 
     subscriptions = await db.get_push_subscriptions_for_users(offline_user_ids)
+    print(f"[Haven] push: {len(subscriptions)} subscription(s) to deliver to", file=sys.stderr)
     if not subscriptions:
         return
 
@@ -271,7 +339,10 @@ async def _send_push_to_offline_room_members(
         "body": preview,
         "icon": "/static/icons/icon-192.png",
         "badge": "/static/icons/icon-192.png",
-        "data": {"url": "/"},
+        # Deep-link: tapping the notification opens Haven directly in the room
+        # the message arrived in (both as a URL for a cold open and room_id for a
+        # postMessage into an already-open tab — see sw.js notificationclick).
+        "data": {"url": f"/?room={room_id}", "room_id": room_id},
     })
 
     from pywebpush import WebPushException  # always available when PUSH_ENABLED
@@ -282,7 +353,7 @@ async def _send_push_to_offline_room_members(
         try:
             # webpush() is synchronous (uses requests internally); run it in a
             # thread pool so we don't block the event loop during network I/O.
-            await asyncio.get_event_loop().run_in_executor(
+            resp = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda s=sub: _webpusher(
                     subscription_info={
@@ -297,6 +368,11 @@ async def _send_push_to_offline_room_members(
                     vapid_claims={"sub": VAPID_SUBJECT},
                     content_encoding="aes128gcm",
                 ),
+            )
+            print(
+                f"[Haven] push: delivered to {sub['endpoint'][:45]}... "
+                f"(HTTP {getattr(resp, 'status_code', '?')})",
+                file=sys.stderr,
             )
         except WebPushException as exc:
             status = getattr(exc.response, "status_code", None) if exc.response else None
@@ -1040,8 +1116,12 @@ async def websocket_endpoint(ws: WebSocket, token: str = ""):
         # Send initial state
         rooms = await db.list_rooms_for_user(user_id)
         users = await db.list_users()
+        # Per-room unread counts, so the sidebar shows badges immediately on
+        # (re)connect — durable across the background/notification/reopen cycle.
+        unread = await db.get_unread_counts(user_id)
         await ws.send_text(json.dumps({
             "type": "connected",
+            "unread": unread,
             "user": {
                 "id": user["id"],
                 "username": user["username"],
@@ -1073,10 +1153,25 @@ async def websocket_endpoint(ws: WebSocket, token: str = ""):
         # Now broadcast presence (after connected event sent to this client)
         await manager.broadcast_presence(user_id, "online")
 
-        # Keepalive — detect dead connections (e.g. MCP process killed by CC)
+        # Keepalive + liveness. Ping every 30s; if the client hasn't checked in
+        # within FOREGROUND_TTL it's frozen/suspended (screen locked, tab evicted)
+        # — close it so it stops counting as a viewer. Closing unblocks the
+        # receive loop below, which cleans up via disconnect() (dropping the
+        # stale connection makes the user push-eligible and marks them offline).
         async def _ping_loop():
             while True:
                 await asyncio.sleep(30)
+                if manager.is_stale(ws):
+                    print(
+                        f"[Haven] reaping stale connection for {user['username']} "
+                        f"(no check-in in >{manager.FOREGROUND_TTL:.0f}s)",
+                        file=sys.stderr,
+                    )
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
+                    break
                 try:
                     await ws.send_text(json.dumps({"type": "ping"}))
                 except Exception:
@@ -1088,8 +1183,13 @@ async def websocket_endpoint(ws: WebSocket, token: str = ""):
         try:
             while True:
                 data = await ws.receive_text()
+                manager.mark_alive(ws)  # any inbound (pong/message) proves life
                 msg = json.loads(data)
                 if msg.get("type") == "pong":
+                    # Pongs piggyback the current active/idle state so the server
+                    # tracks "is this device actually being looked at" every ~30s.
+                    if "active" in msg:
+                        manager.set_active(ws, bool(msg.get("active")))
                     continue
                 await _handle_ws_message(ws, user_id, user, msg)
         finally:
@@ -1105,6 +1205,26 @@ async def websocket_endpoint(ws: WebSocket, token: str = ""):
 
 async def _handle_ws_message(ws: WebSocket, user_id: str, user: dict, msg: dict) -> None:
     msg_type = msg.get("type")
+
+    if msg_type == "read":
+        # Client viewed a room — persist the read marker so unread badges clear
+        # and stay cleared across reconnects. Marker only ever advances.
+        room_id = msg.get("room_id")
+        if room_id and await db.is_room_member(room_id, user_id):
+            await db.mark_room_read(user_id, room_id)
+        return
+
+    if msg_type == "active":
+        # Client reports whether it's actively being viewed (tab visible AND the
+        # user interacted recently). Inactive => push-eligible even though the
+        # socket stays open for real-time delivery.
+        manager.set_active(ws, bool(msg.get("active")))
+        return
+
+    if msg_type == "visibility":
+        # Back-compat for older cached clients: treat "visible" as active.
+        manager.set_active(ws, msg.get("state") == "visible")
+        return
 
     if msg_type == "message":
         room_id = msg.get("room_id")

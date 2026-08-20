@@ -50,6 +50,14 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS room_reads (
+    user_id TEXT NOT NULL REFERENCES users(id),
+    room_id TEXT NOT NULL REFERENCES rooms(id),
+    last_read_id INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, room_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_room_time
     ON messages(room_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_users_token_hash
@@ -317,6 +325,53 @@ class HavenDB:
             rows = [dict(row) for row in await cursor.fetchall()]
 
         return rows
+
+    async def mark_room_read(
+        self, user_id: str, room_id: str, up_to_id: int | None = None
+    ) -> None:
+        """Mark a room read for a user up to a message id (default: latest).
+
+        The stored marker only ever advances (MAX), so an out-of-order or stale
+        client 'read' can never rewind unread state.
+        """
+        if up_to_id is None:
+            async with self._db.execute(
+                "SELECT COALESCE(MAX(id), 0) AS m FROM messages WHERE room_id = ?",
+                (room_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                up_to_id = row["m"] if row else 0
+        await self._db.execute(
+            """INSERT INTO room_reads (user_id, room_id, last_read_id, updated_at)
+               VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(user_id, room_id) DO UPDATE SET
+                   last_read_id = MAX(last_read_id, excluded.last_read_id),
+                   updated_at = CURRENT_TIMESTAMP""",
+            (user_id, room_id, up_to_id),
+        )
+        await self._db.commit()
+
+    async def get_unread_counts(self, user_id: str) -> dict[str, int]:
+        """Return {room_id: unread_count} for every room the user belongs to.
+
+        Unread = messages from OTHER users with an id greater than the user's
+        last-read marker for that room (marker defaults to 0 = never read).
+        Rooms with nothing unread are still present with a count of 0.
+        """
+        async with self._db.execute(
+            """SELECT rm.room_id AS room_id, COUNT(m.id) AS unread
+                 FROM room_members rm
+                 LEFT JOIN room_reads rr
+                       ON rr.room_id = rm.room_id AND rr.user_id = rm.user_id
+                 LEFT JOIN messages m
+                       ON m.room_id = rm.room_id
+                      AND m.user_id != rm.user_id
+                      AND m.id > COALESCE(rr.last_read_id, 0)
+                WHERE rm.user_id = ?
+                GROUP BY rm.room_id""",
+            (user_id,),
+        ) as cursor:
+            return {row["room_id"]: row["unread"] for row in await cursor.fetchall()}
 
     async def set_admin(self, user_id: str, is_admin: bool = True) -> None:
         await self._db.execute(

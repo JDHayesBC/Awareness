@@ -84,19 +84,25 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
-  const url = (event.notification.data && event.notification.data.url) || '/';
+  const data = event.notification.data || {};
+  const roomId = data.room_id || null;
+  const url = data.url || '/';
 
   event.waitUntil(
     clients
       .matchAll({ type: 'window', includeUncontrolled: true })
       .then((windowClients) => {
-        // If a Haven window is already open, focus it rather than opening a new one.
+        // If a Haven window is already open, focus it AND tell it which room to
+        // show (the page can't read this URL — it's already loaded — so we hand
+        // it the room_id over postMessage and let it switch rooms in place).
         for (const client of windowClients) {
-          if (client.url.startsWith(self.location.origin) && 'focus' in client) {
-            return client.focus();
+          if (client.url.startsWith(self.location.origin)) {
+            if (roomId) client.postMessage({ type: 'navigate', room_id: roomId });
+            if ('focus' in client) return client.focus();
           }
         }
-        // No existing window — open a new one.
+        // No existing window — open one scoped to the room via the URL param,
+        // which the client reads on load.
         if (clients.openWindow) {
           return clients.openWindow(url);
         }
