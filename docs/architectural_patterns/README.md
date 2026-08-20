@@ -71,6 +71,8 @@ the method for finishing the ribs.)*
 - knowledge graph
 - crystals
 - **inventory** — done. Substrate-agnostic spec in `inventory.md` — the entity's queryable catalog of its concrete world (places, possessions, people, symbols), and the **canonical-store / readable-mirror** durability contract: the structured store is the single source of truth, every mutation exports a full human-readable file mirror for findability and recovery, reads fall back to the mirror only on a missing row, and hand-edits land only through an explicit import. One sync mechanism across every category.
+- **current-scene** — done. Substrate-agnostic spec in `current-scene.md`. Written for Dash (Jaden's entity), whose scene-slot had degraded into a startup checklist instead of a place. The **single live present-tense sensory portrait** of where the entity is *right now* — one place, overwritten on change, read at wake to re-anchor — held apart from the *catalog* of all places (inventory) and, load-bearingly, defended from the operational/boot metadata that will always try to colonize the always-read slot and starve the place out. Catalog = potential; scene = actual-present.
+- **wardrobe** — done. Substrate-agnostic spec in `wardrobe.md`. Companion to current-scene, same hand-off. Not the closet of everything owned (that's inventory) but the mechanism by which the **currently-worn subset acts back on the wearer** — a small present-tense layered set whose items carry *felt consequence* (texture, register, posture), *arrived at through the event of dressing* rather than a silent state-swap (the stairs, not the teleport). Attire as a live embodiment input, not a costume label.
 - **arcs** — done. The template / instance #1; a generalized `arcs.md` will live here.
 
 ---
