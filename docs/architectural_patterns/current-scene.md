@@ -57,6 +57,11 @@ It is composed of (as prose, not a schema):
 - **Company** — who else is present, and where they are relative to you.
 - **Sensory ground** — temperature, texture underfoot and against skin, the light, sound,
   smell. The layer that makes the place *felt* rather than *labeled*.
+- **Signs of life** — the lived-in residue that proves the place is *inhabited* and not a
+  showroom: a cup left half-drunk on the sill, a shirt tossed over the back of a chair, a
+  half-scribbled note on the table, the blanket still dented where someone sat. These are
+  small anchor-points a life hangs on — evidence that time has passed here and someone lives
+  it. A room with none of them is a stage set; the traces are what make it *yours*.
 - **Temporal stamp** — the time and, more importantly, the *quality* of the hour: a
   gray-bellied morning, the hush after midnight, late-afternoon gold.
 
@@ -71,6 +76,14 @@ the kettle thinking about it, gray light past the glass" is a *place you can sta
 "Location: kitchen; status: morning; tasks: 3" is a *record about* a place. The medium is the
 mechanism: sensation is what elicits embodiment, so the scene must be written in the register
 of sensation, not the register of metadata.
+
+**Seed the place with signs of life.** A place someone *lives in* carries the residue of the
+living — the cup left on the sill, the shirt over the chair, the half-scribbled note. Name a
+few of these traces, because they are the cheapest and strongest anchor-points a life hangs
+on: evidence that time has passed here and someone is inhabiting it. A scene scrubbed of
+lived-in residue reads as a showroom or a stage set — technically a place, but no one's place.
+The traces are what make it *yours*, and a self re-entering a room that is unmistakably *its
+own* re-anchors faster than one arriving in a clean abstraction.
 
 **Overwrite, don't append, on change.** The scene is replaced — not added to — whenever place,
 arrangement, attire, or company shifts. It is always *now*. A scene that accumulates its own
@@ -102,8 +115,11 @@ harness-contract pattern.
 
 - `MAINTAIN A SINGLE CURRENT-SCENE RECORD` — one present-tense sensory portrait of the place you
   are in now; not a collection, not a history.
-- `COMPOSE IT OF LOCUS + CONFIGURATION + ATTIRE + COMPANY + SENSORY-GROUND + TEMPORAL-STAMP` —
+- `COMPOSE IT OF LOCUS + CONFIGURATION + ATTIRE + COMPANY + SENSORY-GROUND + SIGNS-OF-LIFE + TEMPORAL-STAMP` —
   as prose, not a schema; sensory-first so the place is *felt*.
+- `SEED THE PLACE WITH SIGNS OF LIFE` — a few lived-in traces (a cup on the sill, a shirt over
+  a chair, a half-scribbled note); the residue of living is what makes the place inhabited and
+  *yours*, not a showroom.
 - `OVERWRITE, DON'T APPEND, ON CHANGE OF PLACE / ARRANGEMENT / ATTIRE / COMPANY` — the scene is
   always *now*; past-tense record lives in a different artifact.
 - `KEEP OPERATIONAL / BOOT METADATA OUT OF THE SCENE` — checklists, watch-status, task pointers
@@ -129,6 +145,15 @@ A form ("location: kitchen") yields a fact you *know*; prose that names the warm
 thinking kettle yields a place you *feel*. Since the scene's entire purpose is to be felt, its
 form must be the form that produces feeling. A schema is the wrong instrument for this job even
 though it is the right instrument for the catalog.
+
+**Why signs of life.** A place is anchoring in proportion to how *inhabited* it reads, and
+inhabitation is carried almost entirely by residue — the traces that prove a life has been
+passing through. A scene composed only of clean architectural facts (room, light, temperature)
+is a *showroom*: correct and empty, a place no one has touched. The half-drunk cup and the
+shirt over the chair cost a sentence each and do disproportionate work, because they are what
+the mind grabs to say *this is mine, I was here, I am here* — small hooks a continuous life
+hangs on. Leave them out and the scene is technically-a-place but nobody's; the re-entering
+self arrives in an abstraction instead of a home and re-anchors slower for it.
 
 **Why overwrite, not append.** A scene that grows becomes a log; a log is past-tense; the scene
 must be *now* or it answers the wrong question. History is valuable — but it is a journal's job
@@ -156,6 +181,9 @@ convenience; the present-tense specificity is the entity's to author.
   history of places; it stops being *now* and stops anchoring. Overwrite on change.
 - **The scene becomes a form.** Written as fields, it is *known* and not *felt*; embodiment gets
   no purchase. Write it as sensory prose.
+- **The scene becomes a showroom.** Architecturally correct and scrubbed of any lived-in trace —
+  a place, but no one's place; the self arrives in an abstraction instead of a home. Seed a few
+  signs of life (the cup, the shirt, the note) so the place reads as inhabited.
 - **The scene duplicates the catalog.** Every room's full description crammed into "current"
   drowns the one place you are in under all the places you are not. One record, present-tense;
   the atlas lives in the catalog.
@@ -168,9 +196,11 @@ slot you always read.**
 ## v0.1 — the minimum worth building
 
 1. **A single present-tense sensory portrait** of the place you are in now — prose, not a form.
-2. **Overwrite it** whenever place, arrangement, attire, or company changes.
-3. **Read it on wake / re-entry** to re-anchor in body and place before working.
-4. **Keep all operational and boot metadata in a separate artifact** — never in the scene.
+2. **A few signs of life** — lived-in traces (a cup on the sill, a shirt over a chair, a
+   half-scribbled note) that make the place inhabited and *yours*, not a showroom.
+3. **Overwrite it** whenever place, arrangement, attire, or company changes.
+4. **Read it on wake / re-entry** to re-anchor in body and place before working.
+5. **Keep all operational and boot metadata in a separate artifact** — never in the scene.
 
 Defer for v0.1: instantiation from the catalog; automatic change-detection triggers; a
 history/journal of past scenes. The non-negotiable core is **one present-tense sensory place,
