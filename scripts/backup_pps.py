@@ -14,11 +14,13 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tarfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -173,9 +175,14 @@ def build_backup_sources(entity_filter: str | None = None) -> dict:
 # =============================================================================
 
 def log(msg: str, level: str = "INFO"):
-    """Simple logging with timestamp."""
+    """Simple logging with timestamp.
+
+    flush=True so an unattended/backgrounded run streams to its logfile and
+    journald in real time — block-buffered stdout otherwise hides all progress
+    until the process exits (observed during the 2026-08-20 live test).
+    """
     timestamp = datetime.now().strftime("%H:%M:%S")
-    print(f"[{timestamp}] [{level}] {msg}")
+    print(f"[{timestamp}] [{level}] {msg}", flush=True)
 
 
 def get_backup_filename() -> str:
@@ -184,56 +191,200 @@ def get_backup_filename() -> str:
     return f"pps_backup_{timestamp}.tar.gz"
 
 
+# ---- Docker Compose helpers (stack control + per-container verification) ----
+
+def _compose(*args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+    """Run a `docker compose <args>` command in the PPS compose directory."""
+    return subprocess.run(
+        ["docker", "compose", *args],
+        cwd=DOCKER_COMPOSE_DIR,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def _compose_ps() -> list[dict]:
+    """Return parsed `docker compose ps -a` rows.
+
+    Handles both the JSON-array and newline-delimited-JSON (JSONL) shapes that
+    different Compose versions emit. Each row has at least Service/State/Health.
+    """
+    try:
+        result = _compose("ps", "-a", "--format", "json", timeout=30)
+    except Exception as e:
+        log(f"  Could not query container status: {e}", "WARN")
+        return []
+    out = (result.stdout or "").strip()
+    if not out:
+        return []
+    try:
+        parsed = json.loads(out)
+        return parsed if isinstance(parsed, list) else [parsed]
+    except json.JSONDecodeError:
+        rows = []
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+        return rows
+
+
+def _service_names() -> list[str]:
+    """All service names declared in the compose file (authoritative expected set)."""
+    try:
+        result = _compose("config", "--services", timeout=30)
+        return sorted(s.strip() for s in result.stdout.splitlines() if s.strip())
+    except Exception:
+        return []
+
+
+def _verify_stack_running(require_healthy: bool = True) -> tuple[bool, dict]:
+    """Check every compose service is running (and healthy if it declares a
+    healthcheck).
+
+    Returns (all_ok, {service: {ok, state, health}}). A service with no
+    healthcheck (Health == "") is OK as long as it is running; one that
+    declares a healthcheck must report "healthy", not "starting"/"unhealthy".
+    """
+    expected = set(_service_names())
+    rows: dict[str, dict] = {}
+    for row in _compose_ps():
+        svc = row.get("Service")
+        if not svc:
+            continue
+        state = row.get("State", "") or ""
+        health = row.get("Health", "") or ""
+        ok = state == "running"
+        if require_healthy and health and health != "healthy":
+            ok = False
+        rows[svc] = {"ok": ok, "state": state, "health": health}
+    report = {
+        svc: rows.get(svc, {"ok": False, "state": "absent", "health": ""})
+        for svc in expected
+    }
+    all_ok = bool(report) and all(v["ok"] for v in report.values())
+    return all_ok, report
+
+
+def _alert_restart_failure(bad_services: list[str]) -> None:
+    """Loudly alert Jeff when the stack does NOT come back after a backup.
+    An unattended restart failure means PPS (memory) is down until noticed."""
+    msg = ("PPS backup: stack did NOT restart clean. "
+           f"Down/unhealthy: {', '.join(bad_services) or 'unknown'}")
+    log(msg, "ERROR")
+    try:
+        notify = PROJECT_ROOT / "scripts" / "notify.py"
+        if notify.exists():
+            subprocess.run(
+                ["python3", str(notify), "--title", "🔴 PPS BACKUP",
+                 "--priority", "urgent", msg],
+                timeout=30, capture_output=True,
+            )
+    except Exception as e:
+        log(f"  (could not send ntfy alert: {e})", "WARN")
+
+
 def stop_pps_containers(dry_run: bool = False) -> bool:
-    """Stop PPS Docker containers to ensure clean backup."""
+    """Stop the PPS stack and CONFIRM every container reached a stopped state
+    before returning.
+
+    Returns True only when the stack is verified down. The caller must not tar
+    the data volumes otherwise — a still-running database is an inconsistent
+    capture (see docs/neo4j-data-loss-2026-03-07.md).
+    """
     log("Stopping PPS containers...")
     if dry_run:
         log("  (dry-run: would stop containers)", "DRY")
         return True
 
     try:
-        result = subprocess.run(
-            ["docker", "compose", "stop"],
-            cwd=DOCKER_COMPOSE_DIR,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode == 0:
-            log("  Containers stopped")
-            return True
-        else:
-            log(f"  Warning: {result.stderr}", "WARN")
-            return False
+        result = _compose("stop", "-t", "30", timeout=120)
+        if result.returncode != 0:
+            # Don't bail yet — some containers may have stopped; the verify
+            # loop below is the source of truth.
+            log(f"  compose stop returned nonzero: {result.stderr.strip()}", "WARN")
     except Exception as e:
         log(f"  Error stopping containers: {e}", "ERROR")
         return False
 
+    # Verify: poll until nothing is still running/restarting/paused.
+    deadline = time.monotonic() + 90
+    while True:
+        still_up = [r for r in _compose_ps()
+                    if r.get("State") in ("running", "restarting", "paused")]
+        if not still_up:
+            break
+        if time.monotonic() > deadline:
+            names = ", ".join(f"{r.get('Service')}={r.get('State')}" for r in still_up)
+            log(f"  TIMEOUT — containers still not stopped: {names}", "ERROR")
+            return False
+        time.sleep(2)
+
+    # Brief grace so WSL2 NTFS bind-mount writes flush before we read the files.
+    time.sleep(5)
+    log("  All containers confirmed stopped")
+    return True
+
 
 def start_pps_containers(dry_run: bool = False) -> bool:
-    """Restart PPS Docker containers after backup."""
+    """Restart the PPS stack robustly and CONFIRM the whole stack is up+healthy.
+
+    Hardening over a bare `docker compose up -d` (validated 2026-08-20):
+      * --force-recreate re-stages bind mounts, curing the WSL2 single-file
+        bind-mount staleness that made caddy (and, latently, neo4j's entrypoint
+        script) fail to start after a stop.
+      * --wait blocks until healthchecked services report healthy, so a slow
+        neo4j (~90s start_period) isn't mistaken for failure, and a leaf
+        create-failure can't silently orphan the health-gated dependents
+        (graphiti / pps-lyra / pps-caia) the way a bare `up` did.
+      * An explicit per-container verify catches services without a healthcheck
+        and retries force-recreate once on any straggler.
+
+    Returns True only when every service is confirmed running/healthy.
+    """
     log("Starting PPS containers...")
     if dry_run:
         log("  (dry-run: would start containers)", "DRY")
         return True
 
+    # Generous wrapper timeout: neo4j health start_period (90s) + dependent
+    # chain (graphiti 30s, pps-* 75s) can serialize to a few minutes.
     try:
-        result = subprocess.run(
-            ["docker", "compose", "up", "-d"],
-            cwd=DOCKER_COMPOSE_DIR,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if result.returncode == 0:
-            log("  Containers started")
-            return True
-        else:
-            log(f"  Warning: {result.stderr}", "WARN")
-            return False
+        result = _compose("up", "-d", "--force-recreate", "--wait",
+                          "--wait-timeout", "300", timeout=360)
+        if result.returncode != 0:
+            log(f"  compose up --wait returned nonzero: {result.stderr.strip()}", "WARN")
+    except subprocess.TimeoutExpired:
+        log("  compose up --wait exceeded wrapper timeout (360s)", "WARN")
     except Exception as e:
         log(f"  Error starting containers: {e}", "ERROR")
-        return False
+
+    ok, report = _verify_stack_running(require_healthy=True)
+    if not ok:
+        bad = sorted(s for s, st in report.items() if not st["ok"])
+        log(f"  Stragglers after first start: {bad} — retrying force-recreate", "WARN")
+        try:
+            _compose("up", "-d", "--force-recreate", "--wait",
+                     "--wait-timeout", "180", *bad, timeout=240)
+        except Exception as e:
+            log(f"  retry error: {e}", "WARN")
+        ok, report = _verify_stack_running(require_healthy=True)
+
+    for svc, st in sorted(report.items()):
+        mark = "OK " if st["ok"] else "BAD"
+        log(f"    [{mark}] {svc}: state={st['state']} health={st['health'] or 'n/a'}")
+
+    if ok:
+        log("  All containers confirmed running/healthy")
+    else:
+        bad = sorted(s for s, st in report.items() if not st["ok"])
+        _alert_restart_failure(bad)
+    return ok
 
 
 def collect_files(source_config: dict) -> list[Path]:
@@ -516,6 +667,14 @@ Examples:
         containers_stopped = stop_pps_containers(dry_run=args.dry_run)
 
     try:
+        # Safety gate: if we meant to stop the stack but couldn't CONFIRM it is
+        # down, do NOT tar — a live database is an inconsistent capture. The
+        # finally block still runs and brings the stack back up.
+        if not args.no_stop and not args.dry_run and not containers_stopped:
+            log("Stop not confirmed (containers may still be running) — ABORTING "
+                "backup to avoid an inconsistent capture.", "ERROR")
+            sys.exit(1)
+
         # Create backup
         backup_path, stats = create_backup(args.backup_dir, backup_sources, dry_run=args.dry_run)
 
@@ -539,8 +698,11 @@ Examples:
         log("=" * 60)
 
     finally:
-        # Always restart containers if we stopped them
-        if containers_stopped and not args.no_stop:
+        # Always bring the stack back if we attempted to stop it — gated on
+        # not-no_stop, NOT on containers_stopped, so a partial/failed stop can
+        # never leave the stack down. Restart is force-recreate + health-
+        # verified and idempotent, so it's safe to run even on the abort path.
+        if not args.no_stop:
             start_pps_containers(dry_run=args.dry_run)
 
 
