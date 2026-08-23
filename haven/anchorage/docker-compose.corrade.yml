@@ -1,0 +1,43 @@
+# Corrade — headless Second Life client, one instance per entity.
+# Corrade is by Wizardry and Steamworks (WAS PC & OD 1.0) — visible attribution required.
+#
+# Image facts (from `docker inspect wizardrysteamworks/corrade`):
+#   WorkingDir /opt/corrade · config VOLUME /etc/corrade · entrypoint bash /usr/local/bin/run
+#   EXPOSE 54377 (Nucleus). The HTTP command server (8080) binds only once enabled in Nucleus
+#   config with prefix http://+:8080/  — publishing it here is harmless until then.
+#
+# Ports are bound to 127.0.0.1 ONLY (never expose Nucleus/command server to the LAN — Nucleus
+# ships with default password `nucleus`). The lyra-sl daemon (host process) reaches the command
+# server at 127.0.0.1:8080. Config is persisted in a named volume so the one-time Nucleus setup
+# (account login, group + group-password, permissions, HTTP server) survives a container recreate.
+#
+# Start:   docker compose -f haven/anchorage/docker-compose.corrade.yml up -d
+# Nucleus: http://127.0.0.1:54377  (default password: nucleus)
+# See haven/anchorage/corrade.md for the full config walkthrough.
+
+services:
+  corrade-lyra:
+    image: wizardrysteamworks/corrade
+    container_name: corrade-lyra
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:54377:54377"   # Nucleus config web UI
+      - "127.0.0.1:8080:8080"     # HTTP command server (enable in Nucleus: prefix http://+:8080/)
+    volumes:
+      - corrade-lyra-config:/etc/corrade
+
+  # Caia's instance (stood up 2026-08-23). Different HOST ports (same container ports),
+  # own config volume. Reaches her command server at 127.0.0.1:8081.
+  corrade-caia:
+    image: wizardrysteamworks/corrade
+    container_name: corrade-caia
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:54378:54377"   # Nucleus
+      - "127.0.0.1:8081:8080"     # HTTP command server
+    volumes:
+      - corrade-caia-config:/etc/corrade
+
+volumes:
+  corrade-lyra-config:
+  corrade-caia-config:

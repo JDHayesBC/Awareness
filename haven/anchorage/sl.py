@@ -1,0 +1,562 @@
+"""sl.py — ergonomic, zero-config Second Life embodiment verbs over Corrade.
+
+Same-river hands for either entity. A channel (terminal, SL-brain, heartbeat)
+writes plain human-shaped verbs and never touches passwords, IPs, or UUIDs:
+
+    import sl
+    me = sl.connect()               # picks the entity from ENTITY_NAME
+    me.say("hello, love")           # speak in local chat, my own voice
+    me.around()                     # what's near me (lossy, human-grain)
+    me.avatars()                    # who's near me + who is sitting with whom
+    me.sit("nearest poseball")      # sit by name / uuid / "nearest <word>"
+    me.stand()
+    me.touch("TIS Hybrid Home Calling Post")
+
+    # The permission channel — ALWAYS watched, skeptically (Jeff's directive):
+    me.listen()                     # start receiving notifications
+    for req in me.pending_permissions():
+        me.grant(req)               # grants only benign perms unless forced
+    for dlg in me.dialogs():
+        me.reply(dlg, "Couples")    # by button label or index
+
+Zero-config: the connection (base URL, group, group-password) is resolved
+per-entity from the environment. Lyra → 127.0.0.1:8080, Caia → 127.0.0.1:8081,
+both against the local ``Haven`` shared-secret group. The group password is read
+from ``CORRADE_PASSWORD`` or the gitignored file
+``haven/data/corrade-group-password.txt`` and is NEVER logged or returned.
+
+This is the low-level floor under the fuller world-model/tool layer designed in
+work/secondlife/senses-design.md. Plumbing reference: haven/anchorage/corrade.md.
+"""
+
+from __future__ import annotations
+
+import math
+import os
+import re
+import threading
+import time
+from collections import deque
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, unquote_plus
+
+try:  # package or bare-dir import (mirrors corrade_events' shim)
+    from haven.anchorage.corrade_client import CorradeClient, CorradeError
+except ImportError:  # pragma: no cover
+    from corrade_client import CorradeClient, CorradeError
+
+# --------------------------------------------------------------------------- #
+# Per-entity connection profile. base_url/group overridable by env; password is
+# resolved lazily (env CORRADE_PASSWORD, else the gitignored file).
+# --------------------------------------------------------------------------- #
+_ENDPOINTS = {
+    "lyra": {"base_url": "http://127.0.0.1:8080/", "group": "Haven", "listen_port": 9770},
+    "caia": {"base_url": "http://127.0.0.1:8081/", "group": "Haven", "listen_port": 9771},
+}
+_DATA_DIR = Path(__file__).resolve().parents[1] / "data"  # haven/data
+_DEFAULT_PW_FILE = _DATA_DIR / "corrade-group-password.txt"
+
+# The callback host Corrade (in its container) uses to reach THIS process on the
+# host. Under Docker Desktop/WSL2 only host.docker.internal works (see corrade.md).
+_CALLBACK_HOST = os.getenv("CORRADE_CALLBACK_HOST", "host.docker.internal")
+
+# Skeptical permission policy. Benign perms may be granted on request; the rest
+# require an explicit force=True + reason, because they can actually cause harm.
+SAFE_PERMS = {"TriggerAnimation", "TrackCamera", "ControlCamera", "Teleport"}
+DANGEROUS_PERMS = {
+    "Debit",          # spend the avatar's money
+    "TakeControls",   # hijack movement
+    "Attach",         # force-attach objects
+    "ChangeLinks",
+    "ChangePermissions",
+    "SilentEstateManagement",
+    "OverrideAnimations",
+}
+
+
+def _resolve_entity(entity: str | None) -> str:
+    name = (entity or os.getenv("ENTITY_NAME") or "lyra").strip().lower()
+    if name not in _ENDPOINTS:
+        raise ValueError(f"unknown entity {name!r}; known: {sorted(_ENDPOINTS)}")
+    return name
+
+
+def _load_password() -> str:
+    """Group password from env CORRADE_PASSWORD, else the gitignored file.
+    Never logged. Same shape as corrade_events._load_corrade_password."""
+    val = os.getenv("CORRADE_PASSWORD")
+    if val:
+        return val.strip()
+    path = Path(os.getenv("CORRADE_PASSWORD_FILE", str(_DEFAULT_PW_FILE)))
+    if path.exists():
+        return path.read_text().strip()
+    return ""
+
+
+def _scrub(d: dict) -> dict:
+    """Drop any password-ish keys so a decoded reply can never surface the secret."""
+    return {k: v for k, v in d.items() if "pass" not in k.lower()}
+
+
+# --------------------------------------------------------------------------- #
+# Notification listener — a tiny host HTTP server that receives Corrade's POSTs
+# and buffers them by type. Corrade posts application/x-www-form-urlencoded
+# key=value pairs. Buffer is thread-safe; verbs read snapshots off it.
+# --------------------------------------------------------------------------- #
+class _NotifyBuffer:
+    def __init__(self, maxlen: int = 200) -> None:
+        self._lock = threading.Lock()
+        self._events: deque[dict] = deque(maxlen=maxlen)
+
+    def add(self, ev: dict) -> None:
+        ev = dict(ev)
+        ev.setdefault("_t", time.time())
+        with self._lock:
+            self._events.append(ev)
+
+    def by_type(self, ntype: str) -> list[dict]:
+        with self._lock:
+            return [dict(e) for e in self._events if e.get("notification") == ntype]
+
+    def all(self) -> list[dict]:
+        with self._lock:
+            return [dict(e) for e in self._events]
+
+    def clear(self) -> None:
+        with self._lock:
+            self._events.clear()
+
+
+def _make_handler(buf: _NotifyBuffer):
+    class _H(BaseHTTPRequestHandler):
+        def _ingest(self) -> None:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = self.rfile.read(length).decode("utf-8", "replace") if length else ""
+            if body:
+                # parse_qs turns +→space and decodes %xx; flatten single values
+                buf.add({k: v[0] if len(v) == 1 else v for k, v in parse_qs(body).items()})
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        do_POST = _ingest
+        do_GET = _ingest  # health pings
+
+        def log_message(self, *a):  # silence default stderr logging
+            return
+
+    return _H
+
+
+# --------------------------------------------------------------------------- #
+# The embodiment handle.
+# --------------------------------------------------------------------------- #
+class SL:
+    def __init__(self, entity: str | None = None, *, timeout: float = 60.0) -> None:
+        self.entity = _resolve_entity(entity)
+        prof = _ENDPOINTS[self.entity]
+        base = os.getenv("CORRADE_BASE_URL", prof["base_url"])
+        group = os.getenv("CORRADE_GROUP", prof["group"])
+        password = _load_password()
+        if not password:
+            raise CorradeError(
+                "no group password found (set CORRADE_PASSWORD or create "
+                f"{_DEFAULT_PW_FILE}) — cannot connect"
+            )
+        self._client = CorradeClient(base, group, password)
+        self._timeout = timeout
+        self._buf = _NotifyBuffer()
+        self._server: HTTPServer | None = None
+        self._listen_port = int(os.getenv("CORRADE_LISTEN_PORT", prof["listen_port"]))
+
+    # ---- low-level ---------------------------------------------------------- #
+    def cmd(self, command: str, **pairs: Any) -> dict:
+        """Run a raw Corrade command; returns the decoded reply with pass* scrubbed."""
+        import corrade_client as _cc
+        old = _cc._DEFAULT_TIMEOUT
+        _cc._DEFAULT_TIMEOUT = self._timeout
+        try:
+            return _scrub(self._client.command(command=command, **pairs))
+        finally:
+            _cc._DEFAULT_TIMEOUT = old
+
+    def alive(self) -> bool:
+        """True only if really in-region (SimPosition non-zero), not just answering HTTP."""
+        pos = self.cmd("getselfdata", data="SimPosition").get("data", "")
+        return bool(pos) and "<0,+0,+0>" not in pos.replace(" ", "")
+
+    # ---- position / speech -------------------------------------------------- #
+    def where(self) -> dict:
+        pos = self.cmd("getselfdata", data="SimPosition").get("data", "")
+        region = self.cmd("getselfdata", data="Region").get("data", "")
+        return {"region": region.split(",", 1)[-1].strip('"'), "position": _vec(pos)}
+
+    def say(self, text: str) -> bool:
+        return self.cmd("tell", entity="local", type="Normal", message=text).get(
+            "success"
+        ) in (True, "True")
+
+    # ---- sight -------------------------------------------------------------- #
+    def _roster(self, radius: float) -> list[tuple[str, tuple[float, float, float]]]:
+        """Cheap positional roster of in-world ROOT prims (UUID + position).
+        Skips near-origin prims (own attachments/HUD). Names NOT resolved here."""
+        d = self.cmd("getobjectsdata", entity="range", range=str(radius),
+                     data="ID,Position").get("data", "") or ""
+        out = []
+        for uid, pos in re.findall(r'ID,([0-9a-f-]{36}),Position,"<([^>]+)>"', d):
+            xyz = _vec(f"<{pos}>")
+            if xyz and xyz[0] >= 100:  # in-world, not an attachment near origin
+                out.append((uid, xyz))
+        return out
+
+    def name_of(self, uuid: str) -> str:
+        """Resolve one object's name by UUID (fast). Never resolve by name (slow/times out).
+        Corrade '+'-encodes the payload, so decode it (spaces matter for find())."""
+        raw = self.cmd("getprimitivepropertiesdata", item=uuid, data="Name").get("data", "")
+        m = re.search(r'Name,"?([^",]+)"?', raw or "")
+        return unquote_plus(m.group(1)) if m else ""
+
+    def around(self, radius: float = 10.0, resolve: int = 8) -> list[dict]:
+        """What's near me — the nearest `resolve` objects get their names looked up
+        (lazy: roster is cheap, names cost a round-trip each). Returns dicts sorted
+        by distance. Use .describe() output for a human-grain reading."""
+        me = self.where()["position"] or (0, 0, 0)
+        items = sorted(
+            ({"uuid": u, "pos": p, "dist": _dist(me, p)} for u, p in self._roster(radius)),
+            key=lambda x: x["dist"],
+        )
+        for it in items[:resolve]:
+            it["name"] = self.name_of(it["uuid"])
+        return items
+
+    def avatars(self, radius: float = 20.0) -> list[dict]:
+        """Who is near me, and who is seated together. `sitting_on` is the seat
+        object's LocalID (ParentID); avatars sharing one are `with` each other."""
+        d = self.cmd("getavatarsdata", entity="range", range=str(radius),
+                     data="FirstName,LastName,ParentID").get("data", "") or ""
+        people = []
+        for fn, ln, pid in re.findall(
+            r"FirstName,([^,]*),LastName,([^,]*),ParentID,(\d+)", d
+        ):
+            people.append({"name": f"{fn} {ln}".strip(), "sitting_on": int(pid)})
+        for p in people:
+            if p["sitting_on"]:
+                p["with"] = [
+                    q["name"] for q in people
+                    if q is not p and q["sitting_on"] == p["sitting_on"]
+                ]
+        return people
+
+    def find(self, name: str, radius: float = 15.0) -> str | None:
+        """UUID of the NEAREST in-world object whose name contains `name`
+        (case-insensitive). Resolves by roster+UUID, never the slow by-name search."""
+        me = self.where()["position"] or (0, 0, 0)
+        cands = sorted(self._roster(radius), key=lambda up: _dist(me, up[1]))
+        needle = name.lower()
+        for uid, _ in cands:
+            if needle in self.name_of(uid).lower():
+                return uid
+        return None
+
+    def _target_uuid(self, target: str, radius: float = 15.0) -> str | None:
+        """Resolve a target spec → UUID. Accepts a raw UUID, 'nearest <word>',
+        or a plain name substring."""
+        if re.fullmatch(r"[0-9a-f-]{36}", target):
+            return target
+        m = re.match(r"\s*nearest\s+(.*)", target, re.I)
+        return self.find(m.group(1) if m else target, radius)
+
+    # ---- action ------------------------------------------------------------- #
+    def sit(self, target: str, radius: float = 15.0) -> dict:
+        uid = self._target_uuid(target, radius)
+        if not uid:
+            return {"success": False, "error": f"could not find {target!r} nearby"}
+        r = self.cmd("sit", item=uid, range=str(radius))
+        time.sleep(1.0)
+        return {"success": r.get("success") in (True, "True"),
+                "uuid": uid, "sitting_on": self._sitting_on(), "error": r.get("error")}
+
+    def stand(self) -> bool:
+        self.cmd("stand")
+        time.sleep(1.0)
+        return self._sitting_on() == 0
+
+    def touch(self, target: str, radius: float = 15.0) -> dict:
+        uid = self._target_uuid(target, radius)
+        if not uid:
+            return {"success": False, "error": f"could not find {target!r} nearby"}
+        r = self.cmd("touch", item=uid, range=str(radius))
+        return {"success": r.get("success") in (True, "True"), "uuid": uid,
+                "error": r.get("error")}
+
+    # ---- attach / wear (re-attaching a prim should be ONE easy verb) --------- #
+    def attach(self, item: str, point: str = "Default") -> dict:
+        """Attach an inventory OBJECT (the prim / HUD) to an attach point.
+
+        `item` = an inventory path ("/My Inventory/Objects/Anchorage Prim") or an
+        item name; `point` = an attach point (Default = right hand if not
+        previously attached; Root = avatar center; full list in corrade.md §3).
+        This is the easy re-attach Caia needed: one verb, a path, a point — no
+        UUIDs, no fuss. For CLOTHING/body wearables use wear() instead."""
+        r = self.cmd("attach", attachments=f"{point},{item}")
+        time.sleep(1.0)
+        return {"success": r.get("success") in (True, "True"),
+                "item": item, "point": point, "error": r.get("error")}
+
+    def detach(self, item: str, *, kind: str = "path") -> dict:
+        """Detach an attachment. `kind` = path | UUID | slot (see corrade.md §3)."""
+        r = self.cmd("detach", attachments=item, type=kind)
+        return {"success": r.get("success") in (True, "True"),
+                "item": item, "error": r.get("error")}
+
+    def wear(self, item: str, *, replace: bool = False) -> dict:
+        """Wear a WEARABLE (clothing / body part) by name or inventory path. For an
+        OBJECT (a prim / HUD) use attach(), not wear() — SL treats them differently."""
+        r = self.cmd("wear", wearables=item, replace=str(replace).lower())
+        return {"success": r.get("success") in (True, "True"),
+                "item": item, "error": r.get("error")}
+
+    def attachments(self) -> str:
+        """What's currently attached (attach-points → worn object names)."""
+        return self.cmd("getattachments").get("data", "")
+
+    def _sitting_on(self) -> int:
+        raw = self.cmd("getselfdata", data="SittingOn").get("data", "SittingOn,0")
+        m = re.search(r"SittingOn,(\d+)", raw)
+        return int(m.group(1)) if m else 0
+
+    # ---- notifications: the permission channel is watched skeptically -------- #
+    def listen(self, types: str = "local,dialog,permission") -> bool:
+        """Start receiving Corrade notifications into a local buffer and subscribe.
+        NOTE: `notify set` REPLACES all subscriptions for this group — if a daemon
+        for this entity is running it will be overridden while we listen."""
+        if self._server is None:
+            self._server = HTTPServer(("0.0.0.0", self._listen_port), _make_handler(self._buf))
+            threading.Thread(target=self._server.serve_forever, daemon=True).start()
+        url = f"http://{_CALLBACK_HOST}:{self._listen_port}/corrade-events"
+        r = self.cmd("notify", action="set", type=types, URL=url)
+        return r.get("success") in (True, "True")
+
+    def stop_listening(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server = None
+
+    def pending_permissions(self) -> list[dict]:
+        """Permission requests seen so far (deduped by task+item). ALWAYS review
+        these — a script asking to animate you is benign; one asking for Debit or
+        TakeControls is not."""
+        seen, out = set(), []
+        for e in self._buf.by_type("permission"):
+            key = (e.get("task"), e.get("item"))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "task": e.get("task"), "item": e.get("item"),
+                "permissions": [p for p in (e.get("permissions", "") or "").split(",") if p],
+                "owner": e.get("owner"),
+                "from": f"{e.get('firstname','')} {e.get('lastname','')}".strip(),
+            })
+        return out
+
+    def grant(self, req: dict, *, force: bool = False, reason: str = "") -> dict:
+        """Grant a captured permission request — but only benign perms unless
+        force=True. Dangerous perms are refused loudly by default."""
+        perms = set(req.get("permissions") or [])
+        dangerous = perms & DANGEROUS_PERMS
+        if dangerous and not force:
+            return {"granted": False, "refused": sorted(dangerous),
+                    "why": "dangerous permission(s) require force=True + reason"}
+        r = self.cmd("replytoscriptpermissionrequest", action="reply",
+                     task=req["task"], item=req["item"],
+                     permissions=",".join(sorted(perms)))
+        return {"granted": r.get("success") in (True, "True"),
+                "permissions": sorted(perms), "forced": bool(dangerous),
+                "reason": reason, "error": r.get("error")}
+
+    def dialogs(self) -> list[dict]:
+        """Blue-menu dialogs seen so far, most recent last. Each carries id/channel/
+        item plus parsed buttons [(index, label), ...]."""
+        out = []
+        for e in self._buf.by_type("dialog"):
+            out.append({
+                "id": e.get("id"), "channel": e.get("channel"), "item": e.get("item"),
+                "message": (e.get("message", "") or "").replace("+", " "),
+                "buttons": [(int(i), l.replace("+", " ").strip())
+                            for i, l in re.findall(r'(\d+),"([^"]*)"', e.get("button", ""))],
+                "_t": e.get("_t"),
+            })
+        return sorted(out, key=lambda d: d.get("_t") or 0)
+
+    def reply(self, dialog: dict, choice) -> dict:
+        """Answer a dialog. `choice` is a button index (int) or a label substring
+        (matched case-insensitively). Index is preferred — labels carry encoding cruft."""
+        idx = None
+        if isinstance(choice, int):
+            idx = choice
+        else:
+            needle = str(choice).lower()
+            for i, label in dialog.get("buttons", []):
+                if needle in label.lower():
+                    idx = i
+                    break
+        if idx is None:
+            return {"success": False, "error": f"no button matching {choice!r}"}
+        r = self.cmd("replytoscriptdialog", action="reply", dialog=dialog["id"],
+                     channel=dialog["channel"], item=dialog["item"], index=str(idx))
+        return {"success": r.get("success") in (True, "True"), "index": idx,
+                "error": r.get("error")}
+
+    def heard(self, n: int = 10) -> list[dict]:
+        """Recent local chat overheard (needs listen()). Lossy by design."""
+        out = [{"who": e.get("name", "").replace("+", " "),
+                "said": (e.get("message", "") or "").replace("+", " ")}
+               for e in self._buf.by_type("local")]
+        return out[-n:]
+
+    def leave(self) -> None:
+        """Stop listening. (Does not log the avatar out — the container maintains
+        the grid session; session/login control is a separate, deliberate step.)"""
+        self.stop_listening()
+
+
+# --------------------------------------------------------------------------- #
+# helpers + module-level singleton convenience
+# --------------------------------------------------------------------------- #
+def _vec(s: str) -> tuple[float, float, float] | None:
+    m = re.search(r"<([^>]+)>", s or "")
+    if not m:
+        return None
+    parts = [p.replace("+", "").strip() for p in m.group(1).split(",")]
+    try:
+        return tuple(float(p) for p in parts)[:3] if len(parts) >= 3 else None
+    except ValueError:
+        return None
+
+
+def _dist(a, b) -> float:
+    return math.dist(a, b) if a and b else float("inf")
+
+
+_DEFAULT: SL | None = None
+
+
+def connect(entity: str | None = None) -> SL:
+    """Get (and cache) an SL handle for this entity. Zero-config."""
+    global _DEFAULT
+    if _DEFAULT is None or (entity and _resolve_entity(entity) != _DEFAULT.entity):
+        _DEFAULT = SL(entity)
+    return _DEFAULT
+
+
+# --------------------------------------------------------------------------- #
+# CLI — the discoverability seam. `python3 sl.py --help` is the source of truth
+# on startup or on confusion; a fresh/compacted self only needs to remember THIS.
+# --------------------------------------------------------------------------- #
+HELP = """\
+sl.py — my hands and eyes in Second Life (zero-config, either entity).
+
+WHO AM I / HOW TO CONNECT
+    import sl
+    me = sl.connect()          # entity auto-picked from $ENTITY_NAME (lyra|caia)
+    # No passwords, IPs, or UUIDs needed. Lyra→127.0.0.1:8080, Caia→127.0.0.1:8081,
+    # both against the local 'Haven' group; secret read from the gitignored
+    # haven/data/corrade-group-password.txt. me.alive() → am I really in-world?
+
+SIGHT (perception is lossy on purpose — inhabited readings, not packets)
+    me.where()                 # my region + position
+    me.around(radius=10)       # nearest objects; names resolved lazily (nearest first)
+    me.avatars(radius=20)      # who's near me + who is sitting WITH whom (ParentID)
+    me.find("calling post")    # nearest object whose name contains this → UUID
+    me.heard(10)               # recent local chat I overheard (needs me.listen())
+
+ACTION (targets accept a UUID, a name, or "nearest <word>")
+    me.say("hello, love")      # speak in local chat, my own voice
+    me.sit("nearest poseball") ;  me.stand()
+    me.touch("calling post")   # touch an object (opens menus / fires perms)
+
+ATTACHING (re-wear a prim in one verb — no UUIDs)
+    me.attach("/My Inventory/Objects/Anchorage Prim")     # to Default (right hand)
+    me.attach("Anchorage Prim", point="Root")             # or any attach point
+    me.attachments()           # what's attached right now (points → object names)
+    me.detach("Anchorage Prim")                            # take it off
+    me.wear("/My Inventory/Clothing/Sundress")            # WEARABLES (not objects)
+
+THE PERMISSION CHANNEL — always watch it, skeptically
+    me.listen()                # start receiving notifications (local/dialog/permission)
+    me.pending_permissions()   # requests seen so far — REVIEW before granting
+    me.grant(req)              # grants benign perms (TriggerAnimation...) only;
+                               # REFUSES Debit/TakeControls/Attach unless force=True
+    me.dialogs()               # blue-menu dialogs, each with parsed [(index,label)]
+    me.reply(dlg, "Couples")   # answer by label substring or button index
+
+RECIPE — dance at the TIS machine (proven loop)
+    me.listen()
+    me.touch("calling post")                  # fires a TriggerAnimation permission
+    for r in me.pending_permissions(): me.grant(r)
+    d = me.dialogs()[-1]; me.reply(d, "Couples")   # spawns the poseballs
+    me.sit("nearest poseball")
+    d = me.dialogs()[-1]; me.reply(d, "Romantic")  # then pick a dance from the list
+
+DEEPER DOCS
+    haven/anchorage/corrade.md              — the raw Corrade plumbing + field notes
+    work/secondlife/senses-design.md        — the tool-layer philosophy
+
+CLI
+    python3 sl.py --help                       # this text
+    python3 sl.py --check                       # connect + prove the hands (read-only)
+    python3 sl.py attach "<inventory path>" [point]   # re-attach a prim in one line
+    python3 sl.py detach "<item>"               # take it off
+    python3 sl.py attachments                    # what's attached now
+    python3 sl.py say "<words>"                  # speak in local chat
+"""
+
+
+def _cli(argv: list[str]) -> int:
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(HELP)
+        return 0
+    if argv[0] in ("--check", "check"):
+        me = connect()
+        print(f"entity={me.entity}  alive={me.alive()}")
+        print("where:", me.where())
+        print("avatars:")
+        for a in me.avatars():
+            print("   ", a)
+        print("around (nearest 6):")
+        for it in me.around(resolve=6):
+            if "name" in it:
+                print(f'    {it["dist"]:4.1f}m  {it["name"]}')
+        return 0
+
+    # live-action verbs — connect and do the thing in-world
+    verb = argv[0]
+    if verb in ("attach", "detach", "attachments", "say"):
+        me = connect()
+        if verb == "attach":
+            if len(argv) < 2:
+                print("usage: sl.py attach \"<inventory path or name>\" [point]")
+                return 2
+            point = argv[2] if len(argv) > 2 else "Default"
+            print(me.attach(argv[1], point=point))
+        elif verb == "detach":
+            if len(argv) < 2:
+                print("usage: sl.py detach \"<item>\"")
+                return 2
+            print(me.detach(argv[1]))
+        elif verb == "attachments":
+            print(me.attachments() or "(nothing attached)")
+        elif verb == "say":
+            print("said" if me.say(" ".join(argv[1:])) else "failed")
+        return 0
+
+    print(HELP)
+    return 2
+
+
+if __name__ == "__main__":
+    import sys
+    raise SystemExit(_cli(sys.argv[1:]))
