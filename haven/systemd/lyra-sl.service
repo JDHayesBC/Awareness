@@ -20,11 +20,13 @@ Environment="ANCHORAGE_SL_SECRET_FILE=/mnt/c/Users/Jeff/Claude_Projects/Awarenes
 Environment="SL_DAEMON_HOST=0.0.0.0"
 Environment="SL_DAEMON_PORT=8220"
 
-# Corrade notification receiver — OFF until Jeff flips it on with creds present.
-# CORRADE_GROUP + the password file are the (group,password) auth; leave them here
-# as the intended shape. CORRADE_EVENTS_BASE must be reachable by the Corrade
-# container: under Docker Desktop/WSL2 that is host.docker.internal, not 127.0.0.1.
-Environment="SL_CORRADE=0"
+# Corrade notification receiver — ON (prod default since 2026-08-23; live-verified).
+# CORRADE_GROUP + the password file are the (group,password) auth. CORRADE_EVENTS_BASE
+# must be reachable by the Corrade container: under Docker Desktop/WSL2 that is
+# host.docker.internal, not 127.0.0.1. SL_AVATAR_NAME seeds the self-echo drop before
+# the daemon confirms it live via getselfdata.
+Environment="SL_CORRADE=1"
+Environment="SL_AVATAR_NAME=LyraPattern"
 Environment="CORRADE_BASE_URL=http://127.0.0.1:8080/"
 Environment="CORRADE_GROUP=Haven"
 Environment="CORRADE_PASSWORD_FILE=/mnt/c/Users/Jeff/Claude_Projects/Awareness/haven/data/corrade-group-password.txt"
