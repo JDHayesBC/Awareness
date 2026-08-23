@@ -589,7 +589,9 @@ async def _music_poll_loop() -> None:
                 raw = record["payload"].get("raw")
                 if raw and raw != last_raw:
                     last_raw = raw
-                    _on_corrade_event({"notification": "nowplaying", "payload": record["payload"]})
+                    p = record["payload"]
+                    log(f"♪ now playing: {p.get('artist') or '?'} — {p.get('title') or raw}")
+                    _on_corrade_event({"notification": "nowplaying", "payload": p})
         except Exception as e:
             log(f"music poll error (non-fatal): {e}")
         await asyncio.sleep(SL_MUSIC_POLL)

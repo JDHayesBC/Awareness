@@ -273,10 +273,22 @@ class CorradeClient:
 
             MusicSense(parcel_music_url=lambda: client.get_parcel_music_url())
 
-        so the ear auto-re-points to whatever parcel this avatar stands on. NOTE:
-        confirm the exact field name (``MusicURL``) on the first live call —
-        corrade.md:607 references it but it is not yet hardware-verified.
+        so the ear auto-re-points to whatever parcel this avatar stands on.
+
+        Field name ``MusicURL`` is hardware-confirmed live (2026-08-23). Corrade
+        echoes the requested field as a WAS key,value CSV — i.e. the ``data``
+        value is ``"MusicURL,<url>"``, NOT the bare URL — so we strip the field
+        prefix. ``partition`` keeps the value verbatim (a stream URL may itself
+        contain a comma in a query string).
         """
         result = self.command(command="getparceldata", data="MusicURL")
-        url = (result.get("data") or "").strip()
-        return url or None
+        raw = (result.get("data") or "").strip()
+        if not raw:
+            return None
+        key, sep, value = raw.partition(",")
+        if sep and key.strip().lower() == "musicurl":
+            return value.strip() or None
+        # Defensive: a build that returns the bare URL with no key echo.
+        if "://" in raw and "," not in raw:
+            return raw or None
+        return None

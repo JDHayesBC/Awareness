@@ -34,6 +34,10 @@ Environment="CORRADE_GROUP=Haven"
 Environment="CORRADE_PASSWORD_FILE=/mnt/c/Users/Jeff/Claude_Projects/Awareness/haven/data/corrade-group-password.txt"
 Environment="CORRADE_EVENTS_BASE=http://host.docker.internal:8221"
 Environment="CORRADE_NOTIFY_TYPES=local,message,dialog,avatars,collision,sit,animation,appearance,balance,alert,typing,region"
+# Music sense: poll the parcel's audio stream for song changes → medium-tier
+# nowplaying events. MusicURL field + ICY metadata hardware-confirmed 2026-08-23.
+Environment="SL_MUSIC=1"
+Environment="SL_MUSIC_POLL=20"
 
 ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python3 -m haven.anchorage.sl_daemon
 

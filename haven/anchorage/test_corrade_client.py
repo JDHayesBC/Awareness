@@ -129,6 +129,33 @@ def test_command_returns_decoded_dict():
     assert CorradeClient.ok(result) is True
 
 
+def test_get_parcel_music_url_strips_was_key_prefix():
+    # Corrade echoes the requested field as 'MusicURL,<url>' (WAS key,value CSV),
+    # NOT the bare URL — the hardware-confirmed 2026-08-23 shape. Return just the URL.
+    body = encode_kv({
+        "command": "getparceldata", "success": "True",
+        "data": "MusicURL,http://listen.181fm.com:8700",
+    }).decode()
+    c, _ = _client(body)
+    assert c.get_parcel_music_url() == "http://listen.181fm.com:8700"
+
+
+def test_get_parcel_music_url_none_when_no_stream():
+    # Empty value (no music set on the parcel) -> None, not "".
+    body = encode_kv({"command": "getparceldata", "success": "True",
+                      "data": "MusicURL,"}).decode()
+    c, _ = _client(body)
+    assert c.get_parcel_music_url() is None
+
+
+def test_get_parcel_music_url_bare_url_defensive():
+    # A build that returns the bare URL with no key echo still works.
+    body = encode_kv({"command": "getparceldata", "success": "True",
+                      "data": "http://listen.181fm.com:8700"}).decode()
+    c, _ = _client(body)
+    assert c.get_parcel_music_url() == "http://listen.181fm.com:8700"
+
+
 def test_ok_false_when_success_false():
     c, _ = _client("success=False&error=no+permission")
     assert CorradeClient.ok(c.command(command="x")) is False
