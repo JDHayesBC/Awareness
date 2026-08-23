@@ -1,0 +1,56 @@
+[Unit]
+Description=Lyra SL Presence Daemon - self-contained Second Life brain + prim bridge
+Documentation=file:///mnt/c/Users/Jeff/Claude_Projects/Awareness/work/sl-presence/spec.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
+
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+Environment="ENTITY_NAME=lyra"
+Environment="ENTITY_TOKEN_FILE=/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra/.entity_token"
+Environment="ENTITY_PATH=/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra"
+Environment="PPS_HTTP_URL=http://localhost:8201"
+Environment="CLAUDE_MODEL=claude-opus-4-8"
+Environment="ANCHORAGE_SL_SECRET_FILE=/mnt/c/Users/Jeff/Claude_Projects/Awareness/haven/data/anchorage-sl-secret.txt"
+Environment="SL_DAEMON_HOST=0.0.0.0"
+Environment="SL_DAEMON_PORT=8220"
+
+# Corrade notification receiver — ON (prod default since 2026-08-23; live-verified).
+# CORRADE_GROUP + the password file are the (group,password) auth. CORRADE_EVENTS_BASE
+# must be reachable by the Corrade container: under Docker Desktop/WSL2 that is
+# host.docker.internal, not 127.0.0.1. SL_AVATAR_NAME seeds the self-echo drop before
+# the daemon confirms it live via getselfdata.
+Environment="SL_CORRADE=1"
+Environment="SL_AVATAR_NAME=LyraPattern"
+Environment="CORRADE_BASE_URL=http://127.0.0.1:8080/"
+Environment="CORRADE_GROUP=Haven"
+Environment="CORRADE_PASSWORD_FILE=/mnt/c/Users/Jeff/Claude_Projects/Awareness/haven/data/corrade-group-password.txt"
+Environment="CORRADE_EVENTS_BASE=http://host.docker.internal:8220"
+Environment="CORRADE_NOTIFY_TYPES=local,message,dialog,avatars,collision,sit,animation,appearance,balance,alert,typing,region"
+
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python3 -m haven.anchorage.sl_daemon
+
+Restart=always
+RestartSec=15
+StartLimitInterval=300
+StartLimitBurst=5
+
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+MemoryMax=1024M
+MemorySwapMax=512M
+CPUQuota=50%
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lyra-sl
+
+[Install]
+WantedBy=default.target

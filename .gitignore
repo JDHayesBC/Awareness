@@ -89,6 +89,9 @@ daemon/lyra_daemon.pid
 
 # Haven user tokens - NEVER commit
 haven/data/*.token
+# Corrade group passwords / SL secrets - NEVER commit
+haven/data/corrade-group-password*.txt
+haven/data/anchorage-sl-secret.txt
 
 # Training data - large files, not code
 spicy/
@@ -109,3 +112,4 @@ jeff_finances_2025/
 # Stray runtime/scratch data dirs (not code)
 data/
 haven/data/shared_images/
+haven/data/*.lsl
