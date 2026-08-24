@@ -274,15 +274,29 @@ class ArousalState:
         self._leak_to(now)
         return self._v
 
-    def should_fire(self, now: float) -> bool:
+    def should_fire(self, now: float, floor_interval: Optional[float] = None) -> bool:
+        """Fire if arousal V crossed threshold, OR (endogenous) if the silence
+        floor has elapsed. `floor_interval` overrides the static `cfg.floor_interval`
+        when passed — the adaptive idle-heartbeat drives this per-poll (see
+        heartbeat.HeartbeatController); pass 0 to disable the floor for this check
+        (event ingests do this, leaving the floor entirely to the poll loop)."""
         self._leak_to(now)
         if now - self._last_fire < self.cfg.min_interfire:
             return False
+        fi = self.cfg.floor_interval if floor_interval is None else floor_interval
         # Floor: after a long enough quiet, rouse regardless of V — the endogenous
-        # "look around unprompted" beat. Off when floor_interval <= 0.
-        if self.cfg.floor_interval > 0 and (now - self._last_fire) >= self.cfg.floor_interval:
+        # "look around unprompted" beat. Off when fi <= 0.
+        if fi > 0 and (now - self._last_fire) >= fi:
             return True
         return self._v >= self.cfg.theta
+
+    def touch(self, now: float) -> None:
+        """Reset the silence-floor clock without altering V or the refractory —
+        used when real activity happens outside a perception fire (e.g. a
+        prim-relayed inbound message) so the idle floor doesn't fire mid-turn."""
+        self._leak_to(now)
+        if now > self._last_fire:
+            self._last_fire = now
 
     def fire(self, now: float) -> None:
         self._leak_to(now)
@@ -337,6 +351,8 @@ class WakePayload:
     speaker: Optional[str] = None
     text: Optional[str] = None
     music_line: Optional[str] = None
+    idle: bool = False               # True = endogenous idle-floor beat (no external event)
+    idle_prompt: Optional[str] = None  # optional custom prompt from a heartbeat override
 
 
 # --------------------------------------------------------------------------- #
@@ -388,17 +404,44 @@ class SLPerception:
 
         if self.in_flight:
             return None                      # accumulate; recheck at turn_done
-        if self.arousal.should_fire(now):
+        # Event ingests fire on AROUSAL only (floor disabled here); the silence
+        # floor is owned entirely by the idle-heartbeat poll loop (see poll()).
+        if self.arousal.should_fire(now, floor_interval=0.0):
             return self._fire(now, s)
         return None
 
     def turn_done(self, now: float) -> Optional[WakePayload]:
         """Report that the current brain turn finished. Re-fire immediately if
         the room stayed lively enough during it that arousal is still over
-        threshold (this is the single-flight recheck)."""
+        threshold (this is the single-flight recheck). Arousal-only — the floor
+        is the poll loop's job."""
         self.in_flight = False
-        if self.arousal.should_fire(now):
+        if self.arousal.should_fire(now, floor_interval=0.0):
             return self._fire(now, Salience(0.0, MEDIUM, "accumulated", kind="accumulated"))
+        return None
+
+    def note_activity(self, now: float) -> None:
+        """Real activity happened outside a perception fire (a prim-relayed
+        /sl/inbound turn) — reset the silence-floor clock so the idle beat won't
+        fire mid-conversation. Does not touch arousal V."""
+        self.arousal.touch(now)
+
+    def poll(
+        self, now: float, floor_interval: float, idle_prompt: Optional[str] = None
+    ) -> Optional[WakePayload]:
+        """The idle-heartbeat tick. Called by the daemon's poke loop with the
+        adaptive floor (heartbeat.HeartbeatController.current_floor). Fires an
+        ENDOGENOUS wake iff the silence floor has elapsed (or residual arousal is
+        still over threshold) and no turn is in flight. Injects no salience — the
+        floor is the only endogenous fire path, so pokes never accumulate arousal
+        on their own. Returns an idle WakePayload (idle=True) or None."""
+        if self.in_flight:
+            return None
+        if self.arousal.should_fire(now, floor_interval=floor_interval):
+            wp = self._fire(now, Salience(0.0, LOW, "idle-heartbeat", kind="idle"))
+            wp.idle = True
+            wp.idle_prompt = idle_prompt
+            return wp
         return None
 
     def _fire(self, now: float, trigger: Salience) -> WakePayload:

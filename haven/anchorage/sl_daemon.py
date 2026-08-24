@@ -69,6 +69,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from haven.anchorage import corrade_events
+from haven.anchorage import heartbeat
 from haven.anchorage import perception
 from haven.brain import EntityBrain
 
@@ -128,6 +129,14 @@ SL_AVATAR_NAME = os.getenv("SL_AVATAR_NAME", f"{DISPLAY_NAME}Pattern").strip()
 SL_MUSIC = os.getenv("SL_MUSIC", "0") != "0"
 SL_MUSIC_POLL = float(os.getenv("SL_MUSIC_POLL", "20"))
 
+# Watchdog: hard ceiling on a single perception turn. A brain turn awaits the
+# model (and ambient/scene fetches); if any of those stalls, the await never
+# returns, so the try/finally in _handle_perception can't reset the "thinking"
+# halo or clear the single-flight lock — the daemon wedges (observed 2026-08-23,
+# a hung turn after an "Ambient fetch failed"). wait_for() bounds the turn so a
+# stall self-heals: TimeoutError → reply=None → finally runs → status + lock reset.
+SL_TURN_TIMEOUT = float(os.getenv("SL_TURN_TIMEOUT", "90"))
+
 # Heartbeat-as-event (opt-in): a periodic self-authored "heartbeat" event fed into
 # SLPerception, plus an arousal floor so a quiet room eventually rouses a
 # spontaneous glance (the in-world Lake Test — endogenous, not just reactive).
@@ -135,6 +144,24 @@ SL_MUSIC_POLL = float(os.getenv("SL_MUSIC_POLL", "20"))
 # force a wake after this many seconds of quiet regardless of arousal (0 = off).
 SL_HEARTBEAT = float(os.getenv("SL_HEARTBEAT", "0"))
 SL_PERCEPTION_FLOOR = float(os.getenv("SL_PERCEPTION_FLOOR", "0"))
+
+# Adaptive idle-heartbeat (task #8; work/sl-presence/idle-heartbeat-design.md). The
+# in-world max-silence guarantee whose interval BREATHES: tight right after a
+# teleport (catch experience notices / sit-perms / blue-menu dialogs), loose in a
+# chatty room (real beats already cover presence — don't fire in the pauses), a
+# medium endogenous beat when the room is quiet (the in-world Lake Test). It
+# supersedes the fixed SL_HEARTBEAT/SL_PERCEPTION_FLOOR pair (both still available,
+# both default off). Bounds fixed by Jeff at 5s..300s. On by default with SL_CORRADE.
+SL_IDLE_WATCHDOG = os.getenv("SL_IDLE_WATCHDOG", "1") != "0"
+SL_IDLE_POKE = float(os.getenv("SL_IDLE_POKE", "5"))            # poll resolution (honors the 5s floor)
+SL_IDLE_FLOOR_MIN = float(os.getenv("SL_IDLE_FLOOR_MIN", "5"))
+SL_IDLE_FLOOR_MAX = float(os.getenv("SL_IDLE_FLOOR_MAX", "300"))
+SL_IDLE_QUIET = float(os.getenv("SL_IDLE_QUIET", "120"))        # dormant/unknown floor (endogenous beat)
+SL_IDLE_GAP_MULT = float(os.getenv("SL_IDLE_GAP_MULT", "3.0"))  # active floor ≈ this × ambient gap
+SL_IDLE_DORMANT = float(os.getenv("SL_IDLE_DORMANT", "300"))    # no real event in this long ⇒ dormant
+SL_IDLE_TRANS_WIN = float(os.getenv("SL_IDLE_TRANS_WIN", "45"))   # post-transition tight window
+SL_IDLE_TRANS_FLOOR = float(os.getenv("SL_IDLE_TRANS_FLOOR", "5"))  # floor during that window
+SL_IDLE_OVERRIDE_TTL = float(os.getenv("SL_IDLE_OVERRIDE_TTL", "600"))  # override auto-expiry (safety)
 
 
 def _split_reply(reply: str) -> tuple[str, list[str]]:
@@ -301,6 +328,57 @@ _corrade_store: Optional[corrade_events.NotificationStore] = None
 _corrade_client = None
 _corrade_callback_url: Optional[str] = None
 _perception: Optional[perception.SLPerception] = None
+_hb: Optional[heartbeat.HeartbeatController] = None
+
+# Guard so the idle-heartbeat poke loop never fires a turn while another turn
+# (inbound message or perception wake) is in flight — a single Claude session
+# can't take concurrent queries. Set at the top of each brain-invoking handler,
+# cleared in its finally.
+_brain_busy: bool = False
+
+
+_HEARTBEAT_RE = re.compile(r"\[\[\s*HEARTBEAT\s+([^\]]+?)\s*\]\]", re.IGNORECASE)
+
+
+def _apply_heartbeat_directives(text: str) -> str:
+    """Parse + strip `[[HEARTBEAT ...]]` control tokens from a brain reply and
+    apply them to the idle-heartbeat controller. Returns the text with the tokens
+    removed (so they're never spoken or river-captured — same discipline as the
+    OWNERSAY sentinel). Forms:
+        [[HEARTBEAT 10]]                     override to 10s, default idle prompt
+        [[HEARTBEAT 10 "check for dialogs"]] override 10s + a custom idle prompt
+        [[HEARTBEAT auto]] / [[... clear]]   release the override (back to adaptive)
+        [[HEARTBEAT tight]] / [[... tp]]     trigger a transition (tighten) window now
+    """
+    if _hb is None or "[[" not in text:
+        return text
+    now = time.time()
+
+    def _handle(m: "re.Match") -> str:
+        body = m.group(1).strip()
+        low = body.lower()
+        try:
+            if low in ("auto", "clear", "off", "reset"):
+                _hb.clear_override()
+                log("heartbeat: override cleared (adaptive)")
+            elif low in ("tight", "transition", "tp", "teleport"):
+                _hb.note_transition(now)
+                log("heartbeat: transition tighten requested")
+            else:
+                mm = re.match(r'(\d+(?:\.\d+)?)\s*(?:"([^"]*)"|(.*))?$', body)
+                if mm:
+                    secs = float(mm.group(1))
+                    prompt = (mm.group(2) or mm.group(3) or "").strip() or None
+                    val = _hb.set_override(secs, now, prompt=prompt)
+                    log(f"heartbeat: override {val:.0f}s"
+                        + (f" prompt={prompt!r}" if prompt else ""))
+                else:
+                    log(f"heartbeat: unrecognized directive {body!r} (ignored)")
+        except Exception as e:
+            log(f"heartbeat directive error (non-fatal): {e}")
+        return ""  # strip the token from the spoken text
+
+    return _HEARTBEAT_RE.sub(_handle, text)
 
 
 def _on_corrade_event(data: dict) -> None:
@@ -309,8 +387,18 @@ def _on_corrade_event(data: dict) -> None:
     Runs inside the async callback handler / a bg task, so scheduling is safe."""
     if _perception is None:
         return
+    now = time.time()
+    # A region change ≈ teleport: tighten the idle floor for a window to promptly
+    # catch the experience notices / sit-perms / blue-menu dialogs a fresh scene
+    # throws but that don't self-announce (heartbeat design §6).
+    if _hb is not None:
+        try:
+            if perception.event_kind(data) == "region":
+                _hb.note_transition(now)
+        except Exception:
+            pass
     try:
-        payload = _perception.ingest(data, time.time())
+        payload = _perception.ingest(data, now)
     except Exception as e:  # a perception bug must never break the ack
         log(f"perception ingest error (non-fatal): {e}")
         return
@@ -338,6 +426,25 @@ if SL_CORRADE:
     )
     log(f"SLPerception armed (avatar={_av!r}, address={sorted(_address_names)}, "
         f"floor={SL_PERCEPTION_FLOOR:.0f}s)")
+
+    # Adaptive idle-heartbeat: the max-silence guarantee whose interval breathes
+    # with context (task #8). The pure controller lives in heartbeat.py; the poke
+    # loop that drives it is started in _startup.
+    if SL_IDLE_WATCHDOG:
+        _hb = heartbeat.HeartbeatController(
+            floor_min=SL_IDLE_FLOOR_MIN,
+            floor_max=SL_IDLE_FLOOR_MAX,
+            quiet_default=SL_IDLE_QUIET,
+            gap_multiplier=SL_IDLE_GAP_MULT,
+            dormant_after=SL_IDLE_DORMANT,
+            transition_window=SL_IDLE_TRANS_WIN,
+            transition_floor=SL_IDLE_TRANS_FLOOR,
+            default_ttl=SL_IDLE_OVERRIDE_TTL,
+        )
+        log(f"idle-heartbeat armed (poke={SL_IDLE_POKE:.0f}s, floor "
+            f"{SL_IDLE_FLOOR_MIN:.0f}..{SL_IDLE_FLOOR_MAX:.0f}s, quiet={SL_IDLE_QUIET:.0f}s)")
+    else:
+        log("idle-heartbeat disabled (SL_IDLE_WATCHDOG=0)")
 
     corrade_events.register_routes(
         app,
@@ -435,7 +542,19 @@ async def _capture(brain, author_name: str, content: str, *, is_lyra: bool) -> N
 async def _handle_inbound(speaker: str, text: str, *, is_dm: bool, addressed: bool) -> None:
     """The slow path, run off the request: capture the inbound turn, think,
     capture the reply, deliver it to the registered prim(s)."""
+    global _brain_busy
     brain = _get_brain()
+
+    # A real inbound turn (prim-relay, DM) doesn't pass through perception, so reset
+    # the idle-floor clock + feed the tempo here — the watchdog must never fire mid
+    # prim-conversation. And hold the busy guard so the poke loop skips while this
+    # turn is in flight (one Claude session can't take concurrent queries).
+    _brain_busy = True
+    now = time.time()
+    if _perception is not None:
+        _perception.note_activity(now)
+    if _hb is not None:
+        _hb.note_activity(now)
 
     # The inbound turn is river-worthy even if I choose silence — someone spoke
     # to me and I heard it. Capture BEFORE responding.
@@ -452,8 +571,10 @@ async def _handle_inbound(speaker: str, text: str, *, is_dm: bool, addressed: bo
         if reply is None:
             return  # [[NO_RESPONSE]] — inbound already captured; nothing to say/deliver
 
-        # Split off any OWNERSAY: gizmo commands. Only the SPOKEN part is dialogue,
-        # so only it is river-captured; the raw command is a control signal.
+        # Parse + strip any [[HEARTBEAT ...]] control token first (never spoken or
+        # captured), then split off OWNERSAY: gizmo commands. Only the SPOKEN part
+        # is dialogue, so only it is river-captured; the rest are control signals.
+        reply = _apply_heartbeat_directives(reply)
         speech, cmds = _split_reply(reply)
         if not SL_COMMANDS and cmds:
             log(f"SL_COMMANDS=0 — dropping {len(cmds)} gizmo command(s): {cmds!r}")
@@ -478,6 +599,7 @@ async def _handle_inbound(speaker: str, text: str, *, is_dm: bool, addressed: bo
                 log(f"gizmo cmd -> {cmd!r}")
                 await _cmd_to_prim(prim, cmd)
     finally:
+        _brain_busy = False
         # Always fall back to the resting state, whether we spoke, stayed silent,
         # or errored out.
         await _push_status(_resting_status())
@@ -518,6 +640,7 @@ async def _handle_perception(payload) -> None:
     single-flight and recheck. Single-flight is enforced by
     ``SLPerception.in_flight`` (set when the payload was produced, cleared here via
     ``turn_done``) — so no two perception turns overlap."""
+    global _brain_busy
     brain = _get_brain()
     perceive = getattr(brain, "perceive", None)
     if perceive is None:
@@ -525,6 +648,14 @@ async def _handle_perception(payload) -> None:
         if _perception is not None:
             _perception.in_flight = False
         return
+
+    _brain_busy = True
+    idle = getattr(payload, "idle", False)
+    # A real (event-driven) wake feeds the tempo EMA + resets recency; an idle
+    # floor-fire must NOT — it's the endogenous beat itself, not ambient activity,
+    # so counting it would make the room look busier than it is.
+    if _hb is not None and not idle:
+        _hb.note_real_fire(time.time())
 
     # River: capture the triggering utterance (if this wake was someone speaking)
     # before we think, mirroring _handle_inbound. Non-speech triggers (music, an
@@ -535,16 +666,26 @@ async def _handle_perception(payload) -> None:
 
     await _push_status("thinking")
     try:
-        scene = await _live_scene()
-        try:
-            reply = await perceive(
-                scene, payload.deltas, addressed=payload.addressed, trigger=payload.trigger
+        async def _run_turn():
+            scene = await _live_scene()
+            return await perceive(
+                scene, payload.deltas, addressed=payload.addressed,
+                trigger=payload.trigger,
+                idle=idle, idle_prompt=getattr(payload, "idle_prompt", None),
             )
+        try:
+            # Bounded so a stalled model/scene fetch can't wedge the turn (and with
+            # it the "thinking" halo + single-flight lock) forever — see SL_TURN_TIMEOUT.
+            reply = await asyncio.wait_for(_run_turn(), timeout=SL_TURN_TIMEOUT)
+        except asyncio.TimeoutError:
+            log(f"perception turn exceeded {SL_TURN_TIMEOUT:.0f}s — abandoning so halo/lock reset")
+            reply = None
         except Exception as e:
             log(f"brain.perceive failed: {e}")
             reply = None
 
         if reply:
+            reply = _apply_heartbeat_directives(reply)
             speech, cmds = _split_reply(reply)
             if not SL_COMMANDS and cmds:
                 log(f"SL_COMMANDS=0 — dropping {len(cmds)} gizmo command(s): {cmds!r}")
@@ -557,6 +698,7 @@ async def _handle_perception(payload) -> None:
                     log(f"gizmo cmd -> {cmd!r}")
                     await _cmd_to_prim(prim, cmd)
     finally:
+        _brain_busy = False
         await _push_status(_resting_status())
         # Single-flight recheck: if the room stayed lively during the turn, arousal
         # may still be over threshold — fire the next turn now.
@@ -606,6 +748,43 @@ async def _heartbeat_loop() -> None:
     while True:
         await asyncio.sleep(SL_HEARTBEAT)
         _on_corrade_event({"notification": "heartbeat"})
+
+
+async def _idle_watchdog_loop() -> None:
+    """The adaptive idle-heartbeat clock (task #8). Every ``SL_IDLE_POKE`` seconds,
+    ask the controller for the *current* floor (which breathes with context) and
+    ask perception whether that floor is due. If so, fire an idle wake through the
+    exact same ``_handle_perception`` path a real event uses.
+
+    The poke injects NO salience — it only reads the floor clock — so pokes can't
+    accumulate arousal on their own; the floor is the only endogenous fire path.
+    We skip entirely while a turn is in flight (``_brain_busy`` / perception's own
+    ``in_flight``) since one Claude session can't take concurrent queries, and
+    while the brain isn't warmed up yet."""
+    log(f"idle-watchdog started (poke every {SL_IDLE_POKE:.0f}s)")
+    last_desc = ""
+    while True:
+        await asyncio.sleep(SL_IDLE_POKE)
+        try:
+            if not _ready or _brain_busy or _perception is None or _hb is None:
+                continue
+            if _perception.in_flight:
+                continue
+            now = time.time()
+            floor = _hb.current_floor(now)
+            # Cheap visibility into how the floor is breathing, logged only on change.
+            desc = _hb.describe(now)
+            if desc != last_desc:
+                log(f"idle-watchdog floor → {desc}")
+                last_desc = desc
+            payload = _perception.poll(now, floor, idle_prompt=_hb.active_prompt(now))
+            if payload is not None:
+                log(f"idle-watchdog fire (floor={floor:.0f}s, {desc})")
+                task = asyncio.create_task(_handle_perception(payload))
+                _bg_tasks.add(task)
+                task.add_done_callback(_bg_tasks.discard)
+        except Exception as e:
+            log(f"idle-watchdog error (non-fatal): {e}")
 
 
 @app.on_event("startup")
@@ -663,9 +842,18 @@ async def _startup():
         _bg_tasks.add(task)
         task.add_done_callback(_bg_tasks.discard)
 
-    # Heartbeat-as-event (opt-in via SL_HEARTBEAT>0): the endogenous beat.
+    # Heartbeat-as-event (opt-in via SL_HEARTBEAT>0): the legacy fixed endogenous
+    # beat. Superseded by the adaptive idle-watchdog below (both default off/on
+    # respectively), but kept for explicit opt-in.
     if SL_CORRADE and SL_HEARTBEAT > 0 and _perception is not None:
         task = asyncio.create_task(_heartbeat_loop())
+        _bg_tasks.add(task)
+        task.add_done_callback(_bg_tasks.discard)
+
+    # Adaptive idle-watchdog (task #8): the max-silence guarantee whose interval
+    # breathes with context. On by default with SL_CORRADE; owns the endogenous beat.
+    if SL_CORRADE and SL_IDLE_WATCHDOG and _perception is not None and _hb is not None:
+        task = asyncio.create_task(_idle_watchdog_loop())
         _bg_tasks.add(task)
         task.add_done_callback(_bg_tasks.discard)
 

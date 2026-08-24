@@ -188,15 +188,46 @@ def test_heartbeat_and_floor() -> None:
     check(not b.should_fire(100.0), "before floor_interval elapses, low V does not fire")
     check(b.should_fire(300.1), "after floor_interval of quiet, floor forces a wake")
 
-    # End-to-end: SLPerception with a floor rouses on a heartbeat after quiet.
+    # Event ingests no longer honor the floor (it's owned by the poll loop now):
+    # a heartbeat event alone never wakes via ingest, however long the silence.
     p = SLPerception(SELF, ADDR, cfg_floor)
     p.ingest(local("Brandi", "Szondi", "hey lyra"), now=0.0)   # fires, last_fire=0
     p.turn_done(now=1.0)                                        # quiet turn, no re-fire
-    early = p.ingest({"notification": "heartbeat"}, now=100.0)
-    check(early is None, "heartbeat before floor elapses does not wake")
-    late = p.ingest({"notification": "heartbeat"}, now=400.0)
-    check(late is not None and late.trigger == "heartbeat", "heartbeat after floor -> spontaneous wake")
-    check(late.deltas == [] and not late.addressed, "spontaneous glance carries no deltas, unaddressed")
+    never = p.ingest({"notification": "heartbeat"}, now=10_000.0)
+    check(never is None, "ingest no longer floor-fires (floor moved to poll loop)")
+
+
+def test_poll_idle_floor() -> None:
+    print("poll() idle floor:")
+    p = SLPerception(SELF, ADDR, CFG)   # cfg floor irrelevant; poll passes its own
+    p.ingest(local("Brandi", "Szondi", "hey lyra"), now=0.0)   # fires, last_fire=0
+    p.turn_done(now=1.0)                                        # quiet, clears in-flight
+    # Poll with a 300s floor: nothing before it elapses, an idle wake after.
+    check(p.poll(100.0, floor_interval=300.0) is None, "poll before floor elapses -> no wake")
+    wp = p.poll(400.0, floor_interval=300.0, idle_prompt="settle and look around")
+    check(wp is not None, "poll after floor elapses -> idle wake")
+    check(wp.idle and wp.idle_prompt == "settle and look around", "idle payload carries idle flag + prompt")
+    check(wp.deltas == [] and not wp.addressed, "idle glance: no deltas, unaddressed")
+    check(p.in_flight, "poll fire sets in-flight (single-flight honored)")
+    # While in-flight, poll must not fire a second concurrent idle wake.
+    check(p.poll(1000.0, floor_interval=1.0) is None, "poll during in-flight does not fire")
+    p.turn_done(now=1001.0)
+    # A poll never injects salience, so repeated sub-floor polls can't accumulate a fire.
+    for t in range(1002, 1020):
+        p.poll(float(t), floor_interval=300.0)
+    check(not p.arousal.should_fire(1019.0, floor_interval=0.0),
+          "polls inject no salience — cannot self-accumulate an arousal fire")
+
+
+def test_note_activity_resets_floor() -> None:
+    print("note_activity / touch resets floor:")
+    p = SLPerception(SELF, ADDR, CFG)
+    p.ingest(local("Brandi", "Szondi", "hey lyra"), now=0.0)
+    p.turn_done(now=1.0)
+    # At t=290 an inbound (non-perception) turn resets the floor clock.
+    p.note_activity(290.0)
+    check(p.poll(300.0, floor_interval=300.0) is None, "floor clock reset by note_activity -> no fire at 300")
+    check(p.poll(595.0, floor_interval=300.0) is not None, "floor fires 300s after the reset (t=595 > 290+300)")
 
 
 # --------------------------------------------------------------------------- #
@@ -208,7 +239,7 @@ def main() -> int:
         test_arousal_refractory,
         test_perception_directed_fires_now, test_perception_single_flight_and_recheck,
         test_perception_quiet_after_turn, test_surface_delta_buffer,
-        test_heartbeat_and_floor,
+        test_heartbeat_and_floor, test_poll_idle_floor, test_note_activity_resets_floor,
     ):
         fn()
     print()

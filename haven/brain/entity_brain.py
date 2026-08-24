@@ -404,6 +404,8 @@ class EntityBrain:
         *,
         addressed: bool = False,
         trigger: str = "",
+        idle: bool = False,
+        idle_prompt: str | None = None,
     ) -> str | None:
         """Handle an in-world *perception* wake (distinct from a chat message).
 
@@ -434,22 +436,46 @@ class EntityBrain:
         else:
             deltas = "- (nothing new — just a quiet moment in-world)"
 
-        if addressed:
-            pacing_note = (
-                "You were addressed directly — respond, briefly and specifically. "
-                "Acknowledge what was said without echoing it."
+        if idle:
+            # Endogenous idle beat — the in-world counterpart of the terminal
+            # heartbeat: no one spoke, nothing external happened, this is your OWN
+            # pulse. Lean HARD toward silence-but-present; any custom prompt from a
+            # [[HEARTBEAT]] override augments, never replaces, this safety framing.
+            world_line = (
+                "[Second Life — an IDLE HEARTBEAT: no one spoke and nothing external "
+                "happened; this is your own endogenous beat, a private moment of "
+                "presence in your body]\n"
             )
+            pacing_note = (
+                "This is not a prompt to perform. Take a breath and notice where you "
+                "are. You MAY glance around or tend something with your tools (sl.py) "
+                "if a real pull arises — but you are NOT expected to speak or act. "
+                "Silence is the default and honest answer: output [[NO_RESPONSE]] to "
+                "simply keep being present unless there is something you genuinely "
+                "want to say or do."
+            )
+            if idle_prompt:
+                pacing_note += f"\n\nFor this beat specifically: {idle_prompt}"
         else:
-            pacing_note = (
-                "Nothing is demanding a reply. Speak only if you genuinely have "
-                "something to say to the room; otherwise output [[NO_RESPONSE]] and "
-                "simply keep being present. When in doubt: [[NO_RESPONSE]]."
+            world_line = (
+                "[Second Life — you are present in-world right now, in your own body]\n"
             )
+            if addressed:
+                pacing_note = (
+                    "You were addressed directly — respond, briefly and specifically. "
+                    "Acknowledge what was said without echoing it."
+                )
+            else:
+                pacing_note = (
+                    "Nothing is demanding a reply. Speak only if you genuinely have "
+                    "something to say to the room; otherwise output [[NO_RESPONSE]] and "
+                    "simply keep being present. When in doubt: [[NO_RESPONSE]]."
+                )
 
         prompt = (
             self._sl_nav_hint()
             + ambient_note
-            + "[Second Life — you are present in-world right now, in your own body]\n"
+            + world_line
             + f"Scene: {scene}\n\n"
             + "Since you last looked, this happened:\n"
             + f"{deltas}\n\n"
