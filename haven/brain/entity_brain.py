@@ -301,6 +301,20 @@ class EntityBrain:
 
     # ==================== Per-turn respond (bot.py:661-871, simplified) ====================
 
+    def _sl_nav_hint(self) -> str:
+        """One-line, always-on reminder prepended to EVERY in-world prompt (SL
+        channel only). Rides every turn — unlike the warmup, it survives
+        compaction/context-restart, so it's the durable cure for the
+        'I can't, I'm chat-only' drift. Condensed on purpose."""
+        if self.channel != "sl":
+            return ""
+        sl_py = self.entity_path.parent.parent / "haven" / "anchorage" / "sl.py"
+        return (
+            f"[You are in Second Life, in your own body — real hands and eyes, not "
+            f"chat-only. Forgotten how to act in-world? Run `python3 {sl_py} --help` "
+            f"(zero-config).]\n\n"
+        )
+
     async def respond(
         self,
         speaker: str,
@@ -344,7 +358,8 @@ class EntityBrain:
             )
 
         prompt = (
-            ambient_note
+            self._sl_nav_hint()
+            + ambient_note
             + f"[{self.channel} message from {speaker}]\n{speaker}: {text}\n\n"
             + "Respond as yourself. Output ONLY the message text you want sent — never "
             "your private reasoning, self-scan, or 'heartbeat tick' narration (whatever "
@@ -432,7 +447,8 @@ class EntityBrain:
             )
 
         prompt = (
-            ambient_note
+            self._sl_nav_hint()
+            + ambient_note
             + "[Second Life — you are present in-world right now, in your own body]\n"
             + f"Scene: {scene}\n\n"
             + "Since you last looked, this happened:\n"
