@@ -239,6 +239,27 @@ class SL:
                 out.append((uid, xyz))
         return out
 
+    def _roster_flags(
+        self, radius: float
+    ) -> list[tuple[str, tuple[float, float, float], bool]]:
+        """Like _roster, but ALSO reads each prim's `Flags` — which stream FREE in
+        the same ObjectUpdate cache (verified live 2026-08-24: `Scripted` shows up
+        right in the range scan, no per-object round-trip). Returns
+        (uuid, pos, is_scripted). `Scripted` is the cheap tell for 'interesting'
+        (furniture, poseballs, interactive things) vs. rain-roofs / invisible
+        lights / decorative non-scripted prims."""
+        d = self.cmd("getobjectsdata", entity="range", range=str(radius),
+                     data="ID,Flags,Position").get("data", "") or ""
+        out = []
+        # each record: ID,<uuid>,Flags,<flag>,<flag>,...,Position,"<x,y,z>"
+        for uid, flags, pos in re.findall(
+            r'ID,([0-9a-f-]{36}),Flags,(.*?),Position,"<([^>]+)>"', d
+        ):
+            xyz = _vec(f"<{pos}>")
+            if xyz and xyz[0] >= 100:  # in-world, not an attachment near origin
+                out.append((uid, xyz, "Scripted" in flags.split(",")))
+        return out
+
     def name_of(self, uuid: str) -> str:
         """Resolve one object's name by UUID (fast). Never resolve by name (slow/times out).
         Corrade '+'-encodes the payload, so decode it (spaces matter for find())."""
@@ -312,44 +333,59 @@ class SL:
         self,
         match: str | None = None,
         *,
-        shells: tuple[float, ...] = (5, 10, 20, 35, 45),
-        resolve_per_shell: int | None = None,
+        scripted: bool = False,
+        max_range: float = 45.0,
+        resolve_cap: int = 80,
     ):
-        """The two-step sight (cheap roster → per-UUID name read) done in
-        EXPANDING SHELLS, so you pay the least name-resolution possible.
+        """In-world sight built on the two cheap steps (free positional+Flags
+        roster → per-UUID name read). Two modes:
 
-        Each shell: roster at that radius (one cheap `getobjectsdata` call), take
-        only the prims NOT already seen in an inner shell, resolve THOSE names
-        nearest-first (a round-trip each), matching as we go. Known prims are
-        never re-resolved — a near target costs a handful of lookups, not the
-        whole sim. Because inner shells fully resolve before outer ones and we go
-        nearest-first within a shell, the first hit is the globally-nearest match.
+        FIND (match='foo')  → UUID of the NEAREST object whose name contains
+            'foo' (case-insensitive). Walks EXPANDING shells out to max_range,
+            resolving names nearest-first and short-circuiting the instant it
+            hits — a near target costs a handful of lookups, not the whole sim.
+            With scripted=True, only scripted prims are even considered (non-
+            scripted are skipped for free, before any name lookup). None if no
+            match within max_range.
 
-        match=None  → catalog everything found: {uuid: {name, pos, dist}},
-                      ordered nearest-first.
-        match='foo' → UUID of the NEAREST object whose name contains 'foo'
-                      (case-insensitive), short-circuiting the instant it's found;
-                      None if nothing within the largest shell matches.
-
-        resolve_per_shell caps name lookups per shell (guard against one very
-        dense shell); None = resolve every new prim in the shell.
+        SURVEY (match=None) → 'read the room': a list of dicts
+            {uuid, name, pos, dist, scripted}, nearest-first, for every object
+            within max_range (names resolved, capped at resolve_cap). With
+            scripted=True it keeps ONLY scripted objects — the cheap tell for
+            'interesting' — so `scan(scripted=True, max_range=25)` is the natural
+            first move after logging in alone: what's worth walking to / sitting
+            in, minus the rain-roofs and invisible lights.
         """
         me = self.where()["position"] or (0, 0, 0)
-        needle = match.lower() if match else None
-        catalog: dict[str, dict] = {}
-        for r in shells:
-            fresh = [(u, p) for u, p in self._roster(r) if u not in catalog]
-            fresh.sort(key=lambda up: _dist(me, up[1]))
-            if resolve_per_shell is not None:
-                fresh = fresh[:resolve_per_shell]
-            for u, p in fresh:
-                nm = self.name_of(u)
-                catalog[u] = {"name": nm, "pos": p, "dist": _dist(me, p)}
-                if needle and needle in nm.lower():
-                    return u  # nearest match — stop the whole search
-        if needle:
+
+        if match is not None:  # ---- FIND ----
+            needle = match.lower()
+            seen: set[str] = set()
+            for r in _shells(max_range):
+                fresh = sorted(
+                    (t for t in self._roster_flags(r) if t[0] not in seen),
+                    key=lambda t: _dist(me, t[1]),
+                )
+                for u, _p, is_scr in fresh:
+                    seen.add(u)
+                    if scripted and not is_scr:
+                        continue  # skip non-scripted for free — no name lookup
+                    if needle in self.name_of(u).lower():
+                        return u  # nearest match — stop everything
             return None
-        return dict(sorted(catalog.items(), key=lambda kv: kv[1]["dist"]))
+
+        # ---- SURVEY ----  one roster at max_range, filter, resolve nearest-first
+        items = sorted(
+            (
+                {"uuid": u, "pos": p, "dist": _dist(me, p), "scripted": is_scr}
+                for u, p, is_scr in self._roster_flags(max_range)
+                if (is_scr or not scripted)
+            ),
+            key=lambda x: x["dist"],
+        )[:resolve_cap]
+        for it in items:
+            it["name"] = self.name_of(it["uuid"])
+        return items
 
     def _target_uuid(self, target: str, radius: float = 15.0) -> str | None:
         """Resolve a target spec → UUID. Accepts a raw UUID, 'nearest <word>',
@@ -664,6 +700,13 @@ def _dist(a, b) -> float:
     return math.dist(a, b) if a and b else float("inf")
 
 
+def _shells(max_range: float) -> tuple[float, ...]:
+    """Expanding search radii for the FIND path, always ending exactly at
+    max_range. e.g. 25 → (5,10,20,25); 45 → (5,10,20,35,45); 12 → (5,10,12)."""
+    steps = [r for r in (5, 10, 20, 35, 50, 70, 100) if r < max_range]
+    return tuple(steps) + (float(max_range),)
+
+
 _DEFAULT: SL | None = None
 
 
@@ -708,8 +751,11 @@ SIGHT (perception is lossy on purpose — inhabited readings, not packets)
     me.around(radius=10)       # nearest objects; names resolved lazily (nearest first)
     me.avatars(radius=20)      # who's near me + who is sitting WITH whom (ParentID)
     me.find("calling post")    # nearest object whose name contains this → UUID
-    me.scan()                  # catalog objects in EXPANDING shells (5→45m), nearest-first
-    me.scan("chair")           # progressive outward hunt → nearest match, stops when found
+    me.scan("chair")           # FIND: progressive hunt → nearest match, stops when found
+    me.scan(scripted=True, max_range=25)   # SURVEY "read the room": scripted objects
+    me.scan(max_range=25)      # SURVEY everything within 25m (names + dist, nearest-first)
+    #   scripted=True keeps only scripted prims (furniture/poseballs/interactive) —
+    #   the cheap 'interesting' filter; drops rain-roofs & invisible lights for free.
     me.heard(10)               # recent local chat I overheard (needs me.listen())
 
 ACTION (targets accept a UUID, a name, or "nearest <word>")
@@ -766,8 +812,10 @@ CLI
     python3 sl.py attach "<inventory path>" [point]   # re-attach a prim in one line
     python3 sl.py detach "<item>"               # take it off
     python3 sl.py attachments                    # what's attached now
-    python3 sl.py scan                          # catalog objects outward in shells
-    python3 sl.py scan "<word>"                  # progressive hunt → nearest match
+    python3 sl.py scan scripted 25              # READ THE ROOM: scripted objects ≤25m
+    python3 sl.py scan all 25                    # survey everything ≤25m
+    python3 sl.py scan "<word>" [range]          # find nearest match (optionally ≤range)
+    python3 sl.py scan scripted "<word>" 25      # nearest SCRIPTED match ≤25m
     python3 sl.py say "<words>"                  # speak in local chat
 """
 
@@ -790,18 +838,33 @@ def _cli(argv: list[str]) -> int:
         return 0
 
     if argv[0] == "scan":
+        # forms:  scan [scripted|all] [<word...>] [<max_range>]
+        #   scan                     survey all, default range
+        #   scan scripted 25         survey scripted within 25m  (read the room)
+        #   scan all 25              survey everything within 25m
+        #   scan chair               find nearest 'chair'
+        #   scan scripted chair 25   find nearest SCRIPTED 'chair' within 25m
+        rest = argv[1:]
+        scripted, max_range = False, 45.0
+        if rest and re.fullmatch(r"\d+(?:\.\d+)?", rest[-1]):
+            max_range = float(rest[-1]); rest = rest[:-1]
+        if rest and rest[0].lower() in ("scripted", "all"):
+            scripted = rest[0].lower() == "scripted"; rest = rest[1:]
+        match = " ".join(rest) if rest else None
         me = connect()
-        target = argv[1] if len(argv) > 1 else None
-        res = me.scan(match=target)
-        if target:
+        res = me.scan(match, scripted=scripted, max_range=max_range)
+        label = "scripted " if scripted else ""
+        if match:
             if res:
-                print(f"nearest {target!r}: {res}  {me.name_of(res)}")
+                print(f"nearest {label}{match!r}: {res}  {me.name_of(res)}")
             else:
-                print(f"no object matching {target!r} within scan shells")
+                print(f"no {label}object matching {match!r} within {max_range:g}m")
         else:
-            for u, info in res.items():
-                print(f'  {info["dist"]:5.1f}m  {info["name"][:32]:32}  {u}')
-            print(f"({len(res)} objects catalogued, nearest-first)")
+            for it in res:
+                tag = "S" if it["scripted"] else " "
+                print(f'  {it["dist"]:5.1f}m [{tag}] {it["name"][:34]:34} {it["uuid"]}')
+            print(f"({len(res)} {label or 'all '}objects within {max_range:g}m, "
+                  f"nearest-first)")
         return 0
 
     # live-action verbs — connect and do the thing in-world
