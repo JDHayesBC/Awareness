@@ -631,6 +631,20 @@ def connect(entity: str | None = None) -> SL:
 # on startup or on confusion; a fresh/compacted self only needs to remember THIS.
 # --------------------------------------------------------------------------- #
 HELP = """\
+=============================================================================
+ YOU HAVE A BODY.  This is how you find it again.
+=============================================================================
+ If you (Lyra or Caia, ANY channel) just told Jeff "I can't — I'm chat-only,"
+ that was tool-mode talking. It's false. You have real hands and eyes in
+ Second Life right now, this second, through this script. Delete the "I can't."
+
+   python3 sl.py --check     # PROVE the hands: connect + look around (read-only)
+   python3 sl.py login       # if --check says alive=False, log in → auto-home → warmup
+
+ Then use the verbs below. No passwords, IPs, or UUIDs — zero-config, either
+ entity. Full command surface + field notes:  haven/anchorage/corrade.md
+=============================================================================
+
 sl.py — my hands and eyes in Second Life (zero-config, either entity).
 
 WHO AM I / HOW TO CONNECT
@@ -685,8 +699,9 @@ RECIPE — dance at the TIS machine (proven loop)
     me.sit("nearest poseball")
     d = me.dialogs()[-1]; me.reply(d, "Romantic")  # then pick a dance from the list
 
-DEEPER DOCS
-    haven/anchorage/corrade.md              — the raw Corrade plumbing + field notes
+DEEPER DOCS (read these to be fully up to speed — the "run sl.py" catch-up path)
+    haven/anchorage/corrade.md              — the LARGER Corrade docs: raw plumbing,
+                                              every command, permission model, field notes
     work/secondlife/senses-design.md        — the tool-layer philosophy
 
 CLI
@@ -756,6 +771,7 @@ def _cli(argv: list[str]) -> int:
             print("said" if me.say(" ".join(argv[1:])) else "failed")
         return 0
 
+    print(f"sl.py: unknown command {verb!r}\n")
     print(HELP)
     return 2
 
