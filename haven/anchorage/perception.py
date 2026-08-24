@@ -88,6 +88,30 @@ _KNOWN_NOTIFS = frozenset({
     "nowplaying", "heartbeat",
 })
 
+
+def music_tail(payload: Optional[dict], *, include_ref: bool) -> str:
+    """Compact enrichment suffix for a now-playing line (see ``senses/music_cache``).
+
+    Genre/mood is always shown when known; a lyrics marker is appended when the
+    song has words — with the cache ``lyrics_ref`` path on the persistent
+    standing-state line (``include_ref=True``) and a bare ``♫ lyrics`` on the
+    transient change delta. Returns ``""`` for a bare title, an un-enriched
+    payload, or a non-song bumper — so an un-wired or degraded sense renders
+    exactly as it did before (title only)."""
+    if not isinstance(payload, dict) or payload.get("is_song") is False:
+        return ""
+    bits: list[str] = []
+    desc = payload.get("description")
+    if not desc:
+        genres = payload.get("genres") or []
+        desc = " · ".join(genres[:3]) if genres else None
+    if desc:
+        bits.append(desc)
+    if payload.get("has_lyrics"):
+        ref = payload.get("lyrics_ref")
+        bits.append(f"♫ lyrics → {ref}" if (include_ref and ref) else "♫ lyrics")
+    return ("  · " + "  · ".join(bits)) if bits else ""
+
 # Tiers (for logging / caller policy, not used in the math directly).
 FORCE, MEDIUM, LOW, DROP = "force", "medium", "low", "drop"
 
@@ -220,7 +244,7 @@ def score_event(
         artist = payload.get("artist") if isinstance(payload, dict) else None
         title = (payload.get("title") if isinstance(payload, dict) else None) or _get(event, "title")
         who = f"{artist} — " if artist else ""
-        line = f"♪ now playing: {who}{title}".rstrip()
+        line = f"♪ now playing: {who}{title}".rstrip() + music_tail(payload, include_ref=False)
         return Salience(cfg.s_music, MEDIUM, "music-change", kind=kind, delta=line)
 
     if kind == "animation":
@@ -336,7 +360,9 @@ class PerceptionSurface:
         title = self.music.get("title") or ""
         who = f"{artist} — " if artist else ""
         line = f"♪ playing: {who}{title}".rstrip()
-        return line if title else None
+        if not title:
+            return None
+        return line + music_tail(self.music, include_ref=True)
 
 
 # --------------------------------------------------------------------------- #

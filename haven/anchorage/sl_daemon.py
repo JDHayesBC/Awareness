@@ -718,6 +718,7 @@ async def _music_poll_loop() -> None:
     stands on."""
     try:
         from haven.anchorage.senses.music import MusicSense
+        from haven.anchorage.senses.music_cache import remember
     except Exception as e:
         log(f"music sense unavailable ({e}); music poll disabled")
         return
@@ -732,7 +733,20 @@ async def _music_poll_loop() -> None:
                 if raw and raw != last_raw:
                     last_raw = raw
                     p = record["payload"]
-                    log(f"♪ now playing: {p.get('artist') or '?'} — {p.get('title') or raw}")
+                    # Enrich (cache-first) + persist to the song library + heard-log;
+                    # augments p with genres/description/has_lyrics/lyrics_ref. Runs in
+                    # a thread (blocking disk/network) and is best-effort — a failure
+                    # leaves the bare title intact.
+                    try:
+                        p = await asyncio.to_thread(remember, p, ENTITY_NAME)
+                    except Exception as e:
+                        log(f"music enrich/cache error (non-fatal): {e}")
+                    if p.get("is_song") is False:
+                        # Station id / ad bumper — advance the stream cursor but don't
+                        # perturb perception; standing-state keeps the last real song.
+                        continue
+                    extra = f"  ({p['description']})" if p.get("description") else ""
+                    log(f"♪ now playing: {p.get('artist') or '?'} — {p.get('title') or raw}{extra}")
                     _on_corrade_event({"notification": "nowplaying", "payload": p})
         except Exception as e:
             log(f"music poll error (non-fatal): {e}")
