@@ -129,6 +129,15 @@ SL_AVATAR_NAME = os.getenv("SL_AVATAR_NAME", f"{DISPLAY_NAME}Pattern").strip()
 SL_MUSIC = os.getenv("SL_MUSIC", "0") != "0"
 SL_MUSIC_POLL = float(os.getenv("SL_MUSIC_POLL", "20"))
 
+# Pose sense (opt-in): poll the in-range avatar roster (self + others) and feed
+# resolved pose CHANGES into SLPerception as `pose` events (medium tier: enriches
+# the scene, a change alone won't usually wake the brain). Off by default so it
+# can't perturb a running daemon until deliberately enabled. SL_POSE_POLL = seconds
+# between roster polls. See haven/anchorage/senses/pose.py + work/secondlife/
+# animation-awareness-design.md.
+SL_POSE = os.getenv("SL_POSE", "0") != "0"
+SL_POSE_POLL = float(os.getenv("SL_POSE_POLL", "15"))
+
 # Watchdog: hard ceiling on a single perception turn. A brain turn awaits the
 # model (and ambient/scene fetches); if any of those stalls, the await never
 # returns, so the try/finally in _handle_perception can't reset the "thinking"
@@ -753,6 +762,79 @@ async def _music_poll_loop() -> None:
         await asyncio.sleep(SL_MUSIC_POLL)
 
 
+async def _pose_poll_loop() -> None:
+    """Background: poll the in-range avatar roster (self + others) via PoseSense,
+    resolve each against the furniture-pose library, and feed per-subject pose
+    CHANGES into SLPerception as ``pose`` events (medium tier: enriches the
+    embodied scene — who is in what pose — without usually waking the brain).
+
+    This is how I know 'what is happening to my body and others': one
+    ``getavatarsdata`` read senses everyone at once, positions come back
+    configured-exact, and the library turns a position into a named pose."""
+    try:
+        from haven.anchorage.senses import pose as pose_sense
+    except Exception as e:
+        log(f"pose sense unavailable ({e}); pose poll disabled")
+        return
+    # Confirm my own avatar name so self-entries render first-person + aren't
+    # mistaken for another avatar. Prefer the live getselfdata truth, but the event
+    # queue can be cold right after warmup — so retry a few times and fall back to
+    # the deterministic form (SL_AVATAR_NAME + " Resident") which the roster uses for
+    # single-token SL usernames. Never blocks the sense: a miss just means my own
+    # pose reads by name instead of "I".
+    self_name = None
+    for _ in range(3):
+        try:
+            me = await asyncio.to_thread(_corrade_client.self_data, "FirstName,LastName")
+            fn = (me.get("FirstName") or "").strip()
+            ln = (me.get("LastName") or "").strip()
+            if fn:
+                self_name = f"{fn} {ln}".strip()
+                break
+        except Exception:
+            pass
+        await asyncio.sleep(3)
+    if not self_name and SL_AVATAR_NAME:
+        self_name = SL_AVATAR_NAME if " " in SL_AVATAR_NAME else f"{SL_AVATAR_NAME} Resident"
+    ap, fr = pose_sense.corrade_providers(_corrade_client, self_name=self_name)
+    sense = pose_sense.PoseSense(ap, fr, entity=ENTITY_NAME)
+    last: dict[str, tuple] = {}
+    log(f"pose poll started (every {SL_POSE_POLL:.0f}s, self={self_name!r})")
+    while True:
+        try:
+            resolved = await asyncio.to_thread(
+                lambda: sense.resolve(sense.poll(), log_it=False))
+            for e in resolved:
+                sid = e.get("subject_uuid") or e.get("subject")
+                k = pose_sense.pose_key(e)
+                if last.get(sid) == k:
+                    continue                       # no change for this subject
+                first_seen = sid not in last
+                last[sid] = k
+                if e.get("source") in (None, "none"):
+                    continue                       # standing / not posed — nothing to note
+                # Persist the change to the per-entity posed-log (memory), then feed
+                # perception. Skip the very first observation per subject on a fresh
+                # loop so a restart doesn't replay everyone's current pose as "news".
+                try:
+                    await asyncio.to_thread(pose_sense.append_posed, ENTITY_NAME, {
+                        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "subject": e.get("subject"), "subject_uuid": e.get("subject_uuid"),
+                        "self": e.get("self", False), "source": e.get("source"),
+                        "label": e.get("label"), "menu": e.get("menu"),
+                        "furniture_key": e.get("furniture_key"),
+                        "uuid": e.get("anim_uuid") or e.get("uuid"),
+                    })
+                except Exception as ex:
+                    log(f"posed-log append error (non-fatal): {ex}")
+                if first_seen:
+                    continue
+                _on_corrade_event({"notification": "pose", "payload": e})
+        except Exception as e:
+            log(f"pose poll error (non-fatal): {e}")
+        await asyncio.sleep(SL_POSE_POLL)
+
+
 async def _heartbeat_loop() -> None:
     """Background: inject a self-authored ``heartbeat`` event into SLPerception
     every ``SL_HEARTBEAT`` seconds. Small on its own; with ``SL_PERCEPTION_FLOOR``
@@ -853,6 +935,12 @@ async def _startup():
     # Music sense (opt-in via SL_MUSIC=1). Follows this avatar's parcel.
     if SL_CORRADE and SL_MUSIC and _corrade_client is not None and _perception is not None:
         task = asyncio.create_task(_music_poll_loop())
+        _bg_tasks.add(task)
+        task.add_done_callback(_bg_tasks.discard)
+
+    # Pose sense (opt-in via SL_POSE=1). Senses self + others' furniture poses.
+    if SL_CORRADE and SL_POSE and _corrade_client is not None and _perception is not None:
+        task = asyncio.create_task(_pose_poll_loop())
         _bg_tasks.add(task)
         task.add_done_callback(_bg_tasks.discard)
 

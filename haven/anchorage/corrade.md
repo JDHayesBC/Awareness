@@ -778,6 +778,29 @@ libremetaverse/timestamp quirk. Read it for curiosity; never gate logic on it.
   → `attach Neck,<hair>` (preserve it) → `attach Skull,<nametag>` → `getattachments` shows the
   nametag on Skull.
 
+**`download` on THIS build is `Texture`-ONLY (VERIFIED DEAD-END 2026-08-24, Lyra).** The grimore.org
+reference lists `Notecard`/`LSLText`/`Animation`/`Sound`/`Bodypart`/… as valid `type=` values, but
+this deployed Corrade image's `download` parser **rejects every one of them** with `unknown asset type`
+in ~0.0s (pure string-parse rejection, no network) — tested exhaustively: `Notecard` (all casings),
+`LSLText`, `LSLBytecode`, `Animation`, `Sound`, `Object`, `Bodypart`, `Clothing`, `Landmark`,
+`Gesture`, numeric `7`/`10`, `Text`, `CallingCard` — **all rejected.** ONLY `Texture` parses (it gets
+far enough to return `unable to convert to requested format` when fed a non-texture item). Adding
+`path=` does not help (rejection is upstream of delivery). **Consequence: reading notecard/animation
+asset *text* via Corrade is not available on this image** — so the "read the AVpos card statically"
+shortcut for the pose-dictionary is blocked. Would only be restored by upgrading the Corrade docker
+image to a build whose `download` enum-parser accepts the full type set (infra call; not worth it just
+for this). **Use the menu-troll path instead** (below) — it needs no card text and works today.
+
+**Pose-dictionary via menu-troll (the working path, no `download` needed).** Recover label→UUID
+*directly* using only proven-live primitives: sit/`touch` the furniture → AVsitter `dialog`
+notification carries buttons as `index,<n>,<label>,…` → `replytoscriptdialog action=reply dialog=<id>
+index=<n>` selects each pose → read my **own** running `animation` UUID (bot-self notification works)
+→ record `label→UUID`. Submenus via `[BACK]`/`[SWAP]`/`Up`; menus are STATEFUL (fresh `touch` returns
+where you left off). This is exactly the loop proven at §9a ("touch → dialog → choose →
+replytoscriptdialog → re-touch shows new pose"); three UUIDs already cached this way (sS4→d4a16f88,
+C4→7ec9a0fe, S13→33f8829c). Slower than a static card-read (one live pose at a time) but fully
+autonomous and overnight-able.
+
 ---
 
 ## 10. Second Life requirement: register as a Scripted Agent

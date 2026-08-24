@@ -73,6 +73,7 @@ class SalienceConfig:
     s_local: float = 0.35       # undirected nearby speech — ~3 accumulate to fire
     s_avatar: float = 0.30      # avatar enters/leaves chat range
     s_music: float = 0.40       # now-playing track change
+    s_pose: float = 0.15        # a resolved pose change (mine or another's) — body-awareness
     s_animation: float = 0.15   # nearby avatar animation change
     s_appearance: float = 0.15  # nearby avatar outfit change
     s_typing: float = 0.10      # someone starts typing — early lean-in
@@ -85,7 +86,7 @@ class SalienceConfig:
 _KNOWN_NOTIFS = frozenset({
     "local", "message", "dialog", "avatars", "collision", "sit", "animation",
     "appearance", "balance", "alert", "typing", "region", "permission",
-    "nowplaying", "heartbeat",
+    "nowplaying", "pose", "heartbeat",
 })
 
 
@@ -111,6 +112,31 @@ def music_tail(payload: Optional[dict], *, include_ref: bool) -> str:
         ref = payload.get("lyrics_ref")
         bits.append(f"♫ lyrics → {ref}" if (include_ref and ref) else "♫ lyrics")
     return ("  · " + "  · ".join(bits)) if bits else ""
+
+def pose_delta_line(payload: Optional[dict]) -> Optional[str]:
+    """Human one-liner for a resolved pose change (see ``senses/pose.py``).
+
+    First-person for my own body ("I settled into…"), third-person for another
+    avatar. Named when the pose resolved (geometry-exact / self-anim), honest and
+    soft when it didn't (seated-but-uncarded → "sat down", off-card → "shifted").
+    Returns ``None`` for a non-pose so it adds no delta line."""
+    if not isinstance(payload, dict):
+        return None
+    src = payload.get("source")
+    who_self = bool(payload.get("self"))
+    who = "I" if who_self else (payload.get("subject") or "someone")
+    label = payload.get("label")
+    menu = payload.get("menu")
+    tail = f" ({menu})" if (menu and menu.lower() not in (str(label or "").lower(),)) else ""
+    if src in ("geometry-exact", "self-anim") and label:
+        verb = "settled into" if who_self else "is now in"
+        return f"⟡ {who} {verb} {label}{tail}"
+    if src == "parent-only":
+        return f"⟡ {who} sat down" + ("" if who_self else " (pose unnamed)")
+    if src == "blind-freeform":
+        return f"⟡ {who} shifted into a freeform pose"
+    return None
+
 
 # Tiers (for logging / caller policy, not used in the math directly).
 FORCE, MEDIUM, LOW, DROP = "force", "medium", "low", "drop"
@@ -246,6 +272,16 @@ def score_event(
         who = f"{artist} — " if artist else ""
         line = f"♪ now playing: {who}{title}".rstrip() + music_tail(payload, include_ref=False)
         return Salience(cfg.s_music, MEDIUM, "music-change", kind=kind, delta=line)
+
+    if kind == "pose":
+        # A resolved pose change from the pose sense (senses/pose.py). Enriches the
+        # generic `animation` notification with the actual named pose — mine or
+        # another's — so the brain sees "who is in what pose", the embodied scene.
+        payload = event.get("payload") or event
+        line = pose_delta_line(payload)
+        return Salience(cfg.s_pose, MEDIUM, "pose-change", kind=kind,
+                        speaker=payload.get("subject") if isinstance(payload, dict) else None,
+                        delta=line)
 
     if kind == "animation":
         return Salience(cfg.s_animation, MEDIUM, "animation", kind=kind,

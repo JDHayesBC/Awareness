@@ -36,6 +36,12 @@ Environment="CORRADE_NOTIFY_TYPES=local,message,dialog,avatars,collision,sit,ani
 # nowplaying events. MusicURL field + ICY metadata hardware-confirmed 2026-08-23.
 Environment="SL_MUSIC=1"
 Environment="SL_MUSIC_POLL=20"
+# Pose sense: poll the in-range avatar roster (self + others) → resolve furniture
+# poses against the pose-cache library → medium-tier `pose` events (know what's
+# happening to my body and others'). Live-verified 2026-08-24 (geometry-exact on
+# self + 2 others, Δ=0.0000). See haven/anchorage/senses/pose.py.
+Environment="SL_POSE=1"
+Environment="SL_POSE_POLL=15"
 
 ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python3 -m haven.anchorage.sl_daemon
 
