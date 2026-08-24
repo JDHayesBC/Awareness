@@ -94,6 +94,90 @@ def slugify(artist: Optional[str], title: Optional[str], *, maxlen: int = 80) ->
 
 
 # --------------------------------------------------------------------------- #
+# Title normalization — collapse every version/mix/format to the base track
+# --------------------------------------------------------------------------- #
+# We file + reference under clean ``artist + base-track`` (Jeff's call): one
+# lyrics set per song, not a copy per remix/lyric-video/"Taylor's Version". The
+# SAME cleaning feeds the slug (identity/dedup) AND the enrichment look-up (a
+# remix-suffixed title never matches lyrics.ovh / MusicBrainz). The *display*
+# title is untouched — the daemon still shows the real "(… Mix)" in the line;
+# only the library key + look-up use the cleaned form.
+#
+# Surgical, not blanket: a parenthetical is dropped only if it *contains* a junk
+# word, so "Song (Part 1)" and "Radio Ga Ga" survive while "(Official Video)" and
+# "(Sadrican Remix)" die. Tune the word-sets below — a wrong call only costs a
+# redundant file or a missed look-up, never a crash.
+
+# Format cruft — video/lyric/audio packaging, essentially never part of a title.
+_FORMAT_JUNK = {
+    "official", "video", "videos", "lyric", "lyrics", "audio", "hd", "hq",
+    "4k", "8k", "mv", "visualizer", "visualiser", "clip", "teaser", "trailer",
+    "promo", "subtitulado", "legendado", "captions",
+}
+# Version/mix markers — different *rendering* of the same song; collapse them.
+_VERSION_JUNK = {
+    "remix", "mix", "edit", "remaster", "remastered", "live", "acoustic",
+    "instrumental", "cover", "bootleg", "rework", "reworked", "vip", "dub",
+    "mashup", "version", "versions", "extended", "session", "sessions", "demo",
+    "mono", "stereo", "deluxe", "bonus", "anniversary",
+}
+_FEAT_WORDS = {"feat", "ft", "featuring"}
+
+# Trailing free-text qualifier (no brackets): "… Anki Remix", "… 2011 Remaster".
+_TRAIL_KEYS = (r"(?:remix|mix|edit|remaster(?:ed)?|live|acoustic|instrumental|"
+               r"cover|bootleg|rework|vip|dub|mashup|version)")
+_TRAIL_RE = re.compile(r"\s+(?:[A-Za-z0-9][\w'&.]*\s+)?" + _TRAIL_KEYS + r"\b.*$", re.I)
+_FEAT_RE = re.compile(r"\s*[(\[]?\s*(?:feat\.?|ft\.?|featuring)\s+.*$", re.I)
+
+
+def _has_junk(text: str) -> bool:
+    words = set(re.findall(r"[a-z0-9]+", text.lower()))
+    return bool(words & (_FORMAT_JUNK | _VERSION_JUNK | _FEAT_WORDS))
+
+
+def _strip_junk_brackets(s: str) -> str:
+    """Remove ``(...)`` / ``[...]`` groups that contain a junk word; keep clean
+    ones. Loops so nested / adjacent groups all resolve."""
+    prev = None
+    while prev != s:
+        prev = s
+        s = re.sub(r"\(([^()]*)\)", lambda m: "" if _has_junk(m.group(1)) else m.group(0), s)
+        s = re.sub(r"\[([^\[\]]*)\]", lambda m: "" if _has_junk(m.group(1)) else m.group(0), s)
+    return s
+
+
+def clean_title(title: Optional[str]) -> Optional[str]:
+    """Reduce a display title to its base-track form. Never returns empty — if
+    cleaning would erase everything, the original is kept."""
+    if not title:
+        return title
+    t = title.replace("’", "'")
+    t = _strip_junk_brackets(t)
+    t = re.split(r"\s*[|•]\s*", t)[0]        # drop a pipe/bullet promo tail
+    t = _FEAT_RE.sub("", t)                   # drop "feat. X" / "ft X"
+    t = _TRAIL_RE.sub("", t)                  # drop a trailing "... Remix"
+    t = re.sub(r"\s{2,}", " ", t).strip(" -–—•|/")
+    return t or title
+
+
+def clean_artist(artist: Optional[str]) -> Optional[str]:
+    """Base artist: strip YouTube ``- Topic`` and any ``feat.`` credit. Co-primary
+    joins ("Simon & Garfunkel", "Hall, Oates") are preserved — only explicit
+    featuring is dropped."""
+    if not artist:
+        return artist
+    a = re.sub(r"\s*-\s*topic$", "", artist, flags=re.I)
+    a = _FEAT_RE.sub("", a)
+    a = re.sub(r"\s{2,}", " ", a).strip()
+    return a or artist
+
+
+def canonical(artist: Optional[str], title: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """``(artist, title)`` → cleaned ``(artist, title)`` for filing + look-up."""
+    return clean_artist(artist), clean_title(title)
+
+
+# --------------------------------------------------------------------------- #
 # Non-song (station id / bumper) detection — pure heuristics, zero network
 # --------------------------------------------------------------------------- #
 # Explicit bumper phrases that appear in a "title" that isn't a song.
@@ -207,7 +291,10 @@ def remember(
         return payload
     payload["is_song"] = True
 
-    slug = slugify(artist, title)
+    # File + look up under the cleaned base track — collapses every version/mix
+    # to one entry, and fixes the look-up (a remix-suffixed title won't match).
+    ca, ct = canonical(artist, title)
+    slug = slugify(ca, ct)
     now = clock()
 
     rec = None if force else load_song(slug, cache_dir)
@@ -217,13 +304,14 @@ def remember(
         # hammer the network every time it recurs; `force=True` re-fetches.
         info: dict[str, Any] = {"lyrics": None, "genres": [], "description": None}
         try:
-            info = (enrich_fn or _default_enrich())(artist, title) or info
+            info = (enrich_fn or _default_enrich())(ca, ct) or info
         except Exception:
             pass
         rec = {
             "slug": slug,
-            "artist": artist,
-            "title": title,
+            "artist": ca,
+            "title": ct,
+            "variants": [title] if title and title != ct else [],
             "genres": info.get("genres") or [],
             "description": info.get("description"),
             "lyrics": info.get("lyrics"),
@@ -239,6 +327,10 @@ def remember(
         # Backfill fields if an older/leaner record predates a schema tweak.
         rec.setdefault("has_lyrics", bool(rec.get("lyrics")))
         rec.setdefault("genres", [])
+        # Remember which actual version spun, without a second lyrics copy.
+        variants = rec.get("variants") or []
+        if title and title != rec.get("title") and title not in variants:
+            rec["variants"] = (variants + [title])[-12:]
 
     try:
         save_song(rec, cache_dir)

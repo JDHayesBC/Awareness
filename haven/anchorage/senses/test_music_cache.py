@@ -129,9 +129,53 @@ def test_music_tail() -> None:
           "rock · pop" in music_tail({"is_song": True, "genres": ["rock", "pop"]}, include_ref=True))
 
 
+def test_canonical() -> None:
+    from haven.anchorage.senses.music_cache import canonical, clean_title
+    # Jeff's real-world YouTube formats → base track.
+    check("official music video", clean_title("The Fate of Ophelia (Official Music Video)") == "The Fate of Ophelia")
+    check("double-paren version+video", clean_title("Enchanted (Taylor's Version) (Lyric Video)") == "Enchanted")
+    check("paren video + trailing remix", clean_title("Collateral Damage (Lyrics / Lyric Video) Anki Remix") == "Collateral Damage")
+    check("paren remix + pipe tail", clean_title("I Turn To You (Sadrican 2026 Progressive Remix) | Club Anthem") == "I Turn To You")
+    check("the terranova case", clean_title("Chase The Blues (Cameron McVey Mix)") == "Chase The Blues")
+    # Must NOT over-strip real titles:
+    check("keep 'Video Games'", clean_title("Video Games") == "Video Games")
+    check("keep 'Radio Ga Ga'", clean_title("Radio Ga Ga") == "Radio Ga Ga")
+    check("keep leading 'Live and Let Die'", clean_title("Live and Let Die") == "Live and Let Die")
+    check("keep clean paren '(Part 1)'", clean_title("Marquee Moon (Part 1)") == "Marquee Moon (Part 1)")
+    # feat / artist handling:
+    check("strip feat from title", clean_title("Song feat. Rihanna") == "Song")
+    ca, ct = canonical("Drake feat. Rihanna", "Take Care")
+    check("strip feat from artist", ca == "Drake")
+    check("keep co-primary '&'", canonical("Simon & Garfunkel", "America")[0] == "Simon & Garfunkel")
+
+
+def test_remember_collapses_versions() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        calls = {"n": 0}
+
+        def fake_enrich(artist, title):
+            calls["n"] += 1
+            return {"lyrics": "la la", "genres": ["house"], "description": "house"}
+
+        p1 = remember({"artist": "X", "title": "Song (Radio Edit)", "raw": "X - Song (Radio Edit)"},
+                      "caia", cache_dir=d, enrich_fn=fake_enrich)
+        p2 = remember({"artist": "X", "title": "Song (Live)", "raw": "X - Song (Live)"},
+                      "caia", cache_dir=d, enrich_fn=fake_enrich)
+        check("collapse: same ref for both versions", p1["lyrics_ref"] == p2["lyrics_ref"])
+        check("collapse: ref is clean base", p1["lyrics_ref"].endswith("x-song.json"))
+        check("collapse: enrich ran once", calls["n"] == 1)
+        check("collapse: exactly one library file", len(list(Path(d).glob("*.json"))) == 1)
+        rec = json.loads((Path(d) / "x-song.json").read_text(encoding="utf-8"))
+        check("collapse: play_count 2", rec.get("play_count") == 2)
+        check("collapse: canonical title is base", rec.get("title") == "Song")
+        check("collapse: both versions in variants",
+              set(rec.get("variants") or []) == {"Song (Radio Edit)", "Song (Live)"})
+
+
 def main() -> int:
-    for fn in (test_slugify, test_station_filter, test_remember_miss_then_hit,
-               test_remember_non_song, test_remember_enrich_failure_degrades, test_music_tail):
+    for fn in (test_slugify, test_station_filter, test_canonical, test_remember_miss_then_hit,
+               test_remember_non_song, test_remember_enrich_failure_degrades,
+               test_remember_collapses_versions, test_music_tail):
         print(fn.__name__)
         fn()
     print()
