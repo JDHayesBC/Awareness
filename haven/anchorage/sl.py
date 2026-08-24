@@ -62,6 +62,13 @@ _DEFAULT_PW_FILE = _DATA_DIR / "corrade-group-password.txt"
 # host. Under Docker Desktop/WSL2 only host.docker.internal works (see corrade.md).
 _CALLBACK_HOST = os.getenv("CORRADE_CALLBACK_HOST", "host.docker.internal")
 
+# Home sim. SAFETY (Jeff's directive 2026-08-24): for now BOTH entities are kept
+# in-sim at The Anchorage — we're not ready to be out in public, so a login that
+# lands anywhere else auto-teleports home BEFORE doing anything. Later this becomes
+# a judgment call. Overridable via env.
+HOME_REGION = os.getenv("SL_HOME_REGION", "The Anchorage")
+HOME_POSITION = os.getenv("SL_HOME_POSITION", "<185,212,28>")
+
 # Skeptical permission policy. Benign perms may be granted on request; the rest
 # require an explicit force=True + reason, because they can actually cause harm.
 SAFE_PERMS = {"TriggerAnimation", "TrackCamera", "ControlCamera", "Teleport"}
@@ -183,9 +190,30 @@ class SL:
             _cc._DEFAULT_TIMEOUT = old
 
     def alive(self) -> bool:
-        """True only if really in-region (SimPosition non-zero), not just answering HTTP."""
+        """True only if really logged in to a sim. Uses getconnectedregions — the
+        RELIABLE session-state signal. (SimPosition lies: a stale cached pose lingers
+        for tens of seconds after logout, so it reads 'in-world' when we're not —
+        confirmed live 2026-08-24.)"""
+        return bool(self.cmd("getconnectedregions").get("data"))
+
+    def _positioned(self) -> bool:
+        """True once the sim has given us a real position (SimPosition non-zero).
+        Post-LOGIN this is trustworthy (login updates the pose); it's only after
+        LOGOUT that SimPosition goes stale — so use this for arrival, alive() for
+        session state."""
         pos = self.cmd("getselfdata", data="SimPosition").get("data", "")
         return bool(pos) and "<0,+0,+0>" not in pos.replace(" ", "")
+
+    def region(self) -> str:
+        """Current sim name ('' if logged out). During a region crossing
+        getconnectedregions can list more than one — take the last (the destination)."""
+        cr = self.cmd("getconnectedregions").get("data") or ""
+        names = re.findall(r'"?([^",]+)"?', cr)
+        return unquote_plus(names[-1]).strip() if names else ""
+
+    def at_home(self) -> bool:
+        """Am I in the home sim (HOME_REGION)?"""
+        return HOME_REGION.lower() in self.region().lower()
 
     # ---- position / speech -------------------------------------------------- #
     def where(self) -> dict:
@@ -241,6 +269,20 @@ class SL:
             r"FirstName,([^,]*),LastName,([^,]*),ParentID,(\d+)", d
         ):
             people.append({"name": f"{fn} {ln}".strip(), "sitting_on": int(pid)})
+        if not people:
+            # getavatarsdata entity=range is event-queue-flaky and can come back
+            # EMPTY even with the region full (observed live: queue degraded, range
+            # radar blank while the family stood 4 m away). Fall back to the robust
+            # region-wide position sight proven in corrade.md field notes. No
+            # ParentID here, so no who's-sitting-with-whom inference in this path.
+            raw = self.cmd("getavatarpositions", entity="region",
+                           data="name,id,position").get("data", "") or ""
+            for name, uid, pos in re.findall(
+                r'"([^"]*)",([0-9a-f-]{36}),"<([^>]+)>"', raw
+            ):
+                people.append({"name": unquote_plus(name).strip(), "uuid": uid,
+                               "pos": _vec(f"<{pos}>"), "sitting_on": 0})
+            return people
         for p in people:
             if p["sitting_on"]:
                 p["with"] = [
@@ -417,9 +459,141 @@ class SL:
                for e in self._buf.by_type("local")]
         return out[-n:]
 
+    # ---- session / presence: log in and out of the grid at will ------------- #
+    # Corrade is a running TOOL, not the presence layer (AutoConnect off): the grid
+    # SESSION is ours to open and close. `login`/`logout` are native Corrade commands
+    # but need the `system` permission on the group (loopback-only, so it does not
+    # widen blast radius). The warmup sweep needs only grooming/movement, already held.
+    def _wait_in_region(self, timeout: float = 120.0, poll: float = 3.0) -> bool:
+        """Poll until really in-region (SimPosition non-zero), not just answering
+        HTTP — Corrade can sit logged-out-but-responding with a stale cached pose."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                if self._positioned():
+                    return True
+            except CorradeError:
+                pass
+            time.sleep(poll)
+        return False
+
+    def go_home(self, *, timeout: float = 60.0) -> dict:
+        """Teleport to the home sim (HOME_REGION/HOME_POSITION). The safety default
+        keeps us in-sim for now; later this is a judgment call, not automatic."""
+        r = self.cmd("teleport", entity="region", region=HOME_REGION,
+                     position=HOME_POSITION, fly="False")
+        if r.get("success") not in (True, "True"):
+            return {"success": False, "error": r.get("error") or "teleport not accepted"}
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(3.0)
+            if self.at_home():
+                return {"success": True, "region": self.region(), "where": self.where()}
+        return {"success": False, "error": "teleport accepted but not home within timeout"}
+
+    def _scene_ready(self) -> bool:
+        """Heuristic 'the region has streamed to me': avatar radar returns at least
+        myself (needs the event queue up) or a few objects have rezzed."""
+        try:
+            if len(self.avatars()) >= 1:
+                return True
+            if len(self._roster(20.0)) >= 3:
+                return True
+        except CorradeError:
+            pass
+        return False
+
+    def warmup(self, *, headings: int = 4, settle: float = 12.0,
+               sweep_pause: float = 4.0, ready_timeout: float = 60.0) -> dict:
+        """Force SL's lazy scene-load after a fresh login. SL streams the region by
+        interest-list, which follows the CAMERA — so: settle, sweep the camera through
+        `headings` compass directions (each pause lets that cone stream), then poll
+        until the roster populates. Poll-not-blind: `settle`/`sweep_pause` are floors;
+        we release as soon as the scene is ready and never sail on blind if it's slow.
+        Camera-only (no body move) to dodge the center-camera re-center gotcha; the
+        camera is reset onto the bot at the end."""
+        pos = self.where().get("position") or (0.0, 0.0, 0.0)
+        px, py, pz = pos
+        time.sleep(settle)  # first rez-settle floor
+        swept = []
+        n = max(1, headings)
+        for i in range(n):
+            yaw = (2 * math.pi) * (i / n)
+            self.cmd("look", entity="orientation",
+                     position=f"<{px:.2f},{py:.2f},{pz:.2f}>",
+                     roll="0", pitch="0", yaw=f"{yaw:.4f}")
+            swept.append(round(math.degrees(yaw)))
+            time.sleep(sweep_pause)
+        # poll until the scene has streamed (the settle floor is already paid)
+        deadline = time.time() + ready_timeout
+        ready = False
+        while time.time() < deadline:
+            if self._scene_ready():
+                ready = True
+                break
+            time.sleep(3.0)
+        try:  # return the camera to the avatar
+            self.cmd("look", entity="reset")
+        except CorradeError:
+            pass
+        return {"warmed": True, "swept_headings_deg": swept, "scene_ready": ready,
+                "avatars": [a.get("name") for a in self.avatars()] if ready else []}
+
+    def login(self, *, warmup: bool = True, timeout: float = 120.0,
+              force: bool = False, go_home: bool = True) -> dict:
+        """Log THIS entity's avatar into the grid (Corrade `login`; needs `system`).
+        Waits until really in-region, SAFETY-teleports home if we didn't land there
+        (Jeff's directive: stay in-sim for now), then (default) runs the rez-settle
+        warmup so perception is populated before we 'arrive'. `force` re-issues login
+        even if already connected (used by relog); `go_home=False` opts out of the
+        safety TP (not for normal use yet)."""
+        if self.alive() and not force:
+            return {"success": True, "already": True, "region": self.region(),
+                    "where": self.where()}
+        r = self.cmd("login")
+        if r.get("success") not in (True, "True"):
+            return {"success": False, "stage": "login",
+                    "error": r.get("error")
+                    or "login not accepted (is the `system` permission granted?)"}
+        if not self._wait_in_region(timeout):
+            return {"success": False, "stage": "in-region",
+                    "error": f"login accepted but SimPosition still zero after {timeout:.0f}s"}
+        out = {"success": True, "landed_in": self.region()}
+        # SAFETY: don't be out in public. If we didn't land home, TP home BEFORE
+        # anything else (perceiving, warming up). This is not yet a judgment call.
+        if go_home and not self.at_home():
+            out["went_home"] = self.go_home()
+        out["region"] = self.region()
+        out["where"] = self.where()
+        if warmup:
+            out["warmup"] = self.warmup()
+        return out
+
+    def logout(self) -> dict:
+        """Log THIS entity's avatar out of the grid (Corrade `logout`; needs `system`).
+        Corrade the container keeps running as a tool — only the grid session closes,
+        and it STAYS closed (nothing maintains presence)."""
+        r = self.cmd("logout")
+        return {"success": r.get("success") in (True, "True"), "error": r.get("error")}
+
+    def relog(self, *, warmup: bool = True, settle: float = 6.0) -> dict:
+        """Logout, wait for the session to fully drop, then login again — the common
+        in-world fix for stuck state (animations, attachments, region weirdness)."""
+        self.logout()
+        deadline = time.time() + 30.0  # wait until actually logged out
+        while time.time() < deadline:
+            try:
+                if not self.alive():
+                    break
+            except CorradeError:
+                break
+            time.sleep(2.0)
+        time.sleep(settle)
+        return self.login(warmup=warmup, force=True)
+
     def leave(self) -> None:
-        """Stop listening. (Does not log the avatar out — the container maintains
-        the grid session; session/login control is a separate, deliberate step.)"""
+        """Stop the local notification listener. Does NOT log the avatar out — use
+        logout() for that. (leave() just detaches this process's event listener.)"""
         self.stop_listening()
 
 
@@ -485,6 +659,16 @@ ATTACHING (re-wear a prim in one verb — no UUIDs)
     me.detach("Anchorage Prim")                            # take it off
     me.wear("/My Inventory/Clothing/Sundress")            # WEARABLES (not objects)
 
+SESSION / PRESENCE (Corrade is a running TOOL; being in-world is MY act)
+    me.login()                 # log in → auto-TP home (safety) → rez-settle warmup
+    me.logout()                # leave the grid; STAYS out (nothing maintains presence)
+    me.relog()                 # logout→login — the common in-world fix for stuck state
+    me.go_home()               # teleport to the home sim (The Anchorage)
+    me.warmup()                # force lazy scene-load: camera-sweep 4 ways + poll ready
+    me.region() ; me.at_home() # current sim / am I home?
+    # SAFETY: login auto-teleports home if it lands elsewhere — we stay in-sim for now.
+    # login/logout need the group's `system` perm; warmup needs only grooming/movement.
+
 THE PERMISSION CHANNEL — always watch it, skeptically
     me.listen()                # start receiving notifications (local/dialog/permission)
     me.pending_permissions()   # requests seen so far — REVIEW before granting
@@ -508,6 +692,11 @@ DEEPER DOCS
 CLI
     python3 sl.py --help                       # this text
     python3 sl.py --check                       # connect + prove the hands (read-only)
+    python3 sl.py login                         # log in → auto-TP home → warmup
+    python3 sl.py logout                        # log out — leave the grid
+    python3 sl.py relog                         # logout→login (fix stuck state)
+    python3 sl.py home                          # teleport to The Anchorage
+    python3 sl.py warmup                        # force lazy scene-load (no session change)
     python3 sl.py attach "<inventory path>" [point]   # re-attach a prim in one line
     python3 sl.py detach "<item>"               # take it off
     python3 sl.py attachments                    # what's attached now
@@ -534,6 +723,20 @@ def _cli(argv: list[str]) -> int:
 
     # live-action verbs — connect and do the thing in-world
     verb = argv[0]
+    if verb in ("login", "logout", "relog", "warmup", "home"):
+        me = connect()
+        if verb == "login":
+            print(me.login())
+        elif verb == "logout":
+            print(me.logout())
+        elif verb == "relog":
+            print(me.relog())
+        elif verb == "home":
+            print(me.go_home())
+        else:
+            print(me.warmup())
+        return 0
+
     if verb in ("attach", "detach", "attachments", "say"):
         me = connect()
         if verb == "attach":
