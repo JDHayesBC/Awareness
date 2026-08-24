@@ -788,6 +788,27 @@ THE PERMISSION CHANNEL — always watch it, skeptically
     me.dialogs()               # blue-menu dialogs, each with parsed [(index,label)]
     me.reply(dlg, "Couples")   # answer by label substring or button index
 
+WHY `scripted` MATTERS (the cheap "is this interesting?" filter)
+    A region is mostly prims you can't DO anything with — walls, floors, rain-roofs,
+    invisible light sources, decorative clutter ("deko"). The things you can actually
+    interact with — sit on, touch, get a menu from (chairs, poseballs, calling posts,
+    doors, vendors, dance machines) — almost always contain a SCRIPT. So the `Scripted`
+    flag is the closest thing to a free "show me only what I can engage with" filter,
+    and it costs nothing: it rides the same roster scan, no extra lookups. Use it to cut
+    a wall of 100 prims down to the ~20 that are worth a name and a second thought.
+
+RECIPE — walk into a room you don't know (the natural first move)
+    # Logged in alone, no target, just want your bearings + somewhere to sit:
+    for it in me.scan(scripted=True, max_range=25):     # read the room, interesting-only
+        print(it["dist"], it["name"])                   # chairs, poseballs, machines…
+    me.sit("Nerenzo Yard chair - left")                 # then just go sit in one
+    #   CLI equivalent:  python3 sl.py scan scripted 25
+
+RECIPE — find one specific thing and use it
+    me.scan("calling post")            # nearest object whose name contains this → UUID
+    me.scan(scripted=True, match="chair", max_range=10)   # nearest *usable* chair, close
+    #   CLI:  python3 sl.py scan scripted chair 10
+
 RECIPE — dance at the TIS machine (proven loop)
     me.listen()
     me.touch("calling post")                  # fires a TriggerAnimation permission
