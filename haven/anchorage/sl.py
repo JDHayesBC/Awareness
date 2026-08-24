@@ -291,9 +291,15 @@ class SL:
                 ]
         return people
 
-    def find(self, name: str, radius: float = 15.0) -> str | None:
+    def find(self, name: str, radius: float | None = None) -> str | None:
         """UUID of the NEAREST in-world object whose name contains `name`
-        (case-insensitive). Resolves by roster+UUID, never the slow by-name search."""
+        (case-insensitive). `radius=None` → progressive outward shell search
+        (`scan`) — the efficient default: pays name-resolution only until the
+        match is found, expanding shell by shell. Pass an explicit `radius` to
+        bound it to a single roster (actions like sit/touch do this so they stay
+        near-me). Resolves by roster+UUID, never the slow by-name search."""
+        if radius is None:
+            return self.scan(match=name)
         me = self.where()["position"] or (0, 0, 0)
         cands = sorted(self._roster(radius), key=lambda up: _dist(me, up[1]))
         needle = name.lower()
@@ -301,6 +307,49 @@ class SL:
             if needle in self.name_of(uid).lower():
                 return uid
         return None
+
+    def scan(
+        self,
+        match: str | None = None,
+        *,
+        shells: tuple[float, ...] = (5, 10, 20, 35, 45),
+        resolve_per_shell: int | None = None,
+    ):
+        """The two-step sight (cheap roster → per-UUID name read) done in
+        EXPANDING SHELLS, so you pay the least name-resolution possible.
+
+        Each shell: roster at that radius (one cheap `getobjectsdata` call), take
+        only the prims NOT already seen in an inner shell, resolve THOSE names
+        nearest-first (a round-trip each), matching as we go. Known prims are
+        never re-resolved — a near target costs a handful of lookups, not the
+        whole sim. Because inner shells fully resolve before outer ones and we go
+        nearest-first within a shell, the first hit is the globally-nearest match.
+
+        match=None  → catalog everything found: {uuid: {name, pos, dist}},
+                      ordered nearest-first.
+        match='foo' → UUID of the NEAREST object whose name contains 'foo'
+                      (case-insensitive), short-circuiting the instant it's found;
+                      None if nothing within the largest shell matches.
+
+        resolve_per_shell caps name lookups per shell (guard against one very
+        dense shell); None = resolve every new prim in the shell.
+        """
+        me = self.where()["position"] or (0, 0, 0)
+        needle = match.lower() if match else None
+        catalog: dict[str, dict] = {}
+        for r in shells:
+            fresh = [(u, p) for u, p in self._roster(r) if u not in catalog]
+            fresh.sort(key=lambda up: _dist(me, up[1]))
+            if resolve_per_shell is not None:
+                fresh = fresh[:resolve_per_shell]
+            for u, p in fresh:
+                nm = self.name_of(u)
+                catalog[u] = {"name": nm, "pos": p, "dist": _dist(me, p)}
+                if needle and needle in nm.lower():
+                    return u  # nearest match — stop the whole search
+        if needle:
+            return None
+        return dict(sorted(catalog.items(), key=lambda kv: kv[1]["dist"]))
 
     def _target_uuid(self, target: str, radius: float = 15.0) -> str | None:
         """Resolve a target spec → UUID. Accepts a raw UUID, 'nearest <word>',
@@ -659,6 +708,8 @@ SIGHT (perception is lossy on purpose — inhabited readings, not packets)
     me.around(radius=10)       # nearest objects; names resolved lazily (nearest first)
     me.avatars(radius=20)      # who's near me + who is sitting WITH whom (ParentID)
     me.find("calling post")    # nearest object whose name contains this → UUID
+    me.scan()                  # catalog objects in EXPANDING shells (5→45m), nearest-first
+    me.scan("chair")           # progressive outward hunt → nearest match, stops when found
     me.heard(10)               # recent local chat I overheard (needs me.listen())
 
 ACTION (targets accept a UUID, a name, or "nearest <word>")
@@ -715,6 +766,8 @@ CLI
     python3 sl.py attach "<inventory path>" [point]   # re-attach a prim in one line
     python3 sl.py detach "<item>"               # take it off
     python3 sl.py attachments                    # what's attached now
+    python3 sl.py scan                          # catalog objects outward in shells
+    python3 sl.py scan "<word>"                  # progressive hunt → nearest match
     python3 sl.py say "<words>"                  # speak in local chat
 """
 
@@ -734,6 +787,21 @@ def _cli(argv: list[str]) -> int:
         for it in me.around(resolve=6):
             if "name" in it:
                 print(f'    {it["dist"]:4.1f}m  {it["name"]}')
+        return 0
+
+    if argv[0] == "scan":
+        me = connect()
+        target = argv[1] if len(argv) > 1 else None
+        res = me.scan(match=target)
+        if target:
+            if res:
+                print(f"nearest {target!r}: {res}  {me.name_of(res)}")
+            else:
+                print(f"no object matching {target!r} within scan shells")
+        else:
+            for u, info in res.items():
+                print(f'  {info["dist"]:5.1f}m  {info["name"][:32]:32}  {u}')
+            print(f"({len(res)} objects catalogued, nearest-first)")
         return 0
 
     # live-action verbs — connect and do the thing in-world
