@@ -31,6 +31,7 @@ integer LISTEN_CHANNEL = 0;   // 0 = local chat
 integer gListen  = 0;
 key     gRegReq;              // outstanding /sl/register request
 key     gFwdReq;              // outstanding /sl/inbound request
+float   REREGISTER_INTERVAL = 300.0; // re-register every 5 min (heals after daemon restart)
 
 register_with_relay()
 {

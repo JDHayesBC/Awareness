@@ -93,6 +93,10 @@ class EntityBrain:
         consumer_key: str | None = None,
         project_dir: Path | None = None,
         init_timeout: float = 180.0,
+        max_context_tokens: int = 150_000,
+        max_turns: int = 100,
+        max_idle_seconds: int = 4 * 3600,
+        restart_in_turn: bool = True,
     ) -> None:
         self.entity_name = entity_name or os.getenv("ENTITY_NAME", "unknown")
 
@@ -115,6 +119,26 @@ class EntityBrain:
         self.channel = channel
         self.consumer_key = consumer_key or f"{channel}-{self.entity_name}"
         self.init_timeout = init_timeout
+
+        # Session-rotation thresholds. Defaults preserve the historical Haven values
+        # (150k / 100 turns / 4h). A high-tempo surface like SL should pass MUCH lower
+        # turn/context caps so the persistent session rotates often — the invoker's
+        # token accountant undercounts real context (it ignores tool-call round-trips,
+        # which SL perception turns generate heavily), so the *turn-count* cap is the
+        # reliable governor against latency creep. See sl_daemon SL_BRAIN_* env knobs.
+        self.max_context_tokens = max_context_tokens
+        self.max_turns = max_turns
+        self.max_idle_seconds = max_idle_seconds
+
+        # Whether respond()/perceive() may restart the session INLINE (lazily, at the
+        # top of a turn) when it hits a hard limit. True = the historical Haven
+        # behaviour. A surface with a bounded per-turn timeout (SL: SL_TURN_TIMEOUT)
+        # must set this False: the identity warmup is ~minutes, so an inline restart
+        # would be cancelled mid-warmup by the turn timeout, leaving a half-built
+        # session. Such a surface drives rotation OFF the hot path instead
+        # (rotate_if_approaching at a quiet beat + a repeated-timeout watchdog calling
+        # restart_session) — neither of which is subject to the turn timeout.
+        self.restart_in_turn = restart_in_turn
 
         self.invoker: ClaudeInvoker | None = None
 
@@ -201,9 +225,9 @@ class EntityBrain:
             bypass_permissions=True,
             model=self.claude_model,
             mcp_servers=get_default_mcp_servers(entity_path=self.entity_path),
-            max_context_tokens=150_000,
-            max_turns=100,
-            max_idle_seconds=4 * 3600,
+            max_context_tokens=self.max_context_tokens,
+            max_turns=self.max_turns,
+            max_idle_seconds=self.max_idle_seconds,
             startup_prompt=self._build_startup_prompt(),
             init_timeout=self.init_timeout,
         )
@@ -221,6 +245,64 @@ class EntityBrain:
             f"[{self.entity_name}] Invoker ready — context: {self.invoker.context_size} "
             f"tokens, {self.invoker.turn_count} turns"
         )
+
+    # ==================== Session rotation (surface-adapter controllable) ============
+
+    async def restart_session(self, reason: str = "forced", *, on_warmup=None) -> bool:
+        """Force a full session restart + identity re-warm.
+
+        For a surface adapter's watchdog: repeated-timeout recovery (a wedged /
+        degraded session) and proactive off-hot-path rotation. Full restart tears
+        down the underlying CLI subprocess (throwing away a possibly-wedged one)
+        and reconstructs a fresh session, then replays the heavy identity warmup so
+        the new session knows who it is. Returns True if it ran, False if there was
+        no invoker yet. Never raises — a rotation failure must not kill the caller;
+        a failed restart leaves the (old) invoker in place to try again next turn.
+
+        ``on_warmup`` (keyword-only, optional): an async callback fired ONCE at the
+        very start of an actual restart, before the subprocess teardown — so a
+        surface adapter can surface a "warming up" state (e.g. the SL halo) for the
+        WHOLE duration of the rotation, and only when a rotation truly happens. It
+        is best-effort: a failure in the callback is logged but never aborts the
+        restart.
+        """
+        if self.invoker is None:
+            return False
+        if on_warmup is not None:
+            try:
+                await on_warmup()
+            except Exception as e:
+                logger.error(f"[{self.entity_name}] on_warmup hook failed ({reason}): {e}")
+        try:
+            await self.invoker.restart(reason=reason)
+            await self._warm_identity()
+            logger.info(
+                f"[{self.entity_name}] Session rotated ({reason}) — fresh context: "
+                f"{self.invoker.context_size} tokens, {self.invoker.turn_count} turns"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"[{self.entity_name}] restart_session failed ({reason}): {e}")
+            return False
+
+    async def rotate_if_approaching(self, threshold: float = 0.8, *, on_warmup=None) -> bool:
+        """Proactively rotate the session BETWEEN turns if it's approaching its
+        limits, so the heavy identity warmup is paid off the hot path (while no one
+        is waiting on a reply) rather than landing inside a user-facing turn where it
+        would blow the turn-timeout. Returns True iff it rotated. Call this from the
+        adapter at a quiet moment (e.g. after a turn when no re-fire is pending).
+
+        ``on_warmup`` (keyword-only, optional) is threaded through to
+        ``restart_session`` and therefore fires ONLY when an actual rotation occurs
+        — not on the (common) no-op path where the session isn't yet approaching its
+        limits. That's exactly what a "warming up" halo wants: shown iff we truly
+        tear down and re-warm."""
+        if self.invoker is None:
+            return False
+        approaching, reason = self.invoker.approaching_restart(threshold)
+        if not approaching:
+            return False
+        return await self.restart_session(reason=f"proactive: {reason}", on_warmup=on_warmup)
 
     # ==================== Ambient context (bot.py:329-359) ====================
 
@@ -333,10 +415,13 @@ class EntityBrain:
             raise RuntimeError("EntityBrain.warmup() must be called before respond()")
 
         # Restart the session if it's approaching context/turn/idle limits,
-        # replaying identity warmup on the fresh session (bot.py:804-806).
-        restarted = await self.invoker.check_and_restart_if_needed()
-        if restarted:
-            await self._warm_identity()
+        # replaying identity warmup on the fresh session (bot.py:804-806). Skipped
+        # when restart_in_turn is False (see __init__) — that surface rotates off
+        # the hot path so the warmup can't be cancelled by a turn timeout.
+        if self.restart_in_turn:
+            restarted = await self.invoker.check_and_restart_if_needed()
+            if restarted:
+                await self._warm_identity()
 
         ambient = await self._fetch_ambient_context()
         ambient_note = f"[ambient context]\n{ambient}\n\n" if ambient else ""
@@ -424,9 +509,14 @@ class EntityBrain:
         if self.invoker is None:
             raise RuntimeError("EntityBrain.warmup() must be called before perceive()")
 
-        restarted = await self.invoker.check_and_restart_if_needed()
-        if restarted:
-            await self._warm_identity()
+        # Inline hard-limit restart only when this surface allows it (see __init__).
+        # SL sets restart_in_turn=False and rotates off the hot path instead, so the
+        # ~minutes-long identity warmup can't be cancelled mid-flight by the turn
+        # timeout (which would leave a half-initialized session).
+        if self.restart_in_turn:
+            restarted = await self.invoker.check_and_restart_if_needed()
+            if restarted:
+                await self._warm_identity()
 
         ambient = await self._fetch_ambient_context()
         ambient_note = f"[ambient context]\n{ambient}\n\n" if ambient else ""
