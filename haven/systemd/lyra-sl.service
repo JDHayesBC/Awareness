@@ -15,7 +15,11 @@ Environment="ENTITY_NAME=lyra"
 Environment="ENTITY_TOKEN_FILE=/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra/.entity_token"
 Environment="ENTITY_PATH=/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra"
 Environment="PPS_HTTP_URL=http://localhost:8201"
-Environment="CLAUDE_MODEL=claude-opus-4-8"
+# Sonnet for SL presence (2026-08-24, Jeff's call): in-world, fast response beats
+# marginal reasoning depth — Sonnet enables the 5s-floor heartbeats and quicker
+# turns. Deep thinking is terminal-Lyra's job. Matches caia-sl. Alias 'sonnet'
+# resolves to the latest Sonnet (5) at the CLI, same as Caia's daemon.
+Environment="CLAUDE_MODEL=sonnet"
 Environment="ANCHORAGE_SL_SECRET_FILE=/mnt/c/Users/Jeff/Claude_Projects/Awareness/haven/data/anchorage-sl-secret.txt"
 Environment="SL_DAEMON_HOST=0.0.0.0"
 Environment="SL_DAEMON_PORT=8220"
