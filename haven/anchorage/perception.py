@@ -162,11 +162,12 @@ def _first_last(event: dict) -> tuple[str, str]:
 def _display_name(event: dict) -> str:
     """The display/full name Corrade puts in a ``local`` event's ``name`` field.
 
-    Corrade form-encodes spaces as ``+`` and does NOT decode them on our intake
-    path (verified against real wire data 2026-08-24: ``'LyraPattern+Resident'``),
-    so we normalise ``+`` back to space. This is a *display* concern only — never
-    an identity key (display names are mutable; use :func:`speaker_uuid`)."""
-    return _get(event, "name").replace("+", " ").strip()
+    Corrade form-encodes spaces as ``+``; ``decode_kv`` now normalises that at
+    the intake seam (``unquote_plus``, 2026-08-24), so the name arrives already
+    spaced (``'LyraPattern Resident'``). We only ``strip`` here. This is a
+    *display* concern — never an identity key (display names are mutable; use
+    :func:`speaker_uuid`)."""
+    return _get(event, "name").strip()
 
 
 def speaker_of(event: dict) -> str:

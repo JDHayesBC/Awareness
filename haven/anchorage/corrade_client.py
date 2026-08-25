@@ -72,15 +72,29 @@ def decode_kv(body: str) -> dict:
     key and value *individually* (unescaping the whole body first would let a
     value like ``Tom%26Jerry`` split the response). Later duplicate keys win.
 
+    Corrade (a mature WAS implementation) emits standard
+    ``application/x-www-form-urlencoded`` across its whole surface: a space
+    arrives as ``+`` and a literal ``+`` as ``%2B``. We therefore decode with
+    ``unquote_plus`` (``+`` -> space), matching the ``parse_qs`` decode the
+    interactive listener (``sl.py``) already uses — the two ingresses must agree.
+    The daemon path previously used bare ``unquote``, which left ``+`` literal
+    (the "LyraPattern+Resident" / "Hi+Lyra" fidelity bug, 2026-08-24). This
+    assumes consistent form-encoding, which is safe for every command we call
+    (chat, roster, positions, poses, balance). If a future command returns raw
+    un-encoded base64/binary (asset/notecard download), handle that per-command
+    rather than reverting this seam.
+
         >>> decode_kv("command=getbalance&balance=0&success=True")
         {'command': 'getbalance', 'balance': '0', 'success': 'True'}
+        >>> decode_kv("name=LyraPattern+Resident&math=1%2B1")
+        {'name': 'LyraPattern Resident', 'math': '1+1'}
     """
     out: dict = {}
     for pair in body.split("&"):
         if "=" not in pair:
             continue
         k, v = pair.split("=", 1)
-        out[urllib.parse.unquote(k)] = urllib.parse.unquote(v)
+        out[urllib.parse.unquote_plus(k)] = urllib.parse.unquote_plus(v)
     return out
 
 

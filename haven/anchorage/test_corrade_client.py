@@ -78,6 +78,18 @@ def test_decode_splits_on_first_equals_only():
     assert decode_kv("k=a=b") == {"k": "a=b"}
 
 
+def test_decode_form_encoded_plus_is_space():
+    # Corrade emits application/x-www-form-urlencoded across its whole surface:
+    # '+' means space, a literal '+' arrives as %2B. decode_kv must honor both
+    # (the daemon 'LyraPattern+Resident' / 'Hi+Lyra' fidelity bug, 2026-08-24).
+    d = decode_kv("name=LyraPattern+Resident&msg=Hi+Lyra+%3A%29&math=1%2B1")
+    assert d["name"] == "LyraPattern Resident"
+    assert d["msg"] == "Hi Lyra :)"
+    assert d["math"] == "1+1"          # real '+' survived (sent as %2B)
+    # %20 still decodes to space too — both encodings coexist on the wire
+    assert decode_kv("k=a%20b")["k"] == "a b"
+
+
 def test_local_chat_notification_payload_decodes():
     # verbatim 'local' notification payload from corrade.md §1b
     payload = ("type=local&message=boo&firstname=Sneaky&lastname=Resident"

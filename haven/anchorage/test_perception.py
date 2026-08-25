@@ -47,19 +47,24 @@ def local(first: str, last: str, message: str) -> dict:
 
 
 def local_real(uuid: str, name: str, message: str, entity: str = "Agent") -> dict:
-    """The REAL Corrade `local` wire shape (verified 2026-08-24).
+    """The REAL Corrade `local` shape as perception receives it (verified 2026-08-24).
 
     Crucially: there is NO firstname/lastname — the speaker's agent UUID lives in
-    ``owner`` and ``item``, and the display name is in ``name`` with spaces
-    form-encoded as ``+`` (Corrade does not decode them on intake). This is the
-    shape the old name-only self-check could not catch, which drove the replay
-    storm. Tests built on the synthetic ``local()`` above never exercised it."""
+    ``owner`` and ``item``, and the display name is in ``name``. This is the shape
+    the old name-only self-check could not catch, which drove the replay storm;
+    tests built on the synthetic ``local()`` above never exercised it.
+
+    On the raw wire Corrade form-encodes spaces as ``+`` (``LyraPattern+Resident``),
+    but ``corrade_client.decode_kv`` (``unquote_plus``, 2026-08-24) normalises that
+    at the intake seam BEFORE any event reaches perception — so the realistic input
+    here carries spaces, not ``+``. Testing perception against ``+``-encoded names
+    would exercise an input the architecture no longer produces."""
     return {
         "type": "local", "notification": "local",
         "item": uuid, "owner": uuid, "entity": entity,
-        "message": message.replace(" ", "+"),
-        "name": name.replace(" ", "+"),
-        "position": "<184.77438,+211.8318,+29.78>", "region": "The+Anchorage",
+        "message": message,
+        "name": name,
+        "position": "<184.77438, 211.8318, 29.78>", "region": "The Anchorage",
         "audible": "Fully", "volume": "Normal",
     }
 
