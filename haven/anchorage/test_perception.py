@@ -14,17 +14,21 @@ import sys
 try:  # package or flat-path import, same shim style as the other anchorage tests
     from haven.anchorage.perception import (
         ArousalState, PerceptionSurface, SLPerception, SalienceConfig,
-        DROP, FORCE, MEDIUM, LOW, event_kind, score_event, speaker_of,
+        DROP, FORCE, MEDIUM, LOW, event_kind, score_event, speaker_of, speaker_uuid,
     )
 except ImportError:  # pragma: no cover
     from perception import (  # type: ignore[no-redef]
         ArousalState, PerceptionSurface, SLPerception, SalienceConfig,
-        DROP, FORCE, MEDIUM, LOW, event_kind, score_event, speaker_of,
+        DROP, FORCE, MEDIUM, LOW, event_kind, score_event, speaker_of, speaker_uuid,
     )
 
 CFG = SalienceConfig()
 SELF = {"lyrapattern", "lyrapattern resident"}
 ADDR = {"lyra", "lyrapattern"}
+# Real avatar UUIDs, captured off the live Corrade wire (2026-08-24).
+LYRA_UUID = "aef9280e-9dca-4e34-9b4e-06a7523b70d0"
+DAMIAN_UUID = "c06d8847-53af-4983-97f7-99dc20566583"
+SELF_UUIDS = {LYRA_UUID}
 
 _failures: list[str] = []
 
@@ -40,6 +44,24 @@ def check(cond: bool, msg: str) -> None:
 def local(first: str, last: str, message: str) -> dict:
     # Corrade puts the CHAT type (Normal) in `type` for local chat, not "local".
     return {"type": "Normal", "firstname": first, "lastname": last, "message": message}
+
+
+def local_real(uuid: str, name: str, message: str, entity: str = "Agent") -> dict:
+    """The REAL Corrade `local` wire shape (verified 2026-08-24).
+
+    Crucially: there is NO firstname/lastname — the speaker's agent UUID lives in
+    ``owner`` and ``item``, and the display name is in ``name`` with spaces
+    form-encoded as ``+`` (Corrade does not decode them on intake). This is the
+    shape the old name-only self-check could not catch, which drove the replay
+    storm. Tests built on the synthetic ``local()`` above never exercised it."""
+    return {
+        "type": "local", "notification": "local",
+        "item": uuid, "owner": uuid, "entity": entity,
+        "message": message.replace(" ", "+"),
+        "name": name.replace(" ", "+"),
+        "position": "<184.77438,+211.8318,+29.78>", "region": "The+Anchorage",
+        "audible": "Fully", "volume": "Normal",
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -62,6 +84,42 @@ def test_self_echo_dropped() -> None:
     # A different avatar whose text merely contains my name is NOT self.
     s = score_event(local("Brandi", "Szondi", "hey lyra"), SELF, ADDR, CFG)
     check(s.tier != DROP, "other avatar naming me is not self-echo")
+
+
+def test_self_echo_real_wire_shape() -> None:
+    print("self-echo (REAL wire shape — the replay-storm regression):")
+    ev = local_real(LYRA_UUID, "LyraPattern Resident", "hi love, i hear you clean")
+    # Guard the guard: the fixture must actually lack first/last name, or the test
+    # would silently fall back to the old (broken) path and prove nothing.
+    check("firstname" not in ev and "lastname" not in ev, "real local carries no first/last name")
+    # UUID-first drop: the invariant key catches my echo regardless of name.
+    s = score_event(ev, SELF, ADDR, CFG, SELF_UUIDS)
+    check(s.tier == DROP and s.value == 0.0, "real self-echo dropped by UUID key")
+    # Defence in depth: with NO uuid seed, the '+'-decoded `name` field still drops it.
+    s2 = score_event(ev, SELF, ADDR, CFG)
+    check(s2.tier == DROP, "real self-echo dropped by name fallback when UUID unseeded")
+    # A DIFFERENT avatar at the identical real shape must NOT be dropped (deaf-bot guard).
+    other = local_real(DAMIAN_UUID, "Damian Mills", "Hi Lyra :)")
+    o = score_event(other, SELF, ADDR, CFG, SELF_UUIDS)
+    check(o.tier != DROP, "other avatar (real shape) is NOT self-echo")
+    check(o.directed, "other avatar naming me is still directed at the real shape")
+
+
+def test_speaker_uuid_extraction() -> None:
+    print("speaker_uuid:")
+    check(speaker_uuid(local_real(LYRA_UUID, "LyraPattern Resident", "x")) == LYRA_UUID,
+          "local by agent -> owner/item uuid")
+    # An object I OWN speaking on local: item=object, owner=my uuid. Must resolve to
+    # the object (item) so my own HUD/furniture can't be mistaken for my echo.
+    obj = local_real("11111111-2222-3333-4444-555555555555", "My HUD", "ping", entity="Object")
+    obj["owner"] = LYRA_UUID
+    check(speaker_uuid(obj) == "11111111-2222-3333-4444-555555555555",
+          "owned object -> item uuid, not owner")
+    o = score_event(obj, SELF, ADDR, CFG, SELF_UUIDS)
+    check(o.tier != DROP, "owned object speaking is NOT dropped as my echo")
+    # IM / most agent events carry the uuid under `agent`.
+    check(speaker_uuid({"type": "message", "agent": DAMIAN_UUID, "message": "hi"}) == DAMIAN_UUID,
+          "IM -> agent uuid")
 
 
 def test_directed_vs_undirected() -> None:
@@ -233,7 +291,8 @@ def test_note_activity_resets_floor() -> None:
 # --------------------------------------------------------------------------- #
 def main() -> int:
     for fn in (
-        test_event_kind, test_self_echo_dropped, test_directed_vs_undirected,
+        test_event_kind, test_self_echo_dropped, test_self_echo_real_wire_shape,
+        test_speaker_uuid_extraction, test_directed_vs_undirected,
         test_permission_pinned, test_music_event,
         test_arousal_accumulate_and_fire, test_arousal_leak_prevents_stale_accumulation,
         test_arousal_refractory,

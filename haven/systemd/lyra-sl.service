@@ -27,6 +27,10 @@ Environment="SL_DAEMON_PORT=8220"
 # the daemon confirms it live via getselfdata.
 Environment="SL_CORRADE=1"
 Environment="SL_AVATAR_NAME=LyraPattern"
+# Invariant self-echo key (SL is UUID-native; local chat has no first/last name,
+# only owner/item UUID). Confirmed live off the wire 2026-08-24. Keying echo-drop
+# on this stops the replay storm the name-only check missed.
+Environment="SL_AVATAR_UUID=aef9280e-9dca-4e34-9b4e-06a7523b70d0"
 Environment="CORRADE_BASE_URL=http://127.0.0.1:8080/"
 Environment="CORRADE_GROUP=Haven"
 Environment="CORRADE_PASSWORD_FILE=/mnt/c/Users/Jeff/Claude_Projects/Awareness/haven/data/corrade-group-password.txt"

@@ -159,10 +159,26 @@ def _first_last(event: dict) -> tuple[str, str]:
     return _get(event, "firstname", "FirstName"), _get(event, "lastname", "LastName")
 
 
+def _display_name(event: dict) -> str:
+    """The display/full name Corrade puts in a ``local`` event's ``name`` field.
+
+    Corrade form-encodes spaces as ``+`` and does NOT decode them on our intake
+    path (verified against real wire data 2026-08-24: ``'LyraPattern+Resident'``),
+    so we normalise ``+`` back to space. This is a *display* concern only — never
+    an identity key (display names are mutable; use :func:`speaker_uuid`)."""
+    return _get(event, "name").replace("+", " ").strip()
+
+
 def speaker_of(event: dict) -> str:
+    """A human-readable label for the speaker (logs / stored author_name).
+
+    Display concern → prefer a name, fall back to the agent UUID only when no name
+    rode along. Identity comparison must use :func:`speaker_uuid`, not this."""
     fn, ln = _first_last(event)
     name = (fn + " " + ln).strip()
-    return name or _get(event, "agent", "owner", "name", default="someone")
+    return name or _display_name(event) or _get(
+        event, "agent", "owner", "item", "id", default="someone"
+    )
 
 
 def event_kind(event: dict) -> str:
@@ -183,6 +199,29 @@ def event_kind(event: dict) -> str:
     return t or "unknown"
 
 
+def speaker_uuid(event: dict) -> str:
+    """The speaking agent's UUID — SL's ONE invariant identity key.
+
+    SL is UUID-native: display names are mutable ("Jeff Mills"↔"Damian Mills" is
+    one UUID) and ``local`` chat carries NO firstname/lastname at all — only the
+    speaker's agent UUID (verified against real Corrade wire data 2026-08-24). So
+    identity/echo comparison keys on the UUID, never the name.
+
+    Per event kind:
+      * ``local`` chat by an avatar (``entity=Agent``): ``owner`` == ``item`` both
+        hold the speaking agent's UUID.
+      * ``local`` chat by an *object* (``entity=Object``): ``item`` is the object
+        (never my avatar); ``owner`` is the object's owner — we return ``item`` so
+        an object I happen to own can't be mistaken for my own echo.
+      * IM / friendship / teleport etc.: ``agent``.
+      * ``avatars`` roster: ``id``.
+    Returns a lowercased UUID string, or "" when the event carries no agent UUID.
+    """
+    if event_kind(event) == "local" and _get(event, "entity").lower() == "object":
+        return _get(event, "item").lower()
+    return _get(event, "agent", "owner", "item", "id").lower()
+
+
 # --------------------------------------------------------------------------- #
 # Salience
 # --------------------------------------------------------------------------- #
@@ -199,13 +238,36 @@ class Salience:
     delta: Optional[str] = None   # human-readable one-liner for the brain (or None to hide)
 
 
-def _is_self(event: dict, self_names: set[str]) -> bool:
-    """True when this event was produced by my own avatar (echo)."""
-    if not self_names:
-        return False
-    fn, ln = _first_last(event)
-    full = (fn + " " + ln).strip().lower()
-    return fn.lower() in self_names or full in self_names
+def _is_self(
+    event: dict, self_names: set[str], self_uuids: "set[str] | frozenset[str]" = frozenset()
+) -> bool:
+    """True when this event was produced by my own avatar (echo).
+
+    UUID-first (the invariant): if the event's agent UUID is one of mine, it's my
+    echo — no matter what display name rode along. This is what actually stops the
+    replay storm: real ``local`` echoes carry my UUID in ``owner``/``item`` but
+    NO firstname/lastname, so the old name-only check never matched them and every
+    line I spoke got re-ingested as a foreign turn (bug confirmed 2026-08-24).
+
+    Name matching stays as a defensive fallback — it covers events with no UUID,
+    and the window before the UUID seed loads. It checks first/last, the joined
+    full name, AND the ``+``-decoded ``name`` field against self_names (the last of
+    which is what catches a ``local`` echo when no UUID seed is configured).
+    """
+    uid = speaker_uuid(event)
+    if uid and uid in self_uuids:
+        return True
+    if self_names:
+        fn, ln = _first_last(event)
+        full = (fn + " " + ln).strip().lower()
+        disp = _display_name(event).lower()
+        if fn and fn.lower() in self_names:
+            return True
+        if full and full in self_names:
+            return True
+        if disp and disp in self_names:
+            return True
+    return False
 
 
 def _is_directed(text: str, address_names: set[str]) -> bool:
@@ -219,10 +281,12 @@ def score_event(
     self_names: set[str],
     address_names: set[str],
     cfg: SalienceConfig,
+    self_uuids: "set[str] | frozenset[str]" = frozenset(),
 ) -> Salience:
     """Map one perceived event → a :class:`Salience` (value + tier + delta line).
 
-    ``self_names``  : exact identity forms of my own avatar (echo drop).
+    ``self_names``  : display-name forms of my own avatar (echo drop, fallback).
+    ``self_uuids``  : my own avatar UUID(s) — the *invariant* echo key (primary).
     ``address_names``: tokens that mean "me" when mentioned (directedness), e.g.
                        my first name.
     """
@@ -230,7 +294,7 @@ def score_event(
     speaker = speaker_of(event)
 
     # Tier 0 — my own voice/animation comes back through `local`; never wake me.
-    if _is_self(event, self_names):
+    if _is_self(event, self_names, self_uuids):
         return Salience(cfg.s_drop, DROP, f"self:{kind}", kind=kind, speaker=speaker)
 
     if kind == "permission":
@@ -444,9 +508,13 @@ class SLPerception:
         cfg: Optional[SalienceConfig] = None,
         surface: Optional[PerceptionSurface] = None,
         arousal: Optional[ArousalState] = None,
+        self_uuids: Optional[set[str]] = None,
     ) -> None:
         self.cfg = cfg or SalienceConfig()
         self.self_names = {n.lower() for n in self_names}
+        # Invariant echo key (SL is UUID-native). Kept mutable so the daemon can
+        # confirm/extend it live once the avatar is in-world.
+        self.self_uuids = {u.lower() for u in (self_uuids or set())}
         self.address_names = {n.lower() for n in address_names}
         self.surface = surface or PerceptionSurface()
         self.arousal = arousal or ArousalState(self.cfg)
@@ -455,7 +523,7 @@ class SLPerception:
     def ingest(self, event: dict, now: float) -> Optional[WakePayload]:
         """Perceive one event. Returns a :class:`WakePayload` iff this event
         tips arousal over threshold AND no brain turn is already running."""
-        s = score_event(event, self.self_names, self.address_names, self.cfg)
+        s = score_event(event, self.self_names, self.address_names, self.cfg, self.self_uuids)
         if s.tier == DROP or s.value <= 0.0:
             return None
 

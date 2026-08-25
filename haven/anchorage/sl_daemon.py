@@ -123,6 +123,14 @@ CORRADE_NOTIFY_TYPES = os.getenv("CORRADE_NOTIFY_TYPES", corrade_events.DEFAULT_
 # usernames (LyraPattern/CaiaPattern); a spaced legacy name could over-match.
 SL_AVATAR_NAME = os.getenv("SL_AVATAR_NAME", f"{DISPLAY_NAME}Pattern").strip()
 
+# SL is UUID-native: the agent UUID is the ONE invariant identity key. Display
+# names are mutable and `local` chat carries NO firstname/lastname — only the
+# speaker's UUID in owner/item — so self-echo drop keys on this, not the name
+# (see perception.speaker_uuid / _is_self). SL_AVATAR_NAME above stays a defensive
+# fallback. Seed the real avatar UUID here; empty is tolerated (name fallback
+# still catches the echo, just less cleanly).
+SL_AVATAR_UUID = os.getenv("SL_AVATAR_UUID", "").strip().lower()
+
 # Music sense (opt-in): poll the parcel's audio stream and feed track CHANGES into
 # SLPerception. Off by default until the parcel MusicURL field is confirmed live
 # (CorradeClient.get_parcel_music_url). SL_MUSIC_POLL = seconds between polls.
@@ -429,12 +437,14 @@ if SL_CORRADE:
     _av_first = _av.split()[0] if _av else DISPLAY_NAME
     _self_names = {_av.lower(), f"{_av} resident".lower(), _av_first.lower()}
     _address_names = {DISPLAY_NAME.lower(), _av.lower(), _av_first.lower()}
+    _self_uuids = {SL_AVATAR_UUID} if SL_AVATAR_UUID else set()
     _perception = perception.SLPerception(
         _self_names, _address_names,
         cfg=perception.SalienceConfig(floor_interval=SL_PERCEPTION_FLOOR),
+        self_uuids=_self_uuids,
     )
-    log(f"SLPerception armed (avatar={_av!r}, address={sorted(_address_names)}, "
-        f"floor={SL_PERCEPTION_FLOOR:.0f}s)")
+    log(f"SLPerception armed (avatar={_av!r}, uuid={SL_AVATAR_UUID or '(unset—name fallback)'}, "
+        f"address={sorted(_address_names)}, floor={SL_PERCEPTION_FLOOR:.0f}s)")
 
     # Adaptive idle-heartbeat: the max-silence guarantee whose interval breathes
     # with context (task #8). The pure controller lives in heartbeat.py; the poke
@@ -520,6 +530,23 @@ async def sl_inbound(body: InboundBody):
     Delivery happens via a separate POST to the prim's URL anyway, so the fast
     ack costs nothing. NOTHING here touches Haven/haven.db (spec §5)."""
     _check_secret(body.secret)
+
+    # PRIM-BRIDGE DISABLE UNDER CORRADE (2026-08-24). When SL_CORRADE=1, Corrade
+    # IS the perception source: it hears ALL local chat and drops my own echo by
+    # UUID (perception._is_self). A legacy prim still in-world ALSO POSTs local
+    # chat here, but this path has NO self-echo filter, so it re-stored my own
+    # avatar's speech as a foreign turn — the dup/replay storm Jeff traced to
+    # "the prim" (root-caused via a live stack-trace to _handle_inbound). In
+    # Corrade mode we ignore prim-relayed INBOUND speech entirely; /sl/register
+    # + outbound gizmo/status still work. Prim-only mode (SL_CORRADE=0) is
+    # unaffected — the prim is still the perception source there.
+    if SL_CORRADE:
+        # Debug-gated so a chatty room doesn't spam the journal (the prim posts
+        # every local line); the skip itself is unconditional.
+        if os.getenv("SL_DEBUG_RAW"):
+            log(f"/sl/inbound ignored (corrade-mode owns perception) speaker={body.speaker!r}")
+        return {"ok": True, "skipped": "corrade-mode: inbound handled by Corrade perception"}
+
     speaker = body.speaker.strip() or "someone"
     text = body.text.strip()
     if not text:

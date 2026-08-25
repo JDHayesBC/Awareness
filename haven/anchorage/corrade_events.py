@@ -362,6 +362,12 @@ def register_routes(
         # A dialog is discriminated by either key depending on notification vs
         # the older 'type' framing — accept both.
         ntype = data.get("type") or data.get("notification") or "?"
+        # Diagnostic tap (opt-in via SL_DEBUG_RAW): dump the *verbatim* decoded
+        # event so we can see the true wire-shape of a notification — which key
+        # actually carries the agent UUID vs the display name. Off by default;
+        # never logs anything sensitive beyond public in-world chat metadata.
+        if os.getenv("SL_DEBUG_RAW"):
+            log(f"RAW {ntype!r}: {data!r}")
         if data.get("type") == "dialog" or data.get("notification") == "dialog":
             store.add_dialog(data)
             log(

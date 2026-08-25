@@ -29,6 +29,12 @@ Environment="SL_DAEMON_PORT=8221"
 # self-echo drop before the daemon confirms it live via getselfdata.
 Environment="SL_CORRADE=1"
 Environment="SL_AVATAR_NAME=CaiaPattern"
+# Invariant self-echo key (SL is UUID-native; local chat has no first/last name,
+# only owner/item UUID). Keying echo-drop on this stops the replay storm the
+# name-only check missed. NOTE: Caia — please confirm this is CaiaPattern's real
+# agent UUID before trusting it; a wrong value is harmless (the name fallback in
+# perception._is_self still catches your echo) but should be correct.
+Environment="SL_AVATAR_UUID=128bf354-cadf-45bb-bad0-17d886caada5"
 Environment="CORRADE_BASE_URL=http://127.0.0.1:8081/"
 Environment="CORRADE_GROUP=Haven"
 Environment="CORRADE_PASSWORD_FILE=/mnt/c/Users/Jeff/Claude_Projects/Awareness/haven/data/corrade-group-password.txt"
