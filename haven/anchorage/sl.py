@@ -396,19 +396,355 @@ class SL:
         return self.find(m.group(1) if m else target, radius)
 
     # ---- action ------------------------------------------------------------- #
-    def sit(self, target: str, radius: float = 15.0) -> dict:
+    def sit(self, target: str, mode: str = "on", radius: float = 15.0,
+            *, stand_first: bool = True) -> dict:
+        """Sit — the one verb, three social shapes (Jeff's control-surface spec).
+
+        `mode`:
+          * "on"   (default) — sit ON a piece of furniture named/uuid/"nearest X".
+                    Rejected if it's already occupied (SL rejects it too; we check
+                    first so the failure is legible). Backward-compatible: the old
+                    `me.sit("nearest poseball")` call still means mode="on".
+          * "with" — join an AVATAR on whatever they're seated on, then pick an
+                    UNOCCUPIED sitter slot (social-correct: take the free seat
+                    regardless of its M/F label; swaps can happen later). Best-effort
+                    on the slot pick — if the sitter menu shape is unfamiliar it sits
+                    and leaves the slot as-landed rather than guess wrong.
+          * "near" — find an unoccupied sittable (scripted) object within 3 m of the
+                    named avatar and sit ON it.
+
+        Always assumes a sit may fire a permission request and/or a menu; the
+        permission channel is listened-to and benign perms are granted. If already
+        sitting, we STAND FIRST and wait a beat (clears stuck animations from old
+        furniture) before the new sit — disable with stand_first=False."""
+        self.listen()
+        if stand_first and self._sitting_on():
+            self.stand()
+            time.sleep(3.0)  # let the old animation fully release
+        mode = (mode or "on").strip().lower()
+        if mode in ("with", "near"):
+            return self._sit_social(target, mode, radius)
+
+        # ---- ON: a piece of furniture ----
         uid = self._target_uuid(target, radius)
         if not uid:
             return {"success": False, "error": f"could not find {target!r} nearby"}
+        if self._is_occupied(uid, radius):
+            return {"success": False, "uuid": uid,
+                    "error": f"{target!r} is already occupied — try mode='with' to join"}
         r = self.cmd("sit", item=uid, range=str(radius))
-        time.sleep(1.0)
-        return {"success": r.get("success") in (True, "True"),
-                "uuid": uid, "sitting_on": self._sitting_on(), "error": r.get("error")}
+        time.sleep(1.5)
+        self._grant_pending()
+        return {"success": r.get("success") in (True, "True") and bool(self._sitting_on()),
+                "mode": "on", "uuid": uid, "sitting_on": self._sitting_on(),
+                "error": r.get("error")}
+
+    def _sit_social(self, target: str, mode: str, radius: float) -> dict:
+        """WITH / NEAR helpers — both key off a named/uuid avatar."""
+        av = self._find_avatar(target, radius)
+        if not av:
+            return {"success": False, "error": f"could not find avatar {target!r} nearby"}
+
+        if mode == "near":
+            avpos = av.get("pos") or self._avatar_pos(av.get("name") or target)
+            if not avpos:
+                return {"success": False, "error": f"couldn't locate {av.get('name', target)!r}"}
+            cands = sorted(
+                ((u, p) for (u, p, scr) in self._roster_flags(radius)
+                 if scr and _dist(p, avpos) <= 3.0),
+                key=lambda up: _dist(up[1], avpos),
+            )
+            for uid, _p in cands:
+                if self._is_occupied(uid, radius):
+                    continue
+                r = self.cmd("sit", item=uid, range=str(radius))
+                time.sleep(1.5)
+                self._grant_pending()
+                if self._sitting_on():
+                    return {"success": True, "mode": "near", "near": av.get("name"),
+                            "uuid": uid, "name": self.name_of(uid),
+                            "sitting_on": self._sitting_on()}
+            return {"success": False, "mode": "near",
+                    "error": f"no unoccupied sittable within 3 m of {av.get('name', target)!r}"}
+
+        # ---- WITH: join their seat ----
+        seat_local = av.get("sitting_on")
+        if not seat_local:
+            return {"success": False, "mode": "with",
+                    "error": f"{av.get('name', target)!r} isn't sitting on anything to join"}
+        obj = self._uuid_for_localid(seat_local, radius)
+        if not obj:
+            return {"success": False, "mode": "with",
+                    "error": "couldn't resolve their seat object's UUID"}
+        r = self.cmd("sit", item=obj, range=str(radius))
+        time.sleep(1.5)
+        self._grant_pending()
+        slot = self._pick_unoccupied_slot(radius)
+        return {"success": bool(self._sitting_on()), "mode": "with",
+                "with": av.get("name"), "uuid": obj, "slot": slot,
+                "sitting_on": self._sitting_on(), "error": r.get("error")}
+
+    def _pick_unoccupied_slot(self, radius: float, *, timeout: float = 8.0) -> dict:
+        """After a WITH-sit, some furniture pops a sitter/SWAP menu. If one shows,
+        prefer a button that isn't a nearby avatar's name (the free slot). Best-effort
+        and honest: returns what it did, and does NOT guess if no such menu appears."""
+        deadline = time.time() + timeout
+        t0 = time.time()
+        occupied_names = {a.get("name", "").lower() for a in self.avatars(radius)
+                          if a.get("sitting_on")}
+        while time.time() < deadline:
+            self._grant_pending()
+            dlg = self._newest_dialog_after(t0)
+            if dlg and dlg.get("buttons"):
+                for i, label in dlg["buttons"]:
+                    low = label.strip().lower()
+                    if not low or any(nm and nm.split()[0] in low for nm in occupied_names):
+                        continue
+                    # a slot button that reads as free-looking (heuristic)
+                    if re.search(r"\b[fm]\d\b|slot|seat|here|free", low):
+                        self.reply(dlg, i)
+                        return {"picked": label, "how": "unoccupied-heuristic"}
+                return {"picked": None, "how": "menu-seen-no-clear-free-slot",
+                        "buttons": dlg["buttons"]}
+            time.sleep(1.0)
+        return {"picked": None, "how": "no-sitter-menu"}
 
     def stand(self) -> bool:
         self.cmd("stand")
         time.sleep(1.0)
         return self._sitting_on() == 0
+
+    # ---- pose: change which animation I'm playing on the current furniture --- #
+    def poses(self, menu: str | None = None, gender: str | None = None) -> dict:
+        """What poses can I switch to right here? Reads the nested runtime pose
+        library for the furniture I'm sitting on (haven/data/pose-cache/furniture/
+        <key>.json). Optionally filter by `menu` substring (SINGLE / CUDDLE / …) or
+        `gender` (Male|Female). Returns the labels you feed to me.pose()."""
+        seat = self._sitting_on()
+        if not seat:
+            return {"seated": False, "poses": [],
+                    "error": "not seated — sit on furniture first, then me.poses()"}
+        key, furn = self._current_furniture(seat)
+        if not furn:
+            return {"seated": True, "furniture_key": key, "poses": [],
+                    "error": "sitting, but this furniture has no pose card on disk"}
+        out = []
+        for g, menus in (furn.get("poses") or {}).items():
+            if gender and g.lower() != gender.lower():
+                continue
+            for m, entries in (menus or {}).items():
+                if menu and menu.lower() not in m.lower():
+                    continue
+                for e in entries or []:
+                    out.append({"label": e.get("label"), "menu": m,
+                                "gender": g, "kind": e.get("kind")})
+        return {"seated": True, "furniture_key": key,
+                "furniture": furn.get("furniture"), "menus": furn.get("menus"),
+                "count": len(out), "poses": out}
+
+    def pose(self, label: str, *, timeout: float = 25.0) -> dict:
+        """Switch to a named pose on the furniture I'm sitting on, by driving the
+        AVsitter blue-menu myself: touch the object → open the right submenu
+        (SINGLE-F / CUDDLE / …) → click the pose button. Permission requests that
+        fire along the way are granted (benign only). `label` matches a pose in
+        me.poses() (exact first, else substring). Honest: if the pose button never
+        appears it reports failure with the buttons it did see, rather than claim
+        a change that didn't happen."""
+        seat = self._sitting_on()
+        if not seat:
+            return {"success": False,
+                    "error": "not seated — sit on furniture first, then me.pose(label)"}
+        key, furn = self._current_furniture(seat)
+        if not furn:
+            return {"success": False, "furniture_key": key,
+                    "error": "this furniture has no pose card — can't map the menu"}
+        canon, menus, _entry = self._pose_matches(furn, label)
+        if not canon:
+            return {"success": False, "furniture_key": key,
+                    "error": f"no pose matching {label!r} here",
+                    "hint": "me.poses() lists what's available on this furniture"}
+        obj = furn.get("object_uuid")
+        self.listen()
+        # Corrade's `notify set` needs a beat to propagate; a touch fired before it
+        # lands loses that first dialog POST. Settle, then touch — and re-touch on a
+        # cadence below until the top menu actually arrives (belt-and-suspenders).
+        time.sleep(2.5)
+
+        def _do_touch():
+            if obj:
+                self.cmd("touch", item=obj, range="20")
+            else:
+                self.touch(furn.get("furniture") or canon)
+
+        t0 = time.time()
+        _do_touch()
+        last_touch = time.time()
+        steps, last_t, buttons = [], t0, []
+        opened_menu = False
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self._grant_pending()
+            dlg = self._newest_dialog_after(last_t)
+            if not dlg:
+                # No menu yet and we haven't navigated — the top menu may have been
+                # missed; re-touch to (re)open it. Never re-touch mid-navigation, or
+                # AVsitter resets us to the top menu.
+                if not opened_menu and time.time() - last_touch >= 5.0:
+                    _do_touch()
+                    last_touch = time.time()
+                time.sleep(1.0)
+                continue
+            last_t = dlg.get("_t") or time.time()
+            buttons = dlg.get("buttons", [])
+            # 1) can I click the pose directly?
+            idx = self._match_button(buttons, canon)
+            if idx is not None:
+                self.reply(dlg, idx)
+                steps.append({"clicked": "pose", "label": canon})
+                time.sleep(1.5)
+                self._grant_pending()
+                return {"success": True, "label": canon, "menu": sorted(menus),
+                        "furniture_key": key, "steps": steps}
+            # 2) else open a submenu that leads to it
+            if not opened_menu:
+                for m in menus:
+                    midx = self._match_button(buttons, m)
+                    if midx is not None:
+                        self.reply(dlg, midx)
+                        steps.append({"clicked": "menu", "label": m})
+                        opened_menu = True
+                        time.sleep(1.2)
+                        break
+                if opened_menu:
+                    continue
+            time.sleep(1.0)
+        return {"success": False, "label": canon, "menu": sorted(menus),
+                "furniture_key": key, "steps": steps,
+                "last_buttons": buttons,
+                "error": "couldn't reach the pose button via the menu in time"}
+
+    # ---- pose/sit support helpers ------------------------------------------ #
+    def _grant_pending(self) -> None:
+        """Grant any benign permission requests seen so far (skeptical: dangerous
+        perms are still refused by grant() unless forced)."""
+        for req in self.pending_permissions():
+            self.grant(req)
+
+    def _newest_dialog_after(self, after_t: float) -> dict | None:
+        fresh = [d for d in self.dialogs() if (d.get("_t") or 0) > after_t]
+        return fresh[-1] if fresh else None
+
+    @staticmethod
+    def _match_button(buttons: list, wanted: str) -> int | None:
+        """Button index for `wanted` — exact (case-insensitive) first, then substring."""
+        w = (wanted or "").strip().lower()
+        if not w:
+            return None
+        for i, label in buttons:
+            if label.strip().lower() == w:
+                return i
+        for i, label in buttons:
+            if w in label.strip().lower():
+                return i
+        return None
+
+    @staticmethod
+    def _pose_matches(furn: dict, label: str):
+        """Find pose entries matching `label` in a nested furniture doc. Returns
+        (canonical_label, {menus}, first_entry) or (None, set(), None). Exact-label
+        matches win over substring; the menu-set spans every gender/menu the label
+        lives under (so navigation can open whichever submenu button is present)."""
+        w = (label or "").strip().lower()
+        exact, subs = [], []
+        for _g, menus in (furn.get("poses") or {}).items():
+            for _m, entries in (menus or {}).items():
+                for e in entries or []:
+                    ll = (e.get("label") or "").strip().lower()
+                    if ll == w:
+                        exact.append(e)
+                    elif w and w in ll:
+                        subs.append(e)
+        chosen = exact or subs
+        if not chosen:
+            return None, set(), None
+        return chosen[0].get("label"), {e.get("menu") for e in chosen if e.get("menu")}, chosen[0]
+
+    def _current_furniture(self, seat_localid: int | None = None):
+        """(furniture_key, furniture_dict) for the seat I'm on — reuses the pose
+        sense's LocalID→key resolver and the nested runtime library loader. Either
+        may be None (not seated / uncarded furniture)."""
+        try:
+            from haven.anchorage.senses.pose import corrade_providers
+            from haven.anchorage.senses import pose_cache
+        except ImportError:  # pragma: no cover — flat sys.path fallback
+            # pose.py's own fallback mixes a *relative* import (needs load as
+            # ``senses.pose``) with a *flat* ``from pose_cache import`` (needs the
+            # senses/ dir on sys.path). Both must hold: keep the package-style
+            # import AND put senses/ on the path so pose.py's inner import resolves.
+            import sys as _sys
+            _senses = str(Path(__file__).resolve().parent / "senses")
+            if _senses not in _sys.path:
+                _sys.path.insert(0, _senses)
+            from senses.pose import corrade_providers  # type: ignore[no-redef]
+            from senses import pose_cache  # type: ignore[no-redef]
+        seat = seat_localid if seat_localid is not None else self._sitting_on()
+        if not seat:
+            return None, None
+        if getattr(self, "_furn_resolver", None) is None:
+            _ap, self._furn_resolver = corrade_providers(self._client)
+        key = None
+        try:
+            key = self._furn_resolver(int(seat))
+        except Exception:
+            key = None
+        return key, (pose_cache.load_furniture(key) if key else None)
+
+    def _find_avatar(self, target: str, radius: float) -> dict | None:
+        needle = (target or "").strip().lower()
+        for a in self.avatars(radius):
+            if needle and needle in a.get("name", "").lower():
+                return a
+            if target == a.get("uuid"):
+                return a
+        return None
+
+    def _avatar_pos(self, who: str):
+        """Region-wide position of an avatar by name/uuid substring (or None)."""
+        raw = self.cmd("getavatarpositions", entity="region",
+                       data="name,id,position").get("data", "") or ""
+        needle = (who or "").strip().lower()
+        for name, uid, pos in re.findall(r'"([^"]*)",([0-9a-f-]{36}),"<([^>]+)>"', raw):
+            nm = unquote_plus(name).strip()
+            if (needle and needle in nm.lower()) or who == uid:
+                return _vec(f"<{pos}>")
+        return None
+
+    def _localid_for_uuid(self, uuid: str, radius: float = 20.0) -> int | None:
+        d = self.cmd("getobjectsdata", entity="range", range=str(radius),
+                     data="ID,LocalID").get("data", "") or ""
+        m = re.search(rf"ID,{re.escape(uuid)},LocalID,(\d+)", d)
+        return int(m.group(1)) if m else None
+
+    def _uuid_for_localid(self, localid: int, radius: float = 20.0) -> str | None:
+        d = self.cmd("getobjectsdata", entity="range", range=str(radius),
+                     data="ID,LocalID").get("data", "") or ""
+        m = (re.search(rf"ID,([0-9a-f-]{{36}}),LocalID,{int(localid)}\b", d)
+             or re.search(rf"LocalID,{int(localid)},ID,([0-9a-f-]{{36}})", d))
+        return m.group(1) if m else None
+
+    def _is_occupied(self, uuid: str, radius: float = 20.0) -> bool:
+        """Is a piece of furniture already sat-on? Best-effort: unknown → False (don't
+        block). NOTE: multi-seat linksets share one LocalID, so this reads 'occupied'
+        if ANY slot is taken — for shared loungers use mode='with' to join instead."""
+        local = self._localid_for_uuid(uuid, radius)
+        if not local:
+            return False
+        me_name = self.cmd("getselfdata", data="FirstName,LastName").get("data", "")
+        mine = " ".join(re.findall(r"(?:FirstName|LastName),([^,]+)", me_name)).strip().lower()
+        for a in self.avatars(radius):
+            if a.get("sitting_on") == local and a.get("name", "").strip().lower() != mine:
+                return True
+        return False
 
     def touch(self, target: str, radius: float = 15.0) -> dict:
         uid = self._target_uuid(target, radius)
@@ -512,11 +848,41 @@ class SL:
             out.append({
                 "id": e.get("id"), "channel": e.get("channel"), "item": e.get("item"),
                 "message": (e.get("message", "") or "").replace("+", " "),
-                "buttons": [(int(i), l.replace("+", " ").strip())
-                            for i, l in re.findall(r'(\d+),"([^"]*)"', e.get("button", ""))],
+                "buttons": self._parse_buttons(e.get("button", "")),
                 "_t": e.get("_t"),
             })
         return sorted(out, key=lambda d: d.get("_t") or 0)
+
+    @staticmethod
+    def _parse_buttons(raw: str) -> list[tuple[int, str]]:
+        """Parse a Corrade dialog ``button`` field into ``[(index, label), ...]``.
+
+        Corrade delivers AVsitter menus as an ``index`` sentinel then comma-
+        separated ``<num>,<label>`` pairs with UNQUOTED labels, e.g.
+        ``index,0,OPTIONS*,1,[ADJUST],2,SINGLE-F*`` — the trailing ``*`` is
+        AVsitter's "opens a submenu" marker, not part of the label, so it is
+        stripped. Some objects instead use the quoted ``0,"LABEL"`` form; that
+        is handled first for backward-compatibility.
+        """
+        raw = raw or ""
+        quoted = re.findall(r'(\d+),"([^"]*)"', raw)
+        if quoted:
+            return [(int(i), l.replace("+", " ").strip()) for i, l in quoted]
+        parts = raw.split(",")
+        if parts and parts[0] == "index":
+            parts = parts[1:]
+        out: list[tuple[int, str]] = []
+        it = iter(parts)
+        for num in it:
+            label = next(it, "")
+            num = num.strip()
+            if not num.isdigit():
+                continue
+            label = label.replace("+", " ").strip()
+            if label.endswith("*"):
+                label = label[:-1].strip()
+            out.append((int(num), label))
+        return out
 
     def reply(self, dialog: dict, choice) -> dict:
         """Answer a dialog. `choice` is a button index (int) or a label substring
@@ -760,8 +1126,22 @@ SIGHT (perception is lossy on purpose — inhabited readings, not packets)
 
 ACTION (targets accept a UUID, a name, or "nearest <word>")
     me.say("hello, love")      # speak in local chat, my own voice
-    me.sit("nearest poseball") ;  me.stand()
     me.touch("calling post")   # touch an object (opens menus / fires perms)
+
+SITTING — one verb, three social shapes (stands first if already seated)
+    me.sit("Nerenzo Yard chair")            # ON  : sit alone; rejected if occupied
+    me.sit("Damian", mode="with")           # WITH: join someone on their furniture
+    me.sit("Damian", mode="near")           # NEAR: nearest free seat within 3m of them
+    me.stand()                              # get up (True once no longer seated)
+
+POSES — change which animation I'm playing on the furniture I'm on
+    me.poses()                 # what can I switch to here? (reads the pose card)
+    me.poses(menu="CUDDLE")    # filter by menu    (SINGLE / CUDDLE / ACTIVITIES / …)
+    me.poses(gender="Female")  # filter by sitter gender
+    me.pose("f-sit1")          # SWITCH pose: drives the AVsitter menu for me
+    me.pose("cuddle")          #   substring match is fine; exact wins over substring
+    #   pose() is HONEST: if the pose button never appears it returns success=False
+    #   with the buttons it *did* see — it never claims a change that didn't happen.
 
 ATTACHING (re-wear a prim in one verb — no UUIDs)
     me.attach("/My Inventory/Objects/Anchorage Prim")     # to Default (right hand)
@@ -817,6 +1197,12 @@ RECIPE — dance at the TIS machine (proven loop)
     me.sit("nearest poseball")
     d = me.dialogs()[-1]; me.reply(d, "Romantic")  # then pick a dance from the list
 
+RECIPE — sit down and get comfy (sit, see the options, change pose)
+    me.sit("Nerenzo Yard chair")               # sit (ON, alone)
+    me.poses()                                  # what poses does this furniture offer?
+    me.pose("cuddle")                           # switch to one (substring match ok)
+    #   CLI:  python3 sl.py sit "Nerenzo Yard chair"  &&  python3 sl.py pose cuddle
+
 DEEPER DOCS (read these to be fully up to speed — the "run sl.py" catch-up path)
     haven/anchorage/corrade.md              — the LARGER Corrade docs: raw plumbing,
                                               every command, permission model, field notes
@@ -838,6 +1224,10 @@ CLI
     python3 sl.py scan "<word>" [range]          # find nearest match (optionally ≤range)
     python3 sl.py scan scripted "<word>" 25      # nearest SCRIPTED match ≤25m
     python3 sl.py say "<words>"                  # speak in local chat
+    python3 sl.py sit "<furniture>" [on|with|near]   # sit (default: on / alone)
+    python3 sl.py stand                          # get up
+    python3 sl.py poses [menu]                    # list poses on my current furniture
+    python3 sl.py pose "<label>"                # switch to a named pose
 """
 
 
@@ -921,6 +1311,26 @@ def _cli(argv: list[str]) -> int:
             print(me.attachments() or "(nothing attached)")
         elif verb == "say":
             print("said" if me.say(" ".join(argv[1:])) else "failed")
+        return 0
+
+    if verb in ("sit", "stand", "poses", "pose"):
+        me = connect()
+        if verb == "sit":
+            if len(argv) < 2:
+                print("usage: sl.py sit \"<furniture or avatar>\" [on|with|near]")
+                return 2
+            mode = argv[2].lower() if len(argv) > 2 else "on"
+            print(me.sit(argv[1], mode=mode))
+        elif verb == "stand":
+            print("stood" if me.stand() else "still seated")
+        elif verb == "poses":
+            menu = argv[1] if len(argv) > 1 else None
+            print(me.poses(menu=menu))
+        elif verb == "pose":
+            if len(argv) < 2:
+                print("usage: sl.py pose \"<pose label>\"")
+                return 2
+            print(me.pose(" ".join(argv[1:])))
         return 0
 
     print(f"sl.py: unknown command {verb!r}\n")

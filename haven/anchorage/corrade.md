@@ -801,6 +801,59 @@ replytoscriptdialog → re-touch shows new pose"); three UUIDs already cached th
 C4→7ec9a0fe, S13→33f8829c). Slower than a static card-read (one live pose at a time) but fully
 autonomous and overnight-able.
 
+### 9b. Higher-level sit/pose control surface (the `sl.py` verbs, 2026-08-24)
+
+The raw primitives above (`sit`, `stand`, `touch`, `getavatarsdata`, `getobjectsdata`,
+`replytoscriptdialog`) are wrapped into a small set of intent-level verbs in
+`haven/anchorage/sl.py` so sitting reads as *social grammar*, not object-poking. Built by Caia;
+documented here so the reference matches the shipped signatures. The `sl.py` HELP banner is the
+day-to-day API doc — this section records the Corrade-level *mechanics* behind each verb.
+
+- **`sit(target, mode="on"|"with"|"near", radius=15.0, *, stand_first=True) -> dict`** — one verb,
+  three social shapes:
+  - **`on`** (default): sit ON furniture by name / UUID / `"nearest X"`. **Occupancy is pre-checked**
+    (via `getavatarsdata … data=ParentID,Position` — see below) and the sit is **rejected if the seat
+    is already taken**, so an occupied-seat sit fails *legibly* ("try mode='with'") instead of
+    SL silently bouncing it. This encodes Jeff's design call: a bare "sit on" onto an occupied seat is
+    an *error signal* — if you meant to join, you'd have said `with`. Backward-compatible: the old
+    `sit("nearest poseball")` (dance recipe, §9a) still means `mode="on"`.
+  - **`with`**: join an avatar on *their* furniture. Resolve the target avatar's seat: their
+    `ParentID` (a **LocalID**) → map to the seat object's UUID via `getobjectsdata entity=range
+    data=ID,LocalID` (root prims only — same enumeration caveat as §9a poseballs), then `sit` that
+    UUID. After landing, best-effort **pick an unoccupied sitter slot** from the AVsitter menu
+    (prefer a slot button that isn't a nearby avatar's name). Honest degrade: if the menu shape is
+    unfamiliar it sits and leaves the slot **as-landed rather than guess wrong** — swaps can happen
+    later via `[SWAP]`.
+  - **`near`**: nearest **unoccupied, scripted** sittable within **3 m** of the named avatar, then
+    `mode="on"` onto it. (Scripted filter = the `scan(scripted=True)` room-reading heuristic.)
+  - **stand-first hygiene**: if already seated, `stand()` and wait ~3 s (full animation release)
+    before the new `sit` — the cure for stuck animations carried over from the old furniture.
+    Disable with `stand_first=False`.
+  - Returns `{success, mode, uuid, sitting_on, …}`. As always (§9a): `success` from the Corrade
+    command means *accepted*; the verb confirms real seating via `getselfdata SittingOn`.
+- **`stand() -> bool`** — `True` once `SittingOn == 0`.
+- **`poses(menu=None, gender=None) -> dict`** — what can I switch to *right here*, read **offline**
+  from the furniture's pose card (`haven/data/pose-cache/furniture/<key>.json`, the shared library
+  built for the pose *sense*). Returns `{seated, furniture_key, count, poses:[{label,menu,gender,kind}]}`.
+  Optional `menu`/`gender` substring filters. No card → honest empty + reason.
+- **`pose(label, *, timeout=25.0) -> dict`** — **change** pose by driving the AVsitter blue-menu
+  itself (the §9a / menu-troll loop, now a shipped verb): `touch` seat → walk into the right submenu
+  (`SINGLE-F*` / `CUDDLE*` / …) → click the pose button → re-read the header to confirm
+  (`[f-sit1]` → `[f-sit3]`). Exact label match wins over substring. **Honest failure**: returns
+  `success=False` *with the buttons it actually saw*, never a phantom success.
+
+**Occupancy detection (the shared trick under `on`/`with`/`near`).** One `getavatarsdata
+entity=range data=FirstName,LastName,ID,ParentID,Position` read gives every in-range avatar's seat
+(`ParentID` = the seat object's LocalID; same value across two avatars = seated *together*) and world
+`Position`. A seat is "occupied" if any *other* avatar's `ParentID` matches the object's LocalID
+**or** (robustness for linksets whose sit-prim LocalID ≠ the queried root) a seated avatar is within
+~3 m of the object's position. This is the same avatar-roster read the pose *sense* polls — sense and
+control share the query.
+
+**Dancing rides the existing verbs** (no new primitive needed): the §9a couples recipe is
+`touch` calling post → grant `permission` → reply `Couples` → `sit("nearest poseball")` → reply a
+dance. A dedicated `dance()` verb, if it ever lands, is additive and won't change the surface above.
+
 ---
 
 ## 10. Second Life requirement: register as a Scripted Agent
