@@ -264,6 +264,47 @@ def test_reply_routing() -> None:
           "idle floor beat -> reply_via=local")
 
 
+def test_reply_routing_midturn_im() -> None:
+    print("reply routing (mid-turn IM — the 'answered my DM in public' bug):")
+    p = SLPerception(SELF, ADDR, CFG, self_uuids=SELF_UUIDS)
+    # A turn is already running (fired by directed local speech).
+    first = p.ingest(local("Brandi", "Szondi", "hey lyra"), now=0.0)
+    check(first is not None and first.reply_via == "local" and p.in_flight,
+          "directed local fires + sets in-flight (reply local)")
+    # A DM lands DURING that turn — accumulates, does not fire concurrently.
+    mid = p.ingest(im(DAMIAN_UUID, "Damian", "Mills", "hey lyra, you there?"), now=1.0)
+    check(mid is None, "mid-turn IM accumulates (single-flight), no concurrent fire")
+    # Turn wraps: the re-fire must answer the DM PRIVATELY, not fall back to local.
+    again = p.turn_done(now=2.0)
+    check(again is not None, "turn_done re-fires (accumulated IM kept arousal high)")
+    check(again.reply_via == "im" and again.reply_to_uuid == DAMIAN_UUID,
+          "mid-turn DM answered as IM to the sender (not public)")
+    check(again.addressed, "a DM re-fire is marked addressed")
+    check(p._pending_im is None, "pending IM target cleared once consumed")
+
+
+def test_motion_flood_does_not_fire() -> None:
+    print("motion churn is scene-color, not a wake trigger:")
+    # A dancing avatar: animation every 10s + interleaved typing. At the old
+    # 0.15/0.10 this accumulated to ~theta; damped, a steady drip never fires alone.
+    p = SLPerception(SELF, ADDR, CFG, self_uuids=SELF_UUIDS)
+    anim = {"type": "animation", "notification": "animation",
+            "agent": DAMIAN_UUID, "name": "Damian Mills"}
+    typ = {"type": "typing", "notification": "typing",
+           "agent": DAMIAN_UUID, "name": "Damian Mills"}
+    fires = 0
+    for i in range(18):                       # ~3 minutes of motion at 10s cadence
+        if p.ingest(anim, now=i * 10.0):
+            fires += 1
+        if p.ingest(typ, now=i * 10.0 + 5.0):
+            fires += 1
+    check(fires == 0, "3 min of animation+typing churn never wakes the brain")
+    # ...but a real DM lands on top of that churn and STILL fires cleanly.
+    wp = p.ingest(im(DAMIAN_UUID, "Damian", "Mills", "hey lyra"), now=200.0)
+    check(wp is not None and wp.reply_via == "im",
+          "a directed IM still fires through the motion floor, answered privately")
+
+
 def test_surface_delta_buffer() -> None:
     print("surface:")
     s = PerceptionSurface(max_deltas=3)
@@ -346,7 +387,9 @@ def main() -> int:
         test_arousal_accumulate_and_fire, test_arousal_leak_prevents_stale_accumulation,
         test_arousal_refractory,
         test_perception_directed_fires_now, test_perception_single_flight_and_recheck,
-        test_perception_quiet_after_turn, test_reply_routing, test_surface_delta_buffer,
+        test_perception_quiet_after_turn, test_reply_routing,
+        test_reply_routing_midturn_im, test_motion_flood_does_not_fire,
+        test_surface_delta_buffer,
         test_heartbeat_and_floor, test_poll_idle_floor, test_note_activity_resets_floor,
     ):
         fn()

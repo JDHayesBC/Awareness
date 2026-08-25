@@ -74,9 +74,16 @@ class SalienceConfig:
     s_avatar: float = 0.30      # avatar enters/leaves chat range
     s_music: float = 0.40       # now-playing track change
     s_pose: float = 0.15        # a resolved pose change (mine or another's) — body-awareness
-    s_animation: float = 0.15   # nearby avatar animation change
-    s_appearance: float = 0.15  # nearby avatar outfit change
-    s_typing: float = 0.10      # someone starts typing — early lean-in
+    # Motion churn (2026-08-24): a dancing avatar re-emits `animation` every ~10s,
+    # plus `typing`/`appearance` bursts. At the old 0.15/0.10 these accumulated to
+    # ~theta (steady-state ≈0.97) and woke the brain on ambient motion — over-firing
+    # that both bloated the brain's context turn-over-turn AND made "a DM arrives
+    # mid-turn" the common case (which tripped the reply-routing). Damped so motion
+    # COLORS THE SCENE (still adds a delta) without triggering a turn on its own;
+    # real speech (local 0.35 / directed-or-IM 1.20) still fires cleanly on top.
+    s_animation: float = 0.04   # nearby avatar animation change (was 0.15)
+    s_appearance: float = 0.04  # nearby avatar outfit change (was 0.15)
+    s_typing: float = 0.02      # someone starts typing — early lean-in (was 0.10)
     s_low: float = 0.05         # region/balance/alert/collision/sit — routine
     s_heartbeat: float = 0.20   # endogenous "restlessness" tick (see floor_interval)
     s_drop: float = 0.0         # self-echo / ignore — never touches V
@@ -529,6 +536,10 @@ class SLPerception:
         self.surface = surface or PerceptionSurface()
         self.arousal = arousal or ArousalState(self.cfg)
         self.in_flight = False
+        # A directed IM's reply target (speaker, uuid, text), remembered across the
+        # in-flight window so a DM that lands mid-turn is still answered privately
+        # when the turn wraps — the accumulated re-fire would otherwise lose it.
+        self._pending_im: "tuple[Optional[str], str, Optional[str]] | None" = None
 
     def ingest(self, event: dict, now: float) -> Optional[WakePayload]:
         """Perceive one event. Returns a :class:`WakePayload` iff this event
@@ -536,6 +547,12 @@ class SLPerception:
         s = score_event(event, self.self_names, self.address_names, self.cfg, self.self_uuids)
         if s.tier == DROP or s.value <= 0.0:
             return None
+
+        # Remember a directed IM's reply target for the whole in-flight window (set
+        # here so it's captured whether this IM fires its own turn or merely
+        # accumulates behind a running one). Consumed + cleared by the next _fire.
+        if s.kind == "message" and s.speaker_uuid:
+            self._pending_im = (s.speaker, s.speaker_uuid, s.text)
 
         if s.kind == "nowplaying":
             self.surface.note_music(event.get("payload") or event)
@@ -587,20 +604,32 @@ class SLPerception:
     def _fire(self, now: float, trigger: Salience) -> WakePayload:
         self.arousal.fire(now)
         self.in_flight = True
-        # An IM trigger routes the reply back as a private IM to the sender; every
-        # other trigger (local speech, idle beat, accumulated re-fire) stays local.
-        # Guard on a real UUID so a nameless/uuid-less IM can't route into a blank
-        # im(agent="") — it falls back to local instead.
+        speaker, text = trigger.speaker, trigger.text
+        # Reply routing (SL is UUID-native). Prefer the trigger if it's itself an IM;
+        # otherwise fall back to a DM captured during the in-flight accumulation
+        # window (a mid-turn IM) so a private message is ALWAYS answered privately —
+        # this is the fix for "answered my DM in public": the accumulated re-fire
+        # used to lose the target and fall back to local. Every other trigger (local
+        # speech, idle beat, non-IM re-fire) stays local. Guarded on a real UUID so
+        # a nameless IM can't route into a blank im(agent="").
         if trigger.kind == "message" and trigger.speaker_uuid:
             reply_via, reply_to_uuid = "im", trigger.speaker_uuid
+        elif self._pending_im:
+            p_speaker, p_uuid, p_text = self._pending_im
+            reply_via, reply_to_uuid = "im", p_uuid
+            # Surface the IM's speaker/text to the brain when the trigger (an
+            # "accumulated" re-fire) carries none — so it can answer + capture it.
+            speaker = speaker or p_speaker
+            text = text or p_text
         else:
             reply_via, reply_to_uuid = "local", None
+        self._pending_im = None  # consumed — never carries beyond one fire cycle
         return WakePayload(
             trigger=trigger.reason,
-            addressed=trigger.directed or trigger.tier == FORCE,
+            addressed=trigger.directed or trigger.tier == FORCE or reply_via == "im",
             deltas=self.surface.drain_deltas(),
-            speaker=trigger.speaker,
-            text=trigger.text,
+            speaker=speaker,
+            text=text,
             music_line=self.surface.music_line(),
             reply_via=reply_via,
             reply_to_uuid=reply_to_uuid,
