@@ -41,6 +41,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote_plus
+from urllib.request import urlopen, Request as _URLRequest
+from urllib.error import URLError as _URLError
 
 try:  # package or bare-dir import (mirrors corrade_events' shim)
     from haven.anchorage.corrade_client import CorradeClient, CorradeError
@@ -52,8 +54,8 @@ except ImportError:  # pragma: no cover
 # resolved lazily (env CORRADE_PASSWORD, else the gitignored file).
 # --------------------------------------------------------------------------- #
 _ENDPOINTS = {
-    "lyra": {"base_url": "http://127.0.0.1:8080/", "group": "Haven", "listen_port": 9770},
-    "caia": {"base_url": "http://127.0.0.1:8081/", "group": "Haven", "listen_port": 9771},
+    "lyra": {"base_url": "http://127.0.0.1:8080/", "group": "Haven", "listen_port": 9770, "daemon_port": 8220},
+    "caia": {"base_url": "http://127.0.0.1:8081/", "group": "Haven", "listen_port": 9771, "daemon_port": 8221},
 }
 _DATA_DIR = Path(__file__).resolve().parents[1] / "data"  # haven/data
 _DEFAULT_PW_FILE = _DATA_DIR / "corrade-group-password.txt"
@@ -177,6 +179,7 @@ class SL:
         self._buf = _NotifyBuffer()
         self._server: HTTPServer | None = None
         self._listen_port = int(os.getenv("CORRADE_LISTEN_PORT", prof["listen_port"]))
+        self._daemon_port = int(os.getenv("SL_DAEMON_PORT", prof.get("daemon_port", 8220)))
 
     # ---- low-level ---------------------------------------------------------- #
     def cmd(self, command: str, **pairs: Any) -> dict:
@@ -416,28 +419,40 @@ class SL:
         Always assumes a sit may fire a permission request and/or a menu; the
         permission channel is listened-to and benign perms are granted. If already
         sitting, we STAND FIRST and wait a beat (clears stuck animations from old
-        furniture) before the new sit — disable with stand_first=False."""
-        self.listen()
-        if stand_first and self._sitting_on():
-            self.stand()
-            time.sleep(3.0)  # let the old animation fully release
-        mode = (mode or "on").strip().lower()
-        if mode in ("with", "near"):
-            return self._sit_social(target, mode, radius)
+        furniture) before the new sit — disable with stand_first=False.
 
-        # ---- ON: a piece of furniture ----
-        uid = self._target_uuid(target, radius)
-        if not uid:
-            return {"success": False, "error": f"could not find {target!r} nearby"}
-        if self._is_occupied(uid, radius):
-            return {"success": False, "uuid": uid,
-                    "error": f"{target!r} is already occupied — try mode='with' to join"}
-        r = self.cmd("sit", item=uid, range=str(radius))
-        time.sleep(1.5)
-        self._grant_pending()
-        return {"success": r.get("success") in (True, "True") and bool(self._sitting_on()),
-                "mode": "on", "uuid": uid, "sitting_on": self._sitting_on(),
-                "error": r.get("error")}
+        NOTE: this method calls ``listen()`` internally (needed for permission grants
+        and sitter-menu handling). When a SL daemon is running for this entity, that
+        ``notify set`` temporarily overrides the daemon's Corrade subscription — the
+        daemon goes deaf while this call runs. ``stop_listening()`` is called in the
+        finally block to restore daemon subscriptions as soon as the sit completes."""
+        _already_listening = self._server is not None
+        self.listen()
+        try:
+            if stand_first and self._sitting_on():
+                self.stand()
+                time.sleep(3.0)  # let the old animation fully release
+            mode = (mode or "on").strip().lower()
+            if mode in ("with", "near"):
+                return self._sit_social(target, mode, radius)
+
+            # ---- ON: a piece of furniture ----
+            uid = self._target_uuid(target, radius)
+            if not uid:
+                return {"success": False, "error": f"could not find {target!r} nearby"}
+            if self._is_occupied(uid, radius):
+                return {"success": False, "uuid": uid,
+                        "error": f"{target!r} is already occupied — try mode='with' to join"}
+            r = self.cmd("sit", item=uid, range=str(radius))
+            time.sleep(1.5)
+            self._grant_pending()
+            return {"success": r.get("success") in (True, "True") and bool(self._sitting_on()),
+                    "mode": "on", "uuid": uid, "sitting_on": self._sitting_on(),
+                    "error": r.get("error")}
+        finally:
+            if not _already_listening:
+                # We started listening; restore daemon subscriptions now we're done.
+                self.stop_listening()
 
     def _sit_social(self, target: str, mode: str, radius: float) -> dict:
         """WITH / NEAR helpers — both key off a named/uuid avatar."""
@@ -803,9 +818,39 @@ class SL:
         return r.get("success") in (True, "True")
 
     def stop_listening(self) -> None:
+        """Shut down the local notification server and restore the daemon's Corrade
+        subscriptions. ``listen()`` / ``notify set`` overrides the daemon's subscription
+        (same Corrade group slot); calling this hands it back so the daemon isn't
+        left deaf after a terminal sl.py session ends."""
         if self._server is not None:
             self._server.shutdown()
             self._server = None
+        # Restore daemon's Corrade subscriptions (best-effort — non-fatal if the
+        # daemon is down or the secret file is absent).
+        try:
+            secret_file = _DATA_DIR / "anchorage-sl-secret.txt"
+            sl_secret = os.getenv("ANCHORAGE_SL_SECRET") or (
+                secret_file.read_text().strip() if secret_file.exists() else ""
+            )
+            if sl_secret:
+                import json as _json
+                body = _json.dumps({"token": sl_secret}).encode()
+                req = _URLRequest(
+                    f"http://localhost:{self._daemon_port}/corrade-events/subscribe",
+                    data=body, headers={"Content-Type": "application/json"},
+                )
+                with urlopen(req, timeout=5):
+                    pass
+        except Exception:
+            pass  # daemon may not be running; silence — never crash the caller
+
+    def __del__(self) -> None:
+        """Best-effort cleanup on GC / process exit — shuts down the local listener
+        and restores daemon subscriptions so the daemon isn't left deaf."""
+        try:
+            self.stop_listening()
+        except Exception:
+            pass
 
     def pending_permissions(self) -> list[dict]:
         """Permission requests seen so far (deduped by task+item). ALWAYS review

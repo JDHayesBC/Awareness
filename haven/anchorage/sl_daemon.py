@@ -180,6 +180,14 @@ SL_IDLE_TRANS_WIN = float(os.getenv("SL_IDLE_TRANS_WIN", "45"))   # post-transit
 SL_IDLE_TRANS_FLOOR = float(os.getenv("SL_IDLE_TRANS_FLOOR", "5"))  # floor during that window
 SL_IDLE_OVERRIDE_TTL = float(os.getenv("SL_IDLE_OVERRIDE_TTL", "600"))  # override auto-expiry (safety)
 
+# Periodic re-subscription (self-healing). A terminal sl.py session that calls
+# listen() issues a Corrade `notify set` that REPLACES this daemon's subscription
+# with the terminal's own listener — leaving the daemon deaf until it re-subscribes.
+# This loop reinstates subscriptions every SL_RESUB_INTERVAL seconds so any such
+# "theft" self-heals within that window. Default 10 minutes is short enough to be
+# invisible in practice, long enough not to perturb the Corrade event queue.
+SL_RESUB_INTERVAL = float(os.getenv("SL_RESUB_INTERVAL", "600"))  # 10 min
+
 
 def _split_reply(reply: str) -> tuple[str, list[str]]:
     """Split a brain reply into (spoken_text, [exact gizmo commands]).
@@ -881,6 +889,32 @@ async def _pose_poll_loop() -> None:
         await asyncio.sleep(SL_POSE_POLL)
 
 
+async def _resubscribe_loop() -> None:
+    """Background: periodically reinstall Corrade notification subscriptions.
+
+    A terminal sl.py session calling ``listen()`` issues a Corrade ``notify set``
+    that REPLACES this daemon's subscription with the terminal's own listener port —
+    leaving the daemon deaf until it re-subscribes. This loop reinstates the daemon's
+    subscriptions every SL_RESUB_INTERVAL seconds so any such override self-heals.
+    sl.py also now calls stop_listening() which immediately restores subscriptions,
+    making this a belt-and-suspenders safety net for cases where the terminal session
+    exits uncleanly (crash, sigkill) without calling stop_listening().
+    """
+    log(f"subscription watchdog started (every {SL_RESUB_INTERVAL:.0f}s)")
+    while True:
+        await asyncio.sleep(SL_RESUB_INTERVAL)
+        if _corrade_client is None or _corrade_callback_url is None:
+            continue
+        try:
+            installed = await corrade_events.install_subscriptions(
+                _corrade_client, _corrade_callback_url, CORRADE_NOTIFY_TYPES
+            )
+            if installed:
+                log("subscription watchdog: Corrade subscriptions refreshed")
+        except Exception as e:
+            log(f"subscription watchdog error (non-fatal): {e}")
+
+
 async def _heartbeat_loop() -> None:
     """Background: inject a self-authored ``heartbeat`` event into SLPerception
     every ``SL_HEARTBEAT`` seconds. Small on its own; with ``SL_PERCEPTION_FLOOR``
@@ -1002,6 +1036,14 @@ async def _startup():
     # breathes with context. On by default with SL_CORRADE; owns the endogenous beat.
     if SL_CORRADE and SL_IDLE_WATCHDOG and _perception is not None and _hb is not None:
         task = asyncio.create_task(_idle_watchdog_loop())
+        _bg_tasks.add(task)
+        task.add_done_callback(_bg_tasks.discard)
+
+    # Subscription watchdog: periodically re-install Corrade subscriptions so any
+    # terminal sl.py session that steals them (via listen() → notify set) self-heals.
+    # On whenever SL_CORRADE=1 and SL_RESUB_INTERVAL>0 (default 600s / 10 min).
+    if SL_CORRADE and SL_RESUB_INTERVAL > 0 and _corrade_client is not None:
+        task = asyncio.create_task(_resubscribe_loop())
         _bg_tasks.add(task)
         task.add_done_callback(_bg_tasks.discard)
 
