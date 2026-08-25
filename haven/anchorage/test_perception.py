@@ -305,6 +305,44 @@ def test_motion_flood_does_not_fire() -> None:
           "a directed IM still fires through the motion floor, answered privately")
 
 
+def test_engagement_window() -> None:
+    # Once a speaker addresses me by name (or IMs), their un-named follow-up local
+    # lines fire for cfg.engage_window seconds — the fix for "name = instant reply,
+    # un-named conversational line = dropped" that motion-damping exposed. Scoped by
+    # speaker UUID so a crowd's ambient chatter stays quiet.
+    print("conversational engagement window:")
+    p = SLPerception(SELF, ADDR, CFG, self_uuids=SELF_UUIDS)
+    BRANDI = "11111111-1111-1111-1111-111111111111"
+    STRANGER = "22222222-2222-2222-2222-222222222222"
+
+    def uloc(uuid: str, first: str, msg: str) -> dict:
+        # Real local chat carries the speaker's agent UUID in owner/item.
+        return {"type": "Normal", "owner": uuid, "item": uuid,
+                "firstname": first, "lastname": "Resident", "message": msg}
+
+    # 1. Un-named local before engagement — must NOT fire (0.35 < theta).
+    r = p.ingest(uloc(BRANDI, "Brandi", "these turns are slow"), now=0.0)
+    check(r is None and not p.in_flight, "un-named local does not fire when not engaged")
+    # 2. Brandi addresses me by name — fires and opens the window.
+    r = p.ingest(uloc(BRANDI, "Brandi", "Lyra? you there?"), now=5.0)
+    check(r is not None, "directed local fires and opens engagement")
+    p.turn_done(now=6.0)
+    # 3. Brandi's un-named follow-up within the window — now PROMOTED, fires.
+    r = p.ingest(uloc(BRANDI, "Brandi", "these turns are slow"), now=10.0)
+    check(r is not None and r.addressed,
+          "engaged speaker's un-named follow-up fires (and is marked addressed)")
+    p.turn_done(now=11.0)
+    # 4. Engagement is SPEAKER-SCOPED (tested directly, free of arousal-accumulation
+    # confounds): the addressing speaker is engaged; a different avatar is not — so a
+    # crowd's ambient chatter is never promoted, only the person actually talking to me.
+    check(p._is_engaged(BRANDI, 12.0), "the addressing speaker is engaged")
+    check(not p._is_engaged(STRANGER, 12.0),
+          "a different speaker is NOT engaged (scoped by uuid, no crowd flooding)")
+    # 5. The window lapses after engage_window seconds of silence from that speaker.
+    check(not p._is_engaged(BRANDI, 10.0 + CFG.engage_window + 1.0),
+          "engagement lapses after the window elapses")
+
+
 def test_surface_delta_buffer() -> None:
     print("surface:")
     s = PerceptionSurface(max_deltas=3)
@@ -389,6 +427,7 @@ def main() -> int:
         test_perception_directed_fires_now, test_perception_single_flight_and_recheck,
         test_perception_quiet_after_turn, test_reply_routing,
         test_reply_routing_midturn_im, test_motion_flood_does_not_fire,
+        test_engagement_window,
         test_surface_delta_buffer,
         test_heartbeat_and_floor, test_poll_idle_floor, test_note_activity_resets_floor,
     ):

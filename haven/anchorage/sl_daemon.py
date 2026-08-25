@@ -152,7 +152,30 @@ SL_POSE_POLL = float(os.getenv("SL_POSE_POLL", "15"))
 # halo or clear the single-flight lock — the daemon wedges (observed 2026-08-23,
 # a hung turn after an "Ambient fetch failed"). wait_for() bounds the turn so a
 # stall self-heals: TimeoutError → reply=None → finally runs → status + lock reset.
-SL_TURN_TIMEOUT = float(os.getenv("SL_TURN_TIMEOUT", "90"))
+SL_TURN_TIMEOUT = float(os.getenv("SL_TURN_TIMEOUT", "40"))
+# ^ Lowered 90->40 (2026-08-24). A healthy in-world perceive turn is 5-15s even
+# with a tool call or two; 90s let a *degrading* brain session (context creeping
+# up turn-over-turn) limp for a minute and a half per fire before giving up — the
+# "escalating timing then total silence" Jeff saw. 40s catches degradation ~2x
+# sooner and pairs with the repeated-timeout recovery below. Session ROTATION
+# (the heavy identity warmup) is deliberately kept OFF this hot path (proactive
+# rotate_if_approaching at a quiet moment), so a normal turn never legitimately
+# needs the old 90s headroom.
+
+# --- Brain session rotation (the fix for unbounded context growth) ------------
+# The brain is ONE persistent Claude session; every perceive turn appends to it
+# (prompt + all tool-call round-trips). The invoker only auto-restarts at hard
+# limits AND its token accountant undercounts (ignores tool round-trips) — so in a
+# busy in-world session it effectively never rotated, latency climbed unbounded,
+# and turns eventually all exceeded SL_TURN_TIMEOUT (silence). Fix: rotate the SL
+# brain FAR more aggressively. The turn-count cap is the reliable governor (it's
+# exact, unlike the token estimate); 20 turns keeps the session small and fast.
+SL_BRAIN_MAX_TURNS = int(os.getenv("SL_BRAIN_MAX_TURNS", "20"))
+SL_BRAIN_MAX_CONTEXT = int(os.getenv("SL_BRAIN_MAX_CONTEXT", "100000"))  # backstop
+# Repeated-timeout recovery: if this many perceive turns time out back-to-back,
+# force a full session rotation (fresh subprocess + re-warm) before the next fire —
+# turns "silent forever" into "silent one turn, then recovered".
+SL_TIMEOUT_RECOVER_AFTER = int(os.getenv("SL_TIMEOUT_RECOVER_AFTER", "2"))
 
 # Heartbeat-as-event (opt-in): a periodic self-authored "heartbeat" event fed into
 # SLPerception, plus an arousal floor so a quiet room eventually rouses a
@@ -161,6 +184,10 @@ SL_TURN_TIMEOUT = float(os.getenv("SL_TURN_TIMEOUT", "90"))
 # force a wake after this many seconds of quiet regardless of arousal (0 = off).
 SL_HEARTBEAT = float(os.getenv("SL_HEARTBEAT", "0"))
 SL_PERCEPTION_FLOOR = float(os.getenv("SL_PERCEPTION_FLOOR", "0"))
+# Conversational engagement window (seconds). Once a speaker addresses me (name/IM),
+# their un-named follow-up local lines fire for this long — so a back-and-forth flows
+# without re-invoking my name each sentence. 0 disables. See SalienceConfig.engage_window.
+SL_ENGAGE_WINDOW = float(os.getenv("SL_ENGAGE_WINDOW", "180"))
 
 # Adaptive idle-heartbeat (task #8; work/sl-presence/idle-heartbeat-design.md). The
 # in-world max-silence guarantee whose interval BREATHES: tight right after a
@@ -267,7 +294,19 @@ def _get_brain() -> BrainProtocol:
         # channel='sl'/consumer_key=f'sl-{ENTITY_NAME}' — kept distinct from
         # Haven's channel='haven'/consumer_key=f'haven-{ENTITY_NAME}' so the
         # two surfaces don't collide in ambient_recall's per-consumer cursor.
-        _brain = EntityBrain(entity_name=ENTITY_NAME, channel="sl")
+        _brain = EntityBrain(
+            entity_name=ENTITY_NAME,
+            channel="sl",
+            # Rotate aggressively: SL is high-tempo, turns are cheap, and the
+            # persistent session must stay small or latency creeps until turns
+            # time out (see SL_BRAIN_* above). Turn-count is the exact governor.
+            max_turns=SL_BRAIN_MAX_TURNS,
+            max_context_tokens=SL_BRAIN_MAX_CONTEXT,
+            # SL rotates OFF the hot path (proactive at an idle beat + repeated-timeout
+            # watchdog). Inline restart is disabled so the ~minutes-long identity
+            # warmup is never cancelled mid-flight by SL_TURN_TIMEOUT.
+            restart_in_turn=False,
+        )
     return _brain
 
 
@@ -372,6 +411,14 @@ _hb: Optional[heartbeat.HeartbeatController] = None
 # cleared in its finally.
 _brain_busy: bool = False
 
+# Repeated-timeout recovery state (see SL_TIMEOUT_RECOVER_AFTER). Consecutive
+# perception-turn timeouts are counted; once the count reaches the threshold a full
+# session rotation is forced at the TOP of the next turn (off the abandoned turn's
+# stack, under the _brain_busy guard). Any turn that completes without timing out
+# resets the counter.
+_consec_timeouts: int = 0
+_force_restart_pending: bool = False
+
 
 _HEARTBEAT_RE = re.compile(r"\[\[\s*HEARTBEAT\s+([^\]]+?)\s*\]\]", re.IGNORECASE)
 
@@ -459,11 +506,15 @@ if SL_CORRADE:
     _self_uuids = {SL_AVATAR_UUID} if SL_AVATAR_UUID else set()
     _perception = perception.SLPerception(
         _self_names, _address_names,
-        cfg=perception.SalienceConfig(floor_interval=SL_PERCEPTION_FLOOR),
+        cfg=perception.SalienceConfig(
+            floor_interval=SL_PERCEPTION_FLOOR,
+            engage_window=SL_ENGAGE_WINDOW,
+        ),
         self_uuids=_self_uuids,
     )
     log(f"SLPerception armed (avatar={_av!r}, uuid={SL_AVATAR_UUID or '(unset—name fallback)'}, "
-        f"address={sorted(_address_names)}, floor={SL_PERCEPTION_FLOOR:.0f}s)")
+        f"address={sorted(_address_names)}, floor={SL_PERCEPTION_FLOOR:.0f}s, "
+        f"engage={SL_ENGAGE_WINDOW:.0f}s)")
 
     # Adaptive idle-heartbeat: the max-silence guarantee whose interval breathes
     # with context (task #8). The pure controller lives in heartbeat.py; the poke
@@ -695,7 +746,7 @@ async def _handle_perception(payload) -> None:
     single-flight and recheck. Single-flight is enforced by
     ``SLPerception.in_flight`` (set when the payload was produced, cleared here via
     ``turn_done``) — so no two perception turns overlap."""
-    global _brain_busy
+    global _brain_busy, _consec_timeouts, _force_restart_pending
     brain = _get_brain()
     perceive = getattr(brain, "perceive", None)
     if perceive is None:
@@ -705,6 +756,24 @@ async def _handle_perception(payload) -> None:
         return
 
     _brain_busy = True
+
+    # Repeated-timeout recovery: if prior turns timed out back-to-back, rotate the
+    # session (fresh subprocess + re-warm) NOW — off the abandoned turn's stack,
+    # under the _brain_busy guard, before we try to think again. This is the safety
+    # net that turns "silent forever" (every turn exceeding SL_TURN_TIMEOUT on a
+    # degraded/wedged session) into "silent one turn, then recovered".
+    if _force_restart_pending:
+        _force_restart_pending = False
+        restart_session = getattr(brain, "restart_session", None)
+        if restart_session is not None:
+            await _push_status("warming up")
+            log(f"forcing brain session rotation after {_consec_timeouts} consecutive timeout(s)")
+            try:
+                await restart_session(reason="repeated-timeout recovery")
+            except Exception as e:
+                log(f"forced session rotation failed (non-fatal): {e}")
+        _consec_timeouts = 0
+
     idle = getattr(payload, "idle", False)
     # A real (event-driven) wake feeds the tempo EMA + resets recency; an idle
     # floor-fire must NOT — it's the endogenous beat itself, not ambient activity,
@@ -732,12 +801,34 @@ async def _handle_perception(payload) -> None:
             # Bounded so a stalled model/scene fetch can't wedge the turn (and with
             # it the "thinking" halo + single-flight lock) forever — see SL_TURN_TIMEOUT.
             reply = await asyncio.wait_for(_run_turn(), timeout=SL_TURN_TIMEOUT)
+            # A turn that returned (even [[NO_RESPONSE]]) proves the session is
+            # responsive — clear the consecutive-timeout streak.
+            _consec_timeouts = 0
         except asyncio.TimeoutError:
-            log(f"perception turn exceeded {SL_TURN_TIMEOUT:.0f}s — abandoning so halo/lock reset")
+            _consec_timeouts += 1
             reply = None
+            if _consec_timeouts >= SL_TIMEOUT_RECOVER_AFTER:
+                _force_restart_pending = True
+                log(f"perception turn exceeded {SL_TURN_TIMEOUT:.0f}s "
+                    f"(#{_consec_timeouts} in a row) — abandoning; will force session "
+                    f"rotation before next turn")
+            else:
+                log(f"perception turn exceeded {SL_TURN_TIMEOUT:.0f}s "
+                    f"(#{_consec_timeouts}) — abandoning so halo/lock reset")
         except Exception as e:
+            _consec_timeouts = 0
             log(f"brain.perceive failed: {e}")
             reply = None
+
+        # Visibility: surface the brain session's growth so latency creep is
+        # observable in the journal (the invoker's own logging doesn't reach it).
+        inv = getattr(brain, "invoker", None)
+        if inv is not None:
+            try:
+                log(f"brain session: ~{inv.context_size} tok, {inv.turn_count}"
+                    f"/{SL_BRAIN_MAX_TURNS} turns")
+            except Exception:
+                pass
 
         if reply:
             reply = _apply_heartbeat_directives(reply)
@@ -761,16 +852,33 @@ async def _handle_perception(payload) -> None:
                     log(f"gizmo cmd -> {cmd!r}")
                     await _cmd_to_prim(prim, cmd)
     finally:
+        # Single-flight recheck: if the room stayed lively during the turn, arousal
+        # may still be over threshold — the next turn should fire now.
+        again = _perception.turn_done(time.time()) if _perception is not None else None
+
+        # Proactive session rotation OFF the hot path: rotate an approaching-limit
+        # session only on an IDLE BEAT (this turn was the endogenous heartbeat, which
+        # fires after a genuine 120s+ lull) with nothing queued — paying the ~minutes
+        # identity warmup when no one is present, NEVER during a conversational pause
+        # (where gating on `again is None` alone would stall the human's next message)
+        # and NEVER inside a timed turn. Kept under _brain_busy=True so a fresh fire
+        # can't start mid-rotation. A relentlessly-active room that never idles is
+        # covered by the repeated-timeout recovery above (self-correcting backstop).
+        if idle and again is None:
+            rotate = getattr(brain, "rotate_if_approaching", None)
+            if rotate is not None:
+                try:
+                    if await rotate():
+                        log("brain session rotated proactively (quiet moment, off hot path)")
+                except Exception as e:
+                    log(f"proactive rotation failed (non-fatal): {e}")
+
         _brain_busy = False
         await _push_status(_resting_status())
-        # Single-flight recheck: if the room stayed lively during the turn, arousal
-        # may still be over threshold — fire the next turn now.
-        if _perception is not None:
-            again = _perception.turn_done(time.time())
-            if again is not None:
-                task = asyncio.create_task(_handle_perception(again))
-                _bg_tasks.add(task)
-                task.add_done_callback(_bg_tasks.discard)
+        if again is not None:
+            task = asyncio.create_task(_handle_perception(again))
+            _bg_tasks.add(task)
+            task.add_done_callback(_bg_tasks.discard)
 
 
 async def _music_poll_loop() -> None:

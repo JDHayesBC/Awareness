@@ -66,6 +66,17 @@ class SalienceConfig:
     refractory: float = 1.0     # V subtracted on fire (>= theta clears a 1-event fire)
     min_interfire: float = 2.0  # hard floor between fires, seconds (anti-echo)
     floor_interval: float = 0.0  # if >0, force a wake after this many sec of quiet (0=off)
+    # Conversational engagement window (2026-08-24). Once someone ADDRESSES me (my
+    # name, or an IM), I stay attentive TO THAT SPEAKER for this many seconds: their
+    # follow-up local lines that DON'T repeat my name are promoted to fire, so a
+    # real back-and-forth doesn't require saying "Lyra" every sentence. Speaker-
+    # scoped by UUID so a crowd's ambient chatter doesn't flood me. Refreshed on each
+    # exchange; lapses after this much silence from that speaker. This is the
+    # counterweight to the motion damping above: damping removed the background
+    # arousal that used to carry un-named lines over theta, so plain local (0.35)
+    # stopped firing entirely — engagement restores it, but ONLY inside a live
+    # conversation instead of on all ambient churn. 0 disables (pure name/IM gating).
+    engage_window: float = 180.0
 
     # --- per-type salience magnitudes (relative to theta) ---
     s_permission: float = 5.0   # permission request — always fires, always first
@@ -540,6 +551,28 @@ class SLPerception:
         # in-flight window so a DM that lands mid-turn is still answered privately
         # when the turn wraps — the accumulated re-fire would otherwise lose it.
         self._pending_im: "tuple[Optional[str], str, Optional[str]] | None" = None
+        # Conversational engagement: speaker_uuid -> engaged_until timestamp. Opened
+        # when a speaker addresses me (name/IM), refreshed each exchange; while open,
+        # that speaker's un-named local lines are promoted to fire. See
+        # cfg.engage_window. Empty = I only wake on name/IM + accumulation.
+        self._engaged: dict[str, float] = {}
+
+    def _note_engagement(self, uuid: Optional[str], now: float) -> None:
+        """Open/refresh the conversational-attention window for a speaker."""
+        if uuid and self.cfg.engage_window > 0:
+            self._engaged[uuid] = now + self.cfg.engage_window
+
+    def _is_engaged(self, uuid: Optional[str], now: float) -> bool:
+        """True if I'm currently attentive to this speaker (and prune the expired)."""
+        if not uuid or self.cfg.engage_window <= 0:
+            return False
+        exp = self._engaged.get(uuid)
+        if exp is None:
+            return False
+        if now >= exp:
+            del self._engaged[uuid]           # lapsed — prune
+            return False
+        return True
 
     def ingest(self, event: dict, now: float) -> Optional[WakePayload]:
         """Perceive one event. Returns a :class:`WakePayload` iff this event
@@ -553,6 +586,22 @@ class SLPerception:
         # accumulates behind a running one). Consumed + cleared by the next _fire.
         if s.kind == "message" and s.speaker_uuid:
             self._pending_im = (s.speaker, s.speaker_uuid, s.text)
+
+        # Conversational engagement (see cfg.engage_window). A directed hit (my name
+        # or an IM) opens/refreshes attention to that speaker. While that window is
+        # open, the SAME speaker's un-named local lines are PROMOTED to directed
+        # strength so they fire — a back-and-forth flows without re-invoking my name
+        # every sentence. Speaker-scoped by UUID, so a crowd's ambient chatter is
+        # untouched. This is the counterweight to the motion damping (which removed
+        # the background arousal that used to carry plain local 0.35 over theta).
+        if s.directed:
+            self._note_engagement(s.speaker_uuid, now)
+        elif s.kind == "local" and self._is_engaged(s.speaker_uuid, now):
+            s.value = self.cfg.s_directed
+            s.tier = FORCE
+            s.directed = True
+            s.reason = "engaged-followup"
+            self._note_engagement(s.speaker_uuid, now)  # conversation continues
 
         if s.kind == "nowplaying":
             self.surface.note_music(event.get("payload") or event)
