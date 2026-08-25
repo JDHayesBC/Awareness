@@ -1094,22 +1094,55 @@ async def _idle_watchdog_loop() -> None:
             log(f"idle-watchdog error (non-fatal): {e}")
 
 
-@app.on_event("startup")
-async def _startup():
+async def _brain_warmup_task() -> None:
+    """Warm up the entity brain as a background task so the HTTP server is live
+    immediately — a prim that registers *during* warmup gets the "warming up" status
+    pushed to it via ``sl_register → _push_status(_resting_status())`` (which reads
+    "warming up" while ``_ready`` is False).  Once the brain is ready the halo
+    transitions to "listening".  Self-name refinement from the live avatar (formerly
+    the tail of ``_startup``) also runs here, after warmup, so Corrade is settled."""
     global _ready
-    if not SL_SECRET:
-        log("WARNING: no SL shared secret — /sl endpoints will reject everything")
     brain = _get_brain()
     log(f"warming up entity brain for '{ENTITY_NAME}'...")
-    await _push_status("warming up")  # no-op if no prim registered yet
+    # "warming up" → any prim already registered gets it; prims that register later
+    # (within the ~60 s re-register window) see it via sl_register's status push.
+    await _push_status("warming up")
     try:
         await brain.warmup()
         _ready = True
         log("brain warmed up")
     except Exception as e:
         log(f"brain warmup failed: {e}")
-    # Catch a prim that touched during warmup: show it the settled state.
+    # Transition halo to its resting state for any prims registered so far.
     await _push_status(_resting_status())
+
+    # Refine self-echo / directedness names from the live avatar (best-effort):
+    # the config default is a guess; getselfdata is ground truth.
+    if SL_CORRADE and _corrade_client is not None and _perception is not None:
+        try:
+            me = await asyncio.to_thread(_corrade_client.self_data, "FirstName,LastName")
+            fn = (me.get("FirstName") or "").strip()
+            ln = (me.get("LastName") or "").strip()
+            if fn:
+                full = f"{fn} {ln}".strip()
+                _perception.self_names |= {fn.lower(), full.lower()}
+                _perception.address_names |= {fn.lower(), full.lower()}
+                log(f"SLPerception self-name confirmed live: {full!r}")
+        except Exception as e:
+            log(f"self-name confirm failed (using config default): {e}")
+
+
+@app.on_event("startup")
+async def _startup():
+    if not SL_SECRET:
+        log("WARNING: no SL shared secret — /sl endpoints will reject everything")
+
+    # Brain warmup runs in the background so the HTTP server is ready immediately.
+    # The prim re-registers every 60 s; whichever tick lands during the ~30-120 s
+    # warmup window will receive a "warming up" status push (not "listening").
+    task = asyncio.create_task(_brain_warmup_task())
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
 
     # Install Corrade notification subscriptions in the background: the SL event
     # queue can be down for the first ~30s-few minutes after login (corrade.md
@@ -1127,21 +1160,6 @@ async def _startup():
         task = asyncio.create_task(_install_corrade())
         _bg_tasks.add(task)
         task.add_done_callback(_bg_tasks.discard)
-
-    # Refine self-echo / directedness names from the live avatar (best-effort):
-    # the config default is a guess; getselfdata is ground truth.
-    if SL_CORRADE and _corrade_client is not None and _perception is not None:
-        try:
-            me = await asyncio.to_thread(_corrade_client.self_data, "FirstName,LastName")
-            fn = (me.get("FirstName") or "").strip()
-            ln = (me.get("LastName") or "").strip()
-            if fn:
-                full = f"{fn} {ln}".strip()
-                _perception.self_names |= {fn.lower(), full.lower()}
-                _perception.address_names |= {fn.lower(), full.lower()}
-                log(f"SLPerception self-name confirmed live: {full!r}")
-        except Exception as e:
-            log(f"self-name confirm failed (using config default): {e}")
 
     # Music sense (opt-in via SL_MUSIC=1). Follows this avatar's parcel.
     if SL_CORRADE and SL_MUSIC and _corrade_client is not None and _perception is not None:

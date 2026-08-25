@@ -1,5 +1,5 @@
 // ============================================================================
-// The Anchorage — SL prim <-> entity daemon endpoint  (v4 — speech + status + gizmo commands)
+// The Anchorage — SL prim <-> entity daemon endpoint  (v5 — + periodic self-heal re-register)
 // ----------------------------------------------------------------------------
 // Drop this script into a prim in Second Life. One prim per entity (Lyra, Caia).
 // The prim becomes that entity's "body" in-world: it SPEAKS her Haven words in
@@ -31,10 +31,12 @@ integer LISTEN_CHANNEL = 0;   // 0 = local chat
 integer gListen  = 0;
 key     gRegReq;              // outstanding /sl/register request
 key     gFwdReq;              // outstanding /sl/inbound request
-float   REREGISTER_INTERVAL = 300.0; // re-register every 5 min (heals after daemon restart)
+float   REREGISTER_INTERVAL = 60.0;  // re-register every 60s — catches daemon restart quickly
+integer gQuietReg = FALSE;    // TRUE = suppress the "REGISTERED OK" chatter (periodic re-register)
 
-register_with_relay()
+register_with_relay(integer quiet)
 {
+    gQuietReg = quiet;   // read back in http_response so periodic heals stay silent
     if (gMyURL == "")
     {
         llOwnerSay("The Anchorage relay: no inbound URL yet — cannot register.");
@@ -88,6 +90,19 @@ default
         }
     }
 
+    timer()
+    {
+        // Periodic self-heal (REREGISTER_INTERVAL). The daemon forgets our inbound
+        // URL when it restarts, going silent until we re-announce; re-register so it
+        // can push speech/status again within one interval. If the URL itself was
+        // lost (a missed region event), re-request it instead. Quiet on success —
+        // only failures speak — so this never spams owner chat every 5 minutes.
+        if (gMyURL == "")
+            request_url();
+        else
+            register_with_relay(TRUE);
+    }
+
     touch_start(integer n)
     {
         // Manual retry / status poke: re-request URL and re-register.
@@ -102,7 +117,11 @@ default
             gMyURL = body;
             llHTTPResponse(id, 200, "ok");
             llOwnerSay("The Anchorage relay: inbound URL granted; registering with relay...");
-            register_with_relay();
+            register_with_relay(FALSE);
+            // Begin periodic self-heal: re-register on a timer so a daemon restart
+            // (which drops its in-memory prim registry) is recovered within one
+            // interval, with NO manual touch. Safe to (re)set on every grant.
+            llSetTimerEvent(REREGISTER_INTERVAL);
         }
         else if (method == URL_REQUEST_DENIED)
         {
@@ -190,10 +209,13 @@ default
     {
         if (id == gRegReq)
         {
+            integer wasQuiet = gQuietReg;   // capture + clear before branching
+            gQuietReg = FALSE;
             if (status == 200)
             {
-                llOwnerSay("The Anchorage relay: REGISTERED OK — '" + ENTITY +
-                    "' is live in-world. (relay: " + body + ")");
+                if (!wasQuiet)
+                    llOwnerSay("The Anchorage relay: REGISTERED OK — '" + ENTITY +
+                        "' is live in-world. (relay: " + body + ")");
             }
             else if (status == 0 || status == 499)
             {
