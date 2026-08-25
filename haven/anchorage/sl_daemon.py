@@ -364,6 +364,18 @@ async def _push_status(text: str) -> None:
         await _post_prim(prim, {"kind": "status", "text": text})
 
 
+async def _warmup_halo() -> None:
+    """on_warmup hook handed to the brain's restart_session/rotate_if_approaching.
+    Fires ONCE, at the very start of an actual session rotation (before the
+    subprocess is torn down), so the halo shows "warming up" for the WHOLE
+    duration of the re-warm — across EVERY restart path (repeated-timeout recovery
+    AND proactive rotation), not just startup. Clears _ready so any concurrent
+    resting-status push also reads "warming up" until the caller restores it."""
+    global _ready
+    _ready = False
+    await _push_status("warming up")
+
+
 async def _deliver_speech(speech: str, *, im_to: Optional[str] = None) -> None:
     """Speak one line in-world. Prefer Corrade (the avatar's OWN voice) when a
     Corrade client is configured — that moves the MOUTH off the prim. Fall back to
@@ -746,7 +758,7 @@ async def _handle_perception(payload) -> None:
     single-flight and recheck. Single-flight is enforced by
     ``SLPerception.in_flight`` (set when the payload was produced, cleared here via
     ``turn_done``) — so no two perception turns overlap."""
-    global _brain_busy, _consec_timeouts, _force_restart_pending
+    global _brain_busy, _consec_timeouts, _force_restart_pending, _ready
     brain = _get_brain()
     perceive = getattr(brain, "perceive", None)
     if perceive is None:
@@ -766,12 +778,18 @@ async def _handle_perception(payload) -> None:
         _force_restart_pending = False
         restart_session = getattr(brain, "restart_session", None)
         if restart_session is not None:
-            await _push_status("warming up")
             log(f"forcing brain session rotation after {_consec_timeouts} consecutive timeout(s)")
             try:
-                await restart_session(reason="repeated-timeout recovery")
+                # on_warmup fires the "warming up" halo (and clears _ready) at the
+                # start of the actual teardown; restore _ready after so the resting
+                # status below reads "listening" again.
+                await restart_session(
+                    reason="repeated-timeout recovery", on_warmup=_warmup_halo
+                )
             except Exception as e:
                 log(f"forced session rotation failed (non-fatal): {e}")
+            finally:
+                _ready = True
         _consec_timeouts = 0
 
     idle = getattr(payload, "idle", False)
@@ -868,10 +886,15 @@ async def _handle_perception(payload) -> None:
             rotate = getattr(brain, "rotate_if_approaching", None)
             if rotate is not None:
                 try:
-                    if await rotate():
+                    # on_warmup shows the "warming up" halo for the whole rotation —
+                    # but ONLY when a rotation actually happens (approaching-limit),
+                    # since the hook is threaded through and fires past that gate.
+                    if await rotate(on_warmup=_warmup_halo):
                         log("brain session rotated proactively (quiet moment, off hot path)")
                 except Exception as e:
                     log(f"proactive rotation failed (non-fatal): {e}")
+                finally:
+                    _ready = True
 
         _brain_busy = False
         await _push_status(_resting_status())

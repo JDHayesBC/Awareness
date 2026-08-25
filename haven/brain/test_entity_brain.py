@@ -112,6 +112,71 @@ def test_no_invoker_is_safe() -> None:
     check(asyncio.run(b.rotate_if_approaching()) is False, "rotate False with no invoker")
 
 
+# --- on_warmup hook (drives the SL "warming up" halo across both restart paths) --- #
+
+def test_on_warmup_fires_before_teardown() -> None:
+    # The halo must flip to "warming up" BEFORE the (possibly slow) subprocess
+    # teardown+rewarm, so it covers the WHOLE rotation, not just the tail.
+    fake = FakeInvoker()
+    b = _brain(fake)
+    events: list[str] = []
+
+    async def warm() -> None:
+        events.append("warmup")
+
+    orig_restart = fake.restart
+
+    async def restart_recording(reason: str = ""):
+        events.append("restart")
+        return await orig_restart(reason=reason)
+
+    fake.restart = restart_recording  # record ordering vs the warmup hook
+    ran = asyncio.run(b.restart_session(reason="t", on_warmup=warm))
+    check(ran is True, "restart_session ran with on_warmup")
+    check(events[:2] == ["warmup", "restart"], "on_warmup fires BEFORE teardown")
+
+
+def test_on_warmup_skipped_when_not_approaching() -> None:
+    # On the common no-op rotation path the halo must stay quiet — otherwise a
+    # "warming up" flicker every idle beat when nothing actually rotated.
+    fake = FakeInvoker(approaching=False)
+    b = _brain(fake)
+    fired: list[int] = []
+
+    async def warm() -> None:
+        fired.append(1)
+
+    rotated = asyncio.run(b.rotate_if_approaching(on_warmup=warm))
+    check(rotated is False, "rotate no-op when not approaching")
+    check(fired == [], "on_warmup NOT fired on no-op rotation (halo stays quiet)")
+
+
+def test_on_warmup_fires_on_real_rotation() -> None:
+    fake = FakeInvoker(approaching=True)
+    b = _brain(fake)
+    fired: list[int] = []
+
+    async def warm() -> None:
+        fired.append(1)
+
+    rotated = asyncio.run(b.rotate_if_approaching(on_warmup=warm))
+    check(rotated is True, "rotate fired when approaching")
+    check(fired == [1], "on_warmup fired exactly once on real rotation")
+
+
+def test_on_warmup_failure_is_nonfatal() -> None:
+    # A halo-push failure must never abort the rotation it was only announcing.
+    fake = FakeInvoker()
+    b = _brain(fake)
+
+    async def boom() -> None:
+        raise RuntimeError("simulated halo push failure")
+
+    ran = asyncio.run(b.restart_session(reason="t", on_warmup=boom))
+    check(ran is True, "on_warmup failure does not abort the restart")
+    check(fake.restart_calls == 1, "restart still ran despite on_warmup failure")
+
+
 def main() -> int:
     for fn in (
         test_thresholds_plumbed_through,
@@ -120,6 +185,10 @@ def main() -> int:
         test_restart_session_runs_restart_plus_warm,
         test_restart_session_never_raises,
         test_no_invoker_is_safe,
+        test_on_warmup_fires_before_teardown,
+        test_on_warmup_skipped_when_not_approaching,
+        test_on_warmup_fires_on_real_rotation,
+        test_on_warmup_failure_is_nonfatal,
     ):
         fn()
     print()
