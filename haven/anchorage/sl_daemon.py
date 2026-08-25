@@ -317,19 +317,30 @@ async def _push_status(text: str) -> None:
         await _post_prim(prim, {"kind": "status", "text": text})
 
 
-async def _deliver_speech(speech: str) -> None:
-    """Speak one line in-world. Prefer Corrade (the avatar's OWN voice via
-    ``tell entity=local``) when a Corrade client is configured — that moves the
-    MOUTH off the prim. Fall back to the registered prim(s) (llSay) when there's
-    no Corrade client (prim-only mode). Status/hovertext (the halo) always stays
-    on the prim regardless — see ``_push_status``. The Corrade ``say`` is stdlib-
-    synchronous, so it's off-loaded to a thread to keep the event loop free."""
+async def _deliver_speech(speech: str, *, im_to: Optional[str] = None) -> None:
+    """Speak one line in-world. Prefer Corrade (the avatar's OWN voice) when a
+    Corrade client is configured — that moves the MOUTH off the prim. Fall back to
+    the registered prim(s) (llSay) when there's no Corrade client (prim-only mode).
+    Status/hovertext (the halo) always stays on the prim regardless — see
+    ``_push_status``. The Corrade calls are stdlib-synchronous, so they're
+    off-loaded to a thread to keep the event loop free.
+
+    ``im_to`` is the reply target's agent UUID: when set (an IM-triggered turn),
+    the reply goes back as a private IM to that avatar (``tell entity=avatar``)
+    instead of local chat — so a message sent to me privately is answered
+    privately, even when the sender has walked out of local-chat range. Prim mode
+    has no private channel, so it falls back to llSay there."""
     if _corrade_client is not None:
         try:
-            await asyncio.to_thread(_corrade_client.say, speech)
+            if im_to:
+                await asyncio.to_thread(
+                    lambda: _corrade_client.im(speech, agent=im_to)
+                )
+            else:
+                await asyncio.to_thread(_corrade_client.say, speech)
             return
         except Exception as e:
-            log(f"corrade say failed ({e}); falling back to prim")
+            log(f"corrade {'im' if im_to else 'say'} failed ({e}); falling back to prim")
     for prim in _prims.values():
         await _say_to_prim(prim, speech)
 
@@ -728,7 +739,15 @@ async def _handle_perception(payload) -> None:
                 cmds = []
             if speech:
                 await _capture(brain, DISPLAY_NAME, speech, is_lyra=True)
-                await _deliver_speech(speech)
+                # Route the reply where the trigger came from: an IM is answered
+                # privately to the sender (range-independent), local speech stays
+                # local. reply_via/_uuid default to local for idle + non-IM wakes.
+                im_to = (
+                    payload.reply_to_uuid
+                    if getattr(payload, "reply_via", "local") == "im"
+                    else None
+                )
+                await _deliver_speech(speech, im_to=im_to)
             for prim in _prims.values():
                 for cmd in cmds:
                     log(f"gizmo cmd -> {cmd!r}")

@@ -46,6 +46,17 @@ def local(first: str, last: str, message: str) -> dict:
     return {"type": "Normal", "firstname": first, "lastname": last, "message": message}
 
 
+def im(uuid: str, first: str, last: str, message: str) -> dict:
+    """A private IM (``message`` notification) as perception receives it. Corrade
+    carries the sender's agent UUID under ``agent`` (the invariant reply target)
+    plus their first/last name."""
+    return {
+        "type": "message", "notification": "message",
+        "agent": uuid, "firstname": first, "lastname": last,
+        "message": message,
+    }
+
+
 def local_real(uuid: str, name: str, message: str, entity: str = "Agent") -> dict:
     """The REAL Corrade `local` shape as perception receives it (verified 2026-08-24).
 
@@ -220,6 +231,39 @@ def test_perception_quiet_after_turn() -> None:
     check(not p.in_flight, "in-flight cleared after a quiet turn_done")
 
 
+def test_reply_routing() -> None:
+    print("reply routing (IM->IM, local->local):")
+    # score_event stamps the invariant reply target on both speech kinds.
+    im_s = score_event(im(DAMIAN_UUID, "Damian", "Mills", "hey lyra, you there?"),
+                       SELF, ADDR, CFG, SELF_UUIDS)
+    check(im_s.kind == "message" and im_s.speaker_uuid == DAMIAN_UUID,
+          "IM salience carries kind=message + sender uuid")
+    loc_s = score_event(local_real(DAMIAN_UUID, "Damian Mills", "hey lyra"),
+                        SELF, ADDR, CFG, SELF_UUIDS)
+    check(loc_s.speaker_uuid == DAMIAN_UUID, "local salience also carries speaker uuid")
+
+    # An IM wake routes the reply back as a private IM to the sender.
+    p = SLPerception(SELF, ADDR, CFG, self_uuids=SELF_UUIDS)
+    wp = p.ingest(im(DAMIAN_UUID, "Damian", "Mills", "hey lyra, you there?"), now=0.0)
+    check(wp is not None, "IM fires a wake")
+    check(wp.reply_via == "im" and wp.reply_to_uuid == DAMIAN_UUID,
+          "IM wake -> reply_via=im, reply_to_uuid=sender")
+
+    # A local-chat wake stays on local chat (no private routing).
+    p2 = SLPerception(SELF, ADDR, CFG, self_uuids=SELF_UUIDS)
+    wl = p2.ingest(local_real(DAMIAN_UUID, "Damian Mills", "hey lyra"), now=0.0)
+    check(wl is not None and wl.reply_via == "local" and wl.reply_to_uuid is None,
+          "local wake -> reply_via=local (no private target)")
+
+    # An idle floor-beat is not a reply to anyone -> stays local.
+    p3 = SLPerception(SELF, ADDR, CFG, self_uuids=SELF_UUIDS)
+    p3.ingest(local_real(DAMIAN_UUID, "Damian Mills", "hey lyra"), now=0.0)  # fire, in_flight
+    p3.turn_done(now=1.0)
+    idle_wp = p3.poll(now=10_000.0, floor_interval=300.0)
+    check(idle_wp is not None and idle_wp.idle and idle_wp.reply_via == "local",
+          "idle floor beat -> reply_via=local")
+
+
 def test_surface_delta_buffer() -> None:
     print("surface:")
     s = PerceptionSurface(max_deltas=3)
@@ -302,7 +346,7 @@ def main() -> int:
         test_arousal_accumulate_and_fire, test_arousal_leak_prevents_stale_accumulation,
         test_arousal_refractory,
         test_perception_directed_fires_now, test_perception_single_flight_and_recheck,
-        test_perception_quiet_after_turn, test_surface_delta_buffer,
+        test_perception_quiet_after_turn, test_reply_routing, test_surface_delta_buffer,
         test_heartbeat_and_floor, test_poll_idle_floor, test_note_activity_resets_floor,
     ):
         fn()

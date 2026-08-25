@@ -234,6 +234,7 @@ class Salience:
     reason: str
     kind: str = "unknown"
     speaker: Optional[str] = None
+    speaker_uuid: Optional[str] = None  # invariant reply target (SL is UUID-native)
     text: Optional[str] = None
     directed: bool = False
     delta: Optional[str] = None   # human-readable one-liner for the brain (or None to hide)
@@ -311,14 +312,16 @@ def score_event(
             cfg.s_directed if directed else cfg.s_local,
             FORCE if directed else MEDIUM,
             "directed-speech" if directed else "local-speech",
-            kind=kind, speaker=speaker, text=text, directed=directed,
+            kind=kind, speaker=speaker, speaker_uuid=speaker_uuid(event),
+            text=text, directed=directed,
             delta=f'{speaker}: "{text}"' if text else f"{speaker} said something",
         )
 
     if kind == "message":  # IM straight to me — always directed
         text = _get(event, "message")
         return Salience(
-            cfg.s_directed, FORCE, "im", kind=kind, speaker=speaker, text=text,
+            cfg.s_directed, FORCE, "im", kind=kind, speaker=speaker,
+            speaker_uuid=speaker_uuid(event), text=text,
             directed=True, delta=f'{speaker} (IM): "{text}"' if text else f"{speaker} IMed you",
         )
 
@@ -480,6 +483,12 @@ class WakePayload:
     music_line: Optional[str] = None
     idle: bool = False               # True = endogenous idle-floor beat (no external event)
     idle_prompt: Optional[str] = None  # optional custom prompt from a heartbeat override
+    # Reply routing — where the answer should go back (SL is UUID-native).
+    # "im"  -> IM the sender privately (reply_to_uuid is their agent UUID);
+    # "local" (default) -> speak in local chat. Local speech, idle beats, and
+    # accumulated re-fires all stay "local"; only a direct IM trigger routes "im".
+    reply_via: str = "local"
+    reply_to_uuid: Optional[str] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -578,6 +587,14 @@ class SLPerception:
     def _fire(self, now: float, trigger: Salience) -> WakePayload:
         self.arousal.fire(now)
         self.in_flight = True
+        # An IM trigger routes the reply back as a private IM to the sender; every
+        # other trigger (local speech, idle beat, accumulated re-fire) stays local.
+        # Guard on a real UUID so a nameless/uuid-less IM can't route into a blank
+        # im(agent="") — it falls back to local instead.
+        if trigger.kind == "message" and trigger.speaker_uuid:
+            reply_via, reply_to_uuid = "im", trigger.speaker_uuid
+        else:
+            reply_via, reply_to_uuid = "local", None
         return WakePayload(
             trigger=trigger.reason,
             addressed=trigger.directed or trigger.tier == FORCE,
@@ -585,4 +602,6 @@ class SLPerception:
             speaker=trigger.speaker,
             text=trigger.text,
             music_line=self.surface.music_line(),
+            reply_via=reply_via,
+            reply_to_uuid=reply_to_uuid,
         )
