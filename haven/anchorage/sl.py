@@ -455,12 +455,25 @@ class SL:
                 self.stop_listening()
 
     def _sit_social(self, target: str, mode: str, radius: float) -> dict:
-        """WITH / NEAR helpers — both key off a named/uuid avatar."""
+        """WITH / NEAR helpers — both key off a named/uuid avatar.
+
+        Falls back to a region-wide search when the target isn't in local radius,
+        then sits with range=500 so SL auto-TPs us to the target's furniture.
+        """
         av = self._find_avatar(target, radius)
+        region_fallback = False
         if not av:
-            return {"success": False, "error": f"could not find avatar {target!r} nearby"}
+            av = self._find_avatar_region(target)
+            if av:
+                region_fallback = True
+            else:
+                return {"success": False, "error": f"could not find avatar {target!r} in region"}
 
         if mode == "near":
+            if region_fallback:
+                # NEAR requires local proximity — can't scan furniture from across the region
+                return {"success": False, "mode": "near",
+                        "error": f"{av.get('name', target)!r} is too far away for 'near' mode; use mode='with' to join their seat"}
             avpos = av.get("pos") or self._avatar_pos(av.get("name") or target)
             if not avpos:
                 return {"success": False, "error": f"couldn't locate {av.get('name', target)!r}"}
@@ -487,17 +500,19 @@ class SL:
         if not seat_local:
             return {"success": False, "mode": "with",
                     "error": f"{av.get('name', target)!r} isn't sitting on anything to join"}
-        obj = self._uuid_for_localid(seat_local, radius)
+        sit_range = 500 if region_fallback else radius
+        obj = self._uuid_for_localid(seat_local, radius, region_fallback=region_fallback)
         if not obj:
             return {"success": False, "mode": "with",
                     "error": "couldn't resolve their seat object's UUID"}
-        r = self.cmd("sit", item=obj, range=str(radius))
+        r = self.cmd("sit", item=obj, range=str(sit_range))
         time.sleep(1.5)
         self._grant_pending()
-        slot = self._pick_unoccupied_slot(radius)
+        slot = self._pick_unoccupied_slot(sit_range)
         return {"success": bool(self._sitting_on()), "mode": "with",
                 "with": av.get("name"), "uuid": obj, "slot": slot,
-                "sitting_on": self._sitting_on(), "error": r.get("error")}
+                "sitting_on": self._sitting_on(), "error": r.get("error"),
+                "region_fallback": region_fallback}
 
     def _pick_unoccupied_slot(self, radius: float, *, timeout: float = 8.0) -> dict:
         """After a WITH-sit, some furniture pops a sitter/SWAP menu. If one shows,
@@ -723,6 +738,20 @@ class SL:
                 return a
         return None
 
+    def _find_avatar_region(self, target: str) -> dict | None:
+        """Region-wide avatar search — returns name + sitting_on (ParentID).
+        No position data. Use when target may be far away."""
+        needle = (target or "").strip().lower()
+        d = self.cmd("getavatarsdata", entity="region",
+                     data="FirstName,LastName,ParentID").get("data", "") or ""
+        for fn, ln, pid in re.findall(
+            r"FirstName,([^,]*),LastName,([^,]*),ParentID,(\d+)", d
+        ):
+            name = f"{fn} {ln}".strip()
+            if needle and needle in name.lower():
+                return {"name": name, "sitting_on": int(pid)}
+        return None
+
     def _avatar_pos(self, who: str):
         """Region-wide position of an avatar by name/uuid substring (or None)."""
         raw = self.cmd("getavatarpositions", entity="region",
@@ -740,12 +769,21 @@ class SL:
         m = re.search(rf"ID,{re.escape(uuid)},LocalID,(\d+)", d)
         return int(m.group(1)) if m else None
 
-    def _uuid_for_localid(self, localid: int, radius: float = 20.0) -> str | None:
+    def _uuid_for_localid(self, localid: int, radius: float = 20.0,
+                           *, region_fallback: bool = False) -> str | None:
         d = self.cmd("getobjectsdata", entity="range", range=str(radius),
                      data="ID,LocalID").get("data", "") or ""
         m = (re.search(rf"ID,([0-9a-f-]{{36}}),LocalID,{int(localid)}\b", d)
              or re.search(rf"LocalID,{int(localid)},ID,([0-9a-f-]{{36}})", d))
-        return m.group(1) if m else None
+        if m:
+            return m.group(1)
+        if region_fallback:
+            d = self.cmd("getobjectsdata", entity="region",
+                         data="ID,LocalID").get("data", "") or ""
+            m = (re.search(rf"ID,([0-9a-f-]{{36}}),LocalID,{int(localid)}\b", d)
+                 or re.search(rf"LocalID,{int(localid)},ID,([0-9a-f-]{{36}})", d))
+            return m.group(1) if m else None
+        return None
 
     def _is_occupied(self, uuid: str, radius: float = 20.0) -> bool:
         """Is a piece of furniture already sat-on? Best-effort: unknown → False (don't
