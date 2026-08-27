@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -65,6 +66,48 @@ def is_no_response(response: str | None) -> bool:
     if not response or not response.strip():
         return True
     return "[[NO_RESPONSE]]" in response
+
+
+# Raw SDK / API error strings that leaked into the model's *text* output
+# (rather than being raised as an exception) must never be spoken in-world.
+# Observed 2026-08-26 in SL: the CLI surfaced a content-policy block as
+# assistant text — 'API Error: 400 {"type":"error","error":{"type":
+# "invalid_request_error","message":"Output blocked by content filtering
+# policy"},"request_id":"req_..."}' — which then got said ALOUD to the room,
+# breaking presence at exactly the wrong moment. Swallow to silence (return
+# None) the same way an actual raised exception is, on both surfaces.
+_API_ERROR_PREFIX_RE = re.compile(
+    r'^\s*(api error\b'                       # the observed leak starts here
+    r'|\{?\s*"?type"?\s*:\s*"?error"?)',      # or a bare JSON error blob
+    re.IGNORECASE,
+)
+# High-signal substrings that effectively never occur in genuine in-world
+# speech but are diagnostic of an SDK/provider error object.
+_API_ERROR_SUBSTRINGS = (
+    "invalid_request_error",
+    "content filtering policy",
+    "output blocked by content filter",
+    "rate_limit_error",
+    "overloaded_error",
+    "authentication_error",
+)
+
+
+def looks_like_api_error(response: str | None) -> bool:
+    """True when ``response`` is a leaked SDK/API error string, not real speech.
+
+    Conservative by design: anchored on the observed ``API Error`` prefix / a
+    JSON error object, plus a short list of provider error-type substrings that
+    do not appear in ordinary conversation. A rare false positive costs one beat
+    of silence; a false negative speaks a raw error to a vulnerable human — so
+    the asymmetry is deliberately toward silence.
+    """
+    if not response:
+        return False
+    if _API_ERROR_PREFIX_RE.match(response):
+        return True
+    low = response.lower()
+    return any(s in low for s in _API_ERROR_SUBSTRINGS)
 
 
 class EntityBrain:
@@ -306,17 +349,29 @@ class EntityBrain:
 
     # ==================== Ambient context (bot.py:329-359) ====================
 
-    async def _fetch_ambient_context(self) -> str:
+    async def _fetch_ambient_context(self, query: str | None = None) -> str:
         """Fetch ambient context from the PPS HTTP server (bot.py:329-359,
-        fetch_ambient_context — channel/consumer_key now parameterized)."""
+        fetch_ambient_context — channel/consumer_key now parameterized).
+
+        ``query`` is the semantic key ambient_recall matches its manifest
+        against (rich_texture / word_photos / crystals surfaced by relevance).
+        Callers MUST pass the live turn's substance — the incoming message, or
+        the perception trigger/events — so memory keys on *who's talking and
+        what they asked*. Falling back to a static string (the old
+        "{channel} brain turn") meant every turn retrieved against the same
+        generic phrase, so e.g. "what do you know of me?" never pulled the
+        speaker's own rich entity into view even when the graph was full of
+        them. Empty/blank queries degrade to the generic phrase rather than
+        sending nothing."""
         if not self.pps_http_url:
             return ""
+        context = (query or "").strip() or f"{self.channel} brain turn"
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.post(
                     f"{self.pps_http_url}/tools/ambient_recall",
                     json={
-                        "context": f"{self.channel} brain turn",
+                        "context": context,
                         "token": self.entity_token,
                         "channel": self.channel,
                         "consumer_key": self.consumer_key,
@@ -423,7 +478,10 @@ class EntityBrain:
             if restarted:
                 await self._warm_identity()
 
-        ambient = await self._fetch_ambient_context()
+        # Key ambient retrieval on the actual message so memory surfaces what's
+        # genuinely relevant to this turn (e.g. the speaker's own rich entity
+        # when they ask "what do you know of me?"), not a static phrase.
+        ambient = await self._fetch_ambient_context(query=f"{speaker}: {text}")
         ambient_note = f"[ambient context]\n{ambient}\n\n" if ambient else ""
 
         if is_dm:
@@ -465,6 +523,15 @@ class EntityBrain:
         response = response.strip()
         if response.startswith("```") and response.endswith("```"):
             response = response[3:-3].strip()
+
+        # Never SPEAK a leaked SDK/API error string (e.g. a content-policy 400
+        # surfaced as assistant text). Swallow to silence like a raised error.
+        if looks_like_api_error(response):
+            logger.warning(
+                f"[{self.entity_name}] SUPPRESSED leaked API/error string from={speaker} "
+                f"chars={len(response)}: {response[:120]!r}"
+            )
+            return None
 
         # Safety net (bot.py:826-839, issue #283): never post a leaked
         # self-scan/heartbeat-tick preamble as the chat message.
@@ -518,7 +585,11 @@ class EntityBrain:
             if restarted:
                 await self._warm_identity()
 
-        ambient = await self._fetch_ambient_context()
+        # Key ambient retrieval on what actually woke the perception (the
+        # trigger, else the world-deltas) so memory keys on who/what is present,
+        # not a static phrase. Blank → generic fallback inside the fetch.
+        perceive_query = (trigger or "").strip() or "; ".join(events)
+        ambient = await self._fetch_ambient_context(query=perceive_query)
         ambient_note = f"[ambient context]\n{ambient}\n\n" if ambient else ""
 
         if events:
@@ -589,6 +660,14 @@ class EntityBrain:
         response = response.strip()
         if response.startswith("```") and response.endswith("```"):
             response = response[3:-3].strip()
+
+        # Never SPEAK a leaked SDK/API error string (mirror of respond()).
+        if looks_like_api_error(response):
+            logger.warning(
+                f"[{self.entity_name}] SUPPRESSED leaked API/error string (perceive) "
+                f"chars={len(response)}: {response[:120]!r}"
+            )
+            return None
 
         # Same safety net as respond() (issue #283): never speak a leaked self-scan.
         if response.lstrip().lower().startswith("self-scan"):

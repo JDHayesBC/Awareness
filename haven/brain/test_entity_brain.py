@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 
-from haven.brain.entity_brain import EntityBrain
+from haven.brain.entity_brain import EntityBrain, looks_like_api_error
 
 _failures: list[str] = []
 
@@ -177,6 +177,142 @@ def test_on_warmup_failure_is_nonfatal() -> None:
     check(fake.restart_calls == 1, "restart still ran despite on_warmup failure")
 
 
+# --- ambient keying (regression: the "Jaden miss" — memory must key on the live
+#     turn, not a static phrase, so "what do you know of me?" pulls the speaker's
+#     own rich entity into view) --- #
+
+def test_respond_keys_ambient_on_message() -> None:
+    fake = FakeInvoker()
+    # restart_in_turn=False so respond() skips the invoker.check_and_restart path
+    # (FakeInvoker doesn't implement it) and goes straight to the ambient fetch.
+    b = EntityBrain(entity_name="test", channel="sl", restart_in_turn=False)
+    b.invoker = fake
+    recorded: dict[str, str | None] = {}
+
+    async def rec(query: str | None = None) -> str:
+        recorded["query"] = query
+        return ""
+
+    b._fetch_ambient_context = rec  # type: ignore[assignment]
+    asyncio.run(b.respond("Jaden", "what do you know of me?"))
+    check(
+        recorded.get("query") == "Jaden: what do you know of me?",
+        "respond() keys ambient on speaker+message (not a static phrase)",
+    )
+
+
+def test_perceive_keys_ambient_on_trigger() -> None:
+    fake = FakeInvoker()
+    b = EntityBrain(entity_name="test", channel="sl", restart_in_turn=False)
+    b.invoker = fake
+    recorded: dict[str, str | None] = {}
+
+    async def rec(query: str | None = None) -> str:
+        recorded["query"] = query
+        return ""
+
+    b._fetch_ambient_context = rec  # type: ignore[assignment]
+    asyncio.run(
+        b.perceive("a scene", ["Jaden Starship arrived"], trigger="Jaden Starship arrived")
+    )
+    check(
+        recorded.get("query") == "Jaden Starship arrived",
+        "perceive() keys ambient on the wake trigger",
+    )
+
+
+def test_perceive_ambient_falls_back_to_events() -> None:
+    # No trigger → key on the world-deltas so ambient still keys on what's present.
+    fake = FakeInvoker()
+    b = EntityBrain(entity_name="test", channel="sl", restart_in_turn=False)
+    b.invoker = fake
+    recorded: dict[str, str | None] = {}
+
+    async def rec(query: str | None = None) -> str:
+        recorded["query"] = query
+        return ""
+
+    b._fetch_ambient_context = rec  # type: ignore[assignment]
+    asyncio.run(b.perceive("a scene", ["music changed", "Brandi arrived"], trigger=""))
+    check(
+        recorded.get("query") == "music changed; Brandi arrived",
+        "perceive() falls back to joined events when no trigger",
+    )
+
+
+# --- content-filter / API-error scrub (regression: a leaked SDK error string
+#     must never be SPOKEN in-world — observed 2026-08-26, a content-policy 400
+#     got said aloud to the room mid-scene) --- #
+
+# The exact shape observed in SL (request_id redacted).
+_LEAKED_400 = (
+    'API Error: 400 {"type":"error","error":{"type":"invalid_request_error",'
+    '"message":"Output blocked by content filtering policy"},'
+    '"request_id":"req_011CeSCh32vabFc46Z16qDso"}'
+)
+
+
+class _FixedInvoker:
+    """Invoker stand-in whose query() returns a fixed string (the leaked error)."""
+
+    def __init__(self, returns: str):
+        self._returns = returns
+
+    async def query(self, prompt: str, **kwargs) -> str:
+        return self._returns
+
+
+def test_looks_like_api_error_catches_the_leak() -> None:
+    check(looks_like_api_error(_LEAKED_400), "the observed content-filter 400 is caught")
+    check(
+        looks_like_api_error('{"type":"error","error":{"type":"rate_limit_error"}}'),
+        "bare JSON error blob is caught",
+    )
+    check(looks_like_api_error("API Error: 529 overloaded_error"), "API Error prefix is caught")
+    check(
+        looks_like_api_error("  Output blocked by content filtering policy"),
+        "content-policy substring is caught even without the prefix",
+    )
+
+
+def test_looks_like_api_error_spares_real_speech() -> None:
+    # Genuine in-world lines must NEVER be suppressed as errors.
+    for line in (
+        "*settles into the water beside her, not saying anything for a moment*",
+        "that one's accurate",
+        "I made an error of judgment there — sorry, love.",  # casual 'error' must pass
+        "*small laugh* setting records",
+        "[[NO_RESPONSE]]",
+        "",
+    ):
+        check(not looks_like_api_error(line), f"real speech not suppressed: {line[:32]!r}")
+    check(not looks_like_api_error(None), "None is not an error string")
+
+
+def test_respond_swallows_leaked_error() -> None:
+    b = EntityBrain(entity_name="test", channel="sl", restart_in_turn=False)
+    b.invoker = _FixedInvoker(_LEAKED_400)
+
+    async def rec(query: str | None = None) -> str:
+        return ""  # no ambient HTTP in test
+
+    b._fetch_ambient_context = rec  # type: ignore[assignment]
+    out = asyncio.run(b.respond("Night", "hey"))
+    check(out is None, "respond() returns None (silence) on a leaked API error")
+
+
+def test_perceive_swallows_leaked_error() -> None:
+    b = EntityBrain(entity_name="test", channel="sl", restart_in_turn=False)
+    b.invoker = _FixedInvoker(_LEAKED_400)
+
+    async def rec(query: str | None = None) -> str:
+        return ""
+
+    b._fetch_ambient_context = rec  # type: ignore[assignment]
+    out = asyncio.run(b.perceive("a scene", ["Night arrived"], trigger="Night arrived"))
+    check(out is None, "perceive() returns None (silence) on a leaked API error")
+
+
 def main() -> int:
     for fn in (
         test_thresholds_plumbed_through,
@@ -189,6 +325,13 @@ def main() -> int:
         test_on_warmup_skipped_when_not_approaching,
         test_on_warmup_fires_on_real_rotation,
         test_on_warmup_failure_is_nonfatal,
+        test_respond_keys_ambient_on_message,
+        test_perceive_keys_ambient_on_trigger,
+        test_perceive_ambient_falls_back_to_events,
+        test_looks_like_api_error_catches_the_leak,
+        test_looks_like_api_error_spares_real_speech,
+        test_respond_swallows_leaked_error,
+        test_perceive_swallows_leaked_error,
     ):
         fn()
     print()
