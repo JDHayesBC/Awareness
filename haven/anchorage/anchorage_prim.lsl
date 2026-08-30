@@ -1,41 +1,125 @@
 // ============================================================================
-// The Anchorage — SL prim <-> entity daemon endpoint  (v5 — + periodic self-heal re-register)
+// The Anchorage — SL prim <-> entity daemon endpoint  (v6 — NOTECARD-configured)
 // ----------------------------------------------------------------------------
-// Drop this script into a prim in Second Life. One prim per entity (Lyra, Caia).
-// The prim becomes that entity's "body" in-world: it SPEAKS her Haven words in
-// local chat, and RELAYS nearby avatar speech back to Haven.
+// ONE script for EVERY prim (Lyra, Caia, any future entity). All per-prim
+// settings live in a NOTECARD named "config" dropped into the SAME prim, so the
+// script itself is generic and byte-identical everywhere. Update a halo (or any
+// anchorage prim) by simply dropping in a fresh copy of THIS script — no
+// line-editing, no per-entity variants. The old two-file scheme
+// (haven/data/anchorage_prim_{lyra,caia}.lsl) is retired by this.
 //
-// EDIT THESE FOUR LINES per prim, then save:
-//   ENTITY   — "lyra" or "caia" (must match the Haven username)
-//   RELAY    — public base URL of the Haven-side relay (Jeff sets this up via
-//              Caddy/Cloudflare), e.g. "https://anchorage.example.com" (no trailing slash)
-//   SECRET   — the shared secret string from haven/data/anchorage-sl-secret.txt
-//   PRIMARY  — TRUE on exactly ONE prim; that prim voices the humans' lines so
-//              they aren't said twice. Entities always speak from their own prim.
+// SETUP — create a notecard named exactly "config" in this prim's Contents:
 //
-// v2: reports the ACTUAL result of registration (and inbound forwarding) to the
-// owner — no more claiming "online" the instant SL grants a URL. TOUCH the prim
-// to force a retry (useful while SL's DNS cache catches up to a new route).
-// (Ready-to-drop, per-entity copies with config pre-filled live in
-//  haven/data/anchorage_prim_lyra.lsl and haven/data/anchorage_prim_caia.lsl.)
+//     entity  = lyra                            # "lyra" or "caia" (Haven username)
+//     relay   = https://anchorage.example.com   # Haven relay base URL, NO trailing slash
+//     secret  = PASTE-SHARED-SECRET-HERE        # from haven/data/anchorage-sl-secret.txt
+//     primary = true                            # TRUE on EXACTLY ONE prim; it voices the
+//                                               #   humans' lines so they aren't said twice.
+//                                               #   Entities always speak from their own prim.
+//
+// '#' or '//' begins a comment; blank lines are ignored; key order is free.
+//
+// The prim RE-READS the notecard automatically whenever its contents change
+// (CHANGED_INVENTORY) — edit "config", and it reconfigures with no reset. TOUCH
+// the prim to force a re-read + re-register (handy while SL's DNS cache catches
+// up to a new route).
+//
+// Behaviour is unchanged from v5: this prim SPEAKS the entity's Haven words in
+// local chat, RELAYS nearby avatar speech back to Haven, shows status hovertext,
+// and drives worn gizmos via the "cmd" envelope. Only the CONFIG SOURCE moved
+// from four edited script lines to the notecard.
 // ============================================================================
 
-string  ENTITY  = "lyra";
-string  RELAY   = "https://CHANGE-ME.example.com";
-string  SECRET  = "PASTE-SHARED-SECRET-HERE";
-integer PRIMARY = TRUE;
+string  CONFIG_NOTECARD = "config";
+
+// ---- config (loaded from the notecard; empty until read) ----
+string  ENTITY  = "";
+string  RELAY   = "";
+string  SECRET  = "";
+integer PRIMARY = FALSE;
+integer gConfigured = FALSE;   // TRUE once a complete config has been read
+
+// ---- notecard read state ----
+key     gNcQuery;              // outstanding llGetNotecardLine request
+integer gNcLine;              // next line index to read
 
 // ---- internal state ----
 string  gMyURL   = "";        // this prim's inbound llRequestURL (Haven -> SL)
 integer LISTEN_CHANNEL = 0;   // 0 = local chat
 integer gListen  = 0;
-key     gRegReq;              // outstanding /sl/register request
-key     gFwdReq;              // outstanding /sl/inbound request
+key     gRegReq;             // outstanding /sl/register request
+key     gFwdReq;             // outstanding /sl/inbound request
 float   REREGISTER_INTERVAL = 60.0;  // re-register every 60s — catches daemon restart quickly
 integer gQuietReg = FALSE;    // TRUE = suppress the "REGISTERED OK" chatter (periodic re-register)
 
+// ---------------------------------------------------------------------------
+// Config loading (notecard -> the four settings)
+// ---------------------------------------------------------------------------
+load_config()
+{
+    // Reset config + kick off an async line-by-line read of the notecard. The
+    // dataserver event accumulates each line; EOF triggers config_ready().
+    ENTITY = ""; RELAY = ""; SECRET = ""; PRIMARY = FALSE;
+    gConfigured = FALSE;
+    llSetTimerEvent(0.0);   // pause self-heal until we're configured again
+    if (llGetInventoryType(CONFIG_NOTECARD) != INVENTORY_NOTECARD)
+    {
+        llOwnerSay("The Anchorage relay: NO '" + CONFIG_NOTECARD +
+            "' notecard in my Contents — create one with entity/relay/secret/primary. Cannot start.");
+        return;
+    }
+    llOwnerSay("The Anchorage relay (v6): reading '" + CONFIG_NOTECARD + "' notecard...");
+    gNcLine  = 0;
+    gNcQuery = llGetNotecardLine(CONFIG_NOTECARD, gNcLine);
+}
+
+apply_config_line(string line)
+{
+    line = llStringTrim(line, STRING_TRIM);
+    if (line == "") return;
+    if (llGetSubString(line, 0, 0) == "#") return;
+    if (llGetSubString(line, 0, 1) == "//") return;
+    integer eq = llSubStringIndex(line, "=");
+    if (eq == -1) return;
+    string k = llToLower(llStringTrim(llGetSubString(line, 0, eq - 1), STRING_TRIM));
+    string v = llStringTrim(llGetSubString(line, eq + 1, -1), STRING_TRIM);
+    // Forgive an INLINE comment after the value (" # ..." or " // ...") for the
+    // safe keys — a URL/entity/primary never legitimately contains one. NOT applied
+    // to secret (a base64 secret has no space, but never risk truncating it).
+    if (k != "secret")
+    {
+        integer h = llSubStringIndex(v, " #");
+        if (h != -1) v = llStringTrim(llGetSubString(v, 0, h - 1), STRING_TRIM);
+        integer s = llSubStringIndex(v, " //");
+        if (s != -1) v = llStringTrim(llGetSubString(v, 0, s - 1), STRING_TRIM);
+    }
+    if      (k == "entity")  ENTITY  = v;
+    else if (k == "relay")   RELAY   = v;
+    else if (k == "secret")  SECRET  = v;
+    else if (k == "primary") PRIMARY = (llToLower(v) == "true" || v == "1" || llToLower(v) == "yes");
+}
+
+config_ready()
+{
+    if (ENTITY == "" || RELAY == "" || SECRET == "")
+    {
+        llOwnerSay("The Anchorage relay: config INCOMPLETE — need entity, relay AND secret in '" +
+            CONFIG_NOTECARD + "'. Fix the notecard (it re-reads on change) or touch me.");
+        gConfigured = FALSE;
+        return;
+    }
+    gConfigured = TRUE;
+    llOwnerSay("The Anchorage relay (v6): configured as '" + ENTITY + "' (primary=" +
+        (string)PRIMARY + "); requesting inbound URL...");
+    request_url();
+}
+
+// ---------------------------------------------------------------------------
+// Relay plumbing (unchanged from v5 apart from the gConfigured guard)
+// ---------------------------------------------------------------------------
 register_with_relay(integer quiet)
 {
+    if (!gConfigured) return;
     gQuietReg = quiet;   // read back in http_response so periodic heals stay silent
     if (gMyURL == "")
     {
@@ -54,6 +138,7 @@ register_with_relay(integer quiet)
 
 forward_to_haven(string speaker, string text)
 {
+    if (!gConfigured) return;
     string body = llList2Json(JSON_OBJECT, [
         "secret",  SECRET,
         "speaker", speaker,
@@ -76,8 +161,20 @@ default
     state_entry()
     {
         gListen = llListen(LISTEN_CHANNEL, "", NULL_KEY, "");
-        llOwnerSay("The Anchorage relay (v2): booting as '" + ENTITY + "', requesting URL...");
-        request_url();
+        load_config();   // read the notecard; config_ready() -> request_url() when complete
+    }
+
+    dataserver(key query_id, string data)
+    {
+        if (query_id != gNcQuery) return;
+        if (data == EOF)
+        {
+            config_ready();
+            return;
+        }
+        apply_config_line(data);
+        gNcLine++;
+        gNcQuery = llGetNotecardLine(CONFIG_NOTECARD, gNcLine);
     }
 
     changed(integer c)
@@ -88,6 +185,13 @@ default
             llOwnerSay("The Anchorage relay: region changed — re-requesting URL...");
             request_url();
         }
+        // Notecard (or any Contents) edited — re-read config with no reset so a
+        // config tweak takes effect live.
+        if (c & CHANGED_INVENTORY)
+        {
+            llOwnerSay("The Anchorage relay: Contents changed — reloading config...");
+            load_config();
+        }
     }
 
     timer()
@@ -96,7 +200,8 @@ default
         // URL when it restarts, going silent until we re-announce; re-register so it
         // can push speech/status again within one interval. If the URL itself was
         // lost (a missed region event), re-request it instead. Quiet on success —
-        // only failures speak — so this never spams owner chat every 5 minutes.
+        // only failures speak — so this never spams owner chat every minute.
+        if (!gConfigured) return;
         if (gMyURL == "")
             request_url();
         else
@@ -105,9 +210,9 @@ default
 
     touch_start(integer n)
     {
-        // Manual retry / status poke: re-request URL and re-register.
-        llOwnerSay("The Anchorage relay: manual retry — re-requesting URL...");
-        request_url();
+        // Manual retry / status poke: re-read config, re-request URL, re-register.
+        llOwnerSay("The Anchorage relay: manual retry — reloading config + re-requesting URL...");
+        load_config();
     }
 
     http_request(key id, string method, string body)
