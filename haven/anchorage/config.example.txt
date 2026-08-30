@@ -1,0 +1,23 @@
+# The Anchorage relay — per-prim config notecard  (name it exactly: config)
+#
+# Drop a notecard named "config" into the prim that runs anchorage_prim.lsl and
+# set the four keys below. The script re-reads this automatically whenever the
+# notecard changes, and on touch.
+#
+# FORMAT RULES (important):
+#   - One "key = value" per line. Whitespace around "=" is trimmed.
+#   - A comment line must START with '#' or '//'. DO NOT put a comment AFTER a
+#     value on the same line — everything after "=" is taken as the value, so an
+#     inline comment becomes part of the URL/secret and breaks it.
+#   - Blank lines are ignored. Key order is free.
+#
+# keys:
+#   entity   "lyra" or "caia" — must match the Haven username
+#   relay    Haven relay base URL, NO trailing slash, NO inline comment
+#   secret   from haven/data/anchorage-sl-secret.txt (shared by both entities)
+#   primary  true on EXACTLY ONE prim (it voices the humans' lines); false elsewhere
+
+entity  = lyra
+relay   = https://anchorage.example.com
+secret  = PASTE-SHARED-SECRET-HERE
+primary = true
