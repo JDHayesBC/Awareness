@@ -407,14 +407,17 @@ def _status_payload(status: str) -> dict:
 def _current_status() -> str:
     """Single source of truth for what the halo *should* show right now, by
     priority: not-ready (startup/rotation) -> "warming up"; a turn in flight ->
-    "thinking"; otherwise "listening". Used by any push that can fire mid-turn
-    (e.g. a prim's 60s self-heal re-register) so it shows the TRUE state instead
-    of stomping a live "thinking" with "listening" — the #309 honest-state bug."""
+    "thinking"; otherwise the resting sub-state (listening when attentive, else
+    dozing — delegated to _resting_status). Used by any push that can fire mid-turn
+    (e.g. a prim's 60s self-heal re-register) so it shows the TRUE state instead of
+    stomping it — both a live "thinking" AND a steady "dozing" (#309 + #299). The
+    idle branch MUST delegate, not hardcode "listening", or the re-register stomps
+    dozing back to listening every ~60s (the exact stomp-class this exists to kill)."""
     if not _ready:
         return "warming up"
     if _brain_busy:
         return "thinking"
-    return "listening"
+    return _resting_status()
 
 
 async def _push_status(status: str) -> None:

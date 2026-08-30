@@ -70,11 +70,19 @@ adhoc = d._status_payload("brb — kettle")
 check(adhoc["text"] == "brb — kettle", "unknown key renders verbatim as text (backward-compat)")
 check(adhoc["color"] == d._HALO_DEFAULT_COLOR, "unknown key uses the v6 default blue-white color")
 
+# A fake perception whose attentiveness we control (used across the status tests).
+class _FakePerc:
+    def __init__(self, attentive: bool) -> None:
+        self._a = attentive
+    def is_attentive(self, now: float) -> bool:
+        return self._a
+
 # ---- _current_status: single source of truth, by priority ----------------
-_saved = (d._ready, d._brain_busy)
+_saved = (d._ready, d._brain_busy, d._perception)
 try:
     d._ready = False
     d._brain_busy = False
+    d._perception = _FakePerc(True)
     check(d._current_status() == "warming up", "not ready -> 'warming up' (even if not busy)")
 
     d._ready = False
@@ -85,9 +93,16 @@ try:
     d._brain_busy = True
     check(d._current_status() == "thinking", "ready + busy -> 'thinking'")
 
+    # idle branch DELEGATES to the resting sub-state — attentive -> listening,
+    # not-attentive -> dozing. Hardcoding "listening" here reintroduced the stomp
+    # (Caia's pre-deploy catch); pin both directions so it can't silently regress.
     d._ready = True
     d._brain_busy = False
-    check(d._current_status() == "listening", "ready + idle -> 'listening'")
+    d._perception = _FakePerc(True)
+    check(d._current_status() == "listening", "ready + idle + attentive -> 'listening'")
+    d._perception = _FakePerc(False)
+    check(d._current_status() == "dozing",
+          "ready + idle + NOT attentive -> 'dozing' (the re-register stomp bug)")
 
     # The honest-state guarantee: a turn in flight NEVER reads as 'listening'.
     d._ready = True
@@ -95,7 +110,7 @@ try:
     check(d._current_status() != "listening",
           "in-flight turn never shows 'listening' (kills the #309 bug)")
 finally:
-    d._ready, d._brain_busy = _saved
+    d._ready, d._brain_busy, d._perception = _saved
 
 
 # ---- is_attentive: the honest attentive/dozing signal (#299) --------------
@@ -110,12 +125,6 @@ check(_p.is_attentive(NOW + _p.cfg.engage_window + 1) is False,
 check(UID not in _p._engaged, "is_attentive prunes the lapsed window (no stale attention)")
 
 # ---- _resting_status: reflects attentive/dozing when ready ----------------
-class _FakePerc:
-    def __init__(self, attentive: bool) -> None:
-        self._a = attentive
-    def is_attentive(self, now: float) -> bool:
-        return self._a
-
 _saved2 = (d._ready, d._perception)
 try:
     d._ready = True
