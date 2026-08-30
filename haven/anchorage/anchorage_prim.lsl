@@ -1,5 +1,5 @@
 // ============================================================================
-// The Anchorage — SL prim <-> entity daemon endpoint  (v6 — NOTECARD-configured)
+// The Anchorage — SL prim <-> entity daemon endpoint  (v7 — NOTECARD-configured + dumb-display halo)
 // ----------------------------------------------------------------------------
 // ONE script for EVERY prim (Lyra, Caia, any future entity). All per-prim
 // settings live in a NOTECARD named "config" dropped into the SAME prim, so the
@@ -24,10 +24,18 @@
 // the prim to force a re-read + re-register (handy while SL's DNS cache catches
 // up to a new route).
 //
-// Behaviour is unchanged from v5: this prim SPEAKS the entity's Haven words in
-// local chat, RELAYS nearby avatar speech back to Haven, shows status hovertext,
-// and drives worn gizmos via the "cmd" envelope. Only the CONFIG SOURCE moved
-// from four edited script lines to the notecard.
+// Behaviour is as v6 (SPEAKS the entity's Haven words in local chat, RELAYS
+// nearby avatar speech back to Haven, shows status hovertext, drives worn gizmos
+// via the "cmd" envelope; config from the notecard) with ONE change:
+//
+//   v7 — the status hovertext is now a DUMB DISPLAY. The "status" envelope
+//   carries both "text" AND an optional "color" ("<r,g,b>", 0..1 floats); the
+//   prim just renders them. NO status vocabulary or color logic lives here any
+//   more — the bot (sl_daemon.py) owns all of it, so halo wording/colors can be
+//   changed in Python with zero LSL redeploy (issue #309). When "color" is
+//   absent the prim falls back to the v6 soft blue-white, so an OLDER daemon
+//   that sends no color still renders exactly as before — fully backward-
+//   compatible, no flag-day between the prim swap and the daemon update.
 // ============================================================================
 
 string  CONFIG_NOTECARD = "config";
@@ -68,7 +76,7 @@ load_config()
             "' notecard in my Contents — create one with entity/relay/secret/primary. Cannot start.");
         return;
     }
-    llOwnerSay("The Anchorage relay (v6): reading '" + CONFIG_NOTECARD + "' notecard...");
+    llOwnerSay("The Anchorage relay (v7): reading '" + CONFIG_NOTECARD + "' notecard...");
     gNcLine  = 0;
     gNcQuery = llGetNotecardLine(CONFIG_NOTECARD, gNcLine);
 }
@@ -109,7 +117,7 @@ config_ready()
         return;
     }
     gConfigured = TRUE;
-    llOwnerSay("The Anchorage relay (v6): configured as '" + ENTITY + "' (primary=" +
+    llOwnerSay("The Anchorage relay (v7): configured as '" + ENTITY + "' (primary=" +
         (string)PRIMARY + "); requesting inbound URL...");
     request_url();
 }
@@ -236,8 +244,9 @@ default
         {
             // A POST from the daemon: brain -> SL. Body is a JSON envelope
             // {"kind":"say"|"status"|"cmd","text":...}. "say" -> speak in local
-            // chat; "status" -> floating hovertext (warming up / listening /
-            // thinking / compacting); "cmd" -> drive a worn gizmo VERBATIM
+            // chat; "status" -> floating hovertext, rendered VERBATIM with an
+            // optional "color" ("<r,g,b>", 0..1) — a dumb display; the daemon
+            // owns all status wording/colors (#309); "cmd" -> drive a worn gizmo VERBATIM
             // (channel chat for "/n ..." or llOwnerSay for RLV "@..."). A bare,
             // non-JSON body is treated as speech, for backward-compatibility with
             // the older raw-line protocol.
@@ -254,8 +263,21 @@ default
                 if (txt == JSON_INVALID) txt = "";
                 if (kind == "status")
                 {
-                    // Soft blue-white hovertext above the prim; "" clears it.
-                    llSetText(txt, <0.65, 0.80, 1.0>, 1.0);
+                    // DUMB DISPLAY (v7): render whatever text + color the daemon
+                    // hands us. ALL status vocabulary and color logic live in the
+                    // bot now (sl_daemon.py _push_status), so we can change halo
+                    // wording/colors in Python with no LSL redeploy (#309).
+                    //   "text"  -> the hovertext ("" clears it).
+                    //   "color" -> optional "<r,g,b>" vector-string, 0..1 floats.
+                    // When "color" is absent/blank we fall back to the v6 soft
+                    // blue-white, so an OLD daemon that sends no color renders
+                    // exactly as before — backward-compatible, no flag-day.
+                    vector col = <0.65, 0.80, 1.0>;
+                    string cs = llJsonGetValue(body, ["color"]);
+                    if (cs != JSON_INVALID && cs != JSON_NULL &&
+                        llStringTrim(cs, STRING_TRIM) != "")
+                        col = (vector)cs;
+                    llSetText(txt, col, 1.0);
                 }
                 else if (kind == "cmd")
                 {
