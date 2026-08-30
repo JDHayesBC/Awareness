@@ -62,6 +62,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional, Protocol
+from urllib.parse import unquote_plus
 
 import httpx
 import uvicorn
@@ -169,8 +170,12 @@ SL_TURN_TIMEOUT = float(os.getenv("SL_TURN_TIMEOUT", "40"))
 # busy in-world session it effectively never rotated, latency climbed unbounded,
 # and turns eventually all exceeded SL_TURN_TIMEOUT (silence). Fix: rotate the SL
 # brain FAR more aggressively. The turn-count cap is the reliable governor (it's
-# exact, unlike the token estimate); 20 turns keeps the session small and fast.
-SL_BRAIN_MAX_TURNS = int(os.getenv("SL_BRAIN_MAX_TURNS", "20"))
+# exact, unlike the token estimate). Started at 20; raised to 40 (2026-08-25) —
+# with a FULL room (5 avatars) turns accumulate fast, so a cap of 20 rotated the
+# session constantly and each rotation's re-warm spiked the NUC too often. 40
+# halves the rotation frequency (fewer expensive warmups) while still keeping the
+# session bounded. Tune down again if per-turn latency creeps back up on a busy sim.
+SL_BRAIN_MAX_TURNS = int(os.getenv("SL_BRAIN_MAX_TURNS", "40"))
 SL_BRAIN_MAX_CONTEXT = int(os.getenv("SL_BRAIN_MAX_CONTEXT", "100000"))  # backstop
 # Repeated-timeout recovery: if this many perceive turns time out back-to-back,
 # force a full session rotation (fresh subprocess + re-warm) before the next fire —
@@ -188,6 +193,13 @@ SL_PERCEPTION_FLOOR = float(os.getenv("SL_PERCEPTION_FLOOR", "0"))
 # their un-named follow-up local lines fire for this long — so a back-and-forth flows
 # without re-invoking my name each sentence. 0 disables. See SalienceConfig.engage_window.
 SL_ENGAGE_WINDOW = float(os.getenv("SL_ENGAGE_WINDOW", "180"))
+
+# Halo debug (issue #309). When on, every status transition is logged (so the
+# in-world halo can be mapped 1:1 to code events in journalctl) AND internal
+# transitions that are otherwise invisible (timeout-recovery, rotation) are
+# surfaced ON the halo via _halo_debug(). Off by default — normal operation keeps
+# the halo clean for humans; flip on only while debugging "what happened in SL".
+SL_HALO_DEBUG = os.getenv("SL_HALO_DEBUG", "0") != "0"
 
 # Adaptive idle-heartbeat (task #8; work/sl-presence/idle-heartbeat-design.md). The
 # in-world max-silence guarantee whose interval BREATHES: tight right after a
@@ -356,12 +368,69 @@ async def _cmd_to_prim(prim: dict, cmd: str) -> bool:
     return await _post_prim(prim, {"kind": "cmd", "text": cmd})
 
 
-async def _push_status(text: str) -> None:
-    """Best-effort hovertext update to ALL registered prims (llSetText). Never
-    blocks the conversation; a prim with an expired URL just fails silently.
-    States: warming up / listening / thinking (/ compacting — see issue #296)."""
+# ---- Halo status vocabulary (issue #309) -----------------------------------
+# The ONE place halo wording + color live. The v7 LSL prim is a DUMB DISPLAY: it
+# renders whatever `text` + `color` we hand it, so a status can be added, retired,
+# or reworded here in Python with NO LSL redeploy (#299 inattentive, #296
+# compacting now fall out as one-line additions). `color` is an LSL "<r,g,b>"
+# vector-string (0..1 floats) the prim casts to a vector verbatim.
+_HALO_DEFAULT_COLOR = "<0.65, 0.80, 1.0>"  # v6 soft blue-white — the fallback
+
+# status-key -> (hovertext, color). Keys match what the daemon already pushes
+# (_resting_status() / the "thinking" / "warming up" call sites), so NO call site
+# changes wording. An unknown key falls back to (key-as-text, default color) — so
+# any ad-hoc string, and "" (clear the halo), still work.
+_HALO_STATES: dict[str, tuple[str, str]] = {
+    "warming up": ("◌ warming up…", "<1.00, 0.60, 0.10>"),  # amber  — NOT ready yet
+    "listening":  ("listening",               "<0.20, 1.00, 0.40>"),  # green  — attentive/ready
+    "thinking":   ("thinking…",          "<0.65, 0.80, 1.00>"),  # blue   — working on a reply
+}
+
+
+def _status_payload(status: str) -> dict:
+    text, color = _HALO_STATES.get(status, (status, _HALO_DEFAULT_COLOR))
+    return {"kind": "status", "text": text, "color": color}
+
+
+def _current_status() -> str:
+    """Single source of truth for what the halo *should* show right now, by
+    priority: not-ready (startup/rotation) -> "warming up"; a turn in flight ->
+    "thinking"; otherwise "listening". Used by any push that can fire mid-turn
+    (e.g. a prim's 60s self-heal re-register) so it shows the TRUE state instead
+    of stomping a live "thinking" with "listening" — the #309 honest-state bug."""
+    if not _ready:
+        return "warming up"
+    if _brain_busy:
+        return "thinking"
+    return "listening"
+
+
+async def _push_status(status: str) -> None:
+    """Best-effort hovertext update to ALL registered prims. Sends both text AND
+    color (v7 dumb-display protocol, #309); an older v5/v6 prim just ignores the
+    extra `color` field and still renders the text — fully backward-compatible, so
+    the daemon can update before or after the prims are swapped, no flag-day. Never
+    blocks the conversation; a prim with an expired URL just fails silently."""
+    payload = _status_payload(status)
+    if SL_HALO_DEBUG:
+        log(f"halo <- status={status!r} text={payload['text']!r} color={payload['color']}")
     for prim in list(_prims.values()):
-        await _post_prim(prim, {"kind": "status", "text": text})
+        await _post_prim(prim, payload)
+
+
+async def _halo_debug(text: str) -> None:
+    """SL_HALO_DEBUG instrument (#309): surface an internal transition that is
+    otherwise invisible (timeout-recovery, rotation) ON the halo (magenta, ⚙
+    prefix) AND in the log, so "what happened in SL" maps to "what happened in the
+    code". No-op when off, so normal operation keeps the halo clean for humans.
+    Overwrites the current status text by design — it's a debugging tool; the next
+    real _push_status (e.g. the warmup halo that usually follows) restores state."""
+    if not SL_HALO_DEBUG:
+        return
+    log(f"halo-debug: {text}")
+    payload = {"kind": "status", "text": f"⚙ {text}", "color": "<1.00, 0.30, 0.90>"}
+    for prim in list(_prims.values()):
+        await _post_prim(prim, payload)
 
 
 async def _warmup_halo() -> None:
@@ -414,6 +483,7 @@ app = FastAPI(title=f"{DISPLAY_NAME} SL presence")
 _corrade_store: Optional[corrade_events.NotificationStore] = None
 _corrade_client = None
 _corrade_callback_url: Optional[str] = None
+_dn_cache: dict[str, str] = {}   # uuid → display name (session cache for scene rendering)
 _perception: Optional[perception.SLPerception] = None
 _hb: Optional[heartbeat.HeartbeatController] = None
 
@@ -492,6 +562,25 @@ def _on_corrade_event(data: dict) -> None:
                 _hb.note_transition(now)
         except Exception:
             pass
+    # Fix "Hey Damian" / "Hi Raptor": a local (or IM) event's `name` field carries
+    # the legacy USERNAME, not the display name, so the per-utterance speaker label
+    # greeted the wrong name while the roster showed the right one. Resolve the
+    # display name by UUID and overwrite `name` BEFORE perception reads it (pure
+    # perception has no Corrade handle). Guarded — a resolver hiccup never breaks
+    # the ack; on a cache miss the username stands for one line and warms for next.
+    try:
+        _prettify_speaker_name(data)
+    except Exception:
+        pass
+    # Pre-warm the display-name cache the moment someone comes into range, so their
+    # very FIRST spoken line already resolves to the display name — closing the
+    # line-1 cold-cache gap that _prettify_speaker_name alone leaves on a brand-new
+    # arrival. Most important for a vulnerable first-contact (Night): no wrong name
+    # on hello.
+    try:
+        _prewarm_roster_name(data)
+    except Exception:
+        pass
     try:
         payload = _perception.ingest(data, now)
     except Exception as e:  # a perception bug must never break the ack
@@ -596,8 +685,11 @@ async def health():
 async def sl_register(body: RegisterBody):
     _check_secret(body.secret)
     _register_prim(body.entity.lower(), body.url, body.primary)
-    # Immediately show the just-touched prim its current resting state.
-    await _push_status(_resting_status())
+    # Immediately show the just-registered prim the TRUE current state. This fires
+    # on the prim's 60s self-heal re-register too, so it MUST use _current_status()
+    # (not _resting_status()) — otherwise a re-register mid-turn stomps the live
+    # "thinking" halo with "listening", the #309 honest-state bug.
+    await _push_status(_current_status())
     return {"ok": True}
 
 
@@ -723,6 +815,94 @@ async def _handle_inbound(speaker: str, text: str, *, is_dm: bool, addressed: bo
         await _push_status(_resting_status())
 
 
+def _resolve_display(uid: str, fallback: str) -> str:
+    """Display name for a UUID (per-UUID lookup = safe 1:1, no batch mis-map), cached
+    for the session. Falls back to the legacy "First Last" username on miss/failure.
+    Synchronous (call via asyncio.to_thread); every read is guarded so a flaky lookup
+    just yields the username, never breaks the scene."""
+    if not uid:
+        return fallback
+    key = uid.lower()
+    if key in _dn_cache:
+        return _dn_cache[key] or fallback
+    dn = ""
+    try:
+        r = _corrade_client.command(command="getavatardisplayname", agent=uid)
+        dn = unquote_plus((r.get("data") or "").strip()).replace("+", " ")
+    except Exception:
+        dn = ""
+    if not dn or dn.lower() == key:
+        dn = ""
+    _dn_cache[key] = dn
+    return dn or fallback
+
+
+def _schedule_display_warm(uid: str) -> None:
+    """Populate _dn_cache[uid] OFF the hot path (blocking Corrade lookup in a
+    thread) so the NEXT utterance from this speaker resolves to the display name."""
+    if not uid:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no running loop (e.g. under test) → skip; prod hook always has one
+
+    async def _warm() -> None:
+        try:
+            await asyncio.to_thread(_resolve_display, uid, "")
+        except Exception:
+            pass
+
+    task = loop.create_task(_warm())
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
+def _prettify_speaker_name(data: dict) -> None:
+    """Overwrite a chat event's speaker label with the UUID-resolved DISPLAY name.
+
+    A ``local``/``message`` event's ``name`` is the legacy username; the roster
+    resolves display names by UUID (:func:`_resolve_display`) but the per-utterance
+    path never did — the "Hi Raptor" / "Hey Damian" bug. CACHE-ONLY on this fast
+    receiver hook (never the blocking Corrade call): a hit rewrites ``name`` (and
+    drops any first/last so ``perception.speaker_of`` prefers our value); a miss
+    warms the cache for next time and leaves the username for this one line. A
+    cached empty string (display == username, or unresolvable) correctly leaves the
+    username and does NOT re-warm."""
+    if perception.event_kind(data) not in ("local", "message"):
+        return
+    uid = perception.speaker_uuid(data)
+    if not uid:
+        return
+    key = uid.lower()
+    cached = _dn_cache.get(key)
+    if cached:  # non-empty display name already resolved
+        data["name"] = cached
+        for k in ("firstname", "FirstName", "lastname", "LastName"):
+            data.pop(k, None)
+    elif key not in _dn_cache:  # never looked up → warm off-thread for next time
+        _schedule_display_warm(uid)
+
+
+def _prewarm_roster_name(data: dict) -> None:
+    """Pre-warm ``_dn_cache`` for an avatar as soon as they appear in range, so
+    their FIRST spoken line already hits the cache in :func:`_prettify_speaker_name`
+    and greets the DISPLAY name — not the username. Without this, a brand-new
+    arrival's line one lands on a cold cache and greets the legacy username while
+    the warm runs; the second line is fine but the first (the one that matters for
+    a vulnerable first-contact) is wrong.
+
+    Cache-warm only, off the hot path; an already-resolved (or empty-sentinel)
+    entry is never re-warmed, and a non-arrival event is ignored."""
+    if perception.event_kind(data) != "avatars":
+        return
+    uid = perception.speaker_uuid(data)
+    if not uid:
+        return
+    if uid.lower() not in _dn_cache:  # never looked up → resolve now, before they speak
+        _schedule_display_warm(uid)
+
+
 async def _live_scene() -> str:
     """Best-effort one-line snapshot: where I am, who's near, what's playing — the
     standing-state half of a perception wake. Every Corrade read is guarded; a
@@ -737,12 +917,15 @@ async def _live_scene() -> str:
         except Exception as e:
             log(f"scene self_data failed (non-fatal): {e}")
         try:
-            near = await asyncio.to_thread(_corrade_client.avatars_in_range)
+            near = await asyncio.to_thread(
+                _corrade_client.avatars_in_range, 20, "FirstName,LastName,ID")
             names = []
             for a in near:
                 nm = f"{a.get('FirstName', '').strip()} {a.get('LastName', '').strip()}".strip()
+                # self-exclusion keys on the legacy username (stable), THEN we prettify
                 if nm and (_perception is None or nm.lower() not in _perception.self_names):
-                    names.append(nm)
+                    uid = a.get("ID") or a.get("id") or ""
+                    names.append(await asyncio.to_thread(_resolve_display, uid, nm))
             bits.append("nearby: " + ", ".join(names) if names else "no one else in range")
         except Exception as e:
             log(f"scene avatars failed (non-fatal): {e}")
@@ -779,6 +962,7 @@ async def _handle_perception(payload) -> None:
         restart_session = getattr(brain, "restart_session", None)
         if restart_session is not None:
             log(f"forcing brain session rotation after {_consec_timeouts} consecutive timeout(s)")
+            await _halo_debug(f"timeout-recovery: rotating after {_consec_timeouts} timeout(s)")
             try:
                 # on_warmup fires the "warming up" halo (and clears _ready) at the
                 # start of the actual teardown; restore _ready after so the resting
@@ -813,8 +997,14 @@ async def _handle_perception(payload) -> None:
             return await perceive(
                 scene, payload.deltas, addressed=payload.addressed,
                 trigger=payload.trigger,
+                # who-dossier keys: name always, UUID when the trigger carried one
+                # (IM sets reply_to_uuid; local falls back to name-keying). Lets the
+                # brain know WHO is in front of it without per-turn graph retrieval.
+                speaker=payload.speaker or "",
+                speaker_uuid=payload.reply_to_uuid or "",
                 idle=idle, idle_prompt=getattr(payload, "idle_prompt", None),
             )
+        _turn_t0 = time.monotonic()
         try:
             # Bounded so a stalled model/scene fetch can't wedge the turn (and with
             # it the "thinking" halo + single-flight lock) forever — see SL_TURN_TIMEOUT.
@@ -822,6 +1012,11 @@ async def _handle_perception(payload) -> None:
             # A turn that returned (even [[NO_RESPONSE]]) proves the session is
             # responsive — clear the consecutive-timeout streak.
             _consec_timeouts = 0
+            # Visibility (#20): wall-clock turn latency + shape, so a slow turn is
+            # observable in the journal (a healthy addressed turn should be single-
+            # digit seconds; double digits = the brain is pausing for tools mid-reply).
+            log(f"perception turn completed in {time.monotonic() - _turn_t0:.1f}s "
+                f"(addressed={payload.addressed}, idle={idle})")
         except asyncio.TimeoutError:
             _consec_timeouts += 1
             reply = None
