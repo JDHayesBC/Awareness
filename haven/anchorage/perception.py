@@ -586,6 +586,24 @@ class SLPerception:
             return False
         return True
 
+    def is_attentive(self, now: float) -> bool:
+        """True iff ANY conversational engagement window is currently open — i.e. an
+        un-named nearby line would still wake me right now (someone addressed me
+        within cfg.engage_window and the window hasn't lapsed). False = "dozing": no
+        window open, so un-named ambient only fires via slow accumulation and a
+        human should say my name for a prompt reply. Prunes expired windows as it
+        scans, so it can't report stale attention. Drives the SL halo's
+        attentive/dozing distinction (#299)."""
+        if self.cfg.engage_window <= 0:
+            return False
+        live = False
+        for uid, exp in list(self._engaged.items()):
+            if now >= exp:
+                del self._engaged[uid]        # lapsed — prune
+            else:
+                live = True
+        return live
+
     def ingest(self, event: dict, now: float) -> Optional[WakePayload]:
         """Perceive one event. Returns a :class:`WakePayload` iff this event
         tips arousal over threshold AND no brain turn is already running."""

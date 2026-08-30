@@ -19,11 +19,13 @@ No live grid / no brain: pure functions driven directly. Run:
 
 from __future__ import annotations
 
+import inspect
 import os
 
 os.environ.setdefault("SL_CORRADE", "0")  # skip Corrade client build at import
 os.environ.setdefault("ENTITY_NAME", "lyra")
 
+from haven.anchorage import perception  # noqa: E402
 from haven.anchorage import sl_daemon as d  # noqa: E402
 
 _failures: list[str] = []
@@ -43,7 +45,7 @@ def _is_vec_string(s: str) -> bool:
 
 
 # ---- _status_payload: protocol shape -------------------------------------
-for state in ("warming up", "listening", "thinking"):
+for state in ("warming up", "listening", "dozing", "thinking"):
     p = d._status_payload(state)
     check(p.get("kind") == "status", f"{state!r}: kind is 'status'")
     check("text" in p and isinstance(p["text"], str) and p["text"] != "",
@@ -51,8 +53,13 @@ for state in ("warming up", "listening", "thinking"):
     check(_is_vec_string(p.get("color", "")), f"{state!r}: carries a valid <r,g,b> color")
 
 # distinct colors per state — a human must be able to tell them apart
-_colors = {s: d._status_payload(s)["color"] for s in ("warming up", "listening", "thinking")}
-check(len(set(_colors.values())) == 3, "the three states have three distinct colors")
+_colors = {s: d._status_payload(s)["color"]
+           for s in ("warming up", "listening", "dozing", "thinking")}
+check(len(set(_colors.values())) == 4, "the four states have four distinct colors")
+
+# dozing (#299) must tell the human what to do — say my name
+check("name" in d._status_payload("dozing")["text"].lower(),
+      "dozing text tells the human to say my name")
 
 # ---- backward-compat / fallback ------------------------------------------
 clear = d._status_payload("")
@@ -89,6 +96,47 @@ try:
           "in-flight turn never shows 'listening' (kills the #309 bug)")
 finally:
     d._ready, d._brain_busy = _saved
+
+
+# ---- is_attentive: the honest attentive/dozing signal (#299) --------------
+_p = perception.SLPerception(self_names={"lyra"}, address_names={"lyra"})
+NOW = 1000.0
+UID = "beadfeed-0000-1111-2222-333344445555"
+check(_p.is_attentive(NOW) is False, "fresh perception: not attentive (dozing)")
+_p._note_engagement(UID, NOW)
+check(_p.is_attentive(NOW + 1) is True, "attentive while an engagement window is open")
+check(_p.is_attentive(NOW + _p.cfg.engage_window + 1) is False,
+      "not attentive once the window lapses")
+check(UID not in _p._engaged, "is_attentive prunes the lapsed window (no stale attention)")
+
+# ---- _resting_status: reflects attentive/dozing when ready ----------------
+class _FakePerc:
+    def __init__(self, attentive: bool) -> None:
+        self._a = attentive
+    def is_attentive(self, now: float) -> bool:
+        return self._a
+
+_saved2 = (d._ready, d._perception)
+try:
+    d._ready = True
+    d._perception = _FakePerc(True)
+    check(d._resting_status() == "listening", "ready + engaged -> 'listening'")
+    d._perception = _FakePerc(False)
+    check(d._resting_status() == "dozing", "ready + not engaged -> 'dozing' (#299)")
+    d._perception = None
+    check(d._resting_status() == "listening", "prim-only (no perception) keeps 'listening'")
+    d._ready = False
+    d._perception = _FakePerc(True)
+    check(d._resting_status() == "warming up", "not ready -> 'warming up' regardless of engagement")
+finally:
+    d._ready, d._perception = _saved2
+
+# ---- regression guard (Caia's note): the register path must push _current_status
+# so a re-register can't stomp a live 'thinking' — a future revert to
+# _resting_status() would be silent without this.
+_src = inspect.getsource(d.sl_register)
+check("_current_status" in _src,
+      "sl_register pushes _current_status() (not _resting_status()) — re-register honest-state guard")
 
 
 if _failures:

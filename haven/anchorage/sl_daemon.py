@@ -290,7 +290,18 @@ _ready: bool = False
 
 
 def _resting_status() -> str:
-    return "listening" if _ready else "warming up"
+    """The halo state when NOT thinking. Not-ready -> "warming up". Otherwise it
+    tells the truth about whether an un-named nearby line would wake me right now:
+    an open engagement window -> "listening" (attentive, name optional); none ->
+    "dozing" (say my name to wake me). This is #299 — humans shouldn't have to
+    guess whether ambient chatter reaches me. Prim-only mode (no perception /
+    salience gate) keeps the v6 "listening", since the engagement concept doesn't
+    apply there."""
+    if not _ready:
+        return "warming up"
+    if _perception is None:
+        return "listening"
+    return "listening" if _perception.is_attentive(time.time()) else "dozing"
 
 
 def set_brain(brain: BrainProtocol) -> None:
@@ -382,7 +393,8 @@ _HALO_DEFAULT_COLOR = "<0.65, 0.80, 1.0>"  # v6 soft blue-white — the fallback
 # any ad-hoc string, and "" (clear the halo), still work.
 _HALO_STATES: dict[str, tuple[str, str]] = {
     "warming up": ("◌ warming up…", "<1.00, 0.60, 0.10>"),  # amber  — NOT ready yet
-    "listening":  ("listening",               "<0.20, 1.00, 0.40>"),  # green  — attentive/ready
+    "listening":  ("listening",               "<0.20, 1.00, 0.40>"),  # green  — attentive, name optional
+    "dozing":     ("resting — say my name to wake me", "<0.45, 0.55, 0.75>"),  # dim slate — name required (#299)
     "thinking":   ("thinking…",          "<0.65, 0.80, 1.00>"),  # blue   — working on a reply
 }
 
