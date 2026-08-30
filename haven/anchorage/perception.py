@@ -90,8 +90,11 @@ class SalienceConfig:
     # ~theta (steady-state ≈0.97) and woke the brain on ambient motion — over-firing
     # that both bloated the brain's context turn-over-turn AND made "a DM arrives
     # mid-turn" the common case (which tripped the reply-routing). Damped so motion
-    # COLORS THE SCENE (still adds a delta) without triggering a turn on its own;
+    # colors the scene via arousal injection alone without triggering a turn on its own;
     # real speech (local 0.35 / directed-or-IM 1.20) still fires cleanly on top.
+    # delta=None for both (2026-08-29): matching `typing`/`heartbeat` — arousal
+    # contribution stays, but no narrative text enters the delta buffer (fixes the
+    # "outfit mayhem" / "changed how they're moving" churn in brain context).
     s_animation: float = 0.04   # nearby avatar animation change (was 0.15)
     s_appearance: float = 0.04  # nearby avatar outfit change (was 0.15)
     s_typing: float = 0.02      # someone starts typing — early lean-in (was 0.10)
@@ -370,12 +373,21 @@ def score_event(
                         delta=line)
 
     if kind == "animation":
+        # Damped to 0.04 (2026-08-24) — colors the scene via arousal alone.
+        # No delta line: a dancing avatar re-emits `animation` every ~10s, which
+        # would flood the brain's context with "changed how they're moving" noise
+        # before any speech event fires (same pattern as `typing` / `heartbeat`).
         return Salience(cfg.s_animation, MEDIUM, "animation", kind=kind,
-                        speaker=speaker, delta=f"{speaker} changed how they're moving")
+                        speaker=speaker, delta=None)
 
     if kind == "appearance":
+        # Damped to 0.04 (2026-08-24) — colors the scene via arousal alone.
+        # No delta line: Corrade fires `appearance` on rez, rebake, and teleport —
+        # not just intentional outfit changes — so the delta text produces false
+        # "CaiaPattern changed appearance" narrative noise ("outfit mayhem").
+        # Arousal contribution retained; brain gets presence-texture without churn.
         return Salience(cfg.s_appearance, MEDIUM, "appearance", kind=kind,
-                        speaker=speaker, delta=f"{speaker} changed appearance")
+                        speaker=speaker, delta=None)
 
     if kind == "typing":
         # Early "about to talk" nudge — bumps arousal, but not worth its own line.
