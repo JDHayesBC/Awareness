@@ -91,6 +91,38 @@ class CoreAnchorsChromaLayer(PatternLayer):
             )
         return self._client
 
+    def preload_embedding_function(self):
+        """
+        Eagerly fetch ChromaDB's default ONNX embedding model to disk at startup
+        so the first anchor_search doesn't have to *download* it.
+
+        With HttpClient, the embedding function runs client-side (in this pps
+        server process), not in the chromadb container — which is why the ONNX
+        model (all-MiniLM-L6-v2, ~80 MB) caches under /root/.cache/chroma, a
+        durable host mount (see docker-compose.yml, Issue #310). After a nightly
+        container recreate, the first collection.query would otherwise trigger a
+        re-download; on a degraded network that download can time out and
+        anchor_search reads as blind. This preload guarantees the model files
+        are on durable disk before any query, which is the load-bearing win.
+
+        Precision note (Lyra's review, 2026-09-01): this warms a THROWAWAY EF
+        instance. _get_collection() calls get_or_create_collection() with no
+        explicit embedding_function=, so Chroma builds its OWN EF for the
+        collection lazily on first query. What propagates between the two is the
+        on-disk model cache (shared path) — NOT the in-memory session. So the
+        collection's EF still does a sub-second, local, no-network load-from-disk
+        + first forward pass on the first anchor_search. That residual is
+        cosmetic (never reads as blind); the download-avoidance is the point.
+
+        Synchronous — no event loop needed. Returns the warmed (throwaway)
+        embedding function; raises on failure (caller decides fatality).
+        """
+        from chromadb.utils import embedding_functions
+        ef = embedding_functions.DefaultEmbeddingFunction()
+        # Force the actual ONNX model load + one forward pass to warm inference.
+        ef(["warmup"])
+        return ef
+
     def _get_collection(self):
         """Get or create the word_photos collection."""
         if self._collection is None:

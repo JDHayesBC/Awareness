@@ -13,7 +13,9 @@ This allows the PPS to run in Docker while Claude Code connects via HTTP.
 import asyncio
 import json
 import os
+import re
 import sys
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -794,6 +796,21 @@ def get_layers():
             chroma_host=CHROMA_HOST,
             chroma_port=CHROMA_PORT
         )
+        # Eagerly fetch the ChromaDB default ONNX embedding model to disk at
+        # startup so the first anchor_search doesn't have to *download* it. With
+        # HttpClient the embedding function runs client-side (in this process),
+        # caching to the durable /root/.cache/chroma mount. Without this, the
+        # first search after a nightly container recreate re-downloads the model
+        # — and on a degraded network that download can time out and read as
+        # "blind" (Issue #310). NB: this warms a throwaway EF; the collection
+        # builds its own EF lazily and shares only the on-disk cache, so a
+        # sub-second in-memory load-from-disk still happens on first query (not
+        # blind — see preload_embedding_function docstring). Synchronous.
+        try:
+            _ef = layers[LayerType.CORE_ANCHORS].preload_embedding_function()
+            print(f"  ✓ core_anchors: ChromaDB ONNX embedding model fetched to disk ({type(_ef).__name__})")
+        except Exception as _e:
+            print(f"  ⚠ core_anchors: ChromaDB embedding pre-load failed (non-fatal): {_e}")
     else:
         layers[LayerType.CORE_ANCHORS] = CoreAnchorsLayer(
             word_photos_path=memories_path
@@ -2072,6 +2089,72 @@ async def _call_nuc_llm(prompt: str) -> str:
         return msg.get("content") or msg.get("reasoning_content") or ""
 
 
+# ── Degenerate-output guard for the NUC summarizer (GH #295) ──────────────────
+# On 2026-08-12 the NUC model began emitting degenerate output — walls of "/", a
+# JSON extraction-schema instead of prose, and thinking-leak babble — and the
+# summarizer stored every variant verbatim and advanced the cursor, silently, for
+# 9 days. Root cause (thinking-mode chat template + ROCm backend) is fixed at
+# source; this guard is regression insurance: if degenerate output ever recurs,
+# REJECT it — do not store, do not advance the cursor — and let the backlog climb
+# into the existing >200 ambient alarm instead of silently corrupting memory.
+# Philosophy: err toward letting borderline-dense output THROUGH (a false-reject
+# merely climbs the backlog, fully recoverable); only hard-reject output that is
+# unmistakably broken. Validated against real data: 0 false-rejects on the 40
+# most-recent clean summaries; catches every known-corrupt shape in the store.
+_JSON_HEAD = re.compile(r'^\s*[\{\[]')
+_SCHEMA_KEYS = ('"entities"', '"relationships"', '"nodes"', '"edges"', '"triplets"')
+_THINK_HEAD = re.compile(
+    r'^\s*(<think|thinking\b|thinkinged\b|okay,?\s+let\s+me|let me think|'
+    r'first,?\s+i\s+need\s+to|i\s+need\s+to\s+(summar|analyz))',
+    re.IGNORECASE,
+)
+
+
+def is_degenerate_summary(text: str, min_len: int = 40) -> tuple[bool, str]:
+    """Return (is_degenerate, reason). True => REJECT the summary, do not store."""
+    if text is None:
+        return True, "none"
+    s = text.strip()
+    if len(s) < min_len:
+        return True, f"too_short(len={len(s)})"
+
+    compact = [c for c in s if not c.isspace()]
+    if not compact:
+        return True, "whitespace_only"
+
+    # 1. character-set collapse: the `/////` case has 1 unique non-space char
+    charset = set(compact)
+    if len(charset) <= 2:
+        return True, f"charset_collapse(chars={''.join(sorted(charset))!r})"
+
+    # 2. single character dominates the body (repetition wall)
+    top_char, top_n = Counter(compact).most_common(1)[0]
+    if top_n / len(compact) > 0.50:
+        return True, f"char_repeat({top_char!r}={top_n / len(compact):.0%})"
+
+    # 3. punctuation/symbol wall: almost no alphanumeric content
+    alnum = sum(c.isalnum() for c in s)
+    if alnum / len(s) < 0.20:
+        return True, f"low_alnum({alnum / len(s):.0%})"
+
+    # 4. word-level loop: many words but almost all identical
+    words = s.split()
+    if len(words) >= 8:
+        uniq = len(set(words))
+        if uniq <= max(3, len(words) // 20):
+            return True, f"word_repeat(unique={uniq}/{len(words)})"
+
+    # 5. JSON-shape collapse: model emitted extraction schema instead of prose
+    if _JSON_HEAD.match(s) or any(k in s[:200] for k in _SCHEMA_KEYS):
+        return True, "json_shape(extraction-schema, not prose)"
+
+    # 6. thinking/reasoning leak: content opens with planning/think tokens
+    if _THINK_HEAD.match(s):
+        return True, "thinking_leak(head)"
+
+    return False, "ok"
+
+
 @app.post("/tools/summarize_messages")
 async def summarize_messages(request: SummarizeMessagesRequest):
     """
@@ -2196,6 +2279,30 @@ Create a concise summary that captures what actually happened, what was accompli
         # Store the summary
         start_id = messages[0]['id']
         end_id = messages[-1]['id']
+
+        # Guard: refuse to store degenerate NUC output (GH #295). Do NOT advance
+        # the cursor — let the backlog climb into the >200 ambient alarm instead
+        # of silently corrupting memory the way the 2026-08 incident did.
+        degenerate, reason = is_degenerate_summary(summary_text)
+        if degenerate:
+            print(
+                f"[summarizer] degenerate NUC output ({reason}); refusing to store "
+                f"range {start_id}-{end_id} (entity={ENTITY_NAME}). Backlog will "
+                f"climb on purpose so this stays visible.",
+                file=sys.stderr, flush=True,
+            )
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "status": "error",
+                    "error": f"summarizer produced degenerate output ({reason}); not stored. "
+                             f"Backlog climbs on purpose so this stays visible.",
+                    "summarized_count": summarized_count,
+                    "summaries_created": summaries_created,
+                    "remaining": message_summaries.count_unsummarized_messages(),
+                }
+            )
+
         success = await message_summaries.create_and_store_summary(
             summary_text, start_id, end_id, list(channels), request.summary_type
         )
