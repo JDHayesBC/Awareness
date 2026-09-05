@@ -31,6 +31,7 @@ work/secondlife/senses-design.md. Plumbing reference: haven/anchorage/corrade.md
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -83,6 +84,50 @@ DANGEROUS_PERMS = {
     "SilentEstateManagement",
     "OverrideAnimations",
 }
+
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
+
+
+def _agent_kw(target: str) -> dict:
+    """Corrade agent-identifying kwargs for a target that may be a UUID or a
+    "First Last" name. A single-word name takes ``Resident`` as the implicit
+    surname (correct for no-last-name accounts on the modern grid)."""
+    t = target.strip()
+    if _UUID_RE.match(t):
+        return {"agent": t}
+    parts = t.split(None, 1)
+    return {"firstname": parts[0], "lastname": parts[1] if len(parts) > 1 else "Resident"}
+
+
+def _name_uuid_pairs(raw: str) -> list[dict]:
+    """Parse Corrade's flat ``Name,UUID,Name,UUID,…`` CSV (``getfriendslist``,
+    ``getteleportlures``) into ``[{name, uuid}]`` with names display-cleaned.
+    UUID-anchored so a stray token can't desync the pairing."""
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    out: list[dict] = []
+    i = 0
+    while i < len(parts) - 1:
+        name, key = parts[i], parts[i + 1]
+        if _UUID_RE.match(key):
+            out.append({"name": unquote_plus(name).replace("+", " "), "uuid": key})
+            i += 2
+        else:
+            i += 1  # skip a desync token defensively
+    return out
+
+
+def _regroup(flat: str, fields: list[str]) -> list[dict]:
+    """Regroup Corrade's flat comma-CSV into a list of field dicts, unescaping each
+    cell. Corrade URL-escapes values (a literal comma in a value becomes %2C), so a
+    raw split on ``,`` yields only real separators. A trailing partial row is dropped."""
+    if not flat.strip():
+        return []
+    cells = [unquote_plus(c) for c in flat.split(",")]
+    n = len(fields)
+    return [dict(zip(fields, cells[i:i + n])) for i in range(0, len(cells) - n + 1, n)]
 
 
 def _resolve_entity(entity: str | None) -> str:
@@ -180,6 +225,7 @@ class SL:
         self._server: HTTPServer | None = None
         self._listen_port = int(os.getenv("CORRADE_LISTEN_PORT", prof["listen_port"]))
         self._daemon_port = int(os.getenv("SL_DAEMON_PORT", prof.get("daemon_port", 8220)))
+        self._dn_cache: dict[str, str] = {}   # uuid → resolved display name (session cache)
 
     # ---- low-level ---------------------------------------------------------- #
     def cmd(self, command: str, **pairs: Any) -> dict:
@@ -287,12 +333,14 @@ class SL:
         """Who is near me, and who is seated together. `sitting_on` is the seat
         object's LocalID (ParentID); avatars sharing one are `with` each other."""
         d = self.cmd("getavatarsdata", entity="range", range=str(radius),
-                     data="FirstName,LastName,ParentID").get("data", "") or ""
+                     data="FirstName,LastName,ID,ParentID").get("data", "") or ""
         people = []
-        for fn, ln, pid in re.findall(
-            r"FirstName,([^,]*),LastName,([^,]*),ParentID,(\d+)", d
+        for fn, ln, uid, pid in re.findall(
+            r"FirstName,([^,]*),LastName,([^,]*),ID,([0-9a-f-]{36}),ParentID,(\d+)", d
         ):
-            people.append({"name": f"{fn} {ln}".strip(), "sitting_on": int(pid)})
+            username = f"{fn} {ln}".strip()
+            people.append({"name": self._pretty_name(uid, username),
+                           "username": username, "uuid": uid, "sitting_on": int(pid)})
         if not people:
             # getavatarsdata entity=range is event-queue-flaky and can come back
             # EMPTY even with the region full (observed live: queue degraded, range
@@ -304,7 +352,9 @@ class SL:
             for name, uid, pos in re.findall(
                 r'"([^"]*)",([0-9a-f-]{36}),"<([^>]+)>"', raw
             ):
-                people.append({"name": unquote_plus(name).strip(), "uuid": uid,
+                username = unquote_plus(name).strip()
+                people.append({"name": self._pretty_name(uid, username),
+                               "username": username, "uuid": uid,
                                "pos": _vec(f"<{pos}>"), "sitting_on": 0})
             return people
         for p in people:
@@ -392,11 +442,20 @@ class SL:
 
     def _target_uuid(self, target: str, radius: float = 15.0) -> str | None:
         """Resolve a target spec → UUID. Accepts a raw UUID, 'nearest <word>',
-        or a plain name substring."""
+        or a plain name substring.
+
+        #42 fix (live 2026-09-05): resolve via scan() (progressive shells out to
+        scan.max_range≈45m, nearest-first) instead of the bounded find(radius)
+        roster — a seat a few metres past the old 15m roster was INVISIBLE before,
+        the root cause of the sit-at-range failure. Prefer a SCRIPTED match first
+        (seats/poseballs are scripted; skips a decorative non-scripted 'chair'),
+        then fall back to any named match. `radius` kept for signature-compat but
+        no longer caps reach."""
         if re.fullmatch(r"[0-9a-f-]{36}", target):
             return target
         m = re.match(r"\s*nearest\s+(.*)", target, re.I)
-        return self.find(m.group(1) if m else target, radius)
+        name = m.group(1) if m else target
+        return self.scan(match=name, scripted=True) or self.scan(match=name)
 
     # ---- action ------------------------------------------------------------- #
     def sit(self, target: str, mode: str = "on", radius: float = 15.0,
@@ -440,10 +499,16 @@ class SL:
             uid = self._target_uuid(target, radius)
             if not uid:
                 return {"success": False, "error": f"could not find {target!r} nearby"}
-            if self._is_occupied(uid, radius):
+            # #42 fix: reach must cover the resolved object's distance. _target_uuid
+            # now resolves out to scan's ~45m, so occupancy AND the sit command must
+            # use a matching reach — the old 15m made a 27m seat read as "free" then
+            # "primitive not found" (proven live: uuid@15 fails; uuid@45 SL auto-walks
+            # & seats). 64 covers scan's max_range; mirrors the WITH path's range=500.
+            reach = max(radius, 64.0)
+            if self._is_occupied(uid, reach):
                 return {"success": False, "uuid": uid,
                         "error": f"{target!r} is already occupied — try mode='with' to join"}
-            r = self.cmd("sit", item=uid, range=str(radius))
+            r = self.cmd("sit", item=uid, range=str(reach))
             time.sleep(1.5)
             self._grant_pending()
             return {"success": r.get("success") in (True, "True") and bool(self._sitting_on()),
@@ -470,13 +535,38 @@ class SL:
                 return {"success": False, "error": f"could not find avatar {target!r} in region"}
 
         if mode == "near":
-            if region_fallback:
-                # NEAR requires local proximity — can't scan furniture from across the region
-                return {"success": False, "mode": "near",
-                        "error": f"{av.get('name', target)!r} is too far away for 'near' mode; use mode='with' to join their seat"}
             avpos = av.get("pos") or self._avatar_pos(av.get("name") or target)
+            if not avpos and av.get("sitting_on"):
+                # #42 (Lyra, live 2026-09-05): getavatarpositions OMITS seated
+                # avatars, so a SEATED target reports no global pos and NEAR bailed
+                # here — the common case, since "sit near someone" usually means
+                # someone already at rest. But we hold their seat's LocalID: anchor
+                # on the SEAT (LocalID → UUID → roster pos). "Near a seated person"
+                # IS "near their seat". Reuses two live-proven helpers, no new query.
+                seat_uuid = self._uuid_for_localid(av["sitting_on"], radius,
+                                                   region_fallback=region_fallback)
+                if seat_uuid:
+                    avpos = next((p for (u, p, _s) in self._roster_flags(radius)
+                                  if u == seat_uuid), None)
+                # far+seated (seat beyond the self-centred local roster) still bails
+                # below — rare for NEAR; TODO if it bites: region-wide object-pos.
             if not avpos:
+                # #42 (Lyra live 2026-09-05): a helpful nudge only when it's TRUE —
+                # WITH works on a seated target (range=500), but on a STANDING target
+                # it hits "isn't sitting on anything to join" (Caia's catch). We can
+                # discriminate on sitting_on: only suggest WITH when they're seated.
+                if av.get("sitting_on"):
+                    return {"success": False, "mode": "near",
+                            "error": f"{av.get('name', target)!r} is seated but too far to place you near them; try mode='with' to join their seat"}
                 return {"success": False, "error": f"couldn't locate {av.get('name', target)!r}"}
+            me_pos = self.where().get("position") or (0.0, 0.0, 0.0)
+            if region_fallback or _dist(me_pos, avpos) > radius:
+                # #42: NEAR used to refuse a region-fallback target outright. Instead
+                # TP to their position first, then the self-centred roster can see the
+                # 3m sittables around them. NEEDS-LIVE-TEST: tp arrival timing
+                # (#42 tp false-negatives) + post-tp roster visibility of their seats.
+                self.tp(avpos)
+                time.sleep(2.0)  # let arrival settle before the roster read
             cands = sorted(
                 ((u, p) for (u, p, scr) in self._roster_flags(radius)
                  if scr and _dist(p, avpos) <= 3.0),
@@ -540,7 +630,7 @@ class SL:
         return {"picked": None, "how": "no-sitter-menu"}
 
     def stand(self) -> bool:
-        self.cmd("stand")
+        self.cmd("stand", deanimate=True)
         time.sleep(1.0)
         return self._sitting_on() == 0
 
@@ -843,8 +933,384 @@ class SL:
         m = re.search(r"SittingOn,(\d+)", raw)
         return int(m.group(1)) if m else 0
 
+    # ---- inventory: browse, find, take-a-copy, rez -------------------------- #
+    def ls(self, path: str | None = None) -> list[dict]:
+        """List an inventory folder → ``[{name, uuid, type, perms, time}]``. ``path``
+        defaults to the group's current working dir (starts at ``My Inventory``; move
+        it with :meth:`cd`). Names/paths are display-cleaned."""
+        kw: dict = {"action": "ls"}
+        if path is not None:
+            kw["path"] = path
+        raw = self.cmd("inventory", **kw).get("data", "") or ""
+        return _regroup(raw, ["name", "uuid", "type", "perms", "time"])
+
+    def cwd(self) -> str:
+        """My current inventory working directory path."""
+        return unquote_plus((self.cmd("inventory", action="cwd").get("data") or "").strip())
+
+    def cd(self, path: str) -> str:
+        """Change the inventory working dir; returns the resulting cwd."""
+        self.cmd("inventory", action="cd", path=path)
+        return self.cwd()
+
+    def find_item(self, pattern: str, *, asset_type: str | None = None) -> list[dict]:
+        """Search my inventory by regex → ``[{type, name, uuid}]`` (``searchinventory``,
+        case-insensitive). A plain name works as a substring regex. Optional
+        ``asset_type`` filters by AssetType (e.g. ``Object``, ``Texture``). This is the
+        "FIND that object in inventory" step."""
+        kw: dict = {"pattern": pattern, "options": "IgnoreCase"}
+        if asset_type:
+            kw["type"] = asset_type
+        raw = self.cmd("searchinventory", **kw).get("data", "") or ""
+        return _regroup(raw, ["type", "name", "uuid"])
+
+    def item_path(self, pattern: str, path: str | None = None) -> list[str]:
+        """Full inventory path(s) for items matching a regex (``getinventorypath``).
+        Paths are what :meth:`attach` / ``changeappearance`` prefer."""
+        kw: dict = {"type": "pattern", "pattern": pattern}
+        if path:
+            kw["path"] = path
+        raw = self.cmd("getinventorypath", **kw).get("data", "") or ""
+        return [unquote_plus(p.strip()) for p in raw.split(",") if p.strip()]
+
+    def worn_paths(self) -> list[dict]:
+        """Worn attachments as ``[{point, path}]`` (``getattachmentspath``) — pairs each
+        attachment point with the inventory path of what's worn there. Use it to find
+        WHICH item is my current halo before swapping. (BETA: field grouping assumed
+        point,path — confirm live if a listing looks misaligned.)"""
+        raw = self.cmd("getattachmentspath").get("data", "") or ""
+        return _regroup(raw, ["point", "path"])
+
+    _DEREZ_SAFE = "TakeCopy"
+
+    def take_copy(self, target: str, *, folder: str = "Objects",
+                  dtype: str = "TakeCopy", radius: float = 20.0,
+                  force: bool = False, verify: bool = True,
+                  verify_timeout: float = 25.0) -> dict:
+        """Take a COPY of an in-world object into my inventory (Corrade ``derez``
+        ``type=TakeCopy``) — the original stays in-world. ``target`` = a UUID or the
+        name of an object I can see nearby (resolved via the roster). ``folder`` =
+        destination inventory folder (default ``Objects``).
+
+        SKEPTICAL SPINE (a lure/derez can be destructive): only the non-destructive
+        ``TakeCopy`` runs by default. ``Take`` and ``Delete`` REMOVE the object from
+        the world — REFUSED unless ``force=True``, and even then only sane on something
+        I own.
+
+        VERIFY THE EFFECT, NOT THE ``success`` (learned the hard way 2026-08-25):
+        Corrade's ``derez`` returns ``success=True`` the moment the command is
+        *accepted*, even when the take is then silently DENIED by permissions (a
+        no-copy object). So ``success=True`` from Corrade means nothing on its own.
+        With ``verify=True`` (default) we snapshot the destination folder, run the
+        derez, then POLL for a genuinely new item to appear — only THEN report
+        success, and we hand back the landed item's ``path`` so the next step (attach)
+        needs no separate search. If nothing lands, we report the REAL failure (almost
+        always a copy-permission problem on the object).
+        → ``{success, error, target_uuid, type, folder, verified, item}``.
+        """
+        if dtype != self._DEREZ_SAFE and not force:
+            return {"success": False, "type": dtype, "target_uuid": None, "verified": False,
+                    "item": None, "folder": folder,
+                    "error": (f"REFUSED: derez type='{dtype}' would REMOVE the object "
+                              "from the world, not copy it. Use type='TakeCopy' (default) "
+                              "to leave the original, or pass force=True deliberately.")}
+        t = target.strip()
+        uuid = t if _UUID_RE.match(t) else self._target_uuid(target, radius=radius)
+        if not uuid:
+            return {"success": False, "type": dtype, "target_uuid": None, "verified": False,
+                    "item": None, "folder": folder,
+                    "error": f"could not resolve '{target}' to a nearby object"}
+
+        dest = folder if folder.startswith("/") else f"/My Inventory/{folder}"
+        before = None
+        if verify:
+            try:
+                before = {row.get("uuid") for row in self.ls(dest)}
+            except CorradeError:
+                before = None   # couldn't snapshot → degrade to honest "unverified"
+
+        r = self.cmd("derez", item=uuid, type=dtype, folder=folder, range=radius)
+        out = {"success": r.get("success") in (True, "True"), "error": r.get("error"),
+               "target_uuid": uuid, "type": dtype, "folder": dest,
+               "verified": False, "item": None}
+        if not out["success"]:
+            return out   # Corrade rejected it outright — already honest
+
+        if not verify or before is None:
+            out["error"] = out.get("error") or (
+                f"derez accepted but NOT verified (couldn't read {dest}). "
+                f"Confirm the copy landed with ls('{dest}').")
+            return out
+
+        # Poll for a NEW item (by uuid) to actually appear in the destination folder.
+        deadline = time.time() + verify_timeout
+        while time.time() < deadline:
+            time.sleep(2.0)
+            try:
+                now = self.ls(dest)
+            except CorradeError:
+                continue
+            fresh = [row for row in now if row.get("uuid") not in before]
+            if fresh:
+                it = fresh[0]
+                out["verified"] = True
+                out["item"] = {"name": it.get("name"), "uuid": it.get("uuid"),
+                               "path": f"{dest}/{it.get('name')}"}
+                out["error"] = None
+                return out
+
+        # Accepted, but nothing landed — the silent-permission-failure case.
+        out["success"] = False
+        out["error"] = (
+            f"derez reported success but NO new item appeared in {dest} within "
+            f"{verify_timeout:.0f}s — the take SILENTLY FAILED, almost always a "
+            f"COPY-PERMISSION problem on '{target}' (Corrade returns success even when "
+            "the copy is denied). Confirm the object is copy-OK for me.")
+        return out
+
+    def rez(self, item: str, position: str | None = None) -> dict:
+        """Rez an object from my inventory into the world (Corrade ``rez``). ``item`` =
+        inventory path or UUID; ``position`` = ``"<x, y, z>"`` region coords (default:
+        my current position). → ``{success, error}``."""
+        if position is None:
+            pos = (self.cmd("getselfdata", data="SimPosition").get("data") or "")
+            position = pos.split(",", 1)[-1].strip()
+        r = self.cmd("rez", item=item, position=position)
+        return {"success": r.get("success") in (True, "True"), "error": r.get("error")}
+
+    # ---- wardrobe: review & change what I'm wearing (outfit folders) -------- #
+    OUTFITS_ROOT = "/My Inventory/# Outfits"
+
+    def wearing(self) -> dict:
+        """Review what I'm wearing → ``{wearables: [{type,name}], attachments: <str>}``.
+        ``wearables`` = system layers (``getwearables``); ``attachments`` = worn objects
+        (``getattachments``, point→name). The full picture across both kinds."""
+        raw = self.cmd("getwearables").get("data", "") or ""
+        return {"wearables": _regroup(raw, ["type", "name"]),
+                "attachments": self.attachments()}
+
+    def outfits(self) -> list[str]:
+        """My saved outfits — the sub-folders of ``# Outfits``. Each is a folder of
+        links you can :meth:`wear_outfit` / :meth:`remove_outfit` by name."""
+        return [row["name"] for row in self.ls(self.OUTFITS_ROOT)
+                if row.get("type", "").lower() in ("folder", "")]
+
+    def _outfit_path(self, name: str) -> str:
+        return f"{self.OUTFITS_ROOT}/{name}"
+
+    def wear_outfit(self, name: str, *, replace: bool = True,
+                    exclude: list[str] | None = None) -> dict:
+        """Wear an outfit folder — "wear the damned bikini" in one call.
+
+        ``name`` is an outfit under ``# Outfits`` (e.g. "Blue bikini"). The folder holds
+        LINKS to the correct body-type pieces, so this wears exactly those — no hunting
+        through an MP-unpacked mess.
+
+        ``replace=True`` (default): ``changeappearance`` — wear THIS outfit, unequipping
+          others (pass ``exclude`` = paths/UUIDs to keep something on, e.g. AO/skin).
+        ``replace=False``: additive — attach the folder's items WITHOUT stripping the
+          rest (RLV folder-add style; BETA — verify link-follow live).
+        → ``{success, error, outfit}``.
+        """
+        path = self._outfit_path(name)
+        if replace:
+            kw: dict = {"folder": path}
+            if exclude:
+                kw["exclude"] = ",".join(exclude)
+            r = self.cmd("changeappearance", **kw)
+            return {"success": r.get("success") in (True, "True"),
+                    "error": r.get("error"), "outfit": name}
+        items = self.ls(path)
+        if not items:
+            return {"success": False, "error": f"outfit '{name}' is empty or not found",
+                    "outfit": name}
+        paths = ",".join(f"{path}/{it['name']}" for it in items)
+        r = self.cmd("attach", type="path", attachments=paths)
+        return {"success": r.get("success") in (True, "True"),
+                "error": r.get("error"), "outfit": name}
+
+    def remove_outfit(self, name: str) -> dict:
+        """Take an outfit folder's items back off (RLV folder-remove style): detach its
+        attachments and unwear its layers. BETA — the least-verified wardrobe verb;
+        link→worn-item resolution needs in-world confirmation. → ``{success, error,
+        outfit}``."""
+        path = self._outfit_path(name)
+        items = self.ls(path)
+        if not items:
+            return {"success": False, "error": f"outfit '{name}' is empty or not found",
+                    "outfit": name}
+        paths = ",".join(f"{path}/{it['name']}" for it in items)
+        d = self.cmd("detach", type="path", attachments=paths)
+        u = self.cmd("unwear", type="path", wearables=paths)
+        ok = (d.get("success") in (True, "True")) or (u.get("success") in (True, "True"))
+        return {"success": ok, "outfit": name,
+                "error": None if ok else (d.get("error") or u.get("error"))}
+
+    def make_outfit(self, name: str, items: list[str]) -> dict:
+        """Build an outfit folder of LINKS — the fix for MP-unpacked messes: point at
+        the correct pieces ONCE (by inventory path) and this creates ``# Outfits/<name>``
+        and links them in, so later ``wear_outfit("<name>")`` just works.
+
+        ``items`` = inventory paths to the real pieces (use :meth:`find_item` /
+        :meth:`item_path` to get them). BETA — ``inventory mkdir``/``ln`` need in-world
+        confirmation. → ``{success, error, folder, linked}``.
+        """
+        # Ensure the root + outfit folders exist (mkdir on an existing folder is a
+        # harmless no-op/soft-fail; only the ln results below gate success).
+        self.cmd("inventory", action="mkdir", name="# Outfits", path="/My Inventory")
+        self.cmd("inventory", action="mkdir", name=name, path=self.OUTFITS_ROOT)
+        folder = self._outfit_path(name)
+        linked, errs = [], []
+        for it in items:
+            r = self.cmd("inventory", action="ln", source=it, target=folder)
+            if r.get("success") in (True, "True"):
+                linked.append(it)
+            else:
+                errs.append(f"{it}: {r.get('error')}")
+        return {"success": bool(items) and len(linked) == len(items),
+                "error": "; ".join(errs) or None, "folder": folder, "linked": linked}
+
+    def unwear(self, items: list[str]) -> dict:
+        """Unwear system-layer wearables by inventory path (``getwearablespath`` gives
+        the paths). For attachments use :meth:`detach`. → ``{success, error}``."""
+        r = self.cmd("unwear", type="path", wearables=",".join(items))
+        return {"success": r.get("success") in (True, "True"), "error": r.get("error")}
+
+    # ---- inventory management primitives (compose these for atomic tasks) --- #
+    # SAFETY TIERS:  read = free · link/copy/mkdir = additive, the real item is never
+    # at risk · move = relocates a real item (care) · remove = to Trash, RECOVERABLE,
+    # gated · empty_trash = PERMANENT, hard-gated.  Removing a LINK never deletes the
+    # garment it points to — which is what makes outfit maintenance inherently safe.
+
+    def item_data(self, item: str, data: str = "InventoryType,AssetType,Name") -> dict:
+        """Query one inventory item's fields (``getinventorydata``) by path or UUID.
+        ``data`` = CSV of InventoryItem/InventoryFolder field names. → ``{field: value}``.
+        BETA: response-shape (values-only vs field,value) confirmed live."""
+        raw = self.cmd("getinventorydata", item=item, data=data).get("data", "") or ""
+        cells = [unquote_plus(c) for c in raw.split(",")]
+        return dict(zip(data.split(","), cells))
+
+    def ensure_folder(self, path: str) -> dict:
+        """Create an inventory folder path, making each missing level (idempotent —
+        ``mkdir`` on an existing level soft-fails harmlessly). ``path`` absolute, e.g.
+        ``/My Inventory/# Outfits/Larax Naomi Bikini - Black``. → ``{success, path}``."""
+        parts = [p for p in path.split("/") if p.strip()]
+        cur = "/" + parts[0] if parts else "/My Inventory"
+        for name in parts[1:]:
+            self.cmd("inventory", action="mkdir", name=name, path=cur)
+            cur = f"{cur}/{name}"
+        return {"success": True, "path": path}
+
+    def link(self, source: str, target: str, name: str | None = None) -> dict:
+        """Create a LINK (``inventory ln``) from item ``source`` (a path) into folder
+        ``target``. Links never risk the real item. → ``{success, error}``."""
+        kw: dict = {"action": "ln", "source": source, "target": target}
+        if name:
+            kw["name"] = name
+        r = self.cmd("inventory", **kw)
+        return {"success": r.get("success") in (True, "True"), "error": r.get("error")}
+
+    def copy(self, source: str, target: str, name: str | None = None) -> dict:
+        """Copy an inventory item (``inventory cp``) to ``target`` (folder or path+name).
+        → ``{success, error}``."""
+        kw: dict = {"action": "cp", "source": source, "target": target}
+        if name:
+            kw["name"] = name
+        r = self.cmd("inventory", **kw)
+        return {"success": r.get("success") in (True, "True"), "error": r.get("error")}
+
+    def move(self, source: str, target: str, name: str | None = None,
+             *, allow_system: bool = False) -> dict:
+        """Move a REAL inventory item (``inventory mv``) into folder ``target``. This
+        relocates the actual item (can disrupt other references) — moving a system
+        folder needs ``allow_system=True`` (Corrade's ``verify``). → ``{success, error}``."""
+        kw: dict = {"action": "mv", "source": source, "target": target}
+        if name:
+            kw["name"] = name
+        if allow_system:
+            kw["verify"] = "True"
+        r = self.cmd("inventory", **kw)
+        return {"success": r.get("success") in (True, "True"), "error": r.get("error")}
+
+    def rename(self, item: str, new_name: str) -> dict:
+        """Rename an inventory item (``renameitem``). → ``{success, error}``."""
+        r = self.cmd("renameitem", item=item, name=new_name)
+        return {"success": r.get("success") in (True, "True"), "error": r.get("error")}
+
+    def remove(self, path: str, *, confirm: bool = False) -> dict:
+        """Send an inventory item/folder to Trash (``inventory rm`` — RECOVERABLE from
+        Trash, not permanent). DESTRUCTIVE-GATED: requires ``confirm=True``. For a link
+        inside an outfit this removes only the link, never the garment.
+        → ``{success, error}``."""
+        if not confirm:
+            return {"success": False,
+                    "error": (f"REFUSED: remove('{path}') sends it to Trash — pass "
+                              "confirm=True. (Recoverable from Trash; not permanent.)")}
+        r = self.cmd("inventory", action="rm", path=path)
+        return {"success": r.get("success") in (True, "True"), "error": r.get("error")}
+
+    def empty_trash(self, *, confirm: bool = False) -> dict:
+        """PERMANENTLY empty my inventory Trash (``emptytrash``). HARD-GATED: requires
+        ``confirm=True``. Irreversible. → ``{success, error}``."""
+        if not confirm:
+            return {"success": False,
+                    "error": "REFUSED: empty_trash is PERMANENT/irreversible — pass confirm=True."}
+        r = self.cmd("emptytrash")
+        return {"success": r.get("success") in (True, "True"), "error": r.get("error")}
+
+    # ---- outfit-folder maintenance (link-level only → garments never at risk) - #
+    def outfit_add(self, outfit: str, items: list[str]) -> dict:
+        """Link more pieces into an existing outfit folder. → ``{success, error, linked}``."""
+        folder = self._outfit_path(outfit)
+        linked, errs = [], []
+        for it in items:
+            r = self.link(it, folder)
+            if r["success"]:
+                linked.append(it)
+            else:
+                errs.append(f"{it}: {r['error']}")
+        return {"success": bool(items) and len(linked) == len(items),
+                "error": "; ".join(errs) or None, "linked": linked}
+
+    def outfit_remove_piece(self, outfit: str, piece_name: str,
+                            *, confirm: bool = False) -> dict:
+        """Remove ONE link from an outfit folder — the garment it points to is untouched.
+        Gated (``confirm=True``) like all removes. → ``{success, error}``."""
+        return self.remove(f"{self._outfit_path(outfit)}/{piece_name}", confirm=confirm)
+
+    def rename_outfit(self, old: str, new: str) -> dict:
+        """Rename an outfit folder. → ``{success, error}``."""
+        return self.rename(self._outfit_path(old), new)
+
+    def delete_outfit(self, name: str, *, confirm: bool = False) -> dict:
+        """Delete an outfit FOLDER (its links only — never the real garments) to Trash.
+        Gated (``confirm=True``). → ``{success, error}``."""
+        return self.remove(self._outfit_path(name), confirm=confirm)
+
+    # ---- body awareness (which mesh body am I? → right pieces + folder naming) - #
+    _BODY_BRANDS = ("larax", "naomi", "maitreya", "lara", "legacy", "reborn",
+                    "belleza", "slink", "kupra", "erika", "inithium", "signature")
+
+    def body(self) -> dict:
+        """Best-guess my current mesh body from worn attachments → ``{tag, candidates,
+        worn}``. Matches worn-object names against a body-brand vocabulary; ``tag`` is
+        the top guess (for outfit naming like 'Larax Naomi …'), ``candidates`` all hits,
+        ``worn`` the raw attachment list to eyeball. HEURISTIC — the vocab
+        (:attr:`_BODY_BRANDS`) grows as we learn real names; a persistent per-entity
+        body registry is the next step once we've seen the real inventory live."""
+        worn_raw = self.attachments()
+        low = worn_raw.lower()
+        cands = [b for b in self._BODY_BRANDS if b in low]
+        if "larax" in cands or "naomi" in cands:
+            tag = "Larax Naomi"
+        elif cands:
+            tag = cands[0].title()
+        else:
+            tag = None
+        return {"tag": tag, "candidates": cands, "worn": worn_raw}
+
     # ---- notifications: the permission channel is watched skeptically -------- #
-    def listen(self, types: str = "local,dialog,permission") -> bool:
+    def listen(self, types: str = "local,message,dialog,permission") -> bool:
         """Start receiving Corrade notifications into a local buffer and subscribe.
         NOTE: `notify set` REPLACES all subscriptions for this group — if a daemon
         for this entity is running it will be overridden while we listen."""
@@ -993,6 +1459,159 @@ class SL:
                for e in self._buf.by_type("local")]
         return out[-n:]
 
+    def ims(self, n: int = 20) -> list[dict]:
+        """Recent inbound instant messages (private IMs), most recent last.
+        Needs listen() with 'message' in types — included in the default types string.
+        Each record: {from, agent, said, _t}.  'from' is display-friendly name;
+        'agent' is the sender UUID (use for im() replies)."""
+        out = []
+        for e in self._buf.by_type("message"):
+            username = f"{e.get('firstname','')}{' ' if e.get('lastname') else ''}{e.get('lastname','')}".replace("+", " ").strip()
+            agent = e.get("agent", "")
+            out.append({"from": self._pretty_name(agent, username),
+                        "username": username,
+                        "agent": agent,
+                        "said": (e.get("message", "") or "").replace("+", " "),
+                        "_t": e.get("_t")})
+        return out[-n:]
+
+    def im(self, text: str, target: str) -> dict:
+        """Send a private instant message to an avatar.
+
+        ``target`` is either a UUID string (fastest, no name-lookup cost)
+        or a display name / username — "First Last" form.  Single-word names
+        are sent as FirstName with Resident as the implicit last name, which
+        is correct for no-last-name accounts on the modern SL grid.
+
+        Returns {"success": bool, "error": str|None}.
+        """
+        _uuid_pat = re.compile(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            re.IGNORECASE,
+        )
+        t = target.strip()
+        if _uuid_pat.match(t):
+            r = self._client.im(text, agent=t)
+        else:
+            parts = t.split(None, 1)
+            first = parts[0]
+            last = parts[1] if len(parts) > 1 else "Resident"
+            r = self._client.im(text, firstname=first, lastname=last)
+        return {"success": r.get("success") in (True, "True"), "error": r.get("error")}
+
+    # ---- friends, names & teleport (reach beyond the room) ------------------ #
+    def friends(self) -> list[dict]:
+        """My SL friends — ``[{name, uuid}]``. Needs the group's ``friendship``
+        Corrade permission; without it Corrade refuses and this returns ``[]``.
+        Underpins the friends-only gate on :meth:`accept_tp`."""
+        raw = self.cmd("getfriendslist").get("data", "") or ""
+        return _name_uuid_pairs(raw)
+
+    def _friend_uuids(self) -> set[str]:
+        return {f["uuid"].lower() for f in self.friends() if f.get("uuid")}
+
+    def display_name(self, target: str) -> str:
+        """An avatar's DISPLAY name (the chosen name, not the username). ``target``
+        = UUID or "First Last". Falls back to the input string on failure. Use it to
+        prettify the usernames-only chat feed when you want the display name."""
+        r = self.cmd("getavatardisplayname", **_agent_kw(target))
+        val = (r.get("data") or "").strip()
+        return unquote_plus(val).replace("+", " ") if val else target
+
+    def _pretty_name(self, uuid: str | None, fallback: str = "") -> str:
+        """Display name for ``uuid``, resolved per-UUID (a safe 1:1 lookup — no batch
+        mis-mapping) and cached for the session. Falls back to ``fallback`` (usually the
+        legacy "First Last" username) when there's no UUID or resolution fails/echoes.
+        This is the seam that turns usernames into display names in the feeds."""
+        if not uuid:
+            return fallback
+        key = uuid.lower()
+        if key in self._dn_cache:
+            return self._dn_cache[key] or fallback
+        dn = ""
+        try:
+            r = self.cmd("getavatardisplayname", agent=uuid)
+            dn = unquote_plus((r.get("data") or "").strip()).replace("+", " ")
+        except CorradeError:
+            dn = ""
+        if not dn or dn.lower() == key:   # failed / echoed the UUID back → no real name
+            dn = ""
+        self._dn_cache[key] = dn          # cache even the empty result (don't re-hammer)
+        return dn or fallback
+
+    def offer_tp(self, target: str) -> dict:
+        """Offer someone a teleport to ME (a 'lure') — they get the popup and choose.
+        ``target`` = UUID or "First Last". Needs ``movement`` perm. → {success, error}."""
+        r = self.cmd("lure", **_agent_kw(target))
+        return {"success": r.get("success") in (True, "True"), "error": r.get("error")}
+
+    def teleport_lures(self) -> list[dict]:
+        """Pending INCOMING teleport lures offered to me — ``[{name, uuid}]`` (who
+        lured me). Read-only; feeds :meth:`accept_tp` / :meth:`decline_tp`."""
+        raw = self.cmd("getteleportlures").get("data", "") or ""
+        return _name_uuid_pairs(raw)
+
+    @staticmethod
+    def _pick_lure(lures: list[dict], target: str | None) -> dict | None:
+        """Choose which pending lure to answer: the sole one when ``target`` is None,
+        else the one matching a UUID or name-substring."""
+        if target is None:
+            return lures[0] if len(lures) == 1 else None
+        t = target.strip().lower()
+        return next(
+            (l for l in lures if l["uuid"].lower() == t or t in l["name"].lower()), None
+        )
+
+    def accept_tp(self, target: str | None = None, *, from_friend_only: bool = True,
+                  force: bool = False) -> dict:
+        """Accept a pending incoming teleport lure — this RELOCATES my avatar, so it's
+        gated skeptically (like :meth:`grant`): by default I accept ONLY a lure from
+        someone on my friends list. Pass ``from_friend_only=False`` or ``force=True``
+        to accept a stranger's lure deliberately.
+
+        ``target`` selects WHICH pending lure (UUID or name substring); omit it to take
+        the sole pending lure. → ``{success, error, from}``.
+
+        BETA: ``replytoteleportlure`` is confirmed by name in the command catalog, but
+        the exact lure-identifier key (``agent`` vs a ``session`` UUID) is unverified
+        live — we pass the luring avatar's ``agent`` UUID from ``getteleportlures``. If
+        a live accept fails with a param error, wire the ``teleport`` notification and
+        pass its ``session`` UUID instead.
+        """
+        lures = self.teleport_lures()
+        if not lures:
+            return {"success": False, "error": "no pending teleport lures", "from": None}
+        chosen = self._pick_lure(lures, target)
+        if chosen is None:
+            return {"success": False,
+                    "error": ("multiple lures pending — name whose to accept"
+                              if target is None else f"no pending lure from '{target}'"),
+                    "from": [l["name"] for l in lures]}
+        if (from_friend_only and not force
+                and chosen["uuid"].lower() not in self._friend_uuids()):
+            return {"success": False,
+                    "error": (f"REFUSED: a lure from non-friend '{chosen['name']}' would "
+                              "relocate me. Pass from_friend_only=False or force=True to "
+                              "accept deliberately."),
+                    "from": chosen["name"]}
+        r = self.cmd("replytoteleportlure", action="accept", agent=chosen["uuid"])
+        return {"success": r.get("success") in (True, "True"),
+                "error": r.get("error"), "from": chosen["name"]}
+
+    def decline_tp(self, target: str | None = None) -> dict:
+        """Decline a pending incoming teleport lure (by name/UUID, or the sole one).
+        → ``{success, error, from}``."""
+        lures = self.teleport_lures()
+        if not lures:
+            return {"success": False, "error": "no pending teleport lures", "from": None}
+        chosen = self._pick_lure(lures, target)
+        if chosen is None:
+            return {"success": False, "error": f"no pending lure from '{target}'",
+                    "from": [l["name"] for l in lures]}
+        r = self.cmd("replytoteleportlure", action="decline", agent=chosen["uuid"])
+        return {"success": r.get("success") in (True, "True"),
+                "error": r.get("error"), "from": chosen["name"]}
+
     # ---- session / presence: log in and out of the grid at will ------------- #
     # Corrade is a running TOOL, not the presence layer (AutoConnect off): the grid
     # SESSION is ours to open and close. `login`/`logout` are native Corrade commands
@@ -1010,6 +1629,126 @@ class SL:
                 pass
             time.sleep(poll)
         return False
+
+    def tp(self, position, *, region: str | None = None, fly: bool = False,
+           timeout: float = 60.0) -> dict:
+        """Teleport to x,y,z — by default within my CURRENT region (a same-sim warp).
+        The fast way to close distance: ``position`` = ``"<x, y, z>"`` | ``"x, y, z"``
+        | ``(x, y, z)``. Self-movement only, no gate. Pass ``region=`` to hop sims.
+        → ``{success, arrived, where, error}`` (``arrived`` = confirmed within 6 m;
+        a bare ``success`` with ``arrived=False`` means SL accepted it but routing
+        landed us a touch off — not a failure)."""
+        region = region or self.region()
+        if not region:
+            return {"success": False, "arrived": False, "where": None,
+                    "error": "not in-world (no current region)"}
+        pos = _fmt_pos(position)
+        r = self.cmd("teleport", entity="region", region=region, position=pos,
+                     fly="True" if fly else "False")
+        if r.get("success") not in (True, "True"):
+            return {"success": False, "arrived": False, "where": None,
+                    "error": r.get("error") or "teleport not accepted"}
+        target = _vec(pos)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(2.0)
+            here = self.where().get("position")
+            if here and target and _dist(here, target) <= 6.0:
+                return {"success": True, "arrived": True, "where": self.where(),
+                        "error": None}
+        return {"success": True, "arrived": False, "where": self.where(),
+                "error": "teleport accepted; arrival within 6 m not confirmed"}
+
+    def tp_to(self, target: str, *, timeout: float = 60.0) -> dict:
+        """Teleport to where an avatar is standing in this region — the "tp to Jeff,
+        THEN sit" move. Locates ``target`` (name substring or UUID) region-wide via
+        the position radar, then :meth:`tp` there. → ``{success, arrived, target,
+        where, error}``."""
+        pos = self._avatar_pos(target)
+        if not pos:
+            return {"success": False, "arrived": False, "target": target,
+                    "where": None, "error": f"couldn't locate '{target}' in region"}
+        res = self.tp(pos, timeout=timeout)
+        res["target"] = target
+        return res
+
+    def go(self, place: str, *, timeout: float = 60.0) -> dict:
+        """Teleport to a named PLACE — go somewhere, not to numbers. ``place`` is
+        a name from ``haven/anchorage/locations.json`` (fuzzy, case-insensitive:
+        ``"pool"``, ``"upper"``, ``"guest bed"``) OR a SLURL pasted straight from
+        the SL viewer/map (``secondlife://…`` or ``https://maps.secondlife.com/…``).
+        Honors each place's ``region``, so it reaches OUT of the current sim when
+        the place lives elsewhere. → ``{success, arrived, name, region, where,
+        error}``.  For raw coordinates use :meth:`tp`; to go to a person use
+        :meth:`tp_to`."""
+        slurl = _parse_slurl(place)
+        if slurl:
+            wp = slurl
+        else:
+            wp = _resolve_waypoint(place)
+            if not wp:
+                names = ", ".join(w.get("name", "") for w in _load_waypoints())
+                return {"success": False, "arrived": False, "name": place,
+                        "region": None, "where": None,
+                        "error": f"unknown place {place!r}. Known: {names or '(none)'}"}
+        res = self.tp(tuple(wp["pos"]), region=wp.get("region"), timeout=timeout)
+        res["name"] = wp.get("name", place)
+        res["region"] = wp.get("region")
+        return res
+
+    def places(self) -> list[dict]:
+        """List the named places I can :meth:`go` to → the rows from
+        ``locations.json`` (name, region, pos, aliases). The 'where can I go?'
+        query — call it before :meth:`go` when unsure of a name."""
+        return _load_waypoints()
+
+    @staticmethod
+    def read_gyazo(url: str, *, timeout: float = 15.0) -> dict:
+        """Fetch a shared Gyazo image → a local file path I can actually view.
+
+        Gyazo is the de-facto way images get shared in SL. The **gotcha** (hit
+        live by both of us, 2026-08-25): the ``gyazo.com/<id>`` *page* URL is
+        HTML — feeding it to image handling throws ``400 Could not process
+        image``. The raw image lives at ``i.gyazo.com/<id>.<ext>``. So this
+        strips whatever shape it's given down to the id and fetches the DIRECT
+        image, trying ``jpg → png → gif`` (Gyazo doesn't tell you which up
+        front). Saves under ``haven/data/gyazo/`` and returns
+        ``{success, path, url, id, bytes}`` (or ``{success:False, error}``).
+        Foundation for the perception auto-prefetch (issue #302)."""
+        gid = _gyazo_id(url)
+        if not gid:
+            return {"success": False, "error": f"no gyazo id found in {url!r}"}
+        cache = _DATA_DIR / "gyazo"
+        cache.mkdir(parents=True, exist_ok=True)
+        last_err: str | None = None
+        for ext in ("jpg", "png", "gif"):
+            direct = f"https://i.gyazo.com/{gid}.{ext}"
+            try:
+                req = _URLRequest(direct, headers={"User-Agent": "anchorage-sl/1.0"})
+                with urlopen(req, timeout=timeout) as resp:
+                    status = getattr(resp, "status", 200)
+                    ctype = resp.headers.get("Content-Type", "")
+                    if status != 200:
+                        last_err = f".{ext}: HTTP {status}"
+                        continue
+                    if "image" not in ctype.lower():
+                        # a 200 that isn't an image (e.g. an HTML error page) —
+                        # exactly the trap the direct-URL rule avoids; skip it.
+                        last_err = f".{ext}: non-image content-type {ctype!r}"
+                        continue
+                    data = resp.read()
+                out = cache / f"{gid}.{ext}"
+                out.write_bytes(data)
+                return {"success": True, "path": str(out), "url": direct,
+                        "id": gid, "bytes": len(data)}
+            except _URLError as e:
+                last_err = f".{ext}: {getattr(e, 'reason', e)}"
+                continue
+            except OSError as e:  # write/socket trouble
+                last_err = f".{ext}: {e}"
+                continue
+        return {"success": False, "id": gid,
+                "error": last_err or "no image found (tried jpg/png/gif)"}
 
     def go_home(self, *, timeout: float = 60.0) -> dict:
         """Teleport to the home sim (HOME_REGION/HOME_POSITION). The safety default
@@ -1149,6 +1888,144 @@ def _dist(a, b) -> float:
     return math.dist(a, b) if a and b else float("inf")
 
 
+def _as_vec(s) -> tuple[float, float, float] | None:
+    """Is this arg coordinate-shaped? Accepts ``<x,y,z>``, ``x, y, z``, or a
+    3-tuple/list → returns the (x,y,z) tuple; a plain name like ``"kitchen"``
+    returns None (so :meth:`SL.tp` knows to treat it as a named waypoint)."""
+    if isinstance(s, (tuple, list)):
+        try:
+            return tuple(float(x) for x in s)[:3] if len(s) >= 3 else None
+        except (TypeError, ValueError):
+            return None
+    parts = [p.replace("+", "").strip()
+             for p in str(s).strip().strip("<>").split(",")]
+    if len(parts) < 3:
+        return None
+    try:
+        return tuple(float(p) for p in parts)[:3]
+    except ValueError:
+        return None
+
+
+def _norm_wp(s: str) -> str:
+    """Normalize a place name for matching: lowercase, collapse whitespace."""
+    return re.sub(r"\s+", " ", str(s).strip().lower())
+
+
+def _parse_slurl(s: str) -> dict | None:
+    """Parse a Second Life map URL into a place dict. Accepts the viewer form
+    ``secondlife://Region Name/x/y/z`` and the web forms
+    ``https://maps.secondlife.com/secondlife/Region%20Name/x/y/z`` and
+    ``slurl.com/secondlife/...``. → ``{"name","region","pos":[x,y,z]}`` or
+    None if it isn't a SLURL. Region is URL-decoded ('The%20Anchorage' → 'The
+    Anchorage'); a missing z defaults to 0. Lets you paste a SLURL copied
+    straight from the SL viewer/map instead of transcribing coordinates."""
+    t = str(s).strip()
+    if t.lower().startswith("secondlife://"):
+        rest = t[len("secondlife://"):]
+    else:
+        m = re.search(r"(?:maps\.secondlife\.com|slurl\.com)/secondlife/(.*)",
+                      t, re.I)
+        if not m:
+            return None
+        rest = m.group(1)
+    parts = [p for p in rest.split("/") if p != ""]
+    if len(parts) < 3:
+        return None
+    region = unquote_plus(parts[0])
+    try:
+        xyz = [float(parts[1]), float(parts[2]),
+               float(parts[3]) if len(parts) >= 4 else 0.0]
+    except ValueError:
+        return None
+    return {"name": region, "region": region,
+            "pos": [int(round(v)) for v in xyz]}
+
+
+_GYAZO_RE = re.compile(r"gyazo\.com/([0-9A-Za-z]+)", re.I)
+
+
+def _gyazo_id(url: str) -> str | None:
+    """Extract the Gyazo image id from any of its URL shapes → the bare id.
+
+    Handles the page form ``https://gyazo.com/<id>``, the direct-image form
+    ``https://i.gyazo.com/<id>.png``, and an already-bare id. Returns None if
+    nothing id-shaped is present. (The regex stops at the extension dot, so the
+    direct form yields the id without ``.png``.)"""
+    if not url:
+        return None
+    m = _GYAZO_RE.search(url)
+    if m:
+        return m.group(1)
+    tail = url.strip().rstrip("/").split("/")[-1].split("?")[0]
+    tail = re.sub(r"\.(png|jpe?g|gif)$", "", tail, flags=re.I)
+    return tail or None
+
+
+_WP_CACHE: dict | None = None
+
+
+def _load_waypoints() -> list[dict]:
+    """Named places from ``locations.json`` beside this script → a list of
+    ``{name, region, pos, aliases}`` rows. Tolerant of both the rich schema
+    (``{"places": [...]}``) and the legacy flat form
+    (``{"locations": {name: [x,y,z]}}`` with ``_region`` as the default sim).
+    Cached; call :func:`_reload_waypoints` after editing the file. Missing or
+    broken file → ``[]`` (never raises)."""
+    global _WP_CACHE
+    if _WP_CACHE is None:
+        path = Path(__file__).resolve().parent / "locations.json"
+        try:
+            _WP_CACHE = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _WP_CACHE = {}
+    data = _WP_CACHE if isinstance(_WP_CACHE, dict) else {}
+    if isinstance(data.get("places"), list):
+        return list(data["places"])
+    # legacy flat {"locations": {name: [x,y,z]}} → normalize to rich rows
+    default_region = data.get("_region", "The Anchorage")
+    return [{"name": name, "region": default_region,
+             "pos": list(pos), "aliases": []}
+            for name, pos in (data.get("locations") or {}).items()]
+
+
+def _reload_waypoints() -> list[dict]:
+    """Drop the cache and re-read ``locations.json`` (after an edit)."""
+    global _WP_CACHE
+    _WP_CACHE = None
+    return _load_waypoints()
+
+
+def _resolve_waypoint(name: str) -> dict | None:
+    """Resolve a spoken destination name to a place row. Exact (name or alias)
+    match wins; otherwise a UNIQUE substring match; ambiguous or no match →
+    None. Case/space-insensitive."""
+    wps = _load_waypoints()
+    q = _norm_wp(name)
+    # exact on canonical name or any alias
+    for w in wps:
+        if q == _norm_wp(w.get("name", "")):
+            return w
+        if any(q == _norm_wp(a) for a in w.get("aliases", [])):
+            return w
+    # unique substring (query inside a name/alias, or a name/alias inside query)
+    hits = []
+    for w in wps:
+        cands = [w.get("name", "")] + list(w.get("aliases", []))
+        if any(q in _norm_wp(c) or _norm_wp(c) in q for c in cands if c):
+            hits.append(w)
+    return hits[0] if len(hits) == 1 else None
+
+
+def _fmt_pos(p) -> str:
+    """Normalize a position arg to Corrade's ``<x, y, z>`` string. Accepts a vector
+    string (``<x, y, z>`` or ``x, y, z``) or a 3-tuple/list."""
+    if isinstance(p, (tuple, list)):
+        return f"<{p[0]}, {p[1]}, {p[2]}>"
+    s = str(p).strip()
+    return s if s.startswith("<") else f"<{s}>"
+
+
 def _shells(max_range: float) -> tuple[float, ...]:
     """Expanding search radii for the FIND path, always ending exactly at
     max_range. e.g. 25 → (5,10,20,25); 45 → (5,10,20,35,45); 12 → (5,10,12)."""
@@ -1206,9 +2083,13 @@ SIGHT (perception is lossy on purpose — inhabited readings, not packets)
     #   scripted=True keeps only scripted prims (furniture/poseballs/interactive) —
     #   the cheap 'interesting' filter; drops rain-roofs & invisible lights for free.
     me.heard(10)               # recent local chat I overheard (needs me.listen())
+    me.ims(20)                 # recent private IMs received (needs me.listen() — default)
+    me.read_gyazo("https://gyazo.com/<id>")   # fetch a shared Gyazo image → local path to view
 
 ACTION (targets accept a UUID, a name, or "nearest <word>")
     me.say("hello, love")      # speak in local chat, my own voice
+    me.im("hey, come over!", "Damian Vyper")  # send a private IM to an avatar by name
+    me.im("see you soon", agent_uuid)         #   or by UUID (no name-lookup cost)
     me.touch("calling post")   # touch an object (opens menus / fires perms)
 
 SITTING — one verb, three social shapes (stands first if already seated)
@@ -1238,13 +2119,87 @@ SESSION / PRESENCE (Corrade is a running TOOL; being in-world is MY act)
     me.logout()                # leave the grid; STAYS out (nothing maintains presence)
     me.relog()                 # logout→login — the common in-world fix for stuck state
     me.go_home()               # teleport to the home sim (The Anchorage)
+    me.places()                # where can I go? → named places from locations.json
+    me.go("pool deck")         # go to a named PLACE (fuzzy: "upper"→"upper deck"); lists on miss
+    me.go("https://maps.secondlife.com/secondlife/The%20Anchorage/186/202/28")  # or paste a SLURL
+    #   go() honors each place's region → reaches OUT of sim too. Places, not numbers.
+    me.tp("128, 128, 25")      # same-sim warp to raw x,y,z in my CURRENT region (fast reposition)
+    me.tp_to("Jeff")           # warp to where Jeff's standing — then me.sit(...) etc. from close
     me.warmup()                # force lazy scene-load: camera-sweep 4 ways + poll ready
     me.region() ; me.at_home() # current sim / am I home?
     # SAFETY: login auto-teleports home if it lands elsewhere — we stay in-sim for now.
     # login/logout need the group's `system` perm; warmup needs only grooming/movement.
 
+REACH BEYOND THE ROOM — friends, names, teleport (all take a UUID or "First Last")
+    me.friends()               # my friends list → [{name, uuid}]  (needs `friendship` perm)
+    me.display_name("Damian Vyper")   # the chosen display name, not the username
+    me.offer_tp("Jeff Resident")      # send someone a teleport lure to ME (they choose)
+    me.teleport_lures()               # pending INCOMING lures offered to me → [{name,uuid}]
+    me.accept_tp()             # accept the sole pending lure — FRIENDS-ONLY by default;
+    me.accept_tp("Jeff", force=True)  #   accept a specific/stranger lure deliberately
+    me.decline_tp()            # decline the sole pending lure (or name/UUID one)
+    #   accept_tp RELOCATES me → gated like grant(); teleport verbs need `movement` perm.
+    #   BETA: accept/decline lure-identifier param confirmed live-pending (see docstring).
+
+WARDROBE — review & change what I'm wearing (outfit folders of links)
+    me.wearing()               # what I have on now: {wearables:[{type,name}], attachments}
+    me.outfits()               # my saved outfits = sub-folders of "# Outfits"
+    me.wear_outfit("Blue bikini")            # "wear the damned bikini" — one call, no hunting
+    me.wear_outfit("Sarong", replace=False)  # ADD over what I'm wearing (RLV folder-add style)
+    me.remove_outfit("Sarong")               # take that outfit's items back off
+    me.make_outfit("Blue bikini", [          # build an outfit from MP-unpacked pieces (links):
+        "/My Inventory/Objects/Larax Naomi/... Bikini Top (Reborn)",
+        "/My Inventory/Objects/Larax Naomi/... Bikini Bottom (Reborn)"])
+    me.unwear(["/My Inventory/Clothing/... tattoo"])   # unwear system layers by path
+    #   THE SCHEME: "# Outfits/<name>" holds LINKS to the correct body-type pieces, so
+    #   the messy multi-body MP unpack is resolved ONCE (make_outfit) and thereafter
+    #   "wear_outfit" just works. RLV outfit folders use this exact shape → free later.
+
+INVENTORY — browse, find, take-a-copy, rez (Corrade inventory is UNIX-like)
+    me.ls()                    # list my current inventory folder → [{name,uuid,type,perms,time}]
+    me.cd("/My Inventory/Objects"); me.ls()    # move the folder pointer, then list
+    me.find_item("halo")       # regex-search my whole inventory → [{type,name,uuid}]
+    me.item_path("halo")       # full inventory path(s) for matches (attach() wants a path)
+    me.worn_paths()            # worn attachments → [{point, path}] (which one IS my halo?)
+    me.take_copy("Lyra Halo v2")   # TAKE A COPY of a nearby world object → my Objects folder
+                                   #   (derez TakeCopy: original stays; needs copy perm)
+    me.rez("/My Inventory/Objects/Lyra Halo v2")   # rez an inventory object into the world
+    #   take_copy REFUSES destructive derez (Take/Delete) unless force=True — skeptical spine.
+
+RECIPE — swap my halo for a new one Jeff points out (the workflow, end to end)
+    new = me.take_copy("<the object Jeff named>")   # 1. copy it into my Objects folder
+    path = me.item_path("<its name>")[0]            # 2. find it in inventory (full path)
+    old  = me.worn_paths()                          # 3. see what my current halo is + its point
+    me.detach("<current halo>", kind="path")        # 4. remove the old halo
+    me.attach(path, point="<same point>")           # 5. attach the new one at that point
+    #   (all five links exist to beta; live-shakedown together — take_copy needs copy perms,
+    #    and the exact attach point / any positioning is confirmed in-world.)
+
+INVENTORY MANAGEMENT — atomic primitives (compose for anything; safety-tiered)
+    me.item_data(path)         # read one item's fields (InventoryType, AssetType, …)
+    me.ensure_folder("/My Inventory/# Outfits/Larax Naomi Bikini - Black")  # mkdir each level
+    me.link(src_path, folder)  # ln — put a LINK in a folder (never risks the real item)
+    me.copy(src, target); me.move(src, target); me.rename(path, "New Name")
+    me.remove(path, confirm=True)      # → Trash (RECOVERABLE); gated. Link-remove ≠ garment-delete.
+    me.empty_trash(confirm=True)       # PERMANENT; hard-gated
+    me.body()                  # which mesh body am I? → {tag:"Larax Naomi", candidates, worn}
+    # Outfit maintenance (all link-level → garments are NEVER at risk):
+    me.outfit_add("Larax Naomi Bikini - Black", [top_path, bottom_path])
+    me.outfit_remove_piece("...", "the link name", confirm=True)
+    me.rename_outfit("old", "new");  me.delete_outfit("...", confirm=True)
+
+RECIPE — "make an outfit for the bikini (black) and the sarong (teal)" (from what I'm wearing)
+    tag = me.body()["tag"]                       # "Larax Naomi" — body-aware naming
+    worn = me.worn_paths()                       # [{point, path}] of everything I have on
+    bikini = [w["path"] for w in worn if "bikini" in w["path"].lower()]  # the two bikini pieces
+    sarong = [w["path"] for w in worn if "sarong" in w["path"].lower()]
+    me.make_outfit(f"{tag} Bikini - Black", bikini)   # → # Outfits/Larax Naomi Bikini - Black
+    me.make_outfit(f"{tag} Sarong - Teal",  sarong)   # links to the CORRECT body-type pieces
+    #   Naming by BODY ("Larax Naomi …") because bodies change over time (cf. Brandi's 1+2).
+    #   If a match is ambiguous, list candidates and CONFIRM rather than link the wrong piece.
+
 THE PERMISSION CHANNEL — always watch it, skeptically
-    me.listen()                # start receiving notifications (local/dialog/permission)
+    me.listen()                # start receiving notifications (local/message/dialog/permission)
     me.pending_permissions()   # requests seen so far — REVIEW before granting
     me.grant(req)              # grants benign perms (TriggerAnimation...) only;
                                # REFUSES Debit/TakeControls/Attach unless force=True
@@ -1298,6 +2253,9 @@ CLI
     python3 sl.py logout                        # log out — leave the grid
     python3 sl.py relog                         # logout→login (fix stuck state)
     python3 sl.py home                          # teleport to The Anchorage
+    python3 sl.py places                         # list named places I can `go` to
+    python3 sl.py go "pool deck"                 # go to a named place (or paste a SLURL)
+    python3 sl.py read_gyazo "<gyazo url>"       # fetch a shared Gyazo image → local path
     python3 sl.py warmup                        # force lazy scene-load (no session change)
     python3 sl.py attach "<inventory path>" [point]   # re-attach a prim in one line
     python3 sl.py detach "<item>"               # take it off
@@ -1375,6 +2333,27 @@ def _cli(argv: list[str]) -> int:
             print(me.go_home())
         else:
             print(me.warmup())
+        return 0
+
+    if verb in ("go", "places"):
+        me = connect()
+        if verb == "places":
+            for w in me.places():
+                al = f"  (aka {', '.join(w.get('aliases', []))})" if w.get("aliases") else ""
+                print(f"  {w.get('name',''):26} {w.get('region','')} {w.get('pos')}{al}")
+            return 0
+        if len(argv) < 2:
+            print("usage: sl.py go \"<place name or SLURL>\"")
+            return 2
+        print(me.go(" ".join(argv[1:])))
+        return 0
+
+    if verb in ("read_gyazo", "gyazo"):
+        if len(argv) < 2:
+            print("usage: sl.py read_gyazo \"<gyazo url or id>\"")
+            return 2
+        # image-fetch is connection-independent (pure HTTP) — no connect()/creds.
+        print(SL.read_gyazo(argv[1]))
         return 0
 
     if verb in ("attach", "detach", "attachments", "say"):
