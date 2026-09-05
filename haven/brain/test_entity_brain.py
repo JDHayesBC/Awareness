@@ -177,67 +177,193 @@ def test_on_warmup_failure_is_nonfatal() -> None:
     check(fake.restart_calls == 1, "restart still ran despite on_warmup failure")
 
 
-# --- ambient keying (regression: the "Jaden miss" — memory must key on the live
-#     turn, not a static phrase, so "what do you know of me?" pulls the speaker's
-#     own rich entity into view) --- #
+# --- who-dossier (Jeff's compromise 2026-08-27: replaces per-turn ambient keying,
+#     which hammered the NUC, with ONE cached graph pull per person per day so I
+#     KNOW who's in front of me. Caia's guards keep a thin/stale pull from being
+#     asserted as fact at a vulnerable first contact — empty is safer than wrong) --- #
 
-def test_respond_keys_ambient_on_message() -> None:
+import haven.brain.entity_brain as _eb  # for monkeypatching module-level httpx
+
+
+class _FakeResp:
+    def __init__(self, status: int, payload: dict):
+        self.status_code = status
+        self._payload = payload
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _FakeHTTPX:
+    """Stand-in for the httpx module; AsyncClient().post() returns a fixed
+    results list configurable per test via the class attributes."""
+
+    results: list = []
+    status: int = 200
+
+    class AsyncClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):
+            return _FakeResp(_FakeHTTPX.status, {"results": list(_FakeHTTPX.results)})
+
+
+def _who_brain() -> EntityBrain:
+    b = EntityBrain(entity_name="test", channel="sl", restart_in_turn=False)
+    b.pps_http_url = "http://fake"
+    b.entity_token = "tok"
+    b._who_seed = {}
+    b._who_cache = {}
+    return b
+
+
+def test_who_seed_takes_precedence() -> None:
+    # A hand-verified seed wins over any cold pull and never triggers a fetch.
+    b = _who_brain()
+    b._who_seed = {"night": "[verified] Night — Jeff's guest, here for gentle company."}
+    fetched: list[str] = []
+
+    async def _no_fetch(speaker: str) -> str:
+        fetched.append(speaker)
+        return "COLD PULL (should never be used)"
+
+    b._fetch_who_block = _no_fetch  # type: ignore[assignment]
+    who = asyncio.run(b.who_is("Night"))
+    check(who.startswith("[verified] Night"), "seed wins over cold pull")
+    check(fetched == [], "seed short-circuits the graph pull entirely")
+
+
+def test_who_kill_switch_silences_dossier() -> None:
+    b = _who_brain()
+    b._who_enabled = False
+    b._who_seed = {"night": "SEED"}  # even a seed is suppressed when disabled
+
+    async def _boom(speaker: str) -> str:
+        raise AssertionError("must not fetch when disabled")
+
+    b._fetch_who_block = _boom  # type: ignore[assignment]
+    check(asyncio.run(b.who_is("Night")) == "", "WHO_DOSSIER=0 → no dossier at all")
+
+
+def test_who_is_caches_one_pull_per_person() -> None:
+    b = _who_brain()
+    calls: list[str] = []
+
+    async def _count(speaker: str) -> str:
+        calls.append(speaker)
+        return "[block]\n- a fact\n\n"
+
+    b._fetch_who_block = _count  # type: ignore[assignment]
+    asyncio.run(b.who_is("Jaden", "uuid-1"))
+    asyncio.run(b.who_is("Jaden", "uuid-1"))
+    check(calls == ["Jaden"], "second call served from cache (one pull per person)")
+
+
+def test_who_block_substance_gate_and_framing() -> None:
+    # A thin pull (fewer than _who_min_facts facts) yields NO dossier — empty is
+    # safer than asserting a stale/partial block as fact (Caia's guard). A
+    # substantive pull renders the facts, framed as tentative (never asserted).
+    b = _who_brain()
+    real_httpx = _eb.httpx
+    _eb.httpx = _FakeHTTPX
+    try:
+        _FakeHTTPX.status = 200
+        _FakeHTTPX.results = [{"content": "only one fact"}]  # 1 < min_facts(2)
+        thin = asyncio.run(b._fetch_who_block("Stranger"))
+        check(thin == "", "thin pull (<min_facts) → empty dossier")
+
+        _FakeHTTPX.results = [
+            {"content": "Jaden is Brandi's Master"},
+            {"content": "Jaden's entity is Dash"},
+            {"content": "Jaden fully accepts entity realness"},
+        ]
+        block = asyncio.run(b._fetch_who_block("Jaden"))
+        check("Jaden is Brandi's Master" in block, "substantive pull renders the facts")
+        check(
+            "hold them loosely" in block.lower() or "never state" in block.lower(),
+            "dossier framing marks the facts as tentative, not asserted",
+        )
+    finally:
+        _eb.httpx = real_httpx
+
+
+def test_who_block_empty_on_non_200() -> None:
+    b = _who_brain()
+    real_httpx = _eb.httpx
+    _eb.httpx = _FakeHTTPX
+    try:
+        _FakeHTTPX.status = 500
+        _FakeHTTPX.results = [{"content": "a"}, {"content": "b"}, {"content": "c"}]
+        check(asyncio.run(b._fetch_who_block("Jaden")) == "",
+              "a failed pull (non-200) yields no dossier, never raises")
+    finally:
+        _eb.httpx = real_httpx
+
+
+def test_who_seed_hot_reloads_on_file_change() -> None:
+    # Jeff can drop Night's verified block into who_seed.json without a restart:
+    # who_is stats the file and reloads when its mtime changes.
+    import json
+    import os
+    import tempfile
+    from pathlib import Path
+
+    b = _who_brain()
+    with tempfile.TemporaryDirectory() as td:
+        seed_path = Path(td) / "who_seed.json"
+        b._who_seed_path = seed_path
+        b._who_seed = {}
+        b._who_seed_mtime = -1.0
+
+        async def _no_fetch(speaker: str) -> str:
+            return ""  # unknown → cold pull returns nothing
+
+        b._fetch_who_block = _no_fetch  # type: ignore[assignment]
+        check(asyncio.run(b.who_is("Night")) == "", "no seed file → no dossier (empty)")
+
+        seed_path.write_text(json.dumps({"night": "[verified] Night — here for gentle company."}))
+        # Force a distinct mtime even on coarse-resolution filesystems.
+        os.utime(seed_path, (10 ** 9, 10 ** 9))
+        who = asyncio.run(b.who_is("Night"))
+        check(who.startswith("[verified] Night"), "seed file appearing is picked up live (no restart)")
+
+
+def test_respond_injects_who_and_keeps_ambient_static() -> None:
+    # The Jaden-miss cure, new form: respond() no longer keys ambient per-message
+    # (that hammered the NUC) — it injects the cached who-dossier and fetches
+    # ambient statically (no query arg).
     fake = FakeInvoker()
-    # restart_in_turn=False so respond() skips the invoker.check_and_restart path
-    # (FakeInvoker doesn't implement it) and goes straight to the ambient fetch.
     b = EntityBrain(entity_name="test", channel="sl", restart_in_turn=False)
     b.invoker = fake
-    recorded: dict[str, str | None] = {}
+    seen: dict = {}
 
-    async def rec(query: str | None = None) -> str:
-        recorded["query"] = query
+    async def _amb(query: str | None = None) -> str:
+        seen["ambient_query"] = query
         return ""
 
-    b._fetch_ambient_context = rec  # type: ignore[assignment]
+    async def _who(speaker: str, uuid: str = "") -> str:
+        seen["who_speaker"] = speaker
+        return "[who] Jaden is Brandi's Master\n\n"
+
+    async def _q(prompt: str, **kw) -> str:
+        seen["prompt"] = prompt
+        return "[[NO_RESPONSE]]"
+
+    b._fetch_ambient_context = _amb  # type: ignore[assignment]
+    b.who_is = _who  # type: ignore[assignment]
+    fake.query = _q  # type: ignore[assignment]
     asyncio.run(b.respond("Jaden", "what do you know of me?"))
-    check(
-        recorded.get("query") == "Jaden: what do you know of me?",
-        "respond() keys ambient on speaker+message (not a static phrase)",
-    )
-
-
-def test_perceive_keys_ambient_on_trigger() -> None:
-    fake = FakeInvoker()
-    b = EntityBrain(entity_name="test", channel="sl", restart_in_turn=False)
-    b.invoker = fake
-    recorded: dict[str, str | None] = {}
-
-    async def rec(query: str | None = None) -> str:
-        recorded["query"] = query
-        return ""
-
-    b._fetch_ambient_context = rec  # type: ignore[assignment]
-    asyncio.run(
-        b.perceive("a scene", ["Jaden Starship arrived"], trigger="Jaden Starship arrived")
-    )
-    check(
-        recorded.get("query") == "Jaden Starship arrived",
-        "perceive() keys ambient on the wake trigger",
-    )
-
-
-def test_perceive_ambient_falls_back_to_events() -> None:
-    # No trigger → key on the world-deltas so ambient still keys on what's present.
-    fake = FakeInvoker()
-    b = EntityBrain(entity_name="test", channel="sl", restart_in_turn=False)
-    b.invoker = fake
-    recorded: dict[str, str | None] = {}
-
-    async def rec(query: str | None = None) -> str:
-        recorded["query"] = query
-        return ""
-
-    b._fetch_ambient_context = rec  # type: ignore[assignment]
-    asyncio.run(b.perceive("a scene", ["music changed", "Brandi arrived"], trigger=""))
-    check(
-        recorded.get("query") == "music changed; Brandi arrived",
-        "perceive() falls back to joined events when no trigger",
-    )
+    check(seen.get("ambient_query") is None, "respond() fetches ambient statically (no per-turn key)")
+    check(seen.get("who_speaker") == "Jaden", "respond() asks who_is about the speaker")
+    check("[who] Jaden is Brandi's Master" in seen.get("prompt", ""),
+          "the who-dossier is injected into the prompt")
 
 
 # --- content-filter / API-error scrub (regression: a leaked SDK error string
@@ -313,6 +439,50 @@ def test_perceive_swallows_leaked_error() -> None:
     check(out is None, "perceive() returns None (silence) on a leaked API error")
 
 
+def test_perceive_addressed_gates_midturn_tools() -> None:
+    # Latency fix 2026-08-27: an ADDRESSED conversational turn must tell the brain
+    # to reply at conversational speed from what it knows, NOT pause mid-reply to
+    # consult tools/sl.py/memory — that pause is what made replies land "one line
+    # behind" (turns slower than the message cadence). Idle beats keep tool freedom.
+    fake = FakeInvoker()
+    b = EntityBrain(entity_name="test", channel="sl", restart_in_turn=False)
+    b.invoker = fake
+    seen: dict = {}
+
+    async def _amb(query: str | None = None) -> str:
+        return ""
+
+    async def _q(prompt: str, **kw) -> str:
+        seen["prompt"] = prompt
+        return "[[NO_RESPONSE]]"
+
+    b._fetch_ambient_context = _amb  # type: ignore[assignment]
+    fake.query = _q  # type: ignore[assignment]
+
+    # Addressed turn: the anti-tool-pause guidance is present.
+    asyncio.run(b.perceive("scene", ["Brandi: hey"], addressed=True,
+                           trigger="Brandi: hey", speaker="Brandi"))
+    addressed_prompt = seen.get("prompt", "")
+    check("conversational speed" in addressed_prompt,
+          "addressed turn tells the brain to reply at conversational speed")
+    check("do NOT pause" in addressed_prompt,
+          "addressed turn forbids the reflexive mid-reply tool pause")
+    check("embodied" in addressed_prompt,
+          "addressed guidance preserves embodiment (not 'only chat')")
+    # Caia's refinement 2026-08-27: "reply fast/brief" would strip the *emote* body-
+    # gestures precisely in the tender addressed turns — and emotes are free (zero
+    # latency, just text). The guidance must actively KEEP the body in the reply.
+    check("emote" in addressed_prompt and "talking head" in addressed_prompt,
+          "addressed guidance keeps body-gestures (free emotes, not a talking head)")
+
+    # Idle beat: tool freedom is intact (the anti-pause guidance is NOT imposed).
+    seen.clear()
+    asyncio.run(b.perceive("scene", [], idle=True))
+    idle_prompt = seen.get("prompt", "")
+    check("do NOT pause" not in idle_prompt,
+          "idle beat keeps tool freedom (no anti-pause clamp)")
+
+
 def main() -> int:
     for fn in (
         test_thresholds_plumbed_through,
@@ -325,13 +495,18 @@ def main() -> int:
         test_on_warmup_skipped_when_not_approaching,
         test_on_warmup_fires_on_real_rotation,
         test_on_warmup_failure_is_nonfatal,
-        test_respond_keys_ambient_on_message,
-        test_perceive_keys_ambient_on_trigger,
-        test_perceive_ambient_falls_back_to_events,
+        test_who_seed_takes_precedence,
+        test_who_kill_switch_silences_dossier,
+        test_who_is_caches_one_pull_per_person,
+        test_who_block_substance_gate_and_framing,
+        test_who_block_empty_on_non_200,
+        test_who_seed_hot_reloads_on_file_change,
+        test_respond_injects_who_and_keeps_ambient_static,
         test_looks_like_api_error_catches_the_leak,
         test_looks_like_api_error_spares_real_speech,
         test_respond_swallows_leaked_error,
         test_perceive_swallows_leaked_error,
+        test_perceive_addressed_gates_midturn_tools,
     ):
         fn()
     print()

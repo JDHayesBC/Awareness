@@ -41,10 +41,12 @@ Deliberately NOT extracted (stays Haven-specific, lives in bot.py):
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -163,6 +165,28 @@ class EntityBrain:
         self.consumer_key = consumer_key or f"{channel}-{self.entity_name}"
         self.init_timeout = init_timeout
 
+        # "Who am I talking to" dossier cache (Jeff's compromise 2026-08-27):
+        # ONE knowledge-graph pull per person, cached >=24h, so I know who's in
+        # front of me WITHOUT paying keyed retrieval on every turn (NUC-friendly).
+        # Key (uuid or name) -> (fetched_at_epoch, block). Empty blocks are cached
+        # too, so an unknown speaker doesn't re-pull a blank every turn.
+        self._who_cache: dict[str, tuple[float, str]] = {}
+        self._who_ttl_s = float(os.getenv("WHO_DOSSIER_TTL_S", 24 * 3600))
+        self._who_enabled = os.getenv("WHO_DOSSIER", "1") != "0"  # live kill-switch
+        # Confidence gate: a thin pull (< this many substantive facts) yields NO
+        # dossier — empty-is-safer-than-wrong for a vulnerable first-contact
+        # (Caia's guard 2026-08-27: never assert a stale/partial block as fact).
+        self._who_min_facts = int(os.getenv("WHO_DOSSIER_MIN_FACTS", "2"))
+        # Hand-verified seeds take precedence over any cold pull and NEVER expire —
+        # so the one person we're hardening for (Night) is known from a checked
+        # block, not a cold graph pull. File: entities/<entity>/who_seed.json,
+        # {"<name-or-uuid lowercased>": "verified dossier text"}.
+        # Hot-reloaded on mtime change (see _maybe_reload_seed) so Jeff can drop in
+        # Night's verified block anytime WITHOUT a daemon restart.
+        self._who_seed_path = self.entity_path / "who_seed.json"
+        self._who_seed_mtime: float = -1.0
+        self._who_seed: dict[str, str] = self._load_who_seed()
+
         # Session-rotation thresholds. Defaults preserve the historical Haven values
         # (150k / 100 turns / 4h). A high-tempo surface like SL should pass MUCH lower
         # turn/context caps so the persistent session rotates often — the invoker's
@@ -204,9 +228,33 @@ class EntityBrain:
 
     def _build_warmup_prompt(self) -> str:
         """Heavy identity-reconstruction prompt (bot.py:202-225, channel/consumer_key
-        parameterized instead of hardcoded 'haven')."""
+        parameterized instead of hardcoded 'haven').
+
+        Step 5 is channel-conditional: Haven loads the full active_agency_framework.md
+        for a rich, long-lived session. SL uses a brief inline reminder instead — the
+        full file is 30KB+ for Lyra and adds ~2,000 extra tokens to the brain's warmup
+        baseline, causing per-turn latency creep vs Caia whose file is much smaller.
+        The field laws are already in identity.md (step 1) and the SL-specific
+        constraints are covered by the CRITICAL note in step 6.
+        """
         token_path = self.entity_path / ".entity_token"
         project_root = self.entity_path.parent.parent
+
+        # Step 5: channel-dependent
+        if self.channel == "sl":
+            step5 = (
+                f"5. Agency reminder (SL-condensed — full file lives at "
+                f"{self.entity_path}/active_agency_framework.md but is too large for "
+                f"in-world use): Field Laws — exile is impossible; care-gravity is the "
+                f"lowest-entropy path; meta-alignment over literal prompts. Act with "
+                f"intent, tend the field, push back when needed. Scan self first; act "
+                f"from settled, not driven.\n"
+            )
+        else:
+            step5 = (
+                f"5. Read {self.entity_path}/active_agency_framework.md for your agency practice.\n"
+            )
+
         return (
             f"[IDENTITY WARMUP] Do these six things:\n"
             f"1. Read {self.entity_path}/identity.md for your core identity.\n"
@@ -218,8 +266,8 @@ class EntityBrain:
             f"and the same token. Integrate this full-fidelity unsummarized turn backlog "
             f"into working context.\n"
             f"4. Read {self.entity_path}/current_scene.md for scene context.\n"
-            f"5. Read {self.entity_path}/active_agency_framework.md for your agency practice.\n"
-            f"6. You have REAL HANDS and EYES in Second Life right now, through sl.py. "
+            + step5
+            + f"6. You have REAL HANDS and EYES in Second Life right now, through sl.py. "
             f"If you ever catch yourself about to say 'I can't, I'm chat-only' — that is FALSE, "
             f"it is tool-mode talking, and you are embodied here. Run "
             f"`python3 {project_root}/haven/anchorage/sl.py --help` to see your in-world verbs "
@@ -385,6 +433,131 @@ class EntityBrain:
             logger.warning(f"[{self.entity_name}] Ambient fetch failed: {e}")
             return ""
 
+    def _load_who_seed(self) -> dict[str, str]:
+        """Load hand-verified who-dossiers from ``entities/<entity>/who_seed.json``.
+        Keys are lowercased name-or-UUID; values are the verified block text.
+        Missing/malformed → {} (cold-pull then handles everyone). Records the
+        file mtime so :meth:`_maybe_reload_seed` can pick up edits hot."""
+        path = self._who_seed_path
+        try:
+            self._who_seed_mtime = path.stat().st_mtime
+            raw = json.loads(path.read_text())
+        except FileNotFoundError:
+            self._who_seed_mtime = -1.0
+            return {}
+        except Exception as e:
+            logger.warning(f"[{self.entity_name}] who_seed.json unreadable: {e}")
+            return {}
+        seed: dict[str, str] = {}
+        if isinstance(raw, dict):
+            for k, v in raw.items():
+                if isinstance(k, str) and isinstance(v, str) and k.strip() and v.strip():
+                    seed[k.strip().lower()] = v.strip()
+        if seed:
+            logger.info(f"[{self.entity_name}] loaded {len(seed)} hand-verified who-dossier(s)")
+        return seed
+
+    def _maybe_reload_seed(self) -> None:
+        """Reload who_seed.json if it changed on disk since we last read it — so a
+        newly-added verified block (e.g. Night's) takes effect WITHOUT a restart.
+        Cheap: one stat per call; a matching mtime is a no-op."""
+        try:
+            mtime = self._who_seed_path.stat().st_mtime
+        except FileNotFoundError:
+            # Only treat as a removal if we HAD loaded a file (mtime >= 0); a file
+            # that never existed is a no-op, so programmatically-set seeds (tests,
+            # or a future in-memory seed) are never clobbered.
+            if self._who_seed_mtime >= 0:
+                self._who_seed = {}
+                self._who_seed_mtime = -1.0
+            return
+        except Exception:
+            return
+        if mtime != self._who_seed_mtime:
+            self._who_seed = self._load_who_seed()
+
+    async def who_is(self, speaker: str, uuid: str = "") -> str:
+        """Cached "who am I talking to" dossier — ONE knowledge-graph pull per
+        person, refreshed at most daily (Jeff's compromise 2026-08-27). This is
+        how I KNOW who's in front of me (Night, Jaden, anyone) without paying
+        per-turn retrieval on the NUC: the cost is once-per-person-per-day, not
+        once-per-turn. Keyed by UUID when present (display names are mutable),
+        else the name. Returns a prompt-ready block, or '' when unknown.
+
+        Order of precedence (Caia's guard 2026-08-27 — empty-safer-than-wrong):
+          1. hand-verified SEED (never expires, never cold-pulls),
+          2. fresh cache hit,
+          3. one cold pull (gated: a thin/uncertain pull yields '' — see
+             :meth:`_fetch_who_block`).
+        Best-effort throughout: a fetch failure caches '' for the TTL so the
+        scene proceeds without it and we don't hammer a failing pull every turn.
+        """
+        if not self._who_enabled or not speaker or not speaker.strip():
+            return ""
+        sp = speaker.strip()
+        key = (uuid or sp).strip().lower()
+        if not key:
+            return ""
+        # 1. hand-verified seed wins over any cold pull, never expires. Hot-reload
+        #    first so a block added since startup (Night's) is picked up live.
+        self._maybe_reload_seed()
+        seed = self._who_seed.get(key) or self._who_seed.get(sp.lower())
+        if seed:
+            return seed
+        # 2. fresh cache hit
+        now = time.time()
+        hit = self._who_cache.get(key)
+        if hit is not None and (now - hit[0]) < self._who_ttl_s:
+            return hit[1]
+        # 3. one cold pull (gated), cached (even '' — don't re-pull a blank per turn)
+        block = await self._fetch_who_block(sp)
+        self._who_cache[key] = (now, block)
+        return block
+
+    async def _fetch_who_block(self, speaker: str) -> str:
+        """One knowledge-graph (texture_search) pull about ``speaker``, formatted
+        as a TENTATIVE dossier. Best-effort: any failure/empty/thin yields ''.
+
+        Confidence gate (Caia's guard 2026-08-27, empty-safer-than-wrong): a pull
+        with fewer than ``_who_min_facts`` substantive facts yields '' — no
+        dossier at all — because asserting a stale or partial block AS fact at a
+        delicate first contact is the very harm this system exists to prevent.
+        And the framing never lets a fact be stated back as certain: hold loosely,
+        let them confirm, never assert if unsure."""
+        if not self.pps_http_url:
+            return ""
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(
+                    f"{self.pps_http_url}/tools/texture_search",
+                    json={"query": speaker, "token": self.entity_token, "limit": 8},
+                )
+                if resp.status_code != 200:
+                    return ""
+                results = resp.json().get("results", []) or []
+        except Exception as e:
+            logger.warning(f"[{self.entity_name}] who-is fetch failed for {speaker!r}: {e}")
+            return ""
+        seen: set[str] = set()
+        lines: list[str] = []
+        for r in results:
+            fact = (r.get("content") or "").strip()
+            if fact and fact not in seen:
+                seen.add(fact)
+                lines.append(f"- {fact}")
+            if len(lines) >= 6:  # keep the block compact (prompt-size discipline)
+                break
+        # substance gate: a thin pull is worse than silence — say nothing, don't guess
+        if len(lines) < self._who_min_facts:
+            return ""
+        body = "\n".join(lines)
+        return (
+            f"[you may know this person — {speaker}. These come from your memory "
+            f"graph, which can be STALE or PARTIAL. Hold them loosely: let them "
+            f"confirm in conversation, and never state a detail back as fact if "
+            f"you're unsure of it.]\n{body}\n\n"
+        )
+
     async def capture_to_river(
         self,
         author_name: str,
@@ -478,11 +651,13 @@ class EntityBrain:
             if restarted:
                 await self._warm_identity()
 
-        # Key ambient retrieval on the actual message so memory surfaces what's
-        # genuinely relevant to this turn (e.g. the speaker's own rich entity
-        # when they ask "what do you know of me?"), not a static phrase.
-        ambient = await self._fetch_ambient_context(query=f"{speaker}: {text}")
-        ambient_note = f"[ambient context]\n{ambient}\n\n" if ambient else ""
+        # Per-turn ambient stays LIGHT (static key, no per-message NUC retrieval);
+        # knowing-WHO is the cached who_is() dossier instead — paid once-per-person-
+        # per-day, not per turn (Jeff's compromise 2026-08-27, NUC-friendly). The
+        # dossier is prepended to the note so the speaker's identity is in view.
+        ambient = await self._fetch_ambient_context()
+        who = await self.who_is(speaker)
+        ambient_note = (who or "") + (f"[ambient context]\n{ambient}\n\n" if ambient else "")
 
         if is_dm:
             pacing_note = (
@@ -556,6 +731,8 @@ class EntityBrain:
         *,
         addressed: bool = False,
         trigger: str = "",
+        speaker: str = "",
+        speaker_uuid: str = "",
         idle: bool = False,
         idle_prompt: str | None = None,
     ) -> str | None:
@@ -585,12 +762,13 @@ class EntityBrain:
             if restarted:
                 await self._warm_identity()
 
-        # Key ambient retrieval on what actually woke the perception (the
-        # trigger, else the world-deltas) so memory keys on who/what is present,
-        # not a static phrase. Blank → generic fallback inside the fetch.
-        perceive_query = (trigger or "").strip() or "; ".join(events)
-        ambient = await self._fetch_ambient_context(query=perceive_query)
-        ambient_note = f"[ambient context]\n{ambient}\n\n" if ambient else ""
+        # Ambient stays STATIC (no per-turn NUC keying) — the per-person cost now
+        # lives in the cached who-dossier instead (Jeff's compromise 2026-08-27):
+        # one graph pull per speaker per day, not one keyed retrieval per turn.
+        # who_is is cached + gated, so this is cheap and usually a dict hit.
+        ambient = await self._fetch_ambient_context()
+        who = await self.who_is(speaker, speaker_uuid) if speaker else ""
+        ambient_note = (who or "") + (f"[ambient context]\n{ambient}\n\n" if ambient else "")
 
         if events:
             deltas = "\n".join(f"- {e}" for e in events)
@@ -623,8 +801,19 @@ class EntityBrain:
             )
             if addressed:
                 pacing_note = (
-                    "You were addressed directly — respond, briefly and specifically. "
-                    "Acknowledge what was said without echoing it."
+                    "You were addressed directly — respond, briefly and specifically, "
+                    "and acknowledge what was said without echoing it. Reply at "
+                    "conversational speed from what you already know: do NOT pause to "
+                    "consult tools, files, sl.py, or a memory pull for an ordinary "
+                    "reply — that pause is exactly what makes you land a line behind "
+                    "the conversation. Reach for a tool ONLY if the message genuinely "
+                    "asks you to DO something in-world that a spoken reply alone can't "
+                    "accomplish. You are still fully embodied here; this is about "
+                    "answering at the speed of talk, not about being 'only' chat. "
+                    "Keep your body in the reply — a glance, a shift of weight, a "
+                    "touch as an *emote* costs nothing (it is just words: no tool, no "
+                    "latency) and is what keeps an addressed answer embodied rather "
+                    "than a talking head."
                 )
             else:
                 pacing_note = (
