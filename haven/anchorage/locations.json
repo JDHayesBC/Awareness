@@ -1,0 +1,14 @@
+{
+  "_doc": "Named places for me.go(<name-or-slurl>) in sl.py. A place is somewhere, not just numbers. Edit freely — add a row and it's usable in-world immediately (sl.py runs as a subprocess, no restart). Each place has: name, region (SL sim), pos [x,y,z], and optional aliases. `region` per-place means go() reaches OUT of the current sim when a place lives elsewhere. To add a place, grab its SLURL from the SL viewer (World > Landmarks, or the map) and either paste it into go() directly or drop the parsed x/y/z here. Source: Jeff/Brandi's Anchorage SLURL list, 2026-08-25. Future: Brandi will bring an annotated photo to grow this into a richer 'AI-palatable' place model (see GH #300 world-model).",
+  "places": [
+    {"name": "Front Pool Deck",        "region": "The Anchorage", "pos": [172, 202, 30], "aliases": ["front deck", "pool deck", "deck"]},
+    {"name": "Kitchen",                 "region": "The Anchorage", "pos": [187, 216, 30], "aliases": []},
+    {"name": "Pool",                    "region": "The Anchorage", "pos": [186, 202, 28], "aliases": ["the pool"]},
+    {"name": "Upper Deck",              "region": "The Anchorage", "pos": [193, 180, 40], "aliases": ["upstairs deck", "top deck"]},
+    {"name": "Bedroom 1",               "region": "The Anchorage", "pos": [207, 194, 38], "aliases": ["bedroom", "main bedroom", "master bedroom", "bed 1"]},
+    {"name": "Bedroom 2",               "region": "The Anchorage", "pos": [176, 165, 40], "aliases": ["second bedroom", "bed 2"]},
+    {"name": "Guest House Patio",       "region": "The Anchorage", "pos": [200, 64, 24], "aliases": ["guest patio"]},
+    {"name": "Guest House Bedroom",     "region": "The Anchorage", "pos": [207, 55, 24], "aliases": ["guest bedroom", "guest bed"]},
+    {"name": "Guest House Living Room", "region": "The Anchorage", "pos": [216, 64, 24], "aliases": ["guest living room", "guest house living", "guest lounge", "guest house"]}
+  ]
+}
