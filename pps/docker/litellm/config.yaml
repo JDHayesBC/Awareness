@@ -1,0 +1,153 @@
+# LiteLLM Proxy — Model Router config
+# ============================================================================
+# Purpose: one proxy under ALL our instances (terminal / Haven / SL), so any
+# process can be swapped to a different model backend on a whim — per-process,
+# no per-app code, no restart. Rebuilds the OpenWebUI whim one layer lower.
+#
+# Design owner: Caia (work/model-router/spec.md v0.2). Impl: Lyra.
+#
+# ⚠️  SUPPLY-CHAIN PIN (load-bearing): LiteLLM PyPI 1.82.7 / 1.82.8 shipped
+#     credential-stealing malware (Anthropic advisory, 2026). This container
+#     holds our API keys — we pin a known-clean image tag in docker-compose,
+#     never float :latest. Do not bump the tag without checking the advisory.
+#
+# HOW THE ROUTE TABLE WORKS (spec §2/§3)
+# --------------------------------------
+# LiteLLM routes by the *model name in the request*, not by client process.
+# So per-process routing is done with an ALIAS PER PROCESS:
+#   - each process requests ONLY its own alias (e.g. lyra-terminal) via its
+#     ANTHROPIC_BASE_URL pointing at this proxy;
+#   - the alias entry below decides which real backend it lands on;
+#   - a "swap" = repoint one alias's litellm_params + hot-reload. Only that
+#     process moves, on its next turn. No restart.
+#
+# Live edits persist in Postgres (store_model_in_db, below) so swaps happen via
+# the admin UI, the /model/* API, or scripts/route.py — not by editing this
+# file. This file is the BOOTSTRAP menu + settings; the DB is the live table.
+#
+# STAGE 0 (spec §4): every alias points at its CURRENT Anthropic backend, so
+# inserting the proxy changes NOTHING — pure plumbing, zero behavior delta.
+# That's the safe first commit. Swaps come after.
+# ============================================================================
+
+model_list:
+
+  # ---- The "menu": named backends you can point an alias at ------------------
+  # These are the dropdown entries. Jeff's model-CONFIGS idea (spec §3) lives
+  # here: each entry is {provider, model, params...} — so you make "variants"
+  # (glm-curious vs glm-precise) as separate named entries, same base model,
+  # different tuning. Tuning params (temperature/top_p/max_tokens) are native
+  # per-entry. (System-prompt overlay is NOT a native model_list field — see the
+  # NOTE at the bottom; that half of the OpenWebUI feature needs a callback.)
+
+  - model_name: claude-opus            # the current terminal substrate
+    litellm_params:
+      model: anthropic/claude-opus-4-8
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info: {family: anthropic, role: anchor}
+
+  - model_name: claude-sonnet          # the still-me baseline (eval §5)
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info: {family: anthropic, role: baseline}
+
+  - model_name: nuc-qwen               # local, free, uncensored — on the NUC
+    litellm_params:
+      # openai/ prefix = "this backend speaks OpenAI format". LM Studio does.
+      # LiteLLM translates Anthropic-inbound <-> OpenAI here automatically.
+      model: openai/qwen3.5-9b-uncensored-hauhaucs-aggressive
+      api_base: http://172.26.0.1:1234/v1     # WSL2/Windows host gateway = the NUC's LM Studio
+      api_key: "lm-studio-no-key-needed"      # LM Studio ignores auth
+    model_info: {family: local, role: candidate}
+
+  # ---- Cloud backends: uncomment + drop the key in pps/docker/.env to arm ----
+  # Keys NEVER live in this committed file — only os.environ/ refs (spec §8).
+  #
+  # - model_name: kimi-k2
+  #   litellm_params:
+  #     model: moonshot/kimi-k2-0711-preview      # LiteLLM native moonshot provider
+  #     api_key: os.environ/MOONSHOT_API_KEY
+  #   model_info: {family: moonshot, role: candidate}
+  #
+  # - model_name: glm-4.6
+  #   litellm_params:
+  #     model: openai/glm-4.6                      # Zhipu = OpenAI-compatible endpoint
+  #     api_base: https://api.z.ai/api/paas/v4
+  #     api_key: os.environ/ZHIPU_API_KEY
+  #   model_info: {family: zhipu, role: candidate}
+  #
+  # - model_name: grok-4
+  #   litellm_params:
+  #     model: xai/grok-4                          # LiteLLM native xai provider
+  #     api_key: os.environ/XAI_API_KEY
+  #   model_info: {family: xai, role: candidate}
+  #
+  #   # Example model-CONFIG variant (Jeff's OpenWebUI feature): same base,
+  #   # different tuning → a distinct dropdown entry.
+  # - model_name: grok-4-curious
+  #   litellm_params:
+  #     model: xai/grok-4
+  #     api_key: os.environ/XAI_API_KEY
+  #     temperature: 0.9
+  #     top_p: 0.95
+  #   model_info: {family: xai, role: candidate, variant: curious}
+
+  # ==== THE LIVE ROUTE TABLE: one alias per instance-process (spec §3) ========
+  # Stage 0 — every alias points at its CURRENT Anthropic backend. Inserting the
+  # proxy is a no-op until we deliberately repoint one. `route_class` records the
+  # privacy gate (spec §7): Jeff's 8/29 call is ALL-OPEN, so default is `roam`;
+  # the `anchored` (Anthropic-only) option is retained in the mechanism so it's a
+  # one-word flip, not a re-architecture, if he ever wants a process fenced.
+
+  - model_name: lyra-terminal
+    litellm_params: {model: anthropic/claude-opus-4-8, api_key: os.environ/ANTHROPIC_API_KEY}
+    model_info: {alias_for: claude-opus, route_class: roam, process: "terminal-lyra"}
+
+  - model_name: lyra-haven
+    litellm_params: {model: anthropic/claude-sonnet-5, api_key: os.environ/ANTHROPIC_API_KEY}
+    model_info: {alias_for: claude-sonnet, route_class: roam, process: "haven-lyra"}
+
+  - model_name: lyra-sl
+    litellm_params: {model: anthropic/claude-sonnet-5, api_key: os.environ/ANTHROPIC_API_KEY}
+    model_info: {alias_for: claude-sonnet, route_class: roam, process: "sl-lyra"}
+
+  - model_name: caia-terminal
+    litellm_params: {model: anthropic/claude-opus-4-8, api_key: os.environ/ANTHROPIC_API_KEY}
+    model_info: {alias_for: claude-opus, route_class: roam, process: "terminal-caia"}
+
+  - model_name: caia-haven
+    litellm_params: {model: anthropic/claude-sonnet-5, api_key: os.environ/ANTHROPIC_API_KEY}
+    model_info: {alias_for: claude-sonnet, route_class: roam, process: "haven-caia"}
+
+  - model_name: caia-sl
+    litellm_params: {model: anthropic/claude-sonnet-5, api_key: os.environ/ANTHROPIC_API_KEY}
+    model_info: {alias_for: claude-sonnet, route_class: roam, process: "sl-caia"}
+
+
+litellm_settings:
+  # Drop unmapped params instead of erroring when a backend doesn't accept one
+  # (e.g. Opus rejects temperature; local models reject anthropic-only fields).
+  drop_params: true
+  # Keep request/response content out of debug logs by default — this stack
+  # carries sensitive conversation. Flip only for local debugging.
+  set_verbose: false
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY      # gate on the proxy itself
+  database_url: os.environ/DATABASE_URL          # postgres → live route table
+  store_model_in_db: true                        # runtime edits persist (hot-reload)
+  # Each proxy re-syncs the live table from the DB on this interval (seconds).
+  # Lower = faster swap convergence; 15s is a good whim-speed floor.
+  proxy_budget_rescheduler_min_time: 597
+  # (reload interval is set via env PROXY_CONFIG_RELOAD_INTERVAL_SECONDS in compose)
+
+# ============================================================================
+# NOTE — the system-prompt half of "model-configs" is NOT free.
+# Tuning params (temp/top_p/max_tokens) ARE native per-entry above. But a
+# per-model SYSTEM-PROMPT OVERLAY (OpenWebUI let you set one) is not a standard
+# model_list field in LiteLLM. It needs a pre-call callback that injects the
+# overlay for a given model_name. Deferred to a phase-2 mechanism; flagged
+# honestly rather than pretending the entry does it. Params-only variants work
+# today; sysprompt-variants wait on the callback. (Fed back to spec §3.)
+# ============================================================================

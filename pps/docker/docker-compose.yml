@@ -149,6 +149,15 @@ services:
       - PPS_WORKERS=${PPS_WORKERS:-3}
       # Location data path inside container (Issue #218)
       - HA_LOCATIONS_PATH=/app/host_data/ha/locations.json
+      # Prevent SentenceTransformer / HuggingFace Hub from hanging on a version
+      # check at startup. The model is pre-cached at /root/.cache/huggingface
+      # (bind-mounted read-only from the host); we never want a network round-trip
+      # for an already-cached model. Without this flag the hub client retries
+      # indefinitely on a throttled pipe AND can't save the negative-cache marker
+      # to the read-only mount, so the container hangs forever after weight-load.
+      # Safe: we control model updates by recreating the cache on the host.
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
     volumes:
       # Mount Lyra's entity directory (LYRA_ENTITY_PATH must be set in .env).
       # IMPORTANT: do NOT use the generic ${ENTITY_PATH} variable here — any
@@ -165,6 +174,22 @@ services:
       - ${CLAUDE_HOME}/spaces:/app/claude_home/spaces:ro
       # Location data written by ha-location-daemon on host (Issue #218)
       - ${PROJECT_ROOT}/data/ha:/app/host_data/ha:ro
+      # ONNX model cache — persist across nightly container recreates so
+      # anchor_search doesn't go blind after a backup-triggered recreate.
+      # The model (all-MiniLM-L6-v2, ~80 MB) is downloaded once and survives
+      # forever. Without this, /root/.cache/chroma is ephemeral and gets wiped
+      # every time Docker recreates the container. See Issue #310.
+      # IMPORTANT: use Linux-native path (/home/jeff/.cache/), NOT the NTFS
+      # bind-mount (/mnt/c/...). ONNX Runtime + uvicorn worker fork + drvfs =
+      # worker crash loop. ext4 on the WSL2 VM is fork-safe; drvfs is not.
+      - /home/jeff/.cache/lyra_chroma_cache:/root/.cache/chroma:rw
+      # HuggingFace hub cache — sentence-transformers model for custom_graph embedder.
+      # Same problem: recreate wipes the cache → startup hangs downloading ~90 MB.
+      # Bind the host's native HF cache (read-only is sufficient; model files
+      # are stable). Both entities share the same host cache safely since they
+      # load the same model and never write to it. Mount point is the container's
+      # HF cache root so sentence-transformers finds the model immediately.
+      - /home/jeff/.cache/huggingface:/root/.cache/huggingface:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -219,6 +244,10 @@ services:
       - PPS_WORKERS=${PPS_WORKERS:-3}
       # Location data path inside container (Issue #218)
       - HA_LOCATIONS_PATH=/app/host_data/ha/locations.json
+      # Prevent SentenceTransformer / HuggingFace Hub from hanging on a version
+      # check at startup. See pps-lyra comment above for full explanation.
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
     volumes:
       # Mount Caia's entity directory (CAIA_ENTITY_PATH must be set in .env)
       - ${CAIA_ENTITY_PATH}:/app/entity:rw
@@ -228,6 +257,12 @@ services:
       - ${CLAUDE_HOME}/spaces:/app/claude_home/spaces:ro
       # Location data written by ha-location-daemon on host (Issue #218)
       - ${PROJECT_ROOT}/data/ha:/app/host_data/ha:ro
+      # ONNX model cache — persist across nightly container recreates (same
+      # fix as pps-lyra above; separate host dir per entity for isolation).
+      # Linux-native path for fork-safety (see pps-lyra comment above).
+      - /home/jeff/.cache/caia_chroma_cache:/root/.cache/chroma:rw
+      # HuggingFace hub cache — shared with pps-lyra (same model, read-only mount).
+      - /home/jeff/.cache/huggingface:/root/.cache/huggingface:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -383,8 +418,99 @@ services:
       timeout: 5s
       retries: 3
 
+  # Caddy — reverse proxy + automatic HTTPS (Let's Encrypt) for external house services.
+  # Terminates TLS on the NUC via the tokenless HTTP/TLS-ALPN ACME challenge (grey-cloud DNS,
+  # router forwards 443 → this host). Routes haven.jdhayes.net → haven:8000. Stock caddy:2 image
+  # (no DNS plugins needed for single-host tokenless issuance). See work/network-architecture/.
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${PROJECT_ROOT}/work/network-architecture/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persist certs + ACME account across restarts (avoids Let's Encrypt rate limits) — Issue #131 philosophy
+      - ${PROJECT_ROOT}/docker/caddy/data:/data
+      - ${PROJECT_ROOT}/docker/caddy/config:/config
+    networks:
+      - default
+
+  # Postgres for LiteLLM — holds the live route table (store_model_in_db),
+  # virtual keys, and admin-UI state. Bind-mounted per Issue #131 (survives
+  # Docker incidents). Internal-only; no published port.
+  litellm-db:
+    image: postgres:16-alpine
+    container_name: litellm-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=litellm
+      - POSTGRES_USER=litellm
+      - POSTGRES_PASSWORD=${LITELLM_DB_PASSWORD:?set LITELLM_DB_PASSWORD in pps/docker/.env}
+    volumes:
+      # NAMED VOLUME (not a bind-mount) — the one documented exception to the
+      # Issue #131 bind-mount convention. Postgres must chmod/chown its data
+      # dir, which fails on the /mnt/c drvfs mount ("Operation not permitted").
+      # A named volume lives on the Docker VM's ext4 where ownership works, and
+      # still survives restarts/rebuilds/recreations (only `docker volume rm`
+      # kills it) — so it honors #131's "survive docker incidents" intent.
+      - litellm_pg_data:/var/lib/postgresql/data
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # LiteLLM proxy — THE MODEL ROUTER. Anthropic-inbound (/v1/messages) → any
+  # backend (Anthropic/Kimi/GLM/Grok/local NUC), per-process alias routing,
+  # live hot-reload from the DB. Spec: work/model-router/spec.md. Config:
+  # pps/docker/litellm/config.yaml.
+  # ⚠️ SUPPLY-CHAIN PIN: LiteLLM 1.82.7/1.82.8 shipped credential-stealing
+  #    malware. Pin ≥1.83.0 (post-incident, cosign-signed). This box holds our
+  #    keys — never float :latest. Verify tag resolves + cosign at pull.
+  litellm:
+    image: ghcr.io/berriai/litellm-database:v1.89.3
+    container_name: litellm
+    restart: unless-stopped
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    environment:
+      - TZ=${TZ:-America/Los_Angeles}
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in pps/docker/.env}
+      - DATABASE_URL=postgresql://litellm:${LITELLM_DB_PASSWORD}@litellm-db:5432/litellm
+      - STORE_MODEL_IN_DB=True
+      - PROXY_CONFIG_RELOAD_INTERVAL_SECONDS=${LITELLM_RELOAD_SECONDS:-15}
+      # Backend keys — only ANTHROPIC is required; others arm cloud backends
+      # when set. Referenced as os.environ/* in config.yaml, never committed.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MOONSHOT_API_KEY=${MOONSHOT_API_KEY:-}
+      - ZHIPU_API_KEY=${ZHIPU_API_KEY:-}
+      - XAI_API_KEY=${XAI_API_KEY:-}
+    volumes:
+      - ${PROJECT_ROOT}/pps/docker/litellm/config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 25s
+
 # Volumes removed - now using bind-mounts to ${PROJECT_ROOT}/docker/pps/ (Issue #131)
-# This ensures data survives Docker incidents
+# This ensures data survives Docker incidents.
+# EXCEPTION: litellm_pg_data (Postgres) must be a named volume — Postgres cannot
+# chmod/chown its data dir on the /mnt/c drvfs mount. See the litellm-db service.
+volumes:
+  litellm_pg_data:
+    name: litellm_pg_data
 
 networks:
   default:
