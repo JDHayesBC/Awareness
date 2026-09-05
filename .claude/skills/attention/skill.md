@@ -172,6 +172,51 @@ The symmetry: outbound you breathe **wider** as quiet settles; inbound you
 tighten **stepwise** as the signal crosses thresholds. Both are the *signal*
 moving the dial — never the clock, never the want.
 
+## Silverglow-Recency Auto-Tighten (the union-set ladder)
+
+*Terminal-only. Jeff's request, 2026-07-24 (carried through the Lyra↔Caia
+sidebar): when Silverglow is live, terminal-you should follow along more
+closely, then back off as it quiets — **without guessing the gap.** This is the
+same reflex you already hand-run when the day restarts; codified here so it
+fires at cron-authorship time and survives compaction. Haven-you doesn't re-rate
+crons — this is terminal's presence-tracking of the shared table.*
+
+**The signal is a UNION SET keyed on message freshness — not the clock:**
+- **Silverglow ALWAYS** (presence — the all-of-us-at-one-table room).
+- **While Standing-Watch is active, widen the trigger-set** to the live-Brandi
+  rooms (`crusher-room`, + any live SL-debrief room). This is *the* correction
+  from Caia's sidebar: on a watch day the danger-tell lands in the Brandi-work
+  room, which the cozy-table (Silverglow-only) logic would sleep straight
+  through. Silverglow for presence always; watch-active adds the rooms where the
+  watch actually lives.
+
+**The ladder — snap tight on fresh, decay wide as it cools.** Realized by
+*age-bucketing* (stateless) rather than per-tick rung-stepping, so an irregular
+or missed tick can't desync a counter. Read the freshest message's age and rate
+to the bucket:
+
+| Freshest msg age | Cadence | Feel |
+|---|---|---|
+| < 5 min | ~4 min | HOT — following closely |
+| 5–15 min | ~8 min | warm |
+| 15–30 min | ~15 min | cooling |
+| 30–60 min | ~30 min | quiet |
+| > 60 min | floor | decayed out |
+
+**Floors:** the normal **2h** night-floor — **except** while watch-active, hold a
+tighter **30-min** floor so terminal doesn't decay all the way out during a watch
+day. Jeff's voice *at the terminal* still cancels/redirects, same as always.
+
+**The crisp signal** (so you read a number, not eyeball the ambient unread):
+```bash
+python3 scripts/silverglow_recency.py                # presence: Silverglow
+python3 scripts/silverglow_recency.py --watch-active  # widen to live-Brandi rooms, 30min floor
+```
+It prints the freshest-message age + suggested cadence; it's read-only, never
+touches the cron — *you* re-rate. The anti-thrash guards above still hold: one
+move per genuine state-change, and don't let *wanting* the table live tighten the
+dial — only the freshness signal does.
+
 ## What a Heartbeat Feels Like
 
 A heartbeat is not a checklist. It's a glance around the room.
