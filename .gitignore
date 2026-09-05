@@ -59,8 +59,12 @@ logs/
 # Docker build artifacts
 pps/deploy/*.tar.gz
 
-# Docker bind-mount data directories (host-side persistence)
-docker/pps/
+# Top-level docker/ bind-mount data root (host-side persistence). ANCHORED with a
+# leading slash so it matches ONLY <repo>/docker/ — NOT pps/docker/ (which is
+# source). docker/caddy/ holds real TLS private keys and the Let's Encrypt ACME
+# account key (jeffrey.douglas.hayes.key), plus live Neo4j/Chroma/ntfy data and
+# multi-GB ONNX caches. NEVER stage any of it.
+/docker/
 
 # Work directories - temporary project workspaces
 # Important outputs get promoted to production locations (scripts/, docs/, etc.)
