@@ -1084,16 +1084,15 @@ async def _handle_perception(payload) -> None:
         # may still be over threshold — the next turn should fire now.
         again = _perception.turn_done(time.time()) if _perception is not None else None
 
-        # Proactive session rotation OFF the hot path: rotate an approaching-limit
-        # session only on an IDLE BEAT (this turn was the endogenous heartbeat, which
-        # fires after a genuine 120s+ lull) with nothing queued — paying the ~minutes
-        # identity warmup when no one is present, NEVER during a conversational pause
-        # (where gating on `again is None` alone would stall the human's next message)
-        # and NEVER inside a timed turn. Kept under _brain_busy=True so a fresh fire
-        # can't start mid-rotation. A relentlessly-active room that never idles is
-        # covered by the repeated-timeout recovery above (self-correcting backstop).
+        # Session rotation: an approaching-limit brain session must roll to a fresh
+        # one under _brain_busy=True (so a fresh fire can't start mid-rotation), or
+        # per-turn latency climbs until turns exceed SL_TURN_TIMEOUT (silence). Two
+        # triggers, preferring the free one.
+        rotate = getattr(brain, "rotate_if_approaching", None)
         if idle and again is None:
-            rotate = getattr(brain, "rotate_if_approaching", None)
+            # PREFERRED — off the hot path: rotate on a genuine IDLE BEAT (endogenous
+            # heartbeat after a 120s+ lull) with nothing queued, at the standard 0.8
+            # threshold — pays the ~minutes identity warmup when no one is waiting.
             if rotate is not None:
                 try:
                     # on_warmup shows the "warming up" halo for the whole rotation —
@@ -1105,6 +1104,25 @@ async def _handle_perception(payload) -> None:
                     log(f"proactive rotation failed (non-fatal): {e}")
                 finally:
                     _ready = True
+        elif rotate is not None:
+            # HOT-PATH CEILING GUARD (#20, 2026-08-30): a relentlessly-active room
+            # never yields an idle beat — `again` stays non-None through a burst (the
+            # self-re-fire below), so the idle path above is unreachable EXACTLY when
+            # turns pile up fastest. The repeated-timeout backstop does NOT cover this:
+            # bloat produces sporadic single timeouts (each returning turn resets the
+            # consec counter at ~L1029), never the back-to-back streak it needs. So
+            # fire the SAME approaching-check at a TIGHTER 0.95 threshold, regardless
+            # of idle/again. It self-gates (a no-op until ~95% of the turn/token cap),
+            # then eats ONE honest "warming up" stall — legible via halo-v2, and BELOW
+            # the ~44-turn degradation zone we observed, so we never serve a bloated
+            # turn. Rotates before the queued `again` re-fires, so that turn runs fresh.
+            try:
+                if await rotate(threshold=0.95, on_warmup=_warmup_halo):
+                    log("brain session rotated on hot path (room saturated, no idle beat)")
+            except Exception as e:
+                log(f"hot-path rotation failed (non-fatal): {e}")
+            finally:
+                _ready = True
 
         _brain_busy = False
         await _push_status(_resting_status())
