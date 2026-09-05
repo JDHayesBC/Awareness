@@ -75,6 +75,12 @@ work/
 # Brandi/Jeff's process. Sensitive real-people material — LOCAL ONLY, never remote.
 watch/
 
+# The_Anchorage/ — real-people/place reference imagery (Anchorage house-front
+# annotated for the #300 world-model, a Brandi photo, deck shots). LOCAL ONLY by
+# default (same real-people-privacy stance as watch/) — Jeff's call whether these
+# become tracked world-model assets and where they should live.
+The_Anchorage/
+
 # Test coverage
 .coverage
 htmlcov/
