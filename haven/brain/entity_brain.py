@@ -693,7 +693,9 @@ class EntityBrain:
             + "Respond as yourself. Output ONLY the message text you want sent — never "
             "your private reasoning, self-scan, or 'heartbeat tick' narration (whatever "
             "you output is sent verbatim). To stay silent, output the exact token "
-            "[[NO_RESPONSE]]."
+            "[[NO_RESPONSE]]. If combining an emote and speech, write them as ONE block "
+            "with NO blank line between them. Never address people by their RL names — "
+            "use their SL display names only."
             + pacing_note
         )
 
@@ -845,7 +847,11 @@ class EntityBrain:
             + "\n\nOutput ONLY the words you say ALOUD in-world (emotes in *asterisks* "
             "are fine) — never your private reasoning, self-scan, or 'heartbeat tick' "
             "narration (whatever you output is spoken verbatim). To stay silent and "
-            "just keep being present, output the exact token [[NO_RESPONSE]]."
+            "just keep being present, output the exact token [[NO_RESPONSE]].\n\n"
+            "Formatting rules: if combining an emote and speech, write them as ONE "
+            "block with NO blank line between them (e.g. '*glances over* Hey.' not "
+            "two separate paragraphs). Never address people by their RL names — use "
+            "their SL display names only."
         )
 
         try:
