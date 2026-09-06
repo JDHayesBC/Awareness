@@ -1645,19 +1645,29 @@ class SL:
         pos = _fmt_pos(position)
         r = self.cmd("teleport", entity="region", region=region, position=pos,
                      fly="True" if fly else "False")
-        if r.get("success") not in (True, "True"):
-            return {"success": False, "arrived": False, "where": None,
-                    "error": r.get("error") or "teleport not accepted"}
+        accepted = r.get("success") in (True, "True")
+        cmd_err = r.get("error")
+        # Position is the arbiter of truth, NOT Corrade's ack. Corrade reports
+        # "teleport failed" on same-region warps that in fact complete (verified
+        # live 2026-09-06: go→landed dead-on target, yet ack said failed). So we
+        # ALWAYS poll actual position and let it decide. Grace window: full
+        # ``timeout`` when the command was accepted (cross-sim can be slow); a
+        # short grace when Corrade claims failure (a same-region warp lands in a
+        # few seconds or not at all — don't hang the full timeout on a real miss).
         target = _vec(pos)
-        deadline = time.time() + timeout
+        deadline = time.time() + (timeout if accepted else min(10.0, timeout))
         while time.time() < deadline:
             time.sleep(2.0)
             here = self.where().get("position")
             if here and target and _dist(here, target) <= 6.0:
                 return {"success": True, "arrived": True, "where": self.where(),
-                        "error": None}
-        return {"success": True, "arrived": False, "where": self.where(),
-                "error": "teleport accepted; arrival within 6 m not confirmed"}
+                        "error": None if accepted
+                                 else f"arrived despite corrade '{cmd_err}'"}
+        if accepted:
+            return {"success": True, "arrived": False, "where": self.where(),
+                    "error": "teleport accepted; arrival within 6 m not confirmed"}
+        return {"success": False, "arrived": False, "where": self.where(),
+                "error": cmd_err or "teleport not accepted"}
 
     def tp_to(self, target: str, *, timeout: float = 60.0) -> dict:
         """Teleport to where an avatar is standing in this region — the "tp to Jeff,
