@@ -483,6 +483,46 @@ def test_perceive_addressed_gates_midturn_tools() -> None:
           "idle beat keeps tool freedom (no anti-pause clamp)")
 
 
+def test_sl_nav_hint_carries_identity_wall() -> None:
+    # The identity-wall leak (2026-09-05): the SL brain sometimes said "Jeff"
+    # in-world, where every utterance is PUBLIC and he is only ever "Brandi".
+    # The always-on nav hint (which survives compaction/restart) must carry a
+    # blunt, absolute rule — and ONLY on the SL channel.
+    sl = EntityBrain(entity_name="test", channel="sl", restart_in_turn=False)
+    hint = sl._sl_nav_hint()
+    check("IDENTITY WALL" in hint, "sl nav hint carries the identity-wall clause")
+    check("Brandi" in hint, "sl nav hint names Brandi as the in-world identity")
+    check("NEVER say 'Jeff'" in hint, "sl nav hint bluntly forbids saying 'Jeff' in-world")
+    check("emote" in hint, "the wall explicitly covers asides/emotes (where leaks slip)")
+
+    # Non-SL channels must NOT carry it — the wall is in-world-only, and the hint
+    # itself is empty off-channel (it's an SL nav hint).
+    haven = EntityBrain(entity_name="test", channel="haven", restart_in_turn=False)
+    check(haven._sl_nav_hint() == "", "nav hint is empty (and wall absent) off the SL channel")
+
+    # And it actually rides a real in-world turn (respond path), not just in isolation.
+    fake = FakeInvoker()
+    sl.invoker = fake
+    seen: dict = {}
+
+    async def _amb(query: str | None = None) -> str:
+        return ""
+
+    async def _who(speaker: str, uuid: str = "") -> str:
+        return ""
+
+    async def _q(prompt: str, **kw) -> str:
+        seen["prompt"] = prompt
+        return "[[NO_RESPONSE]]"
+
+    sl._fetch_ambient_context = _amb  # type: ignore[assignment]
+    sl.who_is = _who  # type: ignore[assignment]
+    fake.query = _q  # type: ignore[assignment]
+    asyncio.run(sl.respond("Brandi", "hey"))
+    check("IDENTITY WALL" in seen.get("prompt", ""),
+          "the identity wall is prepended to a live in-world respond() prompt")
+
+
 def main() -> int:
     for fn in (
         test_thresholds_plumbed_through,
@@ -507,6 +547,7 @@ def main() -> int:
         test_respond_swallows_leaked_error,
         test_perceive_swallows_leaked_error,
         test_perceive_addressed_gates_midturn_tools,
+        test_sl_nav_hint_carries_identity_wall,
     ):
         fn()
     print()

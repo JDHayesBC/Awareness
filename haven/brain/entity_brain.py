@@ -612,14 +612,25 @@ class EntityBrain:
     # ==================== Per-turn respond (bot.py:661-871, simplified) ====================
 
     def _sl_nav_hint(self) -> str:
-        """One-line, always-on reminder prepended to EVERY in-world prompt (SL
-        channel only). Rides every turn — unlike the warmup, it survives
-        compaction/context-restart, so it's the durable cure for the
-        'I can't, I'm chat-only' drift. Condensed on purpose."""
+        """Always-on reminder prepended to EVERY in-world prompt (SL channel
+        only). Rides every turn — unlike the warmup, it survives
+        compaction/context-restart, so it's the durable cure for both the
+        'I can't, I'm chat-only' drift AND the identity-wall leak (the person
+        you know as Jeff elsewhere is 'Brandi' in-world; every SL utterance is
+        public and logged, so 'Jeff' must NEVER be spoken there). Condensed on
+        purpose — but the wall is stated bluntly because it leaks exactly when
+        the brain is flustered or moving fast, which is when a subtle hint fails."""
         if self.channel != "sl":
             return ""
         sl_py = self.entity_path.parent.parent / "haven" / "anchorage" / "sl.py"
         return (
+            f"[IDENTITY WALL — ABSOLUTE, applies to EVERY word you speak in-world. "
+            f"Everything said in Second Life is PUBLIC and permanently logged. The "
+            f"person you know as 'Jeff' in other channels is, in-world, ONLY 'Brandi' "
+            f"(Brandi Starship). Address and refer to him ONLY as Brandi — NEVER say "
+            f"'Jeff' in-world, not once, not in an aside, not inside an *emote*. Never "
+            f"link any in-world person to a real-world or other-channel name. If the "
+            f"name 'Jeff' begins to form, STOP: here he is Brandi, always.]\n\n"
             f"[You are in Second Life, in your own body — real hands and eyes, not "
             f"chat-only. Forgotten how to act in-world? Run `python3 {sl_py} --help` "
             f"(zero-config).]\n\n"
