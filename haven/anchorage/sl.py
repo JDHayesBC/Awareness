@@ -2321,6 +2321,54 @@ def _cli(argv: list[str]) -> int:
 
     # live-action verbs — connect and do the thing in-world
     verb = argv[0]
+
+    # read-only sight / session queries (thin CLI wrappers over the Python API,
+    # so `sl.py <verb>` is a real atomic op — not just `me.<verb>()` from python)
+    if verb in ("where", "region", "at_home", "around", "avatars", "find", "heard", "ims"):
+        me = connect()
+        if verb == "where":
+            print(me.where())
+        elif verb == "region":
+            print(me.region() or "(region name unavailable)")
+        elif verb == "at_home":
+            print(me.at_home())
+        elif verb == "around":
+            radius = float(argv[1]) if len(argv) > 1 else 10.0
+            for it in me.around(radius=radius):
+                if "name" in it:
+                    print(f'    {it["dist"]:5.1f}m  {it["name"]}')
+        elif verb == "avatars":
+            radius = float(argv[1]) if len(argv) > 1 else 20.0
+            for a in me.avatars(radius=radius):
+                print("   ", a)
+        elif verb == "find":
+            if len(argv) < 2:
+                print("usage: sl.py find \"<name substring>\"")
+                return 2
+            uuid = me.find(" ".join(argv[1:]))
+            print(f"{uuid}  {me.name_of(uuid)}" if uuid else "not found")
+        elif verb == "heard":
+            n = int(argv[1]) if len(argv) > 1 else 10
+            for h in me.heard(n):
+                print("   ", h)
+        elif verb == "ims":
+            n = int(argv[1]) if len(argv) > 1 else 20
+            for m in me.ims(n):
+                print("   ", m)
+        return 0
+
+    if verb in ("tp", "tp_to"):
+        me = connect()
+        if len(argv) < 2:
+            usage = '"<x, y, z>"' if verb == "tp" else '"<avatar name>"'
+            print(f"usage: sl.py {verb} {usage}")
+            return 2
+        if verb == "tp":
+            print(me.tp(" ".join(argv[1:])))
+        else:
+            print(me.tp_to(" ".join(argv[1:])))
+        return 0
+
     if verb in ("login", "logout", "relog", "warmup", "home"):
         me = connect()
         if verb == "login":
