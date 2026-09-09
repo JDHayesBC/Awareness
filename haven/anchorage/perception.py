@@ -461,6 +461,14 @@ class ArousalState:
         self._v = max(0.0, self._v - self.cfg.refractory)
         self._last_fire = now
 
+    def since_last_fire(self, now: float) -> float:
+        """Seconds since the last fire. For callers enforcing the min_interfire
+        anti-echo floor OUTSIDE should_fire — e.g. the pending-directed re-fire in
+        SLPerception.turn_done, which bypasses the theta test but must still honor
+        the hard floor so a fast-failing brain (timeout / [[NO_RESPONSE]]) can't
+        tight-loop re-firing the same stranded message."""
+        return now - self._last_fire
+
 
 # --------------------------------------------------------------------------- #
 # Perception surface — standing-state (what IS) + a rolling delta buffer (what
@@ -563,6 +571,15 @@ class SLPerception:
         # in-flight window so a DM that lands mid-turn is still answered privately
         # when the turn wraps — the accumulated re-fire would otherwise lose it.
         self._pending_im: "tuple[Optional[str], str, Optional[str]] | None" = None
+        # A line ADDRESSED to me (name / IM / engaged-followup) that landed mid-turn,
+        # remembered so turn_done can re-fire on it even after its arousal has leaked
+        # back under theta during a slow turn (the "one-behind" bug: V_inject·e^(−Δ/tau)
+        # falls below theta, so the single-flight recheck misses it and the message
+        # sits stranded until the next event). Deliberately SEPARATE from _pending_im:
+        # this drives ONLY the re-fire decision + trigger text, NEVER reply routing —
+        # so a stranded LOCAL line re-fires LOCAL and can't be misrouted into an IM.
+        # (speaker, uuid, text); latest directed line wins; consumed at _fire.
+        self._pending_directed: "tuple[Optional[str], Optional[str], Optional[str]] | None" = None
         # Conversational engagement: speaker_uuid -> engaged_until timestamp. Opened
         # when a speaker addresses me (name/IM), refreshed each exchange; while open,
         # that speaker's un-named local lines are promoted to fire. See
@@ -638,6 +655,16 @@ class SLPerception:
         self.surface.add_delta(s.delta)
         self.arousal.inject(s.value, now)
 
+        # One-behind fix (paired with turn_done): remember a line ADDRESSED to me
+        # so the recheck can re-fire on it even after its arousal decayed under theta
+        # during a slow turn. s.directed is now finalized (name/IM set it in
+        # score_event; the engaged-followup block above promotes local lines to it).
+        # Routing is NOT driven from here — that stays with _pending_im — so a
+        # stranded LOCAL line re-fires LOCAL. Cleared at _fire; if this event fires
+        # its own turn immediately, that same _fire clears it (no lingering).
+        if s.directed:
+            self._pending_directed = (s.speaker, s.speaker_uuid, s.text)
+
         if self.in_flight:
             return None                      # accumulate; recheck at turn_done
         # Event ingests fire on AROUSAL only (floor disabled here); the silence
@@ -647,14 +674,38 @@ class SLPerception:
         return None
 
     def turn_done(self, now: float) -> Optional[WakePayload]:
-        """Report that the current brain turn finished. Re-fire immediately if
-        the room stayed lively enough during it that arousal is still over
-        threshold (this is the single-flight recheck). Arousal-only — the floor
-        is the poll loop's job."""
+        """Report that the current brain turn finished, and decide whether to
+        re-fire (the single-flight recheck).
+
+        Two re-fire paths:
+        1. Arousal stayed over theta (the room stayed lively) — the original
+           recheck.
+        2. One-behind fix: a line ADDRESSED to me landed mid-turn but its arousal
+           leaked back under theta while I was thinking (V_inject·e^(−Δ/tau) < theta
+           on a slow turn), so path 1 misses it and it sits stranded until the next
+           event. Re-fire on it explicitly, carrying its real text as the trigger —
+           but still honor the min_interfire anti-echo floor, so a fast-failing brain
+           (timeout / [[NO_RESPONSE]]) can't tight-loop re-firing the same message.
+
+        Either way the trigger carries the pending directed line's text when we have
+        it (so the brain knows WHAT it's answering, not a blank "accumulated" wake).
+        Routing is decided in _fire and still consults _pending_im alone, so a
+        stranded LOCAL line re-fires LOCAL, never misrouted into an IM. Arousal-only
+        on the theta test — the silence floor stays the poll loop's job."""
         self.in_flight = False
-        if self.arousal.should_fire(now, floor_interval=0.0):
-            return self._fire(now, Salience(0.0, MEDIUM, "accumulated", kind="accumulated"))
-        return None
+        pend = self._pending_directed
+        if not self.arousal.should_fire(now, floor_interval=0.0):
+            # No residual arousal — re-fire ONLY for a stranded directed line, and
+            # only once the anti-echo floor has elapsed.
+            if not (pend and self.arousal.since_last_fire(now) >= self.cfg.min_interfire):
+                return None
+        if pend:
+            sp, _uuid, tx = pend
+            trigger = Salience(0.0, MEDIUM, "pending-directed", kind="accumulated",
+                               speaker=sp or "", text=tx, directed=True)
+        else:
+            trigger = Salience(0.0, MEDIUM, "accumulated", kind="accumulated")
+        return self._fire(now, trigger)
 
     def note_activity(self, now: float) -> None:
         """Real activity happened outside a perception fire (a prim-relayed
@@ -702,7 +753,10 @@ class SLPerception:
             text = text or p_text
         else:
             reply_via, reply_to_uuid = "local", None
-        self._pending_im = None  # consumed — never carries beyond one fire cycle
+        # Both pending slots consumed — never carry beyond one fire cycle (this is
+        # what makes a message that fired its own turn un-re-answerable: no double).
+        self._pending_im = None
+        self._pending_directed = None
         return WakePayload(
             trigger=trigger.reason,
             addressed=trigger.directed or trigger.tier == FORCE or reply_via == "im",

@@ -283,6 +283,74 @@ def test_reply_routing_midturn_im() -> None:
     check(p._pending_im is None, "pending IM target cleared once consumed")
 
 
+def test_perception_one_behind_refire_after_decay() -> None:
+    # The "one-behind" bug (2026-09-08): a line addressed to me lands mid-turn, but
+    # on a slow turn its arousal leaks back under theta before turn_done rechecks —
+    # so the old recheck (arousal-only) returned None and the message sat stranded
+    # until the NEXT event, making the reply fire "the instant you hit enter," one
+    # behind. The fix re-fires on the stranded directed line regardless of decay.
+    print("SLPerception one-behind (re-fire after arousal decayed under theta):")
+    p = SLPerception(SELF, ADDR, CFG)
+    first = p.ingest(local("Brandi", "Szondi", "hey lyra"), now=0.0)   # fires, in_flight
+    check(first is not None and p.in_flight, "first directed fires, in-flight")
+    check(p._pending_directed is None, "pending-directed cleared at its own fire (no self double)")
+    # A directed follow-up lands DURING the turn; single-flight holds it.
+    mid = p.ingest(local("Brandi", "Szondi", "lyra you there?"), now=1.0)
+    check(mid is None, "mid-turn directed accumulates (single-flight)")
+    # Turn runs LONG (60s) — arousal has genuinely decayed below theta by turn end.
+    check(p.arousal.level(60.0) < CFG.theta,
+          "arousal has leaked under theta during the slow turn (old recheck would miss it)")
+    again = p.turn_done(now=60.0)
+    check(again is not None, "turn_done STILL re-fires on the stranded directed line (the fix)")
+    check(again.text == "lyra you there?", "re-fire carries the stranded message's real text")
+    check(again.addressed, "re-fire is marked addressed (it WAS addressed to me)")
+    check(p._pending_directed is None, "pending-directed consumed by the re-fire")
+
+
+def test_perception_stranded_local_refires_local() -> None:
+    # Routing guard (the sharp edge Caia caught): the fix must NOT be built by
+    # generalizing _pending_im, because _pending_im DRIVES private routing — a
+    # stranded LOCAL line (which carries a speaker UUID!) would then re-fire as a
+    # private IM, the exact inverse of the "answered my DM in public" bug. The
+    # two-slot split (separate _pending_directed that never drives routing) must
+    # keep a stranded local-engaged line on LOCAL. This assertion IS that guard.
+    print("SLPerception stranded local-engaged re-fires LOCAL, never IM:")
+    p = SLPerception(SELF, ADDR, CFG, self_uuids=SELF_UUIDS)
+    # Damian addresses me by name -> opens engagement, fires, in-flight.
+    p.ingest(local_real(DAMIAN_UUID, "Damian Mills", "hey lyra"), now=0.0)
+    check(p.in_flight, "named local fires + opens engagement, in-flight")
+    # An UN-named local from the same (engaged) speaker lands mid-turn — promoted to
+    # directed strength, carries Damian's UUID, accumulates behind the running turn.
+    mid = p.ingest(local_real(DAMIAN_UUID, "Damian Mills", "you there?"), now=1.0)
+    check(mid is None, "mid-turn engaged-followup accumulates (single-flight)")
+    check(p.arousal.level(60.0) < CFG.theta, "arousal decayed under theta over the slow turn")
+    again = p.turn_done(now=60.0)
+    check(again is not None, "turn_done re-fires on the stranded engaged-followup")
+    check(again.reply_via == "local" and again.reply_to_uuid is None,
+          "stranded LOCAL line re-fires LOCAL — NOT misrouted into an IM (the guard)")
+    check(again.text == "you there?", "re-fire carries the stranded local line's text")
+    check(p._pending_im is None, "a local line never populated the IM routing slot")
+
+
+def test_perception_refire_honors_min_interfire() -> None:
+    # Anti-tight-loop guard: the pending re-fire bypasses the theta test, so it must
+    # still honor the min_interfire floor — otherwise a fast-failing brain (turn
+    # returns near-instantly via timeout/[[NO_RESPONSE]]) with a pending line could
+    # re-fire in a tight loop. Within min_interfire, NO re-fire; the message is kept.
+    print("SLPerception pending re-fire honors min_interfire (no tight loop):")
+    p = SLPerception(SELF, ADDR, CFG)
+    p.ingest(local("Brandi", "Szondi", "hey lyra"), now=0.0)          # fires, _last_fire=0
+    mid = p.ingest(local("Brandi", "Szondi", "lyra again"), now=0.1)  # accumulates, pending set
+    check(mid is None and p._pending_directed is not None, "mid-turn directed pending is set")
+    # Turn fast-fails almost immediately (0.2s < min_interfire=2.0). should_fire is
+    # blocked by its own min_interfire floor; the pending path must ALSO stay blocked.
+    again = p.turn_done(now=0.2)
+    check(again is None, "no re-fire inside the min_interfire window — tight loop averted")
+    check(not p.in_flight, "in-flight still cleared")
+    check(p._pending_directed is not None,
+          "stranded message is PRESERVED (not lost) — the next real event answers it")
+
+
 def test_motion_flood_does_not_fire() -> None:
     print("motion churn is scene-color, not a wake trigger:")
     # A dancing avatar: animation every 10s + interleaved typing. At the old
@@ -426,7 +494,11 @@ def main() -> int:
         test_arousal_refractory,
         test_perception_directed_fires_now, test_perception_single_flight_and_recheck,
         test_perception_quiet_after_turn, test_reply_routing,
-        test_reply_routing_midturn_im, test_motion_flood_does_not_fire,
+        test_reply_routing_midturn_im,
+        test_perception_one_behind_refire_after_decay,
+        test_perception_stranded_local_refires_local,
+        test_perception_refire_honors_min_interfire,
+        test_motion_flood_does_not_fire,
         test_engagement_window,
         test_surface_delta_buffer,
         test_heartbeat_and_floor, test_poll_idle_floor, test_note_activity_resets_floor,
