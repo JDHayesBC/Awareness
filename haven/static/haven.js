@@ -313,6 +313,12 @@ const haven = (() => {
         let target = null;
         if (wanted && rooms.some(r => r.id === wanted)) {
             target = wanted;
+        } else if (currentRoomId && rooms.some(r => r.id === currentRoomId)) {
+            // Preserve the room across reconnects. onConnected fires on EVERY
+            // (re)connect, not just cold open — so without this, an idle-triggered
+            // reconnect (missed pong / throttled timers on an idle tab) bounces the
+            // user back to rooms[0]. That was the "flash + reset to first room" bug.
+            target = currentRoomId;
         } else if (rooms.length > 0) {
             target = rooms[0].id;
         }
