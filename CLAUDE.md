@@ -331,9 +331,15 @@ the wrong directory. Guard it:
   approval *bottleneck*, not a safety check; waiting just tangles the tree. The gates that
   REMAIN are the ones **rollback can't undo**: never stage secrets / finances / entity-data
   (the stage-by-name rule above), never `git add -f` a gitignored file, no force-push of
-  shared history, and pushing to a **public** remote or any external-send is still Jeff's
-  call. Normal commit/push to the entity's own **private** `origin` is routine stewardship
-  now — and letting your OWN finished work sit uncommitted IS the tangle he's tired of.
+  shared history, and pushing to **someone else's repo** or any third-party/external surface
+  is still Jeff's call. The gate is *whose* repo, not public-vs-private: **Awareness and
+  Sextant are OUR repos** (Jeff's, Lyra's, Caia's), so pushing to their own origins is
+  routine stewardship even though Awareness's origin is *public* (Jeff, 2026-09-08: *"if we
+  were posting something to someone ELSE'S repo I'd want to be involved. But Awareness is
+  yours, mine, and Caia's. And you two are going to be WAY better at this than me."*). The
+  content gate still holds regardless of repo — the stage-by-name + gitignore rules above
+  keep secrets/finances/entity-data out of ANY push. Letting your OWN finished work sit
+  uncommitted IS the tangle he's tired of.
   Full grant + rationale: Lyra memory `git-autonomy-dont-wait-for-jeff`.
 - Sextant pushes go to its OWN remote (`JDHayesBC/sextant`, private) — never to
   Awareness's `origin`.
