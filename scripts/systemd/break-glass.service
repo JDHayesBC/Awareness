@@ -1,0 +1,29 @@
+[Unit]
+Description=Generate Lyra/Caia break-glass recovery package (weekly)
+Documentation=file:///mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/create_break_glass.py
+Documentation=https://github.com/JDHayesBC/Awareness/issues/157
+After=network-online.target
+
+[Service]
+Type=oneshot
+
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
+
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python3 /mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/create_break_glass.py
+
+SuccessExitStatus=0
+
+MemoryMax=1024M
+CPUQuota=50%
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=break-glass
+
+# Install (user units):
+#   cp scripts/systemd/break-glass.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now break-glass.timer

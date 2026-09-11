@@ -15,6 +15,9 @@ Usage:
 """
 
 import argparse
+import shutil
+import sqlite3
+import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -51,7 +54,11 @@ ENTITY_PATTERNS: list[tuple[str, str]] = [
     ("*.md",                    ""),              # identity.md, relationships.md, etc.
     ("current_scene.md",        ""),              # already caught by *.md — belt+suspenders
     (".entity_token",           ""),              # auth token (hidden file)
-    ("data/*.db",               "data"),          # SQLite databases
+    # NOTE: data/*.db is deliberately NOT raw-copied here. The live conversations.db is
+    # WAL-mode and written by the running pps container; a raw file copy grabs the .db
+    # WITHOUT the -wal, yielding a torn/incomplete DB in the recovery package (#157
+    # finding, 2026-09-11). DBs are captured via a consistent online-backup snapshot
+    # instead — see snapshot_sqlite / discover_entity_dbs.
     ("crystals/**/*.md",        "crystals"),      # rolling crystal window
     ("memories/word_photos/*.md", "memories/word_photos"),  # word photos
     ("journals/**/*",           "journals"),      # journal entries
@@ -91,6 +98,64 @@ def should_exclude(path: Path) -> bool:
         if part in EXCLUDE_DIRS:
             return True
     return False
+
+
+SQLITE_MAGIC = b"SQLite format 3\x00"
+
+
+def is_sqlite_db(path: Path) -> bool:
+    """True if path is a real (non-stub) SQLite database file.
+
+    Skips the many 0-byte / defunct *.db stubs in the entity data dirs — only files
+    carrying the 100-byte SQLite header are snapshotted.
+    """
+    try:
+        if path.stat().st_size < 100:  # SQLite header alone is 100 bytes
+            return False
+        with open(path, "rb") as f:
+            return f.read(16) == SQLITE_MAGIC
+    except OSError:
+        return False
+
+
+def snapshot_sqlite(src: Path, dest: Path) -> None:
+    """Write a transactionally-consistent snapshot of a (possibly live, WAL-mode) SQLite
+    DB to dest via SQLite's online-backup API.
+
+    This is the correct way to back up the live conversations.db: WAL mode lets readers
+    run concurrently with the pps container's writes, and .backup() copies an
+    internally-consistent image with any -wal content folded in — so the snapshot is a
+    single self-contained .db that restores cleanly with NO -wal/-shm alongside it.
+    A raw file copy (the old data/*.db glob) could not guarantee this. Raises on failure.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        dest.unlink()
+    src_conn = sqlite3.connect(str(src), timeout=30.0)
+    try:
+        dst_conn = sqlite3.connect(str(dest))
+        try:
+            src_conn.backup(dst_conn)
+        finally:
+            dst_conn.close()
+    finally:
+        src_conn.close()
+
+
+def discover_entity_dbs(entity_dir: Path) -> list[tuple[Path, str]]:
+    """Return (db_path, arcname) for each REAL SQLite db under entity_dir/data/.
+
+    arcname matches the old layout (entities/<entity>/data/<name>.db) so restore is
+    unchanged; only the capture method (snapshot vs raw copy) differs.
+    """
+    out: list[tuple[Path, str]] = []
+    data_dir = entity_dir / "data"
+    if not data_dir.is_dir():
+        return out
+    for db in sorted(data_dir.glob("*.db")):
+        if is_sqlite_db(db):
+            out.append((db, f"entities/{entity_dir.name}/data/{db.name}"))
+    return out
 
 
 def collect_entity_files(entity_dir: Path) -> list[tuple[Path, str]]:
@@ -157,6 +222,25 @@ def assemble_package(output_dir: Path, dry_run: bool = False) -> None:
         for src, arcname in entity_files:
             manifest.append((src, arcname, f"entity:{entity_dir.name}"))
 
+    # --- Entity SQLite DBs: consistent online-backup snapshots (NOT raw live copies) ---
+    # The live conversations.db is WAL-mode and written by the pps container; a raw copy
+    # would drop the -wal and yield a torn DB in the recovery package (#157). Snapshot each
+    # real DB into a temp dir and ship the snapshot. dry-run skips the (costly) snapshot and
+    # just reports the live size. snap_root is cleaned up at every exit below.
+    snap_root = Path(tempfile.mkdtemp(prefix="bg-snap-"))
+    db_snapshot_failures: list[str] = []
+    for entity_dir in entities:
+        for db_path, arcname in discover_entity_dbs(entity_dir):
+            if dry_run:
+                manifest.append((db_path, arcname, f"entity-db:{entity_dir.name}"))
+                continue
+            snap_dest = snap_root / arcname
+            try:
+                snapshot_sqlite(db_path, snap_dest)
+                manifest.append((snap_dest, arcname, f"entity-db:{entity_dir.name}"))
+            except Exception as e:
+                db_snapshot_failures.append(f"{arcname}: {e}")
+
     # --- Project config ---
     for src, arcname in PROJECT_CONFIG_FILES:
         manifest.append((src, arcname, "config"))
@@ -219,6 +303,7 @@ def assemble_package(output_dir: Path, dry_run: bool = False) -> None:
 
     if dry_run:
         log("Dry run complete. No files written.")
+        shutil.rmtree(snap_root, ignore_errors=True)
         return
 
     # --- Write the zip ---
@@ -235,10 +320,21 @@ def assemble_package(output_dir: Path, dry_run: bool = False) -> None:
     archive_size = zip_path.stat().st_size
     ratio = (1 - archive_size / total_bytes) * 100 if total_bytes > 0 else 0
 
+    # Clean up the temp snapshot dir now that everything is zipped.
+    shutil.rmtree(snap_root, ignore_errors=True)
+
     log("=" * 60)
     log("PACKAGE COMPLETE")
     log(f"  Archive: {zip_path}")
     log(f"  Archive size: {fmt_size(archive_size)} ({ratio:.1f}% compression)")
+    if db_snapshot_failures:
+        # A failed DB snapshot means that database is ABSENT from the recovery package.
+        # For conversations.db that is critical — surface it unmissably.
+        log("", "ERROR")
+        log(f"  [CRITICAL] {len(db_snapshot_failures)} SQLite snapshot(s) FAILED — "
+            f"those DBs are NOT in the package:", "ERROR")
+        for f in db_snapshot_failures:
+            log(f"    - {f}", "ERROR")
     log("=" * 60)
     log("")
     log("Hand this zip to Steve. Steve hands it to Nexus.")

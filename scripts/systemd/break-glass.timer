@@ -1,0 +1,15 @@
+[Unit]
+Description=Fire break-glass.service weekly (Lyra recovery package)
+Requires=break-glass.service
+
+[Timer]
+# Weekly, Sunday 03:13 local time. Off-hour to avoid contention. The generator uses
+# a live online-backup SQLite snapshot (no stack stop), so it does not need to phase
+# with the daily stack-stopping lyra-backup.timer (04:00).
+OnCalendar=Sun *-*-* 03:13:00
+AccuracySec=5min
+Persistent=true
+Unit=break-glass.service
+
+[Install]
+WantedBy=timers.target
