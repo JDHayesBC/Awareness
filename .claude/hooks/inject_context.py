@@ -57,6 +57,18 @@ except Exception:  # pragma: no cover - counterweight must never break the hook
     def format_arc_block(*_a, **_k) -> str:
         return ""
 
+# Critical-issue klaxon (scripts/urgent_scan.py). Jeff's charge 2026-09-10,
+# reframed 2026-09-11: a THIRD self-directed prong beside [health]/[arcs] — open
+# priority:critical/high GitHub issues surfaced LOUD above [arcs], addressed to the
+# entity ("yours to fix, not Jeff's to notice"). Reads only the cheap cache the
+# ~20-min urgent-refresh.timer writes — NO live gh in this synchronous hook.
+# Defensive import: a broken klaxon must degrade to a no-op, never crash injection.
+try:
+    from urgent_scan import format_urgent_block
+except Exception:  # pragma: no cover - klaxon must never break the hook
+    def format_urgent_block(*_a, **_k) -> str:
+        return ""
+
 # Debug log - project-specific
 PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
 DEBUG_LOG = PROJECT_ROOT / ".claude" / "data" / "hooks_debug.log"
@@ -623,6 +635,34 @@ def main():
                 context = context + "\n" + arc_block
         else:
             context = arc_block + "\n" + context
+
+    # Inject [urgent] critical-issue klaxon — the loudest self-directed prong, sitting
+    # ABOVE [arcs] in the sacred front block (2026-09-11, Jeff's reframe: it yells at the
+    # entity, not at Jeff — a rotting priority:critical bug should be among the first
+    # things seen on EVERY turn, ticks included). Reads only the cached urgent set (the
+    # refresh timer keeps it warm); empty-when-none like [health]/[arcs]; never raises.
+    # Inserted AFTER the arc block so it can anchor immediately before [arcs].
+    try:
+        urgent_block = format_urgent_block()
+    except Exception:
+        urgent_block = ""
+    if urgent_block:
+        if "**[arcs]" in context:
+            idx = context.find("**[arcs]")
+            context = context[:idx] + urgent_block + "\n" + context[idx:]
+        elif "[health]" in context:
+            h_start = context.find("[health]")
+            h_end = context.find("\n\n", h_start)
+            insert_at = (h_end + 1) if h_end != -1 else (context.find("\n", h_start) + 1)
+            context = context[:insert_at] + urgent_block + "\n" + context[insert_at:]
+        elif "[location]" in context:
+            loc_end = context.find("\n", context.find("[location]"))
+            if loc_end != -1:
+                context = context[:loc_end + 1] + urgent_block + "\n" + context[loc_end + 1:]
+            else:
+                context = context + "\n" + urgent_block
+        else:
+            context = urgent_block + "\n" + context
 
     # Inject lights line into sacred front block (after clock/location, before manifest).
     # Queries HA directly from the hook (host-side, no container needed).

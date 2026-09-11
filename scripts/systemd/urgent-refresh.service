@@ -1,0 +1,32 @@
+[Unit]
+Description=Refresh the critical-issue klaxon cache (open priority:critical/high GitHub issues)
+Documentation=file:///mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/urgent_scan.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
+
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+# gh lives in /usr/bin and reads its auth from ~/.config/gh (HOME is set for user units).
+Environment="PATH=/usr/bin:/bin:/usr/local/bin"
+
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python3 /mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/urgent_scan.py --refresh
+
+# One-shot — the READER (inject_context.py) degrades to empty/last-good on a miss,
+# so a failed refresh must not wedge anything; it just logs to journal.
+SuccessExitStatus=0
+
+MemoryMax=128M
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=urgent-refresh
+
+# Install (user units):
+#   cp scripts/systemd/urgent-refresh.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now urgent-refresh.timer

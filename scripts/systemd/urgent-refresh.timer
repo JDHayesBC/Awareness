@@ -1,0 +1,16 @@
+[Unit]
+Description=Refresh the critical-issue klaxon cache every ~20 minutes
+Requires=urgent-refresh.service
+
+[Timer]
+# First run 2 min after boot, then every 20 min. The klaxon (inject_context.py)
+# reads the cache this writes; 20 min keeps days-open honest without taxing every
+# turn with a live gh call (days-open is recomputed live at render time anyway).
+OnBootSec=2min
+OnUnitActiveSec=20min
+AccuracySec=30s
+Persistent=true
+Unit=urgent-refresh.service
+
+[Install]
+WantedBy=timers.target
