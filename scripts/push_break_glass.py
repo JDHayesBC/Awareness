@@ -69,6 +69,11 @@ RECIPIENTS_PIN = PROJECT_ROOT / "config" / "break_glass_recipients.sha256"
 ENV_FILE = PROJECT_ROOT / "pps" / "docker" / ".env"
 MARKER_FILE = PROJECT_ROOT / ".claude" / "data" / "break_glass_offsite.json"
 OBJECT_PREFIX = "break-glass/"
+# Stable, non-rotating pointer to the newest ciphertext. Dated object keys rotate out
+# (keep-N), so a link to a specific date eventually 404s; this alias is overwritten each run
+# and NEVER rotated, giving break-glass a PERMANENT public URL to hand to a recovery human.
+LATEST_ALIAS = "awareness-recovery-latest.zip.age"
+LATEST_OBJECT_KEY = OBJECT_PREFIX + LATEST_ALIAS
 MARKER_SCHEMA_VERSION = 1
 PIPELINE_VERSION = "1.0.0"
 DEFAULT_KEEP = 4
@@ -268,6 +273,8 @@ def rotate(client, bucket: str, keep_n: int) -> list[str]:
     for page in paginator.paginate(Bucket=bucket, Prefix=OBJECT_PREFIX):
         for item in page.get("Contents", []):
             k = item["Key"]
+            if k == LATEST_OBJECT_KEY:
+                continue  # the stable alias is never rotated (see LATEST_OBJECT_KEY)
             if k.endswith(".age"):
                 objs.append(k)
 
@@ -350,6 +357,11 @@ def cmd_run(args) -> int:
         size = verify_roundtrip(client, bucket, object_key, cipher_sha, work)
         log(f"round-trip verified ({size / 1e6:.1f} MB, sha256 matches).")
 
+        # Update the stable alias (server-side copy — no 192MB re-upload) and prove IT too.
+        client.copy_object(Bucket=bucket, CopySource={"Bucket": bucket, "Key": object_key}, Key=LATEST_OBJECT_KEY)
+        verify_roundtrip(client, bucket, LATEST_OBJECT_KEY, cipher_sha, work)
+        log(f"stable alias updated -> {LATEST_OBJECT_KEY} (round-trip verified)")
+
         deleted = rotate(client, bucket, args.keep)
         if deleted:
             log(f"rotated (deleted {len(deleted)}): {', '.join(d.rsplit('/', 1)[-1] for d in deleted)}")
@@ -358,6 +370,7 @@ def cmd_run(args) -> int:
             "version": MARKER_SCHEMA_VERSION,
             "last_success_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
             "object_key": object_key,
+            "latest_object_key": LATEST_OBJECT_KEY,
             "size_bytes": size,
             "age_ciphertext_sha256": cipher_sha,
             "zip_sha256": zip_sha,
