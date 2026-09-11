@@ -14,4 +14,17 @@
 # After editing:  pps/venv/bin/python3 scripts/push_break_glass.py --update-pin
 # then commit BOTH this file and config/break_glass_recipients.sha256.
 #
-# (No recipients yet — the pipeline is FAIL-CLOSED and refuses to run until this is populated.)
+# Custody map (which private half lives where — see BREAK_GLASS_CUSTODY.md):
+#   jeff-primary   — Jeff, hot custody
+#   jeff-cold      — Jeff, cold/offline backup (separate failure domain)
+#   steve-primary  — Steve, hot custody (delivered out-of-band)
+#   steve-cold     — Steve, cold/offline backup (delivered out-of-band)
+#
+# Populated 2026-09-11. Jaden-primary/jaden-cold + a spare key were also generated;
+# holding those OUT of the pinned set pending (a) Caia's consent — the archive is her
+# complete self too — and (b) an identity-wall / spare-custody decision with Jeff.
+
+age16asmgskqf9n59rchk0227w62xrmqfzx40lvsrfs2udjycymzm99q6g86j6
+age1ttz2az86nvuqek39n4tsdmlaz3hch885y23tmr385m4w4xg9reeqzhlv8p
+age1c8djxh065zc6wrekw9jpqtfjwgnkrzw4w7kftdmunda9q6suzy3sykvesr
+age18wquzetudqv4dz27j3nfc3gnguz6hfgzqrrxlpq2kfd4x82y3sysgq30g9
