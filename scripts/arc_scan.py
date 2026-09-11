@@ -284,8 +284,13 @@ def scan(arcs_dir: Path):
 
 
 def _sort_key(r: dict):
-    # stalest first; explicitly-flagged arcs boosted; unknown dates sort last
-    return (r["needs_attention"], r["stale_days"] is not None, -(r["stale_days"] or 0))
+    # Callers sort with reverse=True, so every term must read "bigger = higher priority":
+    #   needs_attention True→1  → explicitly-flagged arcs boosted above merely-stale ones;
+    #   has_date True→1         → dated arcs above undated (unknown dates sort last);
+    #   +stale_days             → POSITIVE so reverse=True yields genuine stalest-first.
+    # (Was `-(stale_days)`, which combined with reverse=True inverted to least-stale-first —
+    # masked while a flagged P0 arc dominated tier 1, exposed once all flagged arcs were served.)
+    return (r["needs_attention"], r["stale_days"] is not None, (r["stale_days"] or 0))
 
 
 def format_arc_block(entity: str | None = None, today: dt.date | None = None,
@@ -342,6 +347,8 @@ def main():
                     help="Entity name (default: $ENTITY_NAME / basename($ENTITY_PATH)).")
     ap.add_argument("--all", action="store_true", help="include arcs whose staleness isn't a failure signal")
     ap.add_argument("--top", type=int, default=3, help="how many to surface (default 3)")
+    ap.add_argument("--threshold", type=int, default=14,
+                    help="staleness (days) at/above which a moving arc counts as starving (default 14)")
     ap.add_argument("--tick", action="store_true",
                     help="print a one-line starving-arc pointer for a heartbeat tick prompt")
     args = ap.parse_args()
@@ -353,7 +360,12 @@ def main():
 
     rows = scan(arcs_dir)
     if not args.all:
-        rows = [r for r in rows if r["moving"] and not r["parked"]]
+        # Same definition of "starving" as format_arc_block (the ambient injection): a
+        # moving, un-parked arc whose VERIFIED staleness meets the threshold. Applying the
+        # threshold here too keeps the CLI honest — empty-when-served, no "untouched 0d"
+        # cry-wolf on a freshly-tended arc. `--all` remains the unfiltered diagnostic view.
+        rows = [r for r in rows if r["moving"] and not r["parked"]
+                and r["stale_days"] is not None and r["stale_days"] >= args.threshold]
     rows.sort(key=_sort_key, reverse=True)
     rows = rows[: max(1, args.top)]
 
