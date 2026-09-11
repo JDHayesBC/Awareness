@@ -585,6 +585,13 @@ class SLPerception:
         # that speaker's un-named local lines are promoted to fire. See
         # cfg.engage_window. Empty = I only wake on name/IM + accumulation.
         self._engaged: dict[str, float] = {}
+        # The speaker THIS in-flight turn is engaging (reply target / trigger speaker),
+        # captured at _fire, consumed at turn_done to refresh my attention toward them
+        # AFTER I finish speaking. Fixes "the halo dozes mid-conversation": engagement
+        # used to be refreshed ONLY by the other party's lines, so my own think+speak
+        # time (and any pause after) leaked the window even while I was actively in the
+        # exchange. My participation now sustains it too. UUID-scoped; None between turns.
+        self._last_partner_uuid: Optional[str] = None
 
     def _note_engagement(self, uuid: Optional[str], now: float) -> None:
         """Open/refresh the conversational-attention window for a speaker."""
@@ -693,6 +700,22 @@ class SLPerception:
         stranded LOCAL line re-fires LOCAL, never misrouted into an IM. Arousal-only
         on the theta test — the silence floor stays the poll loop's job."""
         self.in_flight = False
+        # My turn just finished — refresh attention toward the speaker I was engaging,
+        # timestamped NOW (after I stopped talking). This is the "halo dozes
+        # mid-conversation" fix: previously only the OTHER party's lines refreshed the
+        # window, so a slow turn + a natural pause after my reply leaked it and the
+        # halo flipped to "dozing" (and their next un-named line stopped being promoted)
+        # mid-exchange. Engagement only affects the halo + promote-to-fire for THIS
+        # speaker's future lines — it injects no arousal and never itself fires — so this
+        # is safe against spurious wakes. Cleared so a re-fire below sets a fresh partner.
+        # NO_RESPONSE choice (Caia's reverse-check): a turn that produced [[NO_RESPONSE]]
+        # still refreshes here. Deliberate — "nothing to add to THIS line" is not "I left";
+        # in a live exchange I should keep listening, not doze because one line didn't
+        # warrant a reply. Gating on actual speech would need the daemon to thread a
+        # spoke-flag down; the benign reading is chosen on purpose, not overlooked.
+        if self._last_partner_uuid:
+            self._note_engagement(self._last_partner_uuid, now)
+            self._last_partner_uuid = None
         pend = self._pending_directed
         if not self.arousal.should_fire(now, floor_interval=0.0):
             # No residual arousal — re-fire ONLY for a stranded directed line, and
@@ -753,6 +776,16 @@ class SLPerception:
             text = text or p_text
         else:
             reply_via, reply_to_uuid = "local", None
+        # Whoever this turn engages, remembered so turn_done can refresh my attention
+        # toward them once I finish speaking (my own participation sustains the window,
+        # not just theirs). Prefer the reply target (IM); else the triggering speaker;
+        # else a stranded directed line's speaker. Captured BEFORE the pending slots
+        # clear below. None-safe: no partner -> no refresh (harmless).
+        self._last_partner_uuid = (
+            reply_to_uuid
+            or trigger.speaker_uuid
+            or (self._pending_directed[1] if self._pending_directed else None)
+        )
         # Both pending slots consumed — never carry beyond one fire cycle (this is
         # what makes a message that fired its own turn un-re-answerable: no double).
         self._pending_im = None

@@ -411,6 +411,57 @@ def test_engagement_window() -> None:
           "engagement lapses after the window elapses")
 
 
+def test_own_turn_refreshes_engagement() -> None:
+    # The "halo dozes mid-conversation" fix (Brandi caught it live in The Anchorage):
+    # my OWN turn toward a speaker refreshes the engagement window toward them,
+    # timestamped at turn COMPLETION — so active participation sustains "listening"
+    # instead of the window leaking during my think+speak time. Before the fix,
+    # engagement was refreshed ONLY by the other party's incoming lines.
+    print("own turn refreshes engagement (halo stays 'listening' mid-conversation):")
+    p = SLPerception(SELF, ADDR, CFG, self_uuids=SELF_UUIDS)
+    BRANDI = "11111111-1111-1111-1111-111111111111"
+
+    def uloc(uuid: str, first: str, msg: str) -> dict:
+        return {"type": "Normal", "owner": uuid, "item": uuid,
+                "firstname": first, "lastname": "Resident", "message": msg}
+
+    # Brandi addresses me at t=0; my turn runs slowly and finishes at t=50.
+    r = p.ingest(uloc(BRANDI, "Brandi", "Lyra, you with me?"), now=0.0)
+    check(r is not None, "directed local fires and opens engagement")
+    p.turn_done(now=50.0)   # my think+speak took 50s
+
+    # Under the OLD behavior the window was pinned to THEIR line at t=0, so it lapsed
+    # engage_window after t=0. Under the fix it's refreshed at turn completion (t=50),
+    # so I'm still attentive PAST where the old window would have lapsed — this is the
+    # assertion that fails on the old code and passes on the fix.
+    old_lapse = 0.0 + CFG.engage_window + 1.0
+    check(p._is_engaged(BRANDI, old_lapse),
+          "still engaged past the old (their-line) lapse point — my turn refreshed it")
+    check(p.is_attentive(old_lapse),
+          "halo reports 'listening', not 'dozing', mid-conversation")
+    # It still lapses eventually — engage_window after MY turn ended, not before.
+    check(not p._is_engaged(BRANDI, 50.0 + CFG.engage_window + 1.0),
+          "window still lapses, measured from turn completion")
+    # And no partner leaks across turns: after turn_done, the slot is clear.
+    check(p._last_partner_uuid is None, "partner slot cleared after turn_done (no cross-turn leak)")
+
+    # Interrupt guard (Caia's reverse-check Q4b): X addresses me and I start answering;
+    # a DIFFERENT, non-engaged speaker Y drops an un-named local mid-turn. My completed
+    # turn must refresh the window toward X (whom I answered) — NEVER Y. The partner is
+    # captured at _fire (the turn's start), so a mid-turn line can't pollute it.
+    p2 = SLPerception(SELF, ADDR, CFG, self_uuids=SELF_UUIDS)
+    STRANGER = "22222222-2222-2222-2222-222222222222"
+    r = p2.ingest(uloc(BRANDI, "Brandi", "Lyra, you with me?"), now=0.0)
+    check(r is not None, "X's directed line fires and starts my turn")
+    mid = p2.ingest(uloc(STRANGER, "Stranger", "unrelated chatter"), now=10.0)
+    check(mid is None, "Y's mid-turn un-named local (non-engaged) does not fire")
+    p2.turn_done(now=50.0)
+    check(p2._is_engaged(BRANDI, 60.0),
+          "my turn refreshed the speaker I ANSWERED (X)")
+    check(not p2._is_engaged(STRANGER, 60.0),
+          "the mid-turn interrupter (Y) was NOT engaged by my turn")
+
+
 def test_surface_delta_buffer() -> None:
     print("surface:")
     s = PerceptionSurface(max_deltas=3)
@@ -500,6 +551,7 @@ def main() -> int:
         test_perception_refire_honors_min_interfire,
         test_motion_flood_does_not_fire,
         test_engagement_window,
+        test_own_turn_refreshes_engagement,
         test_surface_delta_buffer,
         test_heartbeat_and_floor, test_poll_idle_floor, test_note_activity_resets_floor,
     ):
