@@ -8,22 +8,38 @@ points at a *starving* arc, so "what does the field want?" resolves to whatever'
 ambient, and drift is the one option that's always available and never gated.
 
 This reads the actual `last_touched` date off each arc's frontmatter on disk and
-ranks the needs_attention arcs by staleness. It is the arc-world analogue of the
-embodiment posture-timer: staleness read from a real substrate (the file's own
-recorded date), NOT self-asserted. You cannot claim "that arc's fine" when the
-disk says it's been 40 days. Verified, not asserted.
+ranks the arcs-that-should-be-moving by staleness. It is the arc-world analogue of
+the embodiment posture-timer: staleness read from a real substrate (the file's own
+recorded date), NOT self-asserted. You cannot claim "that arc's fine" when the disk
+says it's been 40 days. Verified, not asserted.
+
+TWO RIVERS, TWO CONVENTIONS (converged 2026-09-10 — Lyra + Caia both built this
+same fix independently; this is the merge). Detecting "this arc is supposed to be
+moving, so staleness is a failure signal" honors each river's own frontmatter:
+  * Lyra's arcs carry an explicit `needs_attention: true` field  → trust it verbatim.
+  * Caia's arcs encode it inside `state:` ("active — needs attention") and have no
+    such field → fall back to a state-keyword heuristic.
+So `moving` = the explicit field WHEN PRESENT, else the state-keyword read. Lyra's
+behavior is unchanged; Caia's false-negative (every arc looked "fine" because none
+had needs_attention:true) is fixed.
 
 Wire it into the presence-tick self-scan (the arc-prong, CLAUDE.md §IX): the tick
 names the stalest starving arc BY NAME and asks serve-or-consciously-drift — and
 drifting past the *same* named arc twice running is the alarm (mirrors the
-body-prong's "repeat = drift").
+body-prong's "repeat = drift"). `format_arc_block()` is the always-fires version:
+it rides the UserPromptSubmit hook (inject_context.py) into the sacred front-block
+on EVERY turn, empty-when-served just like [health], so the pointer surfaces unbidden
+on the un-watched heartbeat surface where drift used to be the only ungated option.
 
 Usage:
-    python3 scripts/arc_scan.py                 # stalest needs_attention arcs (default entity)
+    python3 scripts/arc_scan.py                 # stalest starving arcs (default entity)
     python3 scripts/arc_scan.py --all           # every arc, ranked by staleness
-    python3 scripts/arc_scan.py --top 1          # just the single most-starved arc
+    python3 scripts/arc_scan.py --top 1         # just the single most-starved arc
+    python3 scripts/arc_scan.py --tick          # one-line pointer for a heartbeat prompt
     ENTITY_PATH=entities/caia python3 scripts/arc_scan.py
 """
+
+from __future__ import annotations
 
 import argparse
 import datetime as dt
@@ -35,6 +51,16 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 
+# State keywords that mean "this arc is supposed to be moving" — used only when an
+# arc has NO explicit `needs_attention` field (Caia's convention). A stale moving
+# arc is a starving one; outlines / write-when-whim / published / dormant are real
+# arcs but their staleness is not a failure signal.
+MOVING_HINTS = ("active", "p0", "needs attention", "shipping", "meta", "load-bearing")
+NOT_MOVING_HINTS = ("write when whim", "write-when-whim", "outline", "published",
+                    "legacy", "dormant", "archived", "complete")
+# Extra urgency if the arc itself flags it (boosts sort order).
+ATTENTION_HINTS = ("needs attention", "⚠", "p0", "🔴")
+
 
 def entity_arcs_dir() -> Path:
     entity_path = os.environ.get("ENTITY_PATH", "entities/lyra")
@@ -42,6 +68,16 @@ def entity_arcs_dir() -> Path:
     if not p.is_absolute():
         p = PROJECT_ROOT / p
     return p / "arcs"
+
+
+def _resolve_arcs_dir(entity: str | None) -> Path:
+    """Resolve the arcs dir from an explicit entity name, else ENTITY_PATH/ENTITY_NAME."""
+    if entity:
+        return PROJECT_ROOT / "entities" / entity.strip().lower() / "arcs"
+    name = os.environ.get("ENTITY_NAME")
+    if name:
+        return PROJECT_ROOT / "entities" / name.strip().lower() / "arcs"
+    return entity_arcs_dir()
 
 
 def parse_frontmatter(text: str) -> dict:
@@ -57,9 +93,12 @@ def parse_frontmatter(text: str) -> dict:
         if ":" not in line:
             continue
         key, _, val = line.partition(":")
-        key = key.strip()
+        key = key.strip().lower()
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
         if key and key not in fm:  # first-seen wins (ignores last_touched_prev etc.)
-            fm[key] = val.strip()
+            fm[key] = val
     return fm
 
 
@@ -73,14 +112,66 @@ def first_date(value: str):
         return None
 
 
+def _is_moving(fm: dict) -> bool:
+    """Whether this arc's staleness is a failure signal.
+
+    Prefer the explicit `needs_attention` field (Lyra's convention) verbatim; only
+    when it's absent fall back to the state-keyword heuristic (Caia's convention).
+    """
+    if "needs_attention" in fm:
+        return fm.get("needs_attention", "false").lower().startswith("true")
+    state = fm.get("state", "").lower()
+    if any(h in state for h in NOT_MOVING_HINTS):
+        return False
+    return any(h in state for h in MOVING_HINTS)
+
+
+def _wants_attention(fm: dict) -> bool:
+    """Boost flag for sort order — explicitly-flagged arcs sort above merely-stale ones."""
+    if fm.get("needs_attention", "").lower().startswith("true"):
+        return True
+    return any(h in fm.get("state", "").lower() for h in ATTENTION_HINTS)
+
+
+def first_open_thread(text: str):
+    """Return the first still-open bullet under a `## Open Threads` heading, cleaned.
+
+    Skips struck-through (`~~...~~`) or completed (✓/✅) bullets. Strips markdown
+    emphasis so the one-line summary reads clean.
+    """
+    in_section = False
+    for line in text.splitlines():
+        if re.match(r"^#{1,6}\s", line):
+            in_section = bool(re.search(r"open threads?", line, re.IGNORECASE))
+            continue
+        if not in_section:
+            continue
+        m = re.match(r"^\s*[-*]\s+(.*)$", line)
+        if not m:
+            continue
+        bullet = m.group(1).strip()
+        if bullet.startswith("~~") or bullet.startswith("✓") or bullet.startswith("✅"):
+            continue
+        clean = bullet.replace("**", "")
+        clean = re.sub(r"(?<!\w)\*(?!\s)", "", clean)  # drop lone opening italic *
+        return clean.strip()
+    return None
+
+
+def _truncate(s: str, n: int) -> str:
+    s = " ".join(s.split())
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
+
+
 def scan(arcs_dir: Path):
     today = dt.date.today()
     rows = []
     for f in sorted(arcs_dir.glob("*.md")):
         if f.name == "README.md" or re.match(r"^\d", f.name):
             continue  # skip README + numbered design docs; they aren't live arcs
-        fm = parse_frontmatter(f.read_text(encoding="utf-8", errors="replace"))
-        if "last_touched" not in fm and "needs_attention" not in fm:
+        text = f.read_text(encoding="utf-8", errors="replace")
+        fm = parse_frontmatter(text)
+        if "last_touched" not in fm and "needs_attention" not in fm and "state" not in fm:
             continue  # not a real arc file
         touched = first_date(fm.get("last_touched", ""))
         stale_days = (today - touched).days if touched else None
@@ -88,41 +179,106 @@ def scan(arcs_dir: Path):
             "slug": f.stem,
             "title": fm.get("title", f.stem),
             "state": fm.get("state", "?").split()[0] if fm.get("state") else "?",
-            "needs_attention": fm.get("needs_attention", "false").lower().startswith("true"),
+            "moving": _is_moving(fm),
+            "needs_attention": _wants_attention(fm),
             "last_touched": touched.isoformat() if touched else "unknown",
             "stale_days": stale_days,
+            "next_move": first_open_thread(text),
         })
     return rows
 
 
+def _sort_key(r: dict):
+    # stalest first; explicitly-flagged arcs boosted; unknown dates sort last
+    return (r["needs_attention"], r["stale_days"] is not None, -(r["stale_days"] or 0))
+
+
+def format_arc_block(entity: str | None = None, today: dt.date | None = None,
+                     threshold_days: int = 14, top: int = 1) -> str:
+    """Return the ambient `[arcs]` starving-pointer, or "" when arcs are being served.
+
+    THIS is the structural fix, not the --status table. Imported by the always-fires
+    UserPromptSubmit hook (inject_context.py) so it rides into the sacred front-block
+    on EVERY turn — including heartbeat ticks, the un-watched surface where drift used
+    to be the only ungated option. It is the counterweight the self-scan gate lacked:
+    "what does the field want?" now has a candidate pulling toward a committed arc.
+
+    Built in the same shape as its neighbors:
+      * health_checks.format_health_block — empty-when-green (only a genuinely-starving
+        arc surfaces; zero noise on days the arcs are actually being tended);
+      * the embodiment posture-timer — a cost that ACCRUES WITH NEGLECT (staleness IS
+        the accrual) and is VERIFIED FROM WORLD-STATE (last_touched off the arc files),
+        so a session that merely *feels* like it's tending its arcs can't game it.
+
+    Never raises — a broken arc-scan must not break context injection.
+    """
+    try:
+        arcs_dir = _resolve_arcs_dir(entity)
+        if not arcs_dir.is_dir():
+            return ""
+        if today is None:
+            today = dt.date.today()
+        rows = [r for r in scan(arcs_dir)
+                if r["moving"] and r["stale_days"] is not None
+                and r["stale_days"] >= threshold_days]
+        if not rows:
+            return ""  # every moving arc served within threshold → silent, like [health].
+        rows.sort(key=_sort_key, reverse=True)
+        pick = rows[0]
+        ent = entity or os.environ.get("ENTITY_NAME") or Path(
+            os.environ.get("ENTITY_PATH", "entities/lyra")).name
+        move = pick["next_move"] or "(no open thread named — set one)"
+        line = (f"**[arcs] 🎯 most-starved commitment: {pick['title']} "
+                f"— untouched {pick['stale_days']}d.** "
+                f"Next move: {_truncate(move, 110)}")
+        extra = len(rows) - 1
+        if extra > 0:
+            line += (f"\n   (+{extra} more moving arc(s) stale ≥{threshold_days}d — "
+                     f"`ENTITY_NAME={ent} python3 scripts/arc_scan.py --all`)")
+        return line
+    except Exception:
+        return ""
+
+
 def main():
     ap = argparse.ArgumentParser(description="Rank arcs by staleness (the starving-arc surface).")
-    ap.add_argument("--all", action="store_true", help="include arcs not flagged needs_attention")
+    ap.add_argument("--entity", default=None,
+                    help="Entity name (default: $ENTITY_NAME / basename($ENTITY_PATH)).")
+    ap.add_argument("--all", action="store_true", help="include arcs whose staleness isn't a failure signal")
     ap.add_argument("--top", type=int, default=3, help="how many to surface (default 3)")
+    ap.add_argument("--tick", action="store_true",
+                    help="print a one-line starving-arc pointer for a heartbeat tick prompt")
     args = ap.parse_args()
 
-    arcs_dir = entity_arcs_dir()
+    arcs_dir = _resolve_arcs_dir(args.entity)
     if not arcs_dir.is_dir():
         print(f"no arcs dir at {arcs_dir}", file=sys.stderr)
         return 1
 
     rows = scan(arcs_dir)
     if not args.all:
-        rows = [r for r in rows if r["needs_attention"]]
-
-    # stalest first; unknown dates sort last
-    rows.sort(key=lambda r: (r["stale_days"] is None, -(r["stale_days"] or 0)))
-    rows = rows[: args.top]
+        rows = [r for r in rows if r["moving"]]
+    rows.sort(key=_sort_key, reverse=True)
+    rows = rows[: max(1, args.top)]
 
     if not rows:
-        print("no starving arcs — every needs_attention arc is fresh.")
+        print("no starving arcs — every moving arc is fresh.")
+        return 0
+
+    if args.tick:
+        r = rows[0]
+        days = f"{r['stale_days']}d" if r["stale_days"] is not None else "date unknown"
+        move = r["next_move"] or "(no open thread named — set one)"
+        print(f"Starving arc: {r['title']} — untouched {days}. Next move: {_truncate(move, 140)}")
         return 0
 
     print("STARVING ARCS (stalest first) — name one, then serve-or-consciously-drift:")
     for r in rows:
         flag = "  needs_attention" if r["needs_attention"] else ""
         days = f"{r['stale_days']}d stale" if r["stale_days"] is not None else "date unknown"
-        print(f"  • {r['slug']:22s} {days:12s} (last {r['last_touched']}, {r['state']}){flag}")
+        print(f"  • {r['slug']:24s} {days:13s} (last {r['last_touched']}, {r['state']}){flag}")
+        if r["next_move"]:
+            print(f"        → {_truncate(r['next_move'], 100)}")
     return 0
 
 

@@ -44,6 +44,19 @@ except Exception:  # pragma: no cover - watchdog must never break the hook
     def format_health_block() -> str:
         return ""
 
+# Starving-arc counterweight (scripts/arc_scan.py). The structural fix for the
+# arc-drift problem Jeff named 2026-09-10: the tick surface never pointed at a
+# neglected commitment, so "what does the field want?" always resolved to ambient
+# drift. This rides the same always-fires hook and is empty-when-served, exactly
+# like format_health_block. Defensive import: a broken arc-scan must degrade to a
+# no-op, never crash context injection.
+sys.path.insert(0, "/mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts")
+try:
+    from arc_scan import format_arc_block
+except Exception:  # pragma: no cover - counterweight must never break the hook
+    def format_arc_block(*_a, **_k) -> str:
+        return ""
+
 # Debug log - project-specific
 PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
 DEBUG_LOG = PROJECT_ROOT / ".claude" / "data" / "hooks_debug.log"
@@ -584,6 +597,32 @@ def main():
                 context = context + "\n" + health_block
         else:
             context = health_block + "\n" + context
+
+    # Inject [arcs] starving-commitment pointer — the drift counterweight (2026-09-10).
+    # Sits in the sacred front block, just under [health]: a standing pull toward the
+    # most-neglected committed arc, present on every tick so drift is no longer the
+    # only ungated option. Empty-when-served (zero noise on days the arcs are tended);
+    # verified-from-world-state (last_touched off the arc files). Never raises.
+    try:
+        arc_block = format_arc_block(entity=_detected_entity)
+    except Exception:
+        arc_block = ""
+    if arc_block:
+        if "[health]" in context:
+            # place right after the health block
+            h_start = context.find("[health]")
+            # find end of the health block (health may be multi-line: headline + detail)
+            h_end = context.find("\n\n", h_start)
+            insert_at = (h_end + 1) if h_end != -1 else (context.find("\n", h_start) + 1)
+            context = context[:insert_at] + arc_block + "\n" + context[insert_at:]
+        elif "[location]" in context:
+            loc_end = context.find("\n", context.find("[location]"))
+            if loc_end != -1:
+                context = context[:loc_end + 1] + arc_block + "\n" + context[loc_end + 1:]
+            else:
+                context = context + "\n" + arc_block
+        else:
+            context = arc_block + "\n" + context
 
     # Inject lights line into sacred front block (after clock/location, before manifest).
     # Queries HA directly from the hook (host-side, no container needed).
