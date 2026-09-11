@@ -1,0 +1,17 @@
+# Break-Glass Recovery — pinned recipient PUBLIC keys (age)
+#
+# scripts/push_break_glass.py encrypts each recovery archive to EVERY key listed here.
+# These are PUBLIC keys — safe to commit. The matching PRIVATE keys live OFF this box, in
+# Jeff's / Steve's custody. See docs/BREAK_GLASS_CUSTODY.md for the custody design.
+#
+# One recipient per line. Format: an age recipient ("age1...") or an ssh public key
+# ("ssh-ed25519 ..." / "ssh-rsa ..."). Blank lines and #-comments are ignored.
+#
+# REQUIRED: several, custodially diverse — no two private halves in one failure domain
+# (e.g. Jeff-primary, Jeff-cold, Steve-primary, Steve-cold). For break-glass, RECOVERABILITY
+# is the primary requirement, so more independent keys = more ways back in.
+#
+# After editing:  pps/venv/bin/python3 scripts/push_break_glass.py --update-pin
+# then commit BOTH this file and config/break_glass_recipients.sha256.
+#
+# (No recipients yet — the pipeline is FAIL-CLOSED and refuses to run until this is populated.)

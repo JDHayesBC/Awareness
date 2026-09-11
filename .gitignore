@@ -22,6 +22,10 @@ discord_bot_token.txt
 .env
 *.key
 *.pem
+# age private identity keys — NEVER commit (private halves live OFF this box, in custody)
+*.agekey
+age-identity*
+*.age-identity
 
 # Project coordination
 .project_lock
