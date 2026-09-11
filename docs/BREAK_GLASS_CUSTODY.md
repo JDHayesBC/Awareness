@@ -63,8 +63,11 @@ age-keygen -o jeff-cold.agekey
 ```
 - The `*.agekey` files contain **private** keys — they go to their custody locations and **never**
   touch the NUC or the git repo.
-- Only the four **public** keys (`age1...`) are collected into the pinned recipients file the
-  pipeline encrypts to (Lyra's pipeline owns that file's path + its committed sha256 checksum).
+- Only the four **public** keys (`age1...`) go into the pinned recipients file
+  **`config/break_glass_recipients.txt`** (git-tracked). Its integrity pin is
+  **`config/break_glass_recipients.sha256`** (sha256 of the `.txt` bytes, checked at runtime;
+  `push_break_glass.py --update-pin` regenerates it; a missing/mismatched pin makes the pipeline
+  **refuse to run**).
 
 ---
 
@@ -100,8 +103,13 @@ for it; don't pretend the checksum already is it.
 
 With public-key age, **the NUC cannot decrypt-verify its own uploads** (no private key on the box).
 The automated pipeline proves the *local* zip is good, that encryption exited cleanly, that the
-upload round-tripped, and that the blob is encrypted to the *expected* recipients (header-stanza
-check). What **no automated Phase-1 check can prove** is the thing that actually matters:
+upload round-tripped, and that the ciphertext carries the **expected *number*** of recipient stanzas.
+**Important limit:** that stanza check is a *count / integrity* check only — **age deliberately hides
+recipient identity** (each X25519 stanza is a random ephemeral share, not the recipient's public
+key), so the ciphertext can prove *how many* recipients but never *which*. Recipient **identity**
+therefore rests entirely on the pinned recipients file (detective-tier, §2), the drill, and the
+`recipient_fingerprints` eyeball below — **never** on the blob self-proving its recipients. And what
+**no automated Phase-1 check can prove** is the thing that actually matters:
 
 > that the ciphertext sitting in R2 will, with a real private key, decrypt back to a good, restorable
 > backup.
@@ -122,8 +130,8 @@ assumed.
 
 **The drill (must decrypt the ACTUAL uploaded blob — not a fresh local re-encrypt):**
 ```bash
-# 1. Pull the latest ciphertext from R2 (object_key is in the marker, see §4)
-#    → break-glass-YYYY-MM-DD.zip.age
+# 1. Pull the latest ciphertext from R2 — bucket `awareness`, object_key from the marker
+#    → break-glass/awareness-recovery-YYYY-MM-DD.zip.age
 # 2. Decrypt with YOUR private key:
 age -d -i /path/to/your-private.agekey -o recovered.zip break-glass-YYYY-MM-DD.zip.age
 # 3. Unzip and run the integrity check:
@@ -133,8 +141,11 @@ unzip -q recovered.zip -d recovered/
 # 4. Sanity: the entity data is present, the DBs open, identity files read.
 ```
 
-**Pass** = decrypt succeeds, every `integrity_check` returns `ok`, the restore dry-run completes, and
-the recovered data matches the marker's `zip_sha256`.
+**Pass** = decrypt succeeds, every `integrity_check` returns `ok`, the restore dry-run completes, the
+recovered data matches the marker's `zip_sha256`, **and** the marker's `recipient_fingerprints` (each
+= `sha256(pubkey)[:16]`) match the known-good fingerprints recorded at setup (§5). That last one is
+the detective check that the backup went to the *right* four keys — the ciphertext itself can't prove
+it (age hides recipient identity, §3 intro).
 
 **FAIL is a sev-1.** A failed drill means the off-site backups have been **silently useless** — the
 exact "corrupted for a year and we never knew" nightmare. On fail: stop trusting the marker, alert
@@ -179,8 +190,11 @@ live on the machine it's paging about: the nerve that watches must live outside 
 - [ ] Generate Jeff-primary and Jeff-cold keypairs **off the NUC**; move Jeff-cold's private key
       offline + off-site.
 - [ ] Receive Steve's two **public** keys; do the **fingerprint readback** on a call (§2).
-- [ ] Assemble the 4 pubkeys into the pinned recipients file; commit it checksummed.
-- [ ] Have Steve independently confirm the committed fingerprints match.
+- [ ] Hand the 4 **public** keys to Lyra → she populates `config/break_glass_recipients.txt`,
+      regenerates the `.sha256` pin (`--update-pin`), and commits.
+- [ ] **Record each pubkey's `sha256(pubkey)[:16]` fingerprint in a known-good list** (here, or in the
+      recipients-file comments) so the drill can eyeball the marker against it.
+- [ ] Have Steve independently confirm the committed fingerprints match what he sent.
 - [ ] Confirm the four private keys live in **four independent custody locations** (no shared failure
       domain).
 - [ ] Run the **first decrypt drill** immediately — never trust an un-drilled backup.
@@ -193,12 +207,15 @@ live on the machine it's paging about: the nerve that watches must live outside 
 
 ---
 
-## Coupling points to reconcile with the pipeline (Lyra's half)
+## Settled interfaces (as-built, 2026-09-11)
 
-These are decided in principle but must line up with the built pipeline before this doc is final:
-- Exact **pinned recipients file** path + its committed-checksum mechanism.
-- **R2 bucket** name / object-key naming convention (feeds `object_key` in the marker).
-- The marker field set above is the agreed interface (Caia ↔ Lyra, 2026-09-11).
+Reconciled against the live pipeline (`scripts/push_break_glass.py`, R2 put/get/delete verified):
+- **Pinned recipients file:** `config/break_glass_recipients.txt` (git-tracked pubkeys) +
+  `config/break_glass_recipients.sha256` (runtime-checked pin; `--update-pin` regenerates;
+  mismatch/missing → refuse to run). Fail-closed template committed; **no keys yet** — awaiting §1.
+- **R2 bucket:** `awareness` (live-verified). **Object key:** `break-glass/<zipname>.age`.
+- **Marker:** `.claude/data/break_glass_offsite.json`, field set as in §4;
+  `recipient_fingerprints[]` = `sha256(pubkey)[:16]`.
 
 ---
 
