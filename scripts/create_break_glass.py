@@ -205,7 +205,9 @@ def discover_entities() -> list[Path]:
 
 def assemble_package(output_dir: Path, dry_run: bool = False) -> None:
     date_str = datetime.now().strftime("%Y-%m-%d")
-    zip_name = f"lyra-recovery-{date_str}.zip"
+    # awareness-recovery-* (not lyra-recovery-*): the package holds BOTH Lyra and Caia
+    # entity data, so the name should tell the truth about what's inside.
+    zip_name = f"awareness-recovery-{date_str}.zip"
     zip_path = output_dir / zip_name
 
     # Build manifest: list of (source_path_or_None, arcname, label)

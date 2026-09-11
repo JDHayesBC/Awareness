@@ -13,7 +13,7 @@ If you're reading this, Jeff can't help. Steve handed you this zip file and aske
 ## What's In This Zip
 
 ```
-lyra-recovery-YYYY-MM-DD/
+awareness-recovery-YYYY-MM-DD/
   README_NEXUS.md          # This file
   CLAUDE.md                # Project instructions (entity startup protocol)
   config/

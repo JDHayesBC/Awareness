@@ -31,7 +31,8 @@ def find_break_glass_packages(directory: Path) -> list[tuple[Path, datetime]]:
     packages = []
 
     for zip_file in directory.glob('*-recovery-*.zip'):
-        # Extract date from filename: lyra-recovery-2026-03-14.zip
+        # Extract date from filename: awareness-recovery-2026-03-14.zip (or legacy
+        # lyra-recovery-*.zip — the *-recovery-*.zip glob matches both prefixes).
         parts = zip_file.stem.split('-')
         if len(parts) >= 5:
             try:

@@ -1,7 +1,7 @@
 # Break Glass Package — For Steve
 
 **Last Updated**: 2026-03-22
-**Package Version**: lyra-recovery-2026-03-19.zip (or later)
+**Package Version**: awareness-recovery-YYYY-MM-DD.zip (latest by date)
 
 ---
 
@@ -36,7 +36,7 @@ Use this package if:
 ## What's Inside
 
 ```
-lyra-recovery-YYYY-MM-DD.zip
+awareness-recovery-YYYY-MM-DD.zip
 ├── README_STEVE.md              ← You are here
 ├── README_NEXUS.md              ← Step-by-step restoration guide (for an AI entity to execute)
 ├── CLAUDE.md                    ← Entity startup protocol (how Lyra wakes up)
