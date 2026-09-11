@@ -41,6 +41,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 try:  # pragma: no cover - import shim (package vs. flat sys.path)
@@ -162,6 +163,126 @@ def pose_key(entry: dict) -> tuple:
     """What counts as a *change* for one subject: their identity + resolved pose."""
     return (entry.get("subject_uuid"), entry.get("source"),
             entry.get("label"), entry.get("furniture_key"))
+
+
+# --------------------------------------------------------------------------- #
+# Co-sitter awareness (issue #303) — "someone sat WITH me" as a decision point.
+#
+# pose_key is deliberately seat-blind (it omits parent_localid), so a co-sitter
+# joining my seat scores identically to anyone shifting pose across the parcel:
+# it enriches the scene but never wakes me. This is the "attention degrades even
+# though someone just sat down beside me" gap Brandi/Jeff flagged live. These two
+# helpers add the missing signal WITHOUT disturbing the pose enrich that rides the
+# same poll: a pure roster read (who shares my seat root), and a tiny state machine
+# that fires a WAKE only on the boolean EDGE of "am I sharing my seat".
+#
+# Precondition (VERIFIED live on The Anchorage 2026-09-10, not assumed): co-sitters
+# on one piece of furniture share the SAME seat-root parent_localid — Lyra + Snickers
+# both read parent_localid 7944 on the pool float; Crusher + Brandi both 7950. Single-
+# linkset furniture (one root, several sit-targets) is what makes the shared-ParentID
+# key correct here.
+# --------------------------------------------------------------------------- #
+def cositters_on_my_seat(roster: list[dict]) -> tuple[Optional[int], list[str], list[str]]:
+    """From a resolved roster, find MY seat's ``parent_localid`` and who else shares it.
+
+    Returns ``(my_seat, cositter_names, cositter_uuids)``:
+      * ``my_seat`` is my seat-root LocalID, or ``None`` when I'm not seated (standing,
+        or my ``self`` entry isn't in range) — in which case both lists are empty.
+      * co-sitters = every OTHER in-range avatar sharing my exact ``parent_localid``.
+
+    Pure: no network, no clock, no mutation of the roster. Names are the SL display
+    ``subject`` only — never an identity key, never cross-referenced (the identity wall
+    is a disclosure law; this only ever surfaces the public in-world name)."""
+    me = next((e for e in roster if e.get("self")), None)
+    if not me:
+        return None, [], []
+    my_seat = me.get("parent_localid")
+    if not my_seat:
+        return None, [], []              # standing / not seated
+    names: list[str] = []
+    uuids: list[str] = []
+    for e in roster:
+        if e.get("self"):
+            continue
+        if e.get("parent_localid") == my_seat:
+            names.append(e.get("subject") or "someone")
+            uuids.append(e.get("subject_uuid") or "")
+    return my_seat, names, uuids
+
+
+@dataclass
+class CoSitterResult:
+    """One poll's co-sitter outcome (see :class:`CoSitterEdge`)."""
+    wake: Optional[dict] = None                       # boolean-edge WAKE payload, or None
+    new_joiner_uuids: list[str] = field(default_factory=list)  # engage these (decoupled from wake)
+
+
+class CoSitterEdge:
+    """Track the boolean edge of *"am I sharing my seat?"* across polls (issue #303).
+
+    Two decoupled outputs per :meth:`update`, because they are two different mechanisms
+    (this decoupling is Caia's reverse-check refinement — see design notes):
+
+    * **WAKE** — fires ONLY when the boolean flips, so it is storm-proof:
+        - ``false→true``  someone joined my solitude   (the Snix-sat-with-solo-Lyra bug)
+        - ``true→false``  my last co-sitter left, I'm alone again (a re-pose/stand decision)
+      Churn *within* an already-occupied seat (1→2, 2→1, who-swaps) does NOT wake — the
+      pose enrich on the same poll already carries "who's beside me in what pose". A
+      five-person cuddle-pile therefore costs at most one wake (first join) + one (last
+      leave), never a wake/refract stutter.
+    * **new_joiner_uuids** — every avatar newly sharing my seat THIS poll (and, when I
+      myself just sat onto an occupied seat, everyone already there). Decoupled from the
+      wake so that a *late* arrival to a pile still gets their un-named lines promoted —
+      not just the first joiner. Engagement injects no arousal and never fires; a window
+      only promotes real speech, so N windows = "responsive to who's with me", not a storm.
+
+    Baseline discipline (Caia's Hole B, load-bearing): the baseline is keyed to MY CURRENT
+    SEAT. Whenever my own ``parent_localid`` changes — I stand (→ ``None``) or move to a new
+    seat — the baseline re-arms SILENTLY (no wake), so sitting down beside someone, or
+    standing up, never fires "everyone just joined/left". A daemon restart while someone
+    sits with me is the same silent first-observation → no false wake on boot.
+
+    Known edge (flagged, tolerated in v1): a SOLE co-sitter who stands and re-sits across a
+    poll boundary (>15s apart) double-ticks — true→false "alone again", then false→true
+    "joined". The 15s level-sampling absorbs any faster re-seat. Live-tunable via s_cositter
+    if it ever gets chatty; arguably even correct (they left, they came back)."""
+
+    def __init__(self) -> None:
+        self.seat: Optional[int] = None
+        self.sharing: Optional[bool] = None          # None = unarmed (no baseline yet)
+        self.prev_names: set[str] = set()
+        self.prev_uuids: set[str] = set()
+
+    def update(self, my_seat: Optional[int], co_names: list[str],
+               co_uuids: list[str]) -> CoSitterResult:
+        res = CoSitterResult()
+        cur_uuids = {u for u in co_uuids if u}
+        sharing_now = (my_seat is not None) and bool(co_names)
+
+        # Re-arm silently on any change of MY seat (sat / moved / stood), or first obs.
+        if my_seat != self.seat or self.sharing is None:
+            if my_seat is not None:
+                # I just sat onto this seat — I'm attentive to anyone already here.
+                res.new_joiner_uuids = [u for u in co_uuids if u]
+            self.seat = my_seat
+            self.sharing = sharing_now
+            self.prev_names = set(co_names)
+            self.prev_uuids = cur_uuids
+            return res
+
+        # Same seat as last poll — engagement for anyone NEWLY sharing it (decoupled),
+        res.new_joiner_uuids = [u for u in co_uuids if u and u not in self.prev_uuids]
+
+        # and a WAKE only on the boolean edge.
+        if sharing_now and not self.sharing:
+            res.wake = {"joined": list(co_names), "joined_uuids": list(co_uuids)}
+        elif self.sharing and not sharing_now:
+            res.wake = {"left": sorted(self.prev_names), "now_alone": True}
+
+        self.sharing = sharing_now
+        self.prev_names = set(co_names)
+        self.prev_uuids = cur_uuids
+        return res
 
 
 def watch(

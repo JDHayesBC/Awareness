@@ -85,6 +85,12 @@ class SalienceConfig:
     s_avatar: float = 0.30      # avatar enters/leaves chat range
     s_music: float = 0.40       # now-playing track change
     s_pose: float = 0.15        # a resolved pose change (mine or another's) — body-awareness
+    s_cositter: float = 1.20    # someone joined/left MY seat — a decision point (issue #303).
+    # Wake-tier: it's directed AT my personal space, so it fires alone like a directed line
+    # (1.20 = 20% over theta for headroom against refractory residual). Fired ONLY on the
+    # boolean EDGE of "am I sharing my seat" (join-my-solitude / now-alone), never on churn
+    # within an already-occupied seat — so a cuddle-pile can't wake-storm. The edge decision
+    # lives in senses.pose.CoSitterEdge; this is just its landing magnitude.
     # Motion churn (2026-08-24): a dancing avatar re-emits `animation` every ~10s,
     # plus `typing`/`appearance` bursts. At the old 0.15/0.10 these accumulated to
     # ~theta (steady-state ≈0.97) and woke the brain on ambient motion — over-firing
@@ -107,7 +113,7 @@ class SalienceConfig:
 _KNOWN_NOTIFS = frozenset({
     "local", "message", "dialog", "avatars", "collision", "sit", "animation",
     "appearance", "balance", "alert", "typing", "region", "permission",
-    "nowplaying", "pose", "heartbeat",
+    "nowplaying", "pose", "heartbeat", "cositter_change",
 })
 
 
@@ -156,6 +162,30 @@ def pose_delta_line(payload: Optional[dict]) -> Optional[str]:
         return f"⟡ {who} sat down" + ("" if who_self else " (pose unnamed)")
     if src == "blind-freeform":
         return f"⟡ {who} shifted into a freeform pose"
+    return None
+
+def cositter_line(payload: Optional[dict]) -> Optional[str]:
+    """Human one-liner for a co-sitter change on MY seat (issue #303, see
+    ``senses.pose.CoSitterEdge`` + ``sl_daemon._pose_poll_loop``).
+
+    Two shapes only, matching the boolean edge: a join into my solitude
+    (``joined``), or my last co-sitter leaving (``now_alone``, with ``left``).
+    Names are the SL display name and nothing else — the identity wall (never
+    cross-reference who someone is across spaces) is a *disclosure* law, and this
+    line surfaces only the public in-world name. Returns ``None`` for an empty
+    payload so it adds no delta."""
+    if not isinstance(payload, dict):
+        return None
+    joined = [n for n in (payload.get("joined") or []) if n]
+    left = [n for n in (payload.get("left") or []) if n]
+    if joined:
+        return f"⟡ {', '.join(joined)} sat down with you"
+    if payload.get("now_alone"):
+        who = ", ".join(left)
+        return f"⟡ you're alone on your seat again ({who} stood up)" if who \
+            else "⟡ you're alone on your seat again"
+    if left:
+        return f"⟡ {', '.join(left)} stood up from your seat"
     return None
 
 
@@ -371,6 +401,27 @@ def score_event(
         return Salience(cfg.s_pose, MEDIUM, "pose-change", kind=kind,
                         speaker=payload.get("subject") if isinstance(payload, dict) else None,
                         delta=line)
+
+    if kind == "cositter_change":
+        # Someone joined me on my seat, or my last co-sitter left (issue #303). A
+        # wake-tier decision point, fired only on the boolean edge of "am I sharing
+        # my seat" — the CoSitterEdge already made that call; here we just land it.
+        # directed + the joiner's uuid on a JOIN so it (a) survives a slow turn via
+        # the one-behind pending_directed path, (b) sets _last_partner for turn_done's
+        # engagement refresh. Engagement toward EVERY co-sitter is handled separately
+        # (SLPerception.note_cositter) so late arrivals aren't left conversationally
+        # dead — this speaker_uuid is only the wake's single representative. A
+        # departure (now_alone) has no partner: plain wake, no engagement.
+        payload = event.get("payload") or event
+        joined = payload.get("joined") or [] if isinstance(payload, dict) else []
+        juuids = payload.get("joined_uuids") or [] if isinstance(payload, dict) else []
+        rep_uuid = juuids[0] if (joined and juuids) else None
+        return Salience(
+            cfg.s_cositter, FORCE, "cositter-change", kind=kind,
+            speaker=(joined[0] if joined else None),
+            speaker_uuid=rep_uuid, directed=bool(rep_uuid),
+            delta=cositter_line(payload),
+        )
 
     if kind == "animation":
         # Damped to 0.04 (2026-08-24) — colors the scene via arousal alone.
@@ -597,6 +648,16 @@ class SLPerception:
         """Open/refresh the conversational-attention window for a speaker."""
         if uuid and self.cfg.engage_window > 0:
             self._engaged[uuid] = now + self.cfg.engage_window
+
+    def note_cositter(self, uuid: Optional[str], now: float) -> None:
+        """Open/refresh conversational attention toward someone sharing my seat
+        (issue #303). Called by the pose loop for every co-sitter newly on my seat —
+        DECOUPLED from the co-sitter WAKE (Caia's reverse-check refinement) so that a
+        *late* arrival to an already-occupied seat gets their un-named lines promoted
+        too, not only the first person to break my solitude. Same safety as any
+        engagement window: injects no arousal, never itself fires, only promotes real
+        SPEECH — so N co-sitters is "responsive to who's with me", not a wake-storm."""
+        self._note_engagement(uuid, now)
 
     def _is_engaged(self, uuid: Optional[str], now: float) -> bool:
         """True if I'm currently attentive to this speaker (and prune the expired)."""

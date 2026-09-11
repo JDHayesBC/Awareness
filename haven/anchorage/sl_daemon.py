@@ -1212,6 +1212,7 @@ async def _pose_poll_loop() -> None:
     ap, fr = pose_sense.corrade_providers(_corrade_client, self_name=self_name)
     sense = pose_sense.PoseSense(ap, fr, entity=ENTITY_NAME)
     last: dict[str, tuple] = {}
+    co_edge = pose_sense.CoSitterEdge()   # issue #303: co-sitter-on-my-seat attention
     log(f"pose poll started (every {SL_POSE_POLL:.0f}s, self={self_name!r})")
     while True:
         try:
@@ -1243,6 +1244,24 @@ async def _pose_poll_loop() -> None:
                 if first_seen:
                     continue
                 _on_corrade_event({"notification": "pose", "payload": e})
+            # Co-sitter attention edge (issue #303): decided on the WHOLE roster once
+            # per poll, not per-subject. Wake only on the boolean edge of "am I sharing
+            # my seat" (join-my-solitude / now-alone); open an engagement window toward
+            # every newly-arrived co-sitter (decoupled from the wake so late arrivals to
+            # a pile aren't left conversationally dead). Guarded inside this same try so
+            # a bug here can never kill the pose enrich it rides on.
+            try:
+                my_seat, co_names, co_uuids = pose_sense.cositters_on_my_seat(resolved)
+                cres = co_edge.update(my_seat, co_names, co_uuids)
+                if cres.new_joiner_uuids:
+                    now_cs = time.time()
+                    for u in cres.new_joiner_uuids:
+                        _perception.note_cositter(u, now_cs)
+                if cres.wake:
+                    _on_corrade_event({"notification": "cositter_change",
+                                       "payload": cres.wake})
+            except Exception as ce:
+                log(f"cositter edge (non-fatal): {ce}")
         except Exception as e:
             log(f"pose poll error (non-fatal): {e}")
         await asyncio.sleep(SL_POSE_POLL)

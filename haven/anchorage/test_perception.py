@@ -462,6 +462,62 @@ def test_own_turn_refreshes_engagement() -> None:
           "the mid-turn interrupter (Y) was NOT engaged by my turn")
 
 
+def test_cositter_change_wakes_and_engages() -> None:
+    # Issue #303: someone sitting WITH me on my seat is a wake-tier decision point,
+    # and every co-sitter's un-named lines get promoted while we sit together.
+    print("co-sitter change wakes, routes local, and opens engagement (#303):")
+    SNIX = "33333333-3333-3333-3333-333333333333"
+
+    def cositter(joined=None, juuids=None, left=None, alone=False) -> dict:
+        pay: dict = {}
+        if joined is not None:
+            pay["joined"], pay["joined_uuids"] = joined, (juuids or [])
+        if left is not None:
+            pay["left"] = left
+        if alone:
+            pay["now_alone"] = True
+        return {"notification": "cositter_change", "payload": pay}
+
+    def uloc(uuid: str, first: str, msg: str) -> dict:
+        return {"type": "Normal", "owner": uuid, "item": uuid,
+                "firstname": first, "lastname": "Vaalbara", "message": msg}
+
+    # 1. score: a JOIN is wake-tier, directed at the joiner, with a human delta line.
+    js = score_event(cositter(["Snickers"], [SNIX]), SELF, ADDR, CFG, SELF_UUIDS)
+    check(js.value == CFG.s_cositter and js.tier == FORCE, "join scores s_cositter / FORCE")
+    check(js.directed and js.speaker_uuid == SNIX, "join is directed at the joiner (engagement hook)")
+    check(js.delta == "⟡ Snickers sat down with you", "join delta names who sat with me")
+
+    # 2. ingest: a join FIRES, but the reply stays on LOCAL chat — never a DM to the
+    #    joiner, even though the salience carries their uuid for the engagement window.
+    p = SLPerception(SELF, ADDR, CFG, self_uuids=SELF_UUIDS)
+    wp = p.ingest(cositter(["Snickers"], [SNIX]), now=0.0)
+    check(wp is not None, "a co-sitter joining my solitude fires a wake")
+    check(wp.reply_via == "local" and wp.reply_to_uuid is None,
+          "co-sitter wake answers in LOCAL, not a private IM to the joiner")
+    check(p.is_attentive(0.0), "halo is 'listening' — the join opened an engagement window")
+    # …and now the joiner's un-named local line is promoted (a back-and-forth flows).
+    p.turn_done(now=1.0)
+    follow = p.ingest(uloc(SNIX, "Snickers", "so what were you building?"), now=2.0)
+    check(follow is not None, "the joiner's un-named next line is promoted to fire")
+
+    # 3. score: a DEPARTURE (now-alone) also wakes, but is not directed (no partner).
+    ds = score_event(cositter(left=["Snickers"], alone=True), SELF, ADDR, CFG, SELF_UUIDS)
+    check(ds.value == CFG.s_cositter and not ds.directed and ds.speaker_uuid is None,
+          "now-alone wakes but engages nobody")
+    check(ds.delta == "⟡ you're alone on your seat again (Snickers stood up)",
+          "departure delta says I'm alone again + who left")
+
+    # 4. note_cositter is DECOUPLED from the wake: a churn-joiner (2nd person onto an
+    #    already-occupied seat → NO wake) still gets their lines promoted.
+    p2 = SLPerception(SELF, ADDR, CFG, self_uuids=SELF_UUIDS)
+    check(not p2.is_attentive(0.0), "no engagement before anyone is noted")
+    p2.note_cositter(SNIX, now=0.0)   # what the pose loop calls per newly-arrived co-sitter
+    check(p2.is_attentive(0.0), "note_cositter opens engagement with no wake, no arousal")
+    promoted = p2.ingest(uloc(SNIX, "Snickers", "mind if I sit here?"), now=1.0)
+    check(promoted is not None, "a co-sitter noted (not woken-for) still has lines promoted")
+
+
 def test_surface_delta_buffer() -> None:
     print("surface:")
     s = PerceptionSurface(max_deltas=3)
@@ -552,6 +608,7 @@ def main() -> int:
         test_motion_flood_does_not_fire,
         test_engagement_window,
         test_own_turn_refreshes_engagement,
+        test_cositter_change_wakes_and_engages,
         test_surface_delta_buffer,
         test_heartbeat_and_floor, test_poll_idle_floor, test_note_activity_resets_floor,
     ):

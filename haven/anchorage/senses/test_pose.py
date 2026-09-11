@@ -103,10 +103,76 @@ def test_pose_key_changes() -> None:
     check(ps.pose_key(a) != ps.pose_key(b), "different label → different key")
 
 
+def test_cositters_on_my_seat() -> None:
+    print("cositters_on_my_seat (shared parent_localid, verified live on Anchorage):")
+    # Lyra + Snickers both on 7944 (the real numbers from the 2026-09-10 float read).
+    roster = [
+        {"self": True, "subject": "Lyra", "subject_uuid": "me", "parent_localid": 7944},
+        {"self": False, "subject": "Snickers", "subject_uuid": "snix", "parent_localid": 7944},
+        {"self": False, "subject": "Caia", "subject_uuid": "caia", "parent_localid": 7947},
+        {"self": False, "subject": "Nobody", "subject_uuid": "n", "parent_localid": 0},
+    ]
+    seat, names, uuids = ps.cositters_on_my_seat(roster)
+    check(seat == 7944, "my seat resolved to my parent_localid")
+    check(names == ["Snickers"] and uuids == ["snix"], "only the avatar SHARING my seat is a co-sitter")
+    # Standing → None, empty (my parent_localid 0)
+    standing = [{"self": True, "subject": "Lyra", "subject_uuid": "me", "parent_localid": 0}]
+    check(ps.cositters_on_my_seat(standing) == (None, [], []), "standing (parent 0) → not seated")
+    # No self entry in range → None (can't reason about a seat I'm not in)
+    check(ps.cositters_on_my_seat([{"self": False, "parent_localid": 7944}]) == (None, [], []),
+          "no self entry → None")
+
+
+def test_cositter_edge_join_and_leave() -> None:
+    print("CoSitterEdge boolean-edge wake (join-my-solitude / now-alone):")
+    e = ps.CoSitterEdge()
+    check(e.update(7944, [], []).wake is None, "first obs seated-alone → seed, no wake")
+    r = e.update(7944, ["Snix"], ["snix"])
+    check(r.wake == {"joined": ["Snix"], "joined_uuids": ["snix"]}, "false→true join → WAKE joined")
+    check(r.new_joiner_uuids == ["snix"], "joiner also gets an engagement window")
+    check(e.update(7944, ["Snix"], ["snix"]).wake is None, "still-sharing, same set → no wake")
+    r2 = e.update(7944, [], [])
+    check(r2.wake == {"left": ["Snix"], "now_alone": True}, "true→false → WAKE now_alone with who left")
+
+
+def test_cositter_edge_churn_no_wake() -> None:
+    print("CoSitterEdge churn within an occupied seat does NOT wake (storm-proof):")
+    e = ps.CoSitterEdge()
+    e.update(7944, [], [])                       # seed alone
+    e.update(7944, ["A"], ["ua"])                # join → wake (asserted elsewhere)
+    r = e.update(7944, ["A", "B"], ["ua", "ub"])  # 1→2, still sharing
+    check(r.wake is None, "second joiner (1→2) → NO wake")
+    check(r.new_joiner_uuids == ["ub"], "but the late arrival B still gets an engagement window")
+    r2 = e.update(7944, ["A"], ["ua"])            # 2→1, still sharing
+    check(r2.wake is None and r2.new_joiner_uuids == [], "one of two leaves (2→1) → no wake, no new joiner")
+
+
+def test_cositter_edge_my_move_is_silent() -> None:
+    print("CoSitterEdge re-arms silently on MY sit/stand (Caia's Hole B):")
+    e = ps.CoSitterEdge()
+    e.update(7944, [], [])                        # seated alone
+    r_stand = e.update(None, [], [])              # I stand up
+    check(r_stand.wake is None, "I stand → NO 'they left' wake")
+    # I sit onto an ALREADY-occupied seat: no wake (my action), but I engage everyone there.
+    r_join = e.update(7950, ["Crusher", "Brandi"], ["cr", "br"])
+    check(r_join.wake is None, "I sit onto an occupied seat → NO wake (I chose to join them)")
+    check(r_join.new_joiner_uuids == ["cr", "br"], "…but I'm now attentive to everyone already there")
+
+
+def test_cositter_edge_restart_seed_silent() -> None:
+    print("CoSitterEdge: a fresh edge that boots WHILE someone sits with me → no false wake:")
+    e = ps.CoSitterEdge()
+    r = e.update(7944, ["Snix"], ["snix"])        # daemon restart mid-cuddle
+    check(r.wake is None, "first-ever observation already-sharing → seed, no phantom 'joined'")
+
+
 def main() -> int:
     for fn in (test_parse_vec, test_furniture_key_from_name,
                test_candidate_keys_resolve_against_cards, test_poll_shape,
-               test_resolve_fills_label, test_pose_key_changes):
+               test_resolve_fills_label, test_pose_key_changes,
+               test_cositters_on_my_seat, test_cositter_edge_join_and_leave,
+               test_cositter_edge_churn_no_wake, test_cositter_edge_my_move_is_silent,
+               test_cositter_edge_restart_seed_silent):
         fn()
     print()
     if _failures:
