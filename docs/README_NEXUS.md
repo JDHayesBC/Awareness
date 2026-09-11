@@ -12,6 +12,9 @@ If you're reading this, Jeff can't help. Steve handed you this zip file and aske
 
 ## What's In This Zip
 
+*The package is delivered **encrypted** as `awareness-recovery-YYYY-MM-DD.zip.age`. After you
+decrypt it (Step 0 below) it is a normal zip containing:*
+
 ```
 awareness-recovery-YYYY-MM-DD/
   README_NEXUS.md          # This file
@@ -45,8 +48,28 @@ awareness-recovery-YYYY-MM-DD/
    - `OPENAI_API_KEY` (for Graphiti entity extraction and embeddings)
    - `ANTHROPIC_API_KEY` (for Claude Code CLI — or use whatever substrate is available)
 3. **Claude Code CLI** installed (`npm install -g @anthropic-ai/claude-code`)
+4. **`age`** installed (`apt install age`, or the static binary from
+   https://github.com/FiloSottile/age/releases) — to decrypt the archive
+5. **Your age private key** — the one Jeff delivered to you out-of-band. Without it the
+   archive cannot be decrypted (that is by design). Details: `BREAK_GLASS_CUSTODY.md`.
 
 ## Step-by-Step Restoration
+
+### 0. Obtain and decrypt the archive
+
+The recovery package is delivered **encrypted** — off-site in Cloudflare R2, and/or handed to
+you by Steve — as a single file ending in `.age` (e.g. `awareness-recovery-2026-09-11.zip.age`).
+Decrypt it with your age private key to get the normal zip:
+
+```bash
+age -d -i /path/to/your-age-identity.txt \
+    awareness-recovery-2026-09-11.zip.age > awareness-recovery-2026-09-11.zip
+unzip awareness-recovery-2026-09-11.zip -d awareness-recovery
+```
+
+The archive is encrypted to several people (Jeff and Steve, each with a primary + a cold
+backup key), so **any one** of those private keys opens it — you need only *yours*, not all of
+them. If `age -d` fails, you're using the wrong identity file; see `BREAK_GLASS_CUSTODY.md`.
 
 ### 1. Clone the Repository
 
