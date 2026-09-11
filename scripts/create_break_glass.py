@@ -30,7 +30,11 @@ DEFAULT_OUTPUT_DIR = "/mnt/c/Users/Jeff/awareness_backups/break_glass"
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-# Template path for the Nexus README (created separately)
+# Break-glass docs bundled at the zip root so the package is a self-contained unit
+# (Jeff, 2026-09-11: "the whole thing is a single unit — if Steve has the latest zip,
+# that's all there is to it"). README_STEVE is the human entry point ("You are here");
+# README_NEXUS is the step-by-step restore guide for the AI entity doing the work.
+README_STEVE_PATH = PROJECT_ROOT / "docs" / "README_STEVE.md"
 README_TEMPLATE_PATH = PROJECT_ROOT / "docs" / "README_NEXUS.md"
 
 # Scripts to bundle so Nexus has restore tooling immediately
@@ -251,12 +255,18 @@ def assemble_package(output_dir: Path, dry_run: bool = False) -> None:
     for script in BUNDLED_SCRIPTS:
         manifest.append((script, f"scripts/{script.name}", "scripts"))
 
-    # --- README for Nexus ---
-    if README_TEMPLATE_PATH.exists():
-        manifest.append((README_TEMPLATE_PATH, "README_NEXUS.md", "readme"))
-    else:
-        log(f"Note: {README_TEMPLATE_PATH} not found — README_NEXUS.md will be absent from package", "WARN")
-        manifest.append((None, "README_NEXUS.md", "readme-missing"))
+    # --- READMEs at zip root (single-unit package) ---
+    # README_STEVE is the human's first read; README_NEXUS is the AI restore guide.
+    # Both are load-bearing for a cold restore, so a missing one is a WARN, not silent.
+    for readme_path, arcname in (
+        (README_STEVE_PATH, "README_STEVE.md"),
+        (README_TEMPLATE_PATH, "README_NEXUS.md"),
+    ):
+        if readme_path.exists():
+            manifest.append((readme_path, arcname, "readme"))
+        else:
+            log(f"Note: {readme_path} not found — {arcname} will be absent from package", "WARN")
+            manifest.append((None, arcname, "readme-missing"))
 
     # --- Stats pass ---
     log("=" * 60)
