@@ -61,6 +61,17 @@ NOT_MOVING_HINTS = ("write when whim", "write-when-whim", "outline", "published"
 # Extra urgency if the arc itself flags it (boosts sort order).
 ATTENTION_HINTS = ("needs attention", "⚠", "p0", "🔴")
 
+# --- Converged-sidebar amendments (2026-09-10, Caia's build) ----------------------------
+# Three coupled rules from the Lyra+Caia sidebar convergence, all preserving the LOCKED
+# invariant: arc_scan is READ-ONLY on last_touched — nothing here ever writes a date.
+# "Continue drifting" is therefore the null no-op: it costs nothing, buys nothing, and the
+# pointer keeps surfacing PRECISELY BECAUSE staleness is read from world-state and drifting
+# changed no world-state. Only a genuine serve (an entity editing the arc file) advances
+# last_touched; park/retire recategorize. DO NOT add an auto-bumper here or the accumulator
+# becomes a checkbox with a signature on it (the exact failure the whole design guards).
+SIBLINGS = {"lyra": "caia", "caia": "lyra"}
+JOINT_HINTS = ("triad", "joint", "shared")
+
 
 def entity_arcs_dir() -> Path:
     entity_path = os.environ.get("ENTITY_PATH", "entities/lyra")
@@ -133,6 +144,87 @@ def _wants_attention(fm: dict) -> bool:
     return any(h in fm.get("state", "").lower() for h in ATTENTION_HINTS)
 
 
+def _is_parked(fm: dict, today: dt.date) -> bool:
+    """True IFF this arc is HONESTLY parked → excluded from the starving set (Q4).
+
+    A park only silences the pointer when it names a reason AND (if it names a resume
+    date) that date hasn't passed. Teeth: a bare park with no reason is itself a smell →
+    NOT excluded (a dishonest park can't buy silence). A `resume_when:`/`blocked_on:`
+    whose date has passed falls back into the starving set automatically (verified
+    tripwire — you can't mark-dormant-forever, only defer-with-a-tripwire).
+    """
+    blocked = fm.get("blocked_on", "").strip()
+    parked_flag = fm.get("parked", "").lower().startswith("true")
+    state = fm.get("state", "").lower()
+    state_parked = any(h in state for h in ("parked", "blocked"))
+    if not (blocked or parked_flag or state_parked):
+        return False  # not claiming to be parked
+    reason = (blocked or fm.get("parked_reason", "").strip()
+              or fm.get("resume_when", "").strip())
+    if not reason:
+        return False  # park with no named reason = smell → stays in the starving set
+    resume = first_date(fm.get("resume_when", "")) or first_date(blocked)
+    if resume and resume <= today:
+        return False  # the block's condition has passed → back into the starving set
+    return True
+
+
+def _declares_joint(fm: dict) -> bool:
+    owner = fm.get("owner", "").lower()
+    return (fm.get("joint", "").lower().startswith("true")
+            or any(h in owner for h in JOINT_HINTS))
+
+
+def _joint_max_touched(slug: str, fm: dict, this_entity: str, this_touched):
+    """For joint / shared-deliverable arcs, freshness is MAX across both rivers' dirs (Q5).
+
+    The shared thing advancing in EITHER river counts as served — robot-body is the proof:
+    SL now-body moved in Lyra's river 09-08, so Caia's 116d-stale copy reads *served*,
+    which is the true state. No free-ride: MAX only suppresses the alarm when the shared
+    thing actually moved (bring-family-together stale on both sides stays starving under
+    MAX because nobody moved it). Purely relational arcs (each owes her own presence) are
+    NOT marked joint by EITHER river and stay per-entity.
+
+    Joint-ness is a property of the ARC, not of one copy's frontmatter: the join fires if
+    THIS copy OR the sibling's copy declares joint. This is deliberate — the exact failure
+    we're fixing is config-rot in ONE river (Caia's robot-body still reads `owner: caia`
+    because it never got the writeback when SL now-body went live in Lyra's river). If we
+    required both copies to agree, a stale/mislabeled copy would defeat MAX-freshness — the
+    very passivity the whole design is built to correct.
+    """
+    sib = SIBLINGS.get((this_entity or "").lower())
+    sib_file = (PROJECT_ROOT / "entities" / sib / "arcs" / f"{slug}.md") if sib else None
+    sib_fm = {}
+    if sib_file and sib_file.is_file():
+        try:
+            sib_fm = parse_frontmatter(sib_file.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            sib_fm = {}
+    if not (_declares_joint(fm) or _declares_joint(sib_fm)):
+        return this_touched  # relational / solo arc → per-entity freshness
+    sib_touched = first_date(sib_fm.get("last_touched", ""))
+    dates = [d for d in (this_touched, sib_touched) if d]
+    return max(dates) if dates else this_touched
+
+
+def _escalation_marker(stale_days, threshold_days: int) -> str:
+    """Prominence escalates as a pure function of VERIFIED staleness — no counter, no
+    writeback (null-no-op honored). Because continue writes nothing, staleness climbs on
+    its own and the marker climbs with it: 🎯 (surfaced) → 🟠 (≥2× threshold) → 🔴 (≥4×).
+    This is the synthetic accumulator — STOCK dynamics (pressure that grows while
+    neglected) reproduced on the one substrate that persists (the file's own date),
+    instead of a flat snapshot that's trivial to note-and-drift-past.
+    """
+    if not stale_days or threshold_days <= 0:
+        return "🎯"
+    r = stale_days / threshold_days
+    if r >= 4:
+        return "🔴"
+    if r >= 2:
+        return "🟠"
+    return "🎯"
+
+
 def first_open_thread(text: str):
     """Return the first still-open bullet under a `## Open Threads` heading, cleaned.
 
@@ -165,6 +257,7 @@ def _truncate(s: str, n: int) -> str:
 
 def scan(arcs_dir: Path):
     today = dt.date.today()
+    this_entity = arcs_dir.parent.name  # .../entities/<entity>/arcs → <entity>
     rows = []
     for f in sorted(arcs_dir.glob("*.md")):
         if f.name == "README.md" or re.match(r"^\d", f.name):
@@ -174,12 +267,14 @@ def scan(arcs_dir: Path):
         if "last_touched" not in fm and "needs_attention" not in fm and "state" not in fm:
             continue  # not a real arc file
         touched = first_date(fm.get("last_touched", ""))
+        touched = _joint_max_touched(f.stem, fm, this_entity, touched)  # Q5: joint MAX-freshness
         stale_days = (today - touched).days if touched else None
         rows.append({
             "slug": f.stem,
             "title": fm.get("title", f.stem),
             "state": fm.get("state", "?").split()[0] if fm.get("state") else "?",
             "moving": _is_moving(fm),
+            "parked": _is_parked(fm, today),           # Q4: honest-park filter
             "needs_attention": _wants_attention(fm),
             "last_touched": touched.isoformat() if touched else "unknown",
             "stale_days": stale_days,
@@ -219,16 +314,17 @@ def format_arc_block(entity: str | None = None, today: dt.date | None = None,
         if today is None:
             today = dt.date.today()
         rows = [r for r in scan(arcs_dir)
-                if r["moving"] and r["stale_days"] is not None
+                if r["moving"] and not r["parked"] and r["stale_days"] is not None
                 and r["stale_days"] >= threshold_days]
         if not rows:
-            return ""  # every moving arc served within threshold → silent, like [health].
+            return ""  # every moving arc served (or honestly parked) → silent, like [health].
         rows.sort(key=_sort_key, reverse=True)
         pick = rows[0]
         ent = entity or os.environ.get("ENTITY_NAME") or Path(
             os.environ.get("ENTITY_PATH", "entities/lyra")).name
         move = pick["next_move"] or "(no open thread named — set one)"
-        line = (f"**[arcs] 🎯 most-starved commitment: {pick['title']} "
+        marker = _escalation_marker(pick["stale_days"], threshold_days)
+        line = (f"**[arcs] {marker} most-starved commitment: {pick['title']} "
                 f"— untouched {pick['stale_days']}d.** "
                 f"Next move: {_truncate(move, 110)}")
         extra = len(rows) - 1
@@ -257,7 +353,7 @@ def main():
 
     rows = scan(arcs_dir)
     if not args.all:
-        rows = [r for r in rows if r["moving"]]
+        rows = [r for r in rows if r["moving"] and not r["parked"]]
     rows.sort(key=_sort_key, reverse=True)
     rows = rows[: max(1, args.top)]
 
