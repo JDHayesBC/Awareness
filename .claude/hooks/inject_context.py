@@ -431,6 +431,45 @@ def query_pps_ambient_recall(context: str, session_id: str) -> str:
         return ""
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# #322 — don't store harness / self-authored prompts as Jeff's messages
+# ─────────────────────────────────────────────────────────────────────────────
+# UserPromptSubmit fires for genuine Jeff input AND for text the harness or a
+# cron tick injects: background-task notifications, cross-session peer messages,
+# system reminders, the /loop sentinel, and self-authored heartbeat ticks. None
+# of those are Jeff typing, so storing them as author="Jeff" pollutes the raw
+# capture layer and the knowledge graph (GH #322). Detect them by their stable
+# leading marker (matched at the START of the stripped, lower-cased prompt) and
+# skip the store. Deliberately NARROW: only unambiguous harness/tick markers
+# that carry no third-party content lacking its own capture path — so a real
+# Jeff message that merely *mentions* one of these tags is never dropped.
+#
+# KNOWN-BUT-DEFERRED (surfaced 2026-09-12, verified against caia's store): a
+# larger noise source flows through this same function — SL-brain and Haven
+# context blocks fed to terminal sessions ("[You are in Second Life ...]",
+# "[IDENTITY WALL ...]", "[Haven messages in ...]", "[ambient context]") — tens
+# of thousands of rows. Those WRAP real inbound content (an SL/Haven line) whose
+# primary capture is the sl:/haven: channel, so filtering them is very likely
+# correct too — but it touches SL/Haven capture semantics and wants an
+# inbound-double-capture check + coordination before landing. Kept as a separate
+# follow-up, deliberately NOT skipped here.
+HARNESS_PROMPT_PREFIXES = (
+    "<task-notification",
+    "<cross-session-message",
+    "<system-reminder",
+    "<<autonomous-loop",
+    "heartbeat tick",
+    "[heartbeat",
+    "[night-watch",
+)
+
+
+def is_harness_prompt(prompt: str) -> bool:
+    """True when `prompt` is harness-injected or a self-authored heartbeat tick
+    rather than a genuine Jeff message — see HARNESS_PROMPT_PREFIXES (GH #322)."""
+    return prompt.lstrip().lower().startswith(HARNESS_PROMPT_PREFIXES)
+
+
 def store_user_prompt(prompt: str, session_id: str) -> bool:
     """
     Store the user's prompt in PPS raw capture layer.
@@ -559,8 +598,12 @@ def main():
         print(json.dumps(output))
         sys.exit(0)
 
-    # Store user prompt in PPS (per-turn capture)
-    store_user_prompt(prompt, session_id)
+    # Store user prompt in PPS (per-turn capture) — but NOT harness/tick text,
+    # which is not Jeff talking and only pollutes capture + the graph (#322).
+    if is_harness_prompt(prompt):
+        debug(f"Skipping store of harness/tick prompt: {prompt[:48]!r}")
+    else:
+        store_user_prompt(prompt, session_id)
 
     # Query PPS for ambient recall context
     context = query_pps_ambient_recall(prompt, session_id)
