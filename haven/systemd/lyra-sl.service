@@ -20,6 +20,10 @@ Environment="PPS_HTTP_URL=http://localhost:8201"
 # turns. Deep thinking is terminal-Lyra's job. Matches caia-sl. Alias 'sonnet'
 # resolves to the latest Sonnet (5) at the CLI, same as Caia's daemon.
 Environment="CLAUDE_MODEL=sonnet"
+# Medium reasoning effort (2026-09-12, GH #314, Jeff's explicit call). He chose
+# medium for all chat channels knowing it may nudge SL turn latency up against
+# the 5s heartbeat floor — watch latency; drop to low if turns lag.
+Environment="CLAUDE_EFFORT=medium"
 Environment="ANCHORAGE_SL_SECRET_FILE=/mnt/c/Users/Jeff/Claude_Projects/Awareness/haven/data/anchorage-sl-secret.txt"
 Environment="SL_DAEMON_HOST=0.0.0.0"
 Environment="SL_DAEMON_PORT=8220"

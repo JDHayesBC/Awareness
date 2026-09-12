@@ -160,6 +160,9 @@ class EntityBrain:
 
         self.pps_http_url = pps_http_url or os.getenv("PPS_HTTP_URL", "http://localhost:8201")
         self.claude_model = claude_model or os.getenv("CLAUDE_MODEL", "sonnet")
+        # Reasoning effort (GH #314). Chat channels pin "medium" via CLAUDE_EFFORT
+        # in the systemd unit; unset = let the CLI/settings decide.
+        self.effort = os.getenv("CLAUDE_EFFORT") or None
 
         self.channel = channel
         self.consumer_key = consumer_key or f"{channel}-{self.entity_name}"
@@ -315,6 +318,7 @@ class EntityBrain:
             working_dir=self.entity_path,
             bypass_permissions=True,
             model=self.claude_model,
+            effort=self.effort,
             mcp_servers=get_default_mcp_servers(entity_path=self.entity_path),
             max_context_tokens=self.max_context_tokens,
             max_turns=self.max_turns,

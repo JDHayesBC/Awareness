@@ -57,6 +57,10 @@ ENTITY_NAME = os.getenv("ENTITY_NAME", "unknown")
 # Claude model
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "sonnet")
 
+# Reasoning effort (GH #314). Chat channels pin "medium" via the systemd unit;
+# unset = let the CLI/settings decide.
+CLAUDE_EFFORT = os.getenv("CLAUDE_EFFORT") or None
+
 # Project directory (picks up CLAUDE.md, hooks, .claude/ config)
 PROJECT_DIR = Path(os.getenv("PROJECT_DIR", str(Path(__file__).parent.parent)))
 
@@ -260,6 +264,7 @@ async def init_invoker() -> ClaudeInvoker:
         working_dir=get_entity_path(),
         bypass_permissions=True,
         model=CLAUDE_MODEL,
+        effort=CLAUDE_EFFORT,
         mcp_servers=get_default_mcp_servers(entity_path=get_entity_path()),
         max_context_tokens=150_000,
         max_turns=100,

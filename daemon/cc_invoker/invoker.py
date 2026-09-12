@@ -159,6 +159,7 @@ class ClaudeInvoker:
         startup_prompt: Optional[str] = None,
         init_timeout: float = 60.0,
         capture_channel: Optional[str] = None,
+        effort: Optional[str] = None,
     ):
         """
         Initialize invoker configuration.
@@ -208,6 +209,11 @@ class ClaudeInvoker:
                           (including [[NO_RESPONSE]]) as a duplicate entity row
                           (GH #325). Leave None for surfaces whose ONLY capture
                           path is the terminal hooks (e.g. the Discord daemon).
+            effort: Reasoning effort for the Claude subprocess ("low"/"medium"/
+                          "high"/"max"). Passed to ClaudeAgentOptions(effort=...)
+                          → `--effort` CLI flag (GH #314). Chat channels
+                          (haven/sl) pin "medium" via CLAUDE_EFFORT; None lets the
+                          CLI/settings decide (terminal flies free per /effort).
         """
         self.working_dir = working_dir or PROJECT_ROOT
         self.bypass_permissions = bypass_permissions
@@ -236,6 +242,10 @@ class ClaudeInvoker:
         self.startup_prompt = startup_prompt
         self.init_timeout = init_timeout
         self.capture_channel = capture_channel
+        # Reasoning effort ("low"/"medium"/"high"/"max"). Plumbed straight into
+        # ClaudeAgentOptions(effort=...), which the SDK transport turns into the
+        # `--effort` CLI flag (GH #314). None = let the CLI/settings decide.
+        self.effort = effort
 
         self._client: Optional[ClaudeSDKClient] = None
         self._connected = False
@@ -436,6 +446,7 @@ class ClaudeInvoker:
             allowed_tools=self.allowed_tools if self.allowed_tools else None,
             permission_mode="bypassPermissions" if self.bypass_permissions else None,
             env=self.subprocess_env(),
+            effort=self.effort,
         )
 
         # Create and connect client
