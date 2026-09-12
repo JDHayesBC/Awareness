@@ -434,25 +434,35 @@ def query_pps_ambient_recall(context: str, session_id: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # #322 — don't store harness / self-authored prompts as Jeff's messages
 # ─────────────────────────────────────────────────────────────────────────────
-# UserPromptSubmit fires for genuine Jeff input AND for text the harness or a
-# cron tick injects: background-task notifications, cross-session peer messages,
-# system reminders, the /loop sentinel, and self-authored heartbeat ticks. None
-# of those are Jeff typing, so storing them as author="Jeff" pollutes the raw
-# capture layer and the knowledge graph (GH #322). Detect them by their stable
-# leading marker (matched at the START of the stripped, lower-cased prompt) and
-# skip the store. Deliberately NARROW: only unambiguous harness/tick markers
-# that carry no third-party content lacking its own capture path — so a real
-# Jeff message that merely *mentions* one of these tags is never dropped.
+# UserPromptSubmit fires for genuine Jeff input AND for text that is NOT Jeff
+# typing at a terminal: harness/cron injections (background-task notifications,
+# cross-session peer messages, system reminders, the /loop sentinel, self-authored
+# heartbeat ticks) and — the far larger source — the fully-composed prompts the
+# SL/Haven/Discord brain daemons send through their own CC sessions. Each daemon
+# prepends its own scaffolding ([ambient context], [IDENTITY WALL], [You are in
+# Second Life]) + the inbound line + brain instructions, and hook_input["prompt"]
+# IS that whole string (the "user" is the brain, not Jeff). Storing any of it as
+# author="Jeff" pollutes raw capture + the knowledge graph (GH #322, #325).
 #
-# KNOWN-BUT-DEFERRED (surfaced 2026-09-12, verified against caia's store): a
-# larger noise source flows through this same function — SL-brain and Haven
-# context blocks fed to terminal sessions ("[You are in Second Life ...]",
-# "[IDENTITY WALL ...]", "[Haven messages in ...]", "[ambient context]") — tens
-# of thousands of rows. Those WRAP real inbound content (an SL/Haven line) whose
-# primary capture is the sl:/haven: channel, so filtering them is very likely
-# correct too — but it touches SL/Haven capture semantics and wants an
-# inbound-double-capture check + coordination before landing. Kept as a separate
-# follow-up, deliberately NOT skipped here.
+# Two independent skips, wired at the store call-site in main():
+#   1. PRIMARY — CC_INVOKER_CHANNEL env flag. The invoker exports it for brain
+#      sessions (value = sl|haven|…); non-empty ⇒ skip capture at the SESSION level,
+#      regardless of prompt shape. This is what removes the SL/Haven wrapper rows.
+#   2. BELT — is_non_jeff_prompt(), a prompt-SHAPE backstop for any path that spawns
+#      claude without the env flag. Matched at the START of the stripped, lower-cased
+#      prompt, so a real Jeff message that merely *mentions* a tag mid-line is safe.
+#
+# Belt membership is a data-safety decision, NOT just "looks like noise":
+#   ON the belt — [you are in second life · [identity wall · [haven messages.
+#     All are surfaces whose inbound is ALSO captured on its own sl:/haven: channel
+#     (entity_brain.capture_to_river, haven/bridge.py), so a prefix drop can never
+#     lose a sole copy.
+#   NOT on the belt — [ambient context. SHARED with the Discord daemon
+#     (daemon/lyra_daemon.py), which has NO river capture of its own: a Discord
+#     message reaches PPS ONLY through this terminal capture. Gating this prefix
+#     would silently drop every Discord inbound. SL/Haven's [ambient context] rows
+#     are removed via the env flag instead (both double-capture); Discord passes no
+#     env flag on purpose and keeps flowing through the normal store path.
 HARNESS_PROMPT_PREFIXES = (
     "<task-notification",
     "<cross-session-message",
@@ -461,12 +471,19 @@ HARNESS_PROMPT_PREFIXES = (
     "heartbeat tick",
     "[heartbeat",
     "[night-watch",
+    # #325 brain-wrapper backstop — double-captured surfaces ONLY.
+    # Do NOT add "[ambient context" here: it is Discord's sole capture path.
+    "[you are in second life",
+    "[identity wall",
+    "[haven messages",
 )
 
 
-def is_harness_prompt(prompt: str) -> bool:
-    """True when `prompt` is harness-injected or a self-authored heartbeat tick
-    rather than a genuine Jeff message — see HARNESS_PROMPT_PREFIXES (GH #322)."""
+def is_non_jeff_prompt(prompt: str) -> bool:
+    """True when `prompt` is harness/tick text or a brain-daemon wrapper prompt
+    rather than a genuine Jeff terminal message — see HARNESS_PROMPT_PREFIXES
+    (GH #322, #325). This is the prompt-SHAPE backstop; session-level brain
+    detection is the CC_INVOKER_CHANNEL env flag checked in main()."""
     return prompt.lstrip().lower().startswith(HARNESS_PROMPT_PREFIXES)
 
 
@@ -598,10 +615,19 @@ def main():
         print(json.dumps(output))
         sys.exit(0)
 
-    # Store user prompt in PPS (per-turn capture) — but NOT harness/tick text,
-    # which is not Jeff talking and only pollutes capture + the graph (#322).
-    if is_harness_prompt(prompt):
-        debug(f"Skipping store of harness/tick prompt: {prompt[:48]!r}")
+    # Store user prompt in PPS (per-turn capture) — but NOT text that isn't Jeff
+    # typing at a real terminal (see HARNESS_PROMPT_PREFIXES block above; GH #322, #325).
+    #   1. PRIMARY: brain-invoked sessions export CC_INVOKER_CHANNEL. Non-empty ⇒ skip
+    #      at the session level — their inbound is already on sl:/haven: and their
+    #      outbound is caught by capture_response.py's twin gate, so terminal-capturing
+    #      double-stores. (Discord passes no flag on purpose and DOES flow through here —
+    #      it has no other capture path.)
+    #   2. BELT: prompt-shape backstop for any path that spawns claude without the env.
+    invoker_channel = os.environ.get("CC_INVOKER_CHANNEL", "").strip()
+    if invoker_channel:
+        debug(f"Skipping store: brain-invoked session (CC_INVOKER_CHANNEL={invoker_channel!r})")
+    elif is_non_jeff_prompt(prompt):
+        debug(f"Skipping store of non-Jeff prompt: {prompt[:48]!r}")
     else:
         store_user_prompt(prompt, session_id)
 

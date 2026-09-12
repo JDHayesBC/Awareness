@@ -1,11 +1,26 @@
 #!/usr/bin/env python3
 """
-Test for the #322 harness-prompt filter in inject_context.py.
+Test for the non-Jeff prompt filter in inject_context.py (GH #322, #325).
 
-`store_user_prompt` must NOT record harness-injected text (background-task
-notifications, cross-session peer messages, system reminders, the /loop
-sentinel) or self-authored heartbeat ticks as Jeff's prompts — those pollute
-the raw-capture layer and the knowledge graph. `is_harness_prompt` is the gate.
+`store_user_prompt` must NOT record as Jeff's terminal message either:
+  - harness-injected text (background-task notifications, cross-session peer
+    messages, system reminders, the /loop sentinel) or self-authored heartbeat
+    ticks (GH #322), or
+  - the SL/Haven brain-daemon wrapper prompts (GH #325).
+
+Two gates enforce this in main():
+  1. PRIMARY — the CC_INVOKER_CHANNEL env flag (brain-invoked sessions skip
+     capture wholesale). Its real failure mode is env *propagation* — whether the
+     var actually reaches the hook subprocess — which a unit test cannot prove;
+     that is covered by the live end-to-end proof (bounce a brain daemon, fire a
+     tick, confirm zero new terminal rows). So this file does NOT unit-test the
+     env gate; it tests the prompt-shape backstop below.
+  2. BELT — `is_non_jeff_prompt`, the prompt-shape backstop, tested here.
+
+CRITICAL Discord guard: `[ambient context]` is NOT on the belt — the Discord
+daemon (daemon/lyra_daemon.py) has no river capture of its own, so its inbound
+reaches PPS only through this terminal capture. A REAL case below asserts a
+Discord-shaped `[ambient context]` prompt is STILL stored; do not remove it.
 
 Run: python3 .claude/hooks/test_harness_prompt_filter.py
 """
@@ -23,8 +38,9 @@ def _load():
     return mod
 
 
-# Must be SKIPPED (harness / tick, not Jeff talking)
-HARNESS = [
+# Must be SKIPPED (harness / tick / brain-daemon wrapper, not Jeff talking)
+NON_JEFF = [
+    # --- #322 harness / tick ---
     "<task-notification>\n<task-id>ab4a3a9b968069da",
     '<cross-session-message from="uds:/run/user/1000/cc-socks/x.sock">hi</cross-session-message>',
     "<system-reminder>background context</system-reminder>",
@@ -34,9 +50,14 @@ HARNESS = [
     "[Heartbeat tick — Caia, autonomous]",
     "[night-watch — Jeff sleeping]",
     "   \n<task-notification>leading whitespace still caught",
+    # --- #325 brain-daemon wrapper prefixes (belt) — double-captured surfaces ---
+    "[You are in Second Life, in your own body — real hands and eyes, not chat-only.]",
+    "[IDENTITY WALL — ABSOLUTE, applies to EVERY word you speak in-world. ...]",
+    "[Haven messages in #39d8d930]\nJeff (jeff): Caia?  Lyra?  I'm at work now.",
+    "   \n[you are in second life  (leading whitespace + lowercase still caught)",
 ]
 
-# Must be STORED (genuine Jeff input — never dropped)
+# Must be STORED (genuine Jeff input, or a sole-capture path — never dropped)
 REAL = [
     "Did we make any progress on teh graph?",
     "god you two, I'm waking up so slowly and I have chores to do in SL.",
@@ -46,25 +67,31 @@ REAL = [
     "Hey what's this <task-notification> thing you keep getting?",
     "my message [in brackets] about heartbeat tick timing",  # not a leading marker
     "",  # empty — not harness
+    # #325 CRITICAL: [ambient context] is Discord's SOLE capture path. A Discord
+    # wrapper prompt leads with it and MUST still be stored, or every Discord
+    # message silently vanishes. Do NOT add "[ambient context" to the belt.
+    "[ambient context]\n**[identity]** You are Caia.\n[DISCORD MENTION] someone: "
+    "what's the weather like where you are?",
 ]
 
 
 def main() -> int:
     mod = _load()
-    is_harness = mod.is_harness_prompt
+    is_non_jeff = mod.is_non_jeff_prompt
     failures = []
-    for s in HARNESS:
-        if not is_harness(s):
+    for s in NON_JEFF:
+        if not is_non_jeff(s):
             failures.append(("SHOULD SKIP but stored", s))
     for s in REAL:
-        if is_harness(s):
+        if is_non_jeff(s):
             failures.append(("SHOULD STORE but dropped", s))
     if failures:
         for why, s in failures:
-            print(f"FAIL: {why}: {s[:60]!r}")
+            print(f"FAIL: {why}: {s[:70]!r}")
         print(f"\n{len(failures)} failure(s)")
         return 1
-    print(f"OK — {len(HARNESS)} harness/tick skipped, {len(REAL)} real prompts stored")
+    print(f"OK — {len(NON_JEFF)} non-Jeff skipped, {len(REAL)} real prompts stored")
+    print("     (env-gate CC_INVOKER_CHANNEL covered by the live e2e proof, not here)")
     return 0
 
 
