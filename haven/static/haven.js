@@ -6,7 +6,8 @@ const haven = (() => {
     let currentUser = null;
     let currentRoomId = null;
     let rooms = [];
-    let users = [];
+    let users = [];  // global roster (#319: "Global Users")
+    let roomMembers = [];  // members of currentRoomId only (#319: "Current Room")
     let reconnectTimer = null;
     let reconnectAttempt = 0;
     let reconnectingBannerTimer = null;
@@ -36,6 +37,29 @@ const haven = (() => {
 
     function clearToken() {
         localStorage.removeItem('haven_token');
+    }
+
+    // --- Room-selection persistence (#318) ---
+    // `currentRoomId` (in-memory) only survives WS reconnects within the SAME
+    // page load. A genuine page reload — browser refresh, PWA relaunch, a
+    // mobile tab that got discarded and reopened, or a service-worker update
+    // that forces a hard navigation — starts a fresh JS context where
+    // currentRoomId is null, so without a durable fallback it always fell
+    // through to rooms[0]. That was the second, rarer culprit behind #318:
+    // the first fix only covered same-session WS reconnects. localStorage
+    // closes the remaining gap.
+    const ROOM_STORAGE_KEY = 'haven_current_room';
+
+    function getSavedRoomId() {
+        return localStorage.getItem(ROOM_STORAGE_KEY);
+    }
+
+    function saveCurrentRoomId(roomId) {
+        if (roomId) {
+            localStorage.setItem(ROOM_STORAGE_KEY, roomId);
+        } else {
+            localStorage.removeItem(ROOM_STORAGE_KEY);
+        }
     }
 
     // --- Login ---
@@ -306,10 +330,14 @@ const haven = (() => {
 
         // Choose which room to land in. Priority: a deep-link target (from a
         // tapped notification — via ?room= on a cold open, or a stashed
-        // postMessage), else the first room.
+        // postMessage), then the in-memory current room (same-session WS
+        // reconnect), then the last room saved to localStorage (survives a
+        // genuine page reload — see #318 comment on ROOM_STORAGE_KEY above),
+        // and only then the first room as a last resort.
         const urlRoom = new URLSearchParams(location.search).get('room');
         const wanted = pendingRoomId || urlRoom;
         pendingRoomId = null;
+        const savedRoomId = getSavedRoomId();
         let target = null;
         if (wanted && rooms.some(r => r.id === wanted)) {
             target = wanted;
@@ -317,9 +345,19 @@ const haven = (() => {
             // Preserve the room across reconnects. onConnected fires on EVERY
             // (re)connect, not just cold open — so without this, an idle-triggered
             // reconnect (missed pong / throttled timers on an idle tab) bounces the
-            // user back to rooms[0]. That was the "flash + reset to first room" bug.
+            // user back to rooms[0]. That was the "flash + reset to first room" bug
+            // (first fix, #318).
             target = currentRoomId;
+        } else if (savedRoomId && rooms.some(r => r.id === savedRoomId)) {
+            // No in-memory room (fresh page load) but we have a durable record
+            // of the last room the user was in — restore it instead of
+            // defaulting to rooms[0]. This is the SECOND #318 culprit: a real
+            // reload (refresh / PWA relaunch / discarded-tab reopen / SW-forced
+            // hard nav) always starts with currentRoomId === null.
+            target = savedRoomId;
         } else if (rooms.length > 0) {
+            // Genuinely no current room to restore (first-ever login, or the
+            // saved/current room no longer exists e.g. we were removed from it).
             target = rooms[0].id;
         }
         if (target) selectRoom(target);
@@ -417,12 +455,14 @@ const haven = (() => {
     function onMemberJoined(data) {
         if (data.room_id === currentRoomId) {
             appendSystemMessage(`${escapeHtml(data.display_name)} joined`);
+            loadRoomMembers(currentRoomId);  // #319: refresh "Current Room" panel
         }
     }
 
     function onMemberLeft(data) {
         if (data.room_id === currentRoomId) {
             appendSystemMessage(`${escapeHtml(data.username)} left`);
+            loadRoomMembers(currentRoomId);  // #319: refresh "Current Room" panel
         }
         if (currentUser && data.user_id === currentUser.id) {
             // We left — remove room from sidebar and switch
@@ -432,7 +472,13 @@ const haven = (() => {
                 currentRoomId = null;
                 $('room-name').textContent = '';
                 $('message-list').innerHTML = '';
+                // Trigger: we were removed from (or left) the room we were
+                // currently viewing. rooms[0] is a legitimate fallback HERE —
+                // the room we had selected genuinely no longer exists for us,
+                // so there is nothing to "preserve". selectRoom() below will
+                // overwrite the stale localStorage entry with this new pick.
                 if (rooms.length > 0) selectRoom(rooms[0].id);
+                else { saveCurrentRoomId(null); roomMembers = []; renderRoomUsers(); }
             }
         }
     }
@@ -476,31 +522,73 @@ const haven = (() => {
         $('dm-section').classList.toggle('hidden', !hasDMs);
     }
 
-    function renderUsers() {
-        const list = $('user-list');
-        list.innerHTML = '';
-
+    function sortUsersOnlineFirst(list) {
         // Online first, then alphabetical
-        const sorted = [...users].sort((a, b) => {
+        return [...list].sort((a, b) => {
             if (a.online !== b.online) return a.online ? -1 : 1;
             return a.username.localeCompare(b.username);
         });
+    }
 
-        sorted.forEach(u => {
-            const el = document.createElement('div');
-            el.className = 'user-item';
-            el.title = `Click to DM @${u.username}`;
-            el.innerHTML = `
-                <span class="status-dot ${u.online ? 'online' : 'offline'}"></span>
-                <span>${escapeHtml(u.display_name)}</span>
-                ${u.is_bot ? '<span class="bot-tag">entity</span>' : ''}
-            `;
-            // Click to start DM
-            if (currentUser && u.id !== currentUser.id) {
-                el.addEventListener('click', () => startDM(u.username));
-            }
-            list.appendChild(el);
+    function buildUserItemEl(u) {
+        const el = document.createElement('div');
+        el.className = 'user-item';
+        el.title = `Click to DM @${u.username}`;
+        el.innerHTML = `
+            <span class="status-dot ${u.online ? 'online' : 'offline'}"></span>
+            <span>${escapeHtml(u.display_name)}</span>
+            ${u.is_bot ? '<span class="bot-tag">entity</span>' : ''}
+        `;
+        // Click to start DM
+        if (currentUser && u.id !== currentUser.id) {
+            el.addEventListener('click', () => startDM(u.username));
+        }
+        return el;
+    }
+
+    function renderUsers() {
+        const list = $('user-list');
+        list.innerHTML = '';
+        sortUsersOnlineFirst(users).forEach(u => list.appendChild(buildUserItemEl(u)));
+        // Room membership doesn't change when someone's online status flips,
+        // but the room panel's status DOTS need the same refresh (#319).
+        renderRoomUsers();
+    }
+
+    // --- Current-room members (#319) ---
+    // `roomMembers` holds member id/username/display_name/is_bot for
+    // currentRoomId (fetched via the existing /members endpoint — the server
+    // already knows membership, so no derivation from presence is needed).
+    // Online status is cross-referenced from the global `users` roster,
+    // which is kept live by the `presence` WS event.
+    async function loadRoomMembers(roomId) {
+        if (!roomId) { roomMembers = []; renderRoomUsers(); return; }
+        const token = getToken();
+        try {
+            const res = await fetch(`/api/rooms/${roomId}/members`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!res.ok) { roomMembers = []; renderRoomUsers(); return; }
+            const { members } = await res.json();
+            // Guard against a stale response landing after the user has
+            // already switched rooms again.
+            if (roomId !== currentRoomId) return;
+            roomMembers = members;
+        } catch (e) {
+            roomMembers = [];
+        }
+        renderRoomUsers();
+    }
+
+    function renderRoomUsers() {
+        const list = $('room-user-list');
+        if (!list) return;
+        list.innerHTML = '';
+        const withPresence = roomMembers.map(m => {
+            const live = users.find(u => u.id === m.id);
+            return { ...m, online: live ? live.online : false };
         });
+        sortUsersOnlineFirst(withPresence).forEach(u => list.appendChild(buildUserItemEl(u)));
     }
 
     async function startDM(username) {
@@ -520,6 +608,50 @@ const haven = (() => {
             selectRoom(room.id);
         } catch (e) {
             console.error('DM creation failed:', e);
+        }
+    }
+
+    // --- Create Room (#320) ---
+    // Minimal by design (Crusher marked this low priority): a single prompt
+    // for the display name, auto-derived slug, reuses the existing
+    // POST /api/rooms endpoint (already used server-side by other flows).
+    async function createRoom() {
+        const displayName = prompt('New room name:');
+        if (!displayName) return;
+        const trimmed = displayName.trim();
+        if (!trimmed) return;
+
+        // The server's `name` field is a URL-safe slug (see CreateRoomRequest
+        // pattern ^[a-z0-9-]+$) distinct from the human-facing display_name.
+        const slug = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        if (!slug) {
+            alert('Room name needs at least one letter or number.');
+            return;
+        }
+
+        const token = getToken();
+        try {
+            const res = await fetch('/api/rooms', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ name: slug, display_name: trimmed, is_dm: false }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                alert(`Failed to create room: ${err.detail || res.status}`);
+                return;
+            }
+            const room = await res.json();
+            if (!rooms.find(r => r.id === room.id)) {
+                rooms.push(room);
+                renderRooms();
+            }
+            selectRoom(room.id);
+        } catch (e) {
+            alert(`Failed to create room: ${e.message}`);
         }
     }
 
@@ -691,8 +823,10 @@ const haven = (() => {
 
     function selectRoom(roomId) {
         currentRoomId = roomId;
+        saveCurrentRoomId(roomId);  // durable across reloads — see #318
         const room = rooms.find(r => r.id === roomId);
         $('room-name').textContent = room ? (room.is_dm ? room.display_name : `# ${room.display_name}`) : '';
+        loadRoomMembers(roomId);  // #319: populate the "Current Room" panel
 
         // Clear unread for this room (locally + persist the read marker server-side)
         delete unread[roomId];
@@ -1259,7 +1393,7 @@ const haven = (() => {
 
     document.addEventListener('DOMContentLoaded', init);
 
-    return { loadMore, selectRoom, inviteToRoom, leaveRoom, exportConversation, enableNotifications };
+    return { loadMore, selectRoom, inviteToRoom, leaveRoom, exportConversation, enableNotifications, createRoom };
 })();
 
 // --- PWA: register the (minimal, safe) service worker ---

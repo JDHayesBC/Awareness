@@ -219,6 +219,27 @@ body::before {
     margin-top: 1rem;
 }
 
+/* #320: "+" create-room affordance sits inline with the "Rooms" label */
+.sidebar-section-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.create-room-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 0.25rem;
+    border-radius: 4px;
+}
+.create-room-btn:hover {
+    color: var(--accent);
+    background: var(--bg-hover);
+}
+
 .sidebar-content {
     flex: 1;
     overflow-y: auto;
@@ -672,6 +693,24 @@ body::before {
     flex: 1;
     overflow-y: auto;
     padding: 0.5rem;
+}
+
+/* #319: "Current Room" members — capped height so it never crowds out the
+   Global Users list below it when a room has many members. */
+#room-user-list {
+    flex: 0 0 auto;
+    max-height: 35%;
+    overflow-y: auto;
+    padding: 0.5rem;
+    border-bottom: 1px solid var(--border-subtle);
+}
+#room-user-list:empty::after {
+    content: 'No members';
+    display: block;
+    padding: 5px 8px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    opacity: 0.6;
 }
 
 .user-item {

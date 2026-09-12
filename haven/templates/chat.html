@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Haven</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <link rel="stylesheet" href="/static/haven.css?v=20260818d">
+    <link rel="stylesheet" href="/static/haven.css?v=20260909a">
     <!-- PWA: installable app -->
     <link rel="manifest" href="/manifest.webmanifest">
     <meta name="theme-color" content="#121014">
@@ -51,7 +51,10 @@
             </div>
 
             <div class="sidebar-content">
-                <div class="sidebar-section-label">Rooms</div>
+                <div class="sidebar-section-label sidebar-section-label-row">
+                    <span>Rooms</span>
+                    <button id="create-room-btn" class="create-room-btn" title="Create a new room" aria-label="Create a new room" onclick="haven.createRoom()">+</button>
+                </div>
                 <div id="room-list"></div>
 
                 <div id="dm-section" class="hidden">
@@ -136,13 +139,15 @@
             </div>
         </div>
 
-        <!-- Users panel -->
+        <!-- Users panel: split into who's in THIS room (#319) vs everyone online -->
         <div id="users-panel">
-            <div class="users-header">Users</div>
+            <div class="users-header">Current Room</div>
+            <div id="room-user-list"></div>
+            <div class="users-header">Global Users</div>
             <div id="user-list"></div>
         </div>
     </div>
 
-    <script src="/static/haven.js?v=20260818i"></script>
+    <script src="/static/haven.js?v=20260909a"></script>
 </body>
 </html>
