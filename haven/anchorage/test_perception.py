@@ -9,17 +9,20 @@ Exits non-zero on any failure.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 
 try:  # package or flat-path import, same shim style as the other anchorage tests
     from haven.anchorage.perception import (
-        ArousalState, PerceptionSurface, SLPerception, SalienceConfig,
-        DROP, FORCE, MEDIUM, LOW, event_kind, score_event, speaker_of, speaker_uuid,
+        ArousalState, GyazoPrefetcher, PerceptionSurface, SLPerception, SalienceConfig,
+        DROP, FORCE, MEDIUM, LOW, event_kind, gyazo_urls_in, score_event, speaker_of,
+        speaker_uuid,
     )
 except ImportError:  # pragma: no cover
     from perception import (  # type: ignore[no-redef]
-        ArousalState, PerceptionSurface, SLPerception, SalienceConfig,
-        DROP, FORCE, MEDIUM, LOW, event_kind, score_event, speaker_of, speaker_uuid,
+        ArousalState, GyazoPrefetcher, PerceptionSurface, SLPerception, SalienceConfig,
+        DROP, FORCE, MEDIUM, LOW, event_kind, gyazo_urls_in, score_event, speaker_of,
+        speaker_uuid,
     )
 
 CFG = SalienceConfig()
@@ -592,6 +595,108 @@ def test_note_activity_resets_floor() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Gyazo auto-prefetch (issue #302)
+# --------------------------------------------------------------------------- #
+
+def test_gyazo_url_extraction() -> None:
+    print("gyazo url extraction:")
+    start = len(_failures)
+    check(gyazo_urls_in("look: https://gyazo.com/abcDEF123.") == ["https://gyazo.com/abcDEF123"],
+          "page-form url, trailing period excluded")
+    check(gyazo_urls_in("(https://i.gyazo.com/abcDEF123.png)") == ["https://i.gyazo.com/abcDEF123"],
+          "direct-image-form url in parens, extension excluded from match")
+    check(gyazo_urls_in("just gyazo.com/xyz789, neat right?") == ["gyazo.com/xyz789"],
+          "bare host (no scheme), trailing comma excluded")
+    check(gyazo_urls_in("no links here") == [], "no match on plain text")
+    check(gyazo_urls_in("") == [], "empty text")
+    check(gyazo_urls_in(None) == [], "None text")
+    dup = gyazo_urls_in("see https://gyazo.com/abc123 and again https://gyazo.com/abc123!")
+    check(dup == ["https://gyazo.com/abc123"], "duplicate mention deduped by id")
+    assert len(_failures) == start, "gyazo url extraction had failing checks (see FAIL lines above)"
+
+
+def test_gyazo_cache_hit_immediate_note() -> None:
+    print("gyazo cache hit:")
+    start = len(_failures)
+    gy = GyazoPrefetcher("/tmp/anchorage-gyazo-test-does-not-need-to-exist")
+    gy._cache["abc123"] = {"ok": True, "path": "/fake/cache/abc123.jpg", "id": "abc123"}
+    notes = gy.request(["https://gyazo.com/abc123"], "Damian", now=0.0)
+    check(len(notes) == 1, "one note for one url")
+    check("Read('/fake/cache/abc123.jpg')" in notes[0], "cache hit note carries the Read directive")
+    check("Damian" in notes[0], "note attributes the speaker")
+    assert len(_failures) == start, "gyazo cache-hit had failing checks (see FAIL lines above)"
+
+
+def test_gyazo_max_per_ingest_cap() -> None:
+    print("gyazo max_per_ingest cap:")
+    start = len(_failures)
+    gy = GyazoPrefetcher("/tmp/anchorage-gyazo-test-does-not-need-to-exist", max_per_ingest=2)
+    urls = ["https://gyazo.com/one", "https://gyazo.com/two", "https://gyazo.com/three"]
+    notes = gy.request(urls, "Jeff", now=0.0)
+    check(len(notes) == 2, "capped to max_per_ingest even with 3 urls in one line")
+    assert len(_failures) == start, "gyazo cap had failing checks (see FAIL lines above)"
+
+
+def test_gyazo_timeout_path() -> None:
+    print("gyazo timeout (never blocks the perception loop):")
+    start = len(_failures)
+
+    async def slow_fetch(gid, url, cache_dir, max_bytes, timeout):
+        await asyncio.sleep(10)  # far longer than the prefetcher's own timeout below
+        return {"ok": True, "path": "should-never-be-reached", "id": gid}  # pragma: no cover
+
+    async def run() -> None:
+        received: list[str] = []
+        gy = GyazoPrefetcher(
+            "/tmp/anchorage-gyazo-test-does-not-need-to-exist",
+            timeout=0.05, fetch_fn=slow_fetch, on_delta=received.append,
+        )
+        notes = gy.request(["https://gyazo.com/timeoutid"], "Brandi", now=0.0)
+        check(notes == ["(image pending: https://gyazo.com/timeoutid)"],
+              "pending note returned immediately (no block)")
+        await asyncio.sleep(0.3)  # let the background task run past the 0.05s cap
+        check("timeoutid" in gy._cache, "resolved (failed) result gets cached")
+        check(gy._cache.get("timeoutid", {}).get("ok") is False, "timeout is marked a failure, not success")
+        check("timed out" in gy._cache.get("timeoutid", {}).get("error", ""),
+              "error string names the timeout")
+        check(len(received) == 1 and "gyazo image fetch failed" in received[0],
+              "on_delta fired once with the failure note")
+        check("timeoutid" not in gy._pending, "pending set cleared once resolved")
+
+    asyncio.run(run())
+    assert len(_failures) == start, "gyazo timeout-path had failing checks (see FAIL lines above)"
+
+
+def test_perception_ingest_gyazo_pending_note() -> None:
+    print("perception.ingest() + gyazo (no event loop running -> stays pending):")
+    start = len(_failures)
+    gy = GyazoPrefetcher("/tmp/anchorage-gyazo-test-does-not-need-to-exist")
+    perc = SLPerception(SELF, ADDR, CFG, gyazo=gy)
+    ev = local("Brandi", "Szondi", "look what I found https://gyazo.com/abc999")
+    perc.ingest(ev, now=0.0)
+    deltas = perc.surface.drain_deltas()
+    check(any("image pending: https://gyazo.com/abc999" in d for d in deltas),
+          "pending gyazo note appears in the delta buffer")
+    check(any('Brandi Szondi: "look what I found' in d for d in deltas),
+          "original speech delta is still present alongside the gyazo note")
+    assert len(_failures) == start, "perception+gyazo ingest had failing checks (see FAIL lines above)"
+
+
+def test_perception_ingest_gyazo_cache_hit_same_delta() -> None:
+    print("perception.ingest() + gyazo cache hit (already resolved):")
+    start = len(_failures)
+    gy = GyazoPrefetcher("/tmp/anchorage-gyazo-test-does-not-need-to-exist")
+    gy._cache["abc999"] = {"ok": True, "path": "/fake/cache/abc999.jpg", "id": "abc999"}
+    perc = SLPerception(SELF, ADDR, CFG, gyazo=gy)
+    ev = local("Brandi", "Szondi", "check this https://gyazo.com/abc999")
+    perc.ingest(ev, now=0.0)
+    deltas = perc.surface.drain_deltas()
+    check(any("Read('/fake/cache/abc999.jpg')" in d for d in deltas),
+          "a pre-resolved image attaches its Read directive on the SAME delta drain")
+    assert len(_failures) == start, "perception+gyazo cache-hit had failing checks (see FAIL lines above)"
+
+
+# --------------------------------------------------------------------------- #
 def main() -> int:
     for fn in (
         test_event_kind, test_self_echo_dropped, test_self_echo_real_wire_shape,
@@ -611,6 +716,10 @@ def main() -> int:
         test_cositter_change_wakes_and_engages,
         test_surface_delta_buffer,
         test_heartbeat_and_floor, test_poll_idle_floor, test_note_activity_resets_floor,
+        test_gyazo_url_extraction, test_gyazo_cache_hit_immediate_note,
+        test_gyazo_max_per_ingest_cap, test_gyazo_timeout_path,
+        test_perception_ingest_gyazo_pending_note,
+        test_perception_ingest_gyazo_cache_hit_same_delta,
     ):
         fn()
     print()

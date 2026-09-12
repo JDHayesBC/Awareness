@@ -45,7 +45,7 @@ def _is_vec_string(s: str) -> bool:
 
 
 # ---- _status_payload: protocol shape -------------------------------------
-for state in ("warming up", "listening", "dozing", "thinking"):
+for state in ("warming up", "listening", "dozing", "thinking", "bridge"):
     p = d._status_payload(state)
     check(p.get("kind") == "status", f"{state!r}: kind is 'status'")
     check("text" in p and isinstance(p["text"], str) and p["text"] != "",
@@ -54,8 +54,14 @@ for state in ("warming up", "listening", "dozing", "thinking"):
 
 # distinct colors per state — a human must be able to tell them apart
 _colors = {s: d._status_payload(s)["color"]
-           for s in ("warming up", "listening", "dozing", "thinking")}
-check(len(set(_colors.values())) == 4, "the four states have four distinct colors")
+           for s in ("warming up", "listening", "dozing", "thinking", "bridge")}
+check(len(set(_colors.values())) == 5, "the five states have five distinct colors")
+
+# "bridge" (#311) is the terminal-bridge presence-mode signal, distinct from the
+# brain-driven states — sl_bus.py pushes it so the halo is honest about who's
+# actually driving.
+check(d._status_payload("bridge")["text"] != d._status_payload("listening")["text"],
+      "bridge state reads differently from listening (honest presence-mode signal)")
 
 # dozing (#299) must tell the human what to do — say my name
 check("name" in d._status_payload("dozing")["text"].lower(),
@@ -146,6 +152,13 @@ finally:
 _src = inspect.getsource(d.sl_register)
 check("_current_status" in _src,
       "sl_register pushes _current_status() (not _resting_status()) — re-register honest-state guard")
+
+# ---- /sl/push_status (#311): sl_bus.py's external halo-push endpoint ------
+_push_src = inspect.getsource(d.sl_push_status)
+check("__restore__" in _push_src,
+      "sl_push_status handles the '__restore__' sentinel (hand control back to the daemon)")
+check("_current_status" in _push_src,
+      "sl_push_status's restore path reads _current_status(), the same honest-state source of truth")
 
 
 if _failures:

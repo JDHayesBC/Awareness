@@ -76,6 +76,8 @@ import signal
 import sys
 import time
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import Request as _URLRequest, urlopen
 
 # Import the sl.py verb library whether we're run as a module or a bare file.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -83,12 +85,52 @@ import sl  # noqa: E402
 
 VALID_ENTITIES = {"lyra", "caia"}
 
+# haven/data — same directory sl.py and sl_daemon.py both read their gitignored
+# secrets from (sl._DATA_DIR is already haven/data; sl_daemon.py's DATA_DIR
+# matches it independently).
+_HALO_SECRET_FILE = sl._DATA_DIR / "anchorage-sl-secret.txt"
+
 
 def _entity() -> str:
     name = (os.getenv("ENTITY_NAME") or "lyra").strip().lower()
     if name not in VALID_ENTITIES:
         sys.exit(f"sl_bus: unknown ENTITY_NAME {name!r} (expected one of {sorted(VALID_ENTITIES)})")
     return name
+
+
+def _load_sl_secret() -> str:
+    """Same secret the daemon checks (``_load_secret`` in sl_daemon.py):
+    ``ANCHORAGE_SL_SECRET`` env, else the gitignored file. Duplicated here
+    (rather than importing sl_daemon.py) because that module pulls in FastAPI/
+    uvicorn — heavy deps sl_bus.py has no other reason to require."""
+    val = os.getenv("ANCHORAGE_SL_SECRET")
+    if val:
+        return val.strip()
+    path = Path(os.getenv("ANCHORAGE_SL_SECRET_FILE", str(_HALO_SECRET_FILE)))
+    if path.exists():
+        return path.read_text().strip()
+    return ""
+
+
+def _push_halo(entity: str, status: str) -> None:
+    """Best-effort halo update via the sibling daemon's ``/sl/push_status``
+    (issue #311) — the terminal bridge borrows the daemon's ALREADY-registered
+    prim(s) rather than duplicating prim-registration/HTTP-post plumbing here.
+    Silently no-ops (never raises) if the daemon isn't running/reachable or no
+    secret is configured — sl_bus must keep working standalone; the daemon is a
+    coexisting sibling, not a dependency (see module docstring)."""
+    prof = sl._ENDPOINTS.get(entity, {})
+    port = prof.get("daemon_port")
+    secret = _load_sl_secret()
+    if not port or not secret:
+        return
+    url = f"http://127.0.0.1:{port}/sl/push_status"
+    body = json.dumps({"secret": secret, "status": status}).encode()
+    req = _URLRequest(url, data=body, headers={"Content-Type": "application/json"})
+    try:
+        urlopen(req, timeout=3)
+    except (URLError, OSError, ValueError):
+        pass  # daemon not up / unreachable — the bridge itself still works fine
 
 
 def _rt_dir(entity: str) -> Path:
@@ -199,6 +241,7 @@ def serve(entity: str, argv: list[str]) -> int:
 
     me = sl.connect(entity)
     listen_ok = me.listen()
+    _push_halo(entity, "bridge")  # #311: reflect terminal-bridge presence in-world
 
     def _log_heard(kind: str, payload) -> None:
         with p.heard.open("a") as f:
@@ -259,6 +302,7 @@ def serve(entity: str, argv: list[str]) -> int:
             me.stop_listening()
         except Exception:
             pass
+        _push_halo(entity, "__restore__")  # #311: hand the halo back to the daemon's own state
         _log_heard("_status", {"note": "serve stopped; stop_listening() called (daemon subscription restored)"})
         try:
             if p.pid.exists() and int(p.pid.read_text().strip()) == os.getpid():

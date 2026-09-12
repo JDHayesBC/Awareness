@@ -130,6 +130,32 @@ def _regroup(flat: str, fields: list[str]) -> list[dict]:
     return [dict(zip(fields, cells[i:i + n])) for i in range(0, len(cells) - n + 1, n)]
 
 
+def _is_throttled(err: str | None) -> bool:
+    """Is this Corrade error the grid's teleport rate-limit (issue #312)? Matched
+    loosely (substring, case-insensitive) since Corrade's wording for a throttle
+    has drifted across versions in the wild."""
+    return bool(err) and "throttl" in err.lower()
+
+
+def _tp_backoff_delays(max_retries: int = 3, start: float = 6.0,
+                        cap_total: float = 30.0) -> list[float]:
+    """The exponential backoff schedule for a throttled teleport: start ~6s,
+    doubling, capped so the WHOLE retry run never exceeds ~30s total wait. Pure
+    + deterministic so it's unit-testable without sleeping."""
+    delays: list[float] = []
+    wait = start
+    total = 0.0
+    for _ in range(max_retries):
+        remaining = cap_total - total
+        if remaining <= 0:
+            break
+        step = min(wait, remaining)
+        delays.append(step)
+        total += step
+        wait *= 2
+    return delays
+
+
 def _resolve_entity(entity: str | None) -> str:
     name = (entity or os.getenv("ENTITY_NAME") or "lyra").strip().lower()
     if name not in _ENDPOINTS:
@@ -912,10 +938,51 @@ class SL:
                 "item": item, "point": point, "error": r.get("error")}
 
     def detach(self, item: str, *, kind: str = "path") -> dict:
-        """Detach an attachment. `kind` = path | UUID | slot (see corrade.md §3)."""
-        r = self.cmd("detach", attachments=item, type=kind)
+        """Detach an attachment. ``item`` = a worn item's NAME/substring, its
+        inventory UUID, OR — pass ``kind='slot'`` explicitly — an attach-point
+        name (e.g. ``'RightHip'``).
+
+        ROOT-CAUSE (issue #316): Corrade's ``detach`` by ``type=path``/``UUID``
+        reliably returns ``{'success': False, 'error': 'general error'}`` even
+        for a currently-worn item's own name/inventory-UUID — only ``type=slot``
+        (by attach-point) actually works live. So for the default ``kind='path'``
+        (and any non-``'slot'`` kind) we resolve ``item`` against
+        :meth:`attachments` — body awareness — to find WHICH slot it's on, then
+        detach that slot. ``kind='slot'`` bypasses resolution entirely and stays
+        the same literal call it always was.
+        → ``{success, error, item, slot}`` (``slot`` present once resolved).
+        """
+        if kind == "slot":
+            r = self.cmd("detach", attachments=item, type="slot")
+            return {"success": r.get("success") in (True, "True"),
+                    "item": item, "error": r.get("error")}
+
+        worn = self.attachments()
+        needle = item.strip().lower()
+        matches = [w for w in worn
+                   if needle == (w.get("name") or "").lower()
+                   or needle in (w.get("name") or "").lower()
+                   or needle == (w.get("uuid") or "").lower()]
+        if not matches:
+            # Not a recognized worn attachment (maybe a wearable, or body-awareness
+            # couldn't resolve it) — fall back to the raw form so this stays a
+            # no-worse-than-before path rather than a hard failure.
+            r = self.cmd("detach", attachments=item, type=kind)
+            return {"success": r.get("success") in (True, "True"),
+                    "item": item, "error": r.get("error")}
+        if len(matches) > 1:
+            exact = [w for w in matches if (w.get("name") or "").lower() == needle]
+            if len(exact) == 1:
+                matches = exact
+            else:
+                return {"success": False, "item": item,
+                        "error": (f"ambiguous — {len(matches)} worn items match "
+                                  f"{item!r}: " + ", ".join(
+                                      f'{w.get("name")}@{w.get("slot")}' for w in matches))}
+        slot = matches[0]["slot"]
+        r = self.cmd("detach", attachments=slot, type="slot")
         return {"success": r.get("success") in (True, "True"),
-                "item": item, "error": r.get("error")}
+                "item": item, "slot": slot, "error": r.get("error")}
 
     def wear(self, item: str, *, replace: bool = False) -> dict:
         """Wear a WEARABLE (clothing / body part) by name or inventory path. For an
@@ -924,9 +991,42 @@ class SL:
         return {"success": r.get("success") in (True, "True"),
                 "item": item, "error": r.get("error")}
 
-    def attachments(self) -> str:
-        """What's currently attached (attach-points → worn object names)."""
-        return self.cmd("getattachments").get("data", "")
+    def _attachments_raw(self) -> str:
+        """Raw ``getattachments`` CSV (attach-point → worn object name), as Corrade
+        returns it. Kept for the couple of call sites that want a flat string
+        (``wearing()``'s back-compat field, :meth:`body`'s substring heuristic)."""
+        return self.cmd("getattachments").get("data", "") or ""
+
+    def attachments(self) -> list[dict]:
+        """Body awareness (issue #316) — everything currently attached →
+        ``[{slot, name, uuid}]``, so an entity KNOWS what's on her body without
+        parsing raw CSV. ``slot``/``name`` come straight off ``getattachments``;
+        ``uuid`` is best-effort: resolved via the matching inventory path from
+        :meth:`worn_paths` (``getattachmentspath``), looked up with
+        :meth:`find_item`. ``uuid`` is ``None`` when it can't be resolved
+        uniquely (duplicate names, an un-indexed no-copy item, etc) — that's
+        honest degradation, not a failure of the call. This is what
+        :meth:`detach` uses to turn a NAME into the point Corrade actually wants."""
+        rows = _regroup(self._attachments_raw(), ["slot", "name"])
+        if not rows:
+            return rows
+        try:
+            by_point = {w["point"]: w["path"] for w in self.worn_paths()}
+        except CorradeError:
+            by_point = {}
+        for row in rows:
+            row["uuid"] = None
+            path = by_point.get(row["slot"])
+            if not path:
+                continue
+            leaf = path.rsplit("/", 1)[-1]
+            try:
+                found = self.find_item(re.escape(leaf))
+            except CorradeError:
+                found = []
+            if len(found) == 1:
+                row["uuid"] = found[0].get("uuid")
+        return rows
 
     def _sitting_on(self) -> int:
         raw = self.cmd("getselfdata", data="SittingOn").get("data", "SittingOn,0")
@@ -1084,10 +1184,12 @@ class SL:
     def wearing(self) -> dict:
         """Review what I'm wearing → ``{wearables: [{type,name}], attachments: <str>}``.
         ``wearables`` = system layers (``getwearables``); ``attachments`` = worn objects
-        (``getattachments``, point→name). The full picture across both kinds."""
+        as the raw ``getattachments`` point→name string (back-compat shape — use
+        :meth:`attachments` for the richer ``[{slot,name,uuid}]`` body-awareness
+        view). The full picture across both kinds."""
         raw = self.cmd("getwearables").get("data", "") or ""
         return {"wearables": _regroup(raw, ["type", "name"]),
-                "attachments": self.attachments()}
+                "attachments": self._attachments_raw()}
 
     def outfits(self) -> list[str]:
         """My saved outfits — the sub-folders of ``# Outfits``. Each is a folder of
@@ -1298,7 +1400,7 @@ class SL:
         ``worn`` the raw attachment list to eyeball. HEURISTIC — the vocab
         (:attr:`_BODY_BRANDS`) grows as we learn real names; a persistent per-entity
         body registry is the next step once we've seen the real inventory live."""
-        worn_raw = self.attachments()
+        worn_raw = self._attachments_raw()
         low = worn_raw.lower()
         cands = [b for b in self._BODY_BRANDS if b in low]
         if "larax" in cands or "naomi" in cands:
@@ -1510,6 +1612,34 @@ class SL:
     def _friend_uuids(self) -> set[str]:
         return {f["uuid"].lower() for f in self.friends() if f.get("uuid")}
 
+    def friend_requests(self) -> list[dict]:
+        """Pending INCOMING friend requests — ``[{name, uuid}]``
+        (``getfriendshiprequests``). Mirrors :meth:`friends`'s shape; feeds
+        :meth:`reply_friend_request` (issue #321 — Crusher wanted to friend us and
+        the accept/decline verbs didn't exist)."""
+        raw = self.cmd("getfriendshiprequests").get("data", "") or ""
+        return _name_uuid_pairs(raw)
+
+    def reply_friend_request(self, target: str | None = None, accept: bool = True) -> dict:
+        """Accept or decline a pending incoming friend request
+        (``replytofriendshiprequest``). ``target`` selects WHICH pending request
+        (UUID or name substring); omit it to take the sole pending one — same
+        picker as :meth:`accept_tp`/:meth:`decline_tp`. → ``{success, error,
+        from}``."""
+        reqs = self.friend_requests()
+        if not reqs:
+            return {"success": False, "error": "no pending friend requests", "from": None}
+        chosen = self._pick_lure(reqs, target)
+        if chosen is None:
+            return {"success": False,
+                    "error": ("multiple friend requests pending — name whose to answer"
+                              if target is None else f"no pending friend request from '{target}'"),
+                    "from": [r["name"] for r in reqs]}
+        r = self.cmd("replytofriendshiprequest", action="accept" if accept else "decline",
+                     agent=chosen["uuid"], entity="agent")
+        return {"success": r.get("success") in (True, "True"), "error": r.get("error"),
+                "from": chosen["name"]}
+
     def display_name(self, target: str) -> str:
         """An avatar's DISPLAY name (the chosen name, not the username). ``target``
         = UUID or "First Last". Falls back to the input string on failure. Use it to
@@ -1635,16 +1765,34 @@ class SL:
         """Teleport to x,y,z — by default within my CURRENT region (a same-sim warp).
         The fast way to close distance: ``position`` = ``"<x, y, z>"`` | ``"x, y, z"``
         | ``(x, y, z)``. Self-movement only, no gate. Pass ``region=`` to hop sims.
-        → ``{success, arrived, where, error}`` (``arrived`` = confirmed within 6 m;
-        a bare ``success`` with ``arrived=False`` means SL accepted it but routing
-        landed us a touch off — not a failure)."""
+        → ``{success, arrived, where, error, attempts}`` (``arrived`` = confirmed
+        within 6 m; a bare ``success`` with ``arrived=False`` means SL accepted it
+        but routing landed us a touch off — not a failure).
+
+        THROTTLE-AWARE (issue #312): a burst of teleports (navigate → reposition →
+        navigate again, the busy-club pattern) can trip the grid's teleport rate
+        limit — Corrade answers ``error='teleport throttled'`` and nothing moves.
+        Rather than fail on the first hit, we back off (~6s, doubling, ≤3 retries,
+        ≤30s total wait) and retry the SAME command; only a throttle that outlasts
+        the whole retry budget becomes an honest failure (``attempts`` in the
+        return dict tells you how many tries it took)."""
         region = region or self.region()
         if not region:
             return {"success": False, "arrived": False, "where": None,
-                    "error": "not in-world (no current region)"}
+                    "error": "not in-world (no current region)", "attempts": 0}
         pos = _fmt_pos(position)
-        r = self.cmd("teleport", entity="region", region=region, position=pos,
-                     fly="True" if fly else "False")
+
+        attempts = 0
+        r: dict = {}
+        for extra_delay in [0.0] + _tp_backoff_delays():
+            if extra_delay:
+                time.sleep(extra_delay)
+            attempts += 1
+            r = self.cmd("teleport", entity="region", region=region, position=pos,
+                         fly="True" if fly else "False")
+            if r.get("success") in (True, "True") or not _is_throttled(r.get("error")):
+                break
+
         accepted = r.get("success") in (True, "True")
         cmd_err = r.get("error")
         # Position is the arbiter of truth, NOT Corrade's ack. Corrade reports
@@ -1661,13 +1809,15 @@ class SL:
             here = self.where().get("position")
             if here and target and _dist(here, target) <= 6.0:
                 return {"success": True, "arrived": True, "where": self.where(),
+                        "attempts": attempts,
                         "error": None if accepted
                                  else f"arrived despite corrade '{cmd_err}'"}
         if accepted:
             return {"success": True, "arrived": False, "where": self.where(),
+                    "attempts": attempts,
                     "error": "teleport accepted; arrival within 6 m not confirmed"}
         return {"success": False, "arrived": False, "where": self.where(),
-                "error": cmd_err or "teleport not accepted"}
+                "attempts": attempts, "error": cmd_err or "teleport not accepted"}
 
     def tp_to(self, target: str, *, timeout: float = 60.0) -> dict:
         """Teleport to where an avatar is standing in this region — the "tp to Jeff,
@@ -2120,8 +2270,9 @@ POSES — change which animation I'm playing on the furniture I'm on
 ATTACHING (re-wear a prim in one verb — no UUIDs)
     me.attach("/My Inventory/Objects/Anchorage Prim")     # to Default (right hand)
     me.attach("Anchorage Prim", point="Root")             # or any attach point
-    me.attachments()           # what's attached right now (points → object names)
-    me.detach("Anchorage Prim")                            # take it off
+    me.attachments()           # body awareness: [{slot,name,uuid}] of what's on me now
+    me.detach("Anchorage Prim")                            # take it off — by NAME, UUID, or
+    me.detach("RightHip", kind="slot")                     #   kind='slot' by attach-point directly
     me.wear("/My Inventory/Clothing/Sundress")            # WEARABLES (not objects)
 
 SESSION / PRESENCE (Corrade is a running TOOL; being in-world is MY act)
@@ -2150,6 +2301,10 @@ REACH BEYOND THE ROOM — friends, names, teleport (all take a UUID or "First La
     me.decline_tp()            # decline the sole pending lure (or name/UUID one)
     #   accept_tp RELOCATES me → gated like grant(); teleport verbs need `movement` perm.
     #   BETA: accept/decline lure-identifier param confirmed live-pending (see docstring).
+    me.friend_requests()              # pending INCOMING friend requests → [{name,uuid}]
+    me.reply_friend_request()               # accept the sole pending one
+    me.reply_friend_request("Crusher", accept=False)  # decline a specific/named one
+    #   needs `friendship` perm; mirrors accept_tp/decline_tp's single-pending-picker shape.
 
 WARDROBE — review & change what I'm wearing (outfit folders of links)
     me.wearing()               # what I have on now: {wearables:[{type,name}], attachments}
@@ -2269,7 +2424,10 @@ CLI
     python3 sl.py warmup                        # force lazy scene-load (no session change)
     python3 sl.py attach "<inventory path>" [point]   # re-attach a prim in one line
     python3 sl.py detach "<item>"               # take it off
-    python3 sl.py attachments                    # what's attached now
+    python3 sl.py attachments                    # what's attached now (body awareness)
+    python3 sl.py friend_requests                # pending incoming friend requests
+    python3 sl.py accept_friend ["<name/uuid>"]   # accept the sole pending (or a named) one
+    python3 sl.py decline_friend ["<name/uuid>"]  # decline the sole pending (or a named) one
     python3 sl.py scan scripted 25              # READ THE ROOM: scripted objects ≤25m
     python3 sl.py scan all 25                    # survey everything ≤25m
     python3 sl.py scan "<word>" [range]          # find nearest match (optionally ≤range)
@@ -2428,9 +2586,24 @@ def _cli(argv: list[str]) -> int:
                 return 2
             print(me.detach(argv[1]))
         elif verb == "attachments":
-            print(me.attachments() or "(nothing attached)")
+            worn = me.attachments()
+            if not worn:
+                print("(nothing attached)")
+            for w in worn:
+                print(f'  {w.get("slot",""):20} {w.get("name","")}'
+                      f'{"  " + w["uuid"] if w.get("uuid") else ""}')
         elif verb == "say":
             print("said" if me.say(" ".join(argv[1:])) else "failed")
+        return 0
+
+    if verb in ("friend_requests", "accept_friend", "decline_friend"):
+        me = connect()
+        if verb == "friend_requests":
+            for r in me.friend_requests():
+                print("   ", r)
+        else:
+            target = " ".join(argv[1:]) if len(argv) > 1 else None
+            print(me.reply_friend_request(target, accept=(verb == "accept_friend")))
         return 0
 
     if verb in ("sit", "stand", "poses", "pose"):

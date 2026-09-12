@@ -48,9 +48,15 @@ completion via :meth:`turn_done`.
 
 from __future__ import annotations
 
+import asyncio
 import math
+import os
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
+from urllib.error import URLError as _URLError
+from urllib.request import Request as _URLRequest, urlopen
 
 # --------------------------------------------------------------------------- #
 # Config — every magic number in one place, all normalized to theta = 1.0 so the
@@ -187,6 +193,215 @@ def cositter_line(payload: Optional[dict]) -> Optional[str]:
     if left:
         return f"⟡ {', '.join(left)} stood up from your seat"
     return None
+
+
+# --------------------------------------------------------------------------- #
+# Gyazo auto-prefetch (issue #302). Builds on the ``read_gyazo`` verb
+# (``sl.py``): when a Gyazo link shows up in local chat / an IM, perception
+# pre-fetches the actual image in the background and drops a Read-directive
+# into the delta stream once it resolves — same shape as the existing
+# ``[ATTACHED IMAGE — call Read(...)]`` note the Haven surface already uses
+# for shared images (haven/bot.py) — so the entity sees it on its next wake
+# without a manual ``sl.py read_gyazo`` call.
+#
+# This module stays pure/I/O-free everywhere else, so the fetch itself is
+# NOT wired through ``sl.SL.read_gyazo`` directly (that would pull Corrade's
+# live-connection machinery — and its shared, unbounded, non-timeout-aware
+# cache — into a module designed to be testable with no network and a fake
+# clock). Instead this reuses the *same algorithm* read_gyazo uses (the
+# gyazo.com page is HTML; the raw image lives at
+# ``i.gyazo.com/<id>.<ext>``, and Gyazo doesn't say which extension up front,
+# so try jpg/png/gif in order) behind an injectable ``fetch_fn`` seam, wrapped
+# for the perception loop's constraints: never blocking (runs as a
+# background asyncio task), timeout-bounded (~8s default), size-capped
+# (~2MB default so a runaway image can't balloon the cache or the prompt),
+# and cached per-entity (``entities/<entity>/data/gyazo_cache/``, not the
+# shared ``haven/data/gyazo`` ``read_gyazo`` writes to) so Lyra's and Caia's
+# caches never collide.
+# --------------------------------------------------------------------------- #
+
+_GYAZO_RE = re.compile(r"(?:https?://)?(?:www\.)?(?:i\.)?gyazo\.com/([0-9A-Za-z]+)", re.I)
+
+
+def gyazo_urls_in(text: Optional[str]) -> list[str]:
+    """Every Gyazo URL mentioned in a chat line, in order, deduped by id.
+
+    Matches both the page form (``gyazo.com/<id>``) and the direct-image
+    form (``i.gyazo.com/<id>.<ext>``), with or without a scheme. Trailing
+    sentence punctuation (a period, a comma, a closing paren right after the
+    id) is naturally excluded — the id group is a bare alnum run, so it stops
+    before any punctuation a human sentence tacks on. Returns the matched
+    URL text itself (what was actually pasted), not the bare id."""
+    if not text:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _GYAZO_RE.finditer(text):
+        gid = m.group(1)
+        if gid in seen:
+            continue
+        seen.add(gid)
+        out.append(m.group(0))
+    return out
+
+
+def _gyazo_id(url: str) -> Optional[str]:
+    m = _GYAZO_RE.search(url)
+    return m.group(1) if m else None
+
+
+def _download_gyazo_sync(
+    gid: str, url: str, cache_dir: Path, max_bytes: int, timeout: float
+) -> dict:
+    """Default (blocking) fetch — run off-thread by :class:`GyazoPrefetcher`.
+
+    Mirrors ``sl.SL.read_gyazo``'s try-jpg/png/gif-in-order approach, plus a
+    hard size cap (checked against ``Content-Length`` when present, and
+    against the actual bytes read regardless — a lying/absent header can't
+    bypass the cap). Writes into ``cache_dir`` (per-entity) rather than the
+    shared ``haven/data/gyazo``. Returns
+    ``{"ok": True, "path", "url", "id", "bytes"}`` or ``{"ok": False, "id",
+    "error"}``."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    last_err: Optional[str] = None
+    for ext in ("jpg", "png", "gif"):
+        direct = f"https://i.gyazo.com/{gid}.{ext}"
+        try:
+            req = _URLRequest(direct, headers={"User-Agent": "anchorage-sl/1.0"})
+            with urlopen(req, timeout=timeout) as resp:
+                status = getattr(resp, "status", 200)
+                ctype = resp.headers.get("Content-Type", "")
+                if status != 200:
+                    last_err = f".{ext}: HTTP {status}"
+                    continue
+                if "image" not in ctype.lower():
+                    last_err = f".{ext}: non-image content-type {ctype!r}"
+                    continue
+                clen = resp.headers.get("Content-Length")
+                if clen and int(clen) > max_bytes:
+                    last_err = f".{ext}: {clen} bytes exceeds cap ({max_bytes})"
+                    continue
+                data = resp.read(max_bytes + 1)
+                if len(data) > max_bytes:
+                    last_err = f".{ext}: exceeds {max_bytes}-byte cap"
+                    continue
+            out = cache_dir / f"{gid}.{ext}"
+            out.write_bytes(data)
+            return {"ok": True, "path": str(out), "url": direct, "id": gid, "bytes": len(data)}
+        except _URLError as e:
+            last_err = f".{ext}: {getattr(e, 'reason', e)}"
+            continue
+        except OSError as e:
+            last_err = f".{ext}: {e}"
+            continue
+    return {"ok": False, "id": gid, "error": last_err or "no image found (tried jpg/png/gif)"}
+
+
+def _gyazo_note(result: dict, speaker: Optional[str] = None) -> str:
+    """Human-facing delta line for a resolved (or failed) prefetch.
+
+    Success uses the same tool-mandated phrasing Haven's shared-image note
+    uses (haven/bot.py) — a directive, not descriptive metadata, since a
+    softer "[image: ...]" note has been skipped by sessions that then claim
+    they can't see images."""
+    if result.get("ok"):
+        who = f"{speaker} shared an image" if speaker else "an image was shared"
+        return (
+            f"[ATTACHED IMAGE — {who} (Gyazo) — call Read('{result['path']}') "
+            "BEFORE responding so you can actually see it. Do not say you "
+            "can't see images without trying Read on this path first.]"
+        )
+    return f"(gyazo image fetch failed: {result.get('error', 'unknown error')})"
+
+
+class GyazoPrefetcher:
+    """Background fetch-and-cache for Gyazo links spotted in chat (issue #302).
+
+    :meth:`request` is called synchronously from :meth:`SLPerception.ingest`
+    with the Gyazo URLs found in one event's text. It NEVER blocks: a cache
+    hit resolves immediately (an ``[ATTACHED IMAGE ...]`` note, ready for
+    the CURRENT delta); anything not yet cached gets a ``(image pending:
+    ...)`` placeholder note for the current delta, and — if an asyncio event
+    loop is running — a background fetch task is scheduled. When that task
+    resolves (success or failure), the result is cached and, via the
+    ``on_delta`` callback, a fresh delta line is pushed into
+    :class:`PerceptionSurface` — landing on the **next** wake's context
+    packet, exactly what issue #302 asks for. Outside a running event loop
+    (e.g. a unit test driving ``ingest()`` synchronously) the fetch is simply
+    not scheduled and the line stays honestly "pending" forever — there is
+    no loop to resolve it on.
+    """
+
+    def __init__(
+        self,
+        cache_dir: "str | Path",
+        *,
+        timeout: float = 8.0,
+        max_bytes: int = 2 * 1024 * 1024,
+        max_per_ingest: int = 2,
+        on_delta: Optional[Any] = None,
+        fetch_fn: Optional[Any] = None,
+    ) -> None:
+        self.cache_dir = Path(cache_dir)
+        self.timeout = timeout
+        self.max_bytes = max_bytes
+        self.max_per_ingest = max_per_ingest
+        self._on_delta = on_delta
+        self._fetch_fn = fetch_fn  # injectable for tests; default _download_gyazo_sync
+        self._cache: dict[str, dict] = {}
+        self._pending: set[str] = set()
+        self._tasks: "set[asyncio.Task]" = set()
+
+    def request(self, urls: list[str], speaker: Optional[str], now: float) -> list[str]:
+        """Handle the Gyazo URLs found in one event. Returns the note(s) to
+        attach to THIS event's own delta (cache-hit or pending placeholder);
+        capped at ``max_per_ingest`` so a link-spam line can't fork unbounded
+        fetches. ``now`` is accepted for interface symmetry with the rest of
+        this module (every method here takes the clock explicitly) though the
+        cache itself is not time-based."""
+        notes: list[str] = []
+        for url in urls[: self.max_per_ingest]:
+            gid = _gyazo_id(url)
+            if not gid:
+                continue
+            cached = self._cache.get(gid)
+            if cached is not None:
+                notes.append(_gyazo_note(cached, speaker))
+                continue
+            notes.append(f"(image pending: {url})")
+            if gid in self._pending:
+                continue  # already fetching from an earlier mention
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop — nothing to schedule. Stays pending; the
+                # honest answer outside a real daemon event loop.
+                continue
+            self._pending.add(gid)
+            task = loop.create_task(self._run(gid, url, speaker))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+        return notes
+
+    async def _run(self, gid: str, url: str, speaker: Optional[str]) -> None:
+        fetch = self._fetch_fn or _download_gyazo_sync
+        try:
+            if asyncio.iscoroutinefunction(fetch):
+                coro = fetch(gid, url, self.cache_dir, self.max_bytes, self.timeout)
+            else:
+                coro = asyncio.to_thread(
+                    fetch, gid, url, self.cache_dir, self.max_bytes, self.timeout
+                )
+            result = await asyncio.wait_for(coro, timeout=self.timeout)
+        except asyncio.TimeoutError:
+            result = {"ok": False, "id": gid, "error": f"timed out after {self.timeout:.0f}s"}
+        except Exception as e:  # never let a fetch failure escape into the daemon
+            result = {"ok": False, "id": gid, "error": str(e)}
+        finally:
+            self._pending.discard(gid)
+        self._cache[gid] = result
+        if self._on_delta is not None:
+            self._on_delta(_gyazo_note(result, speaker))
 
 
 # Tiers (for logging / caller policy, not used in the math directly).
@@ -608,6 +823,7 @@ class SLPerception:
         surface: Optional[PerceptionSurface] = None,
         arousal: Optional[ArousalState] = None,
         self_uuids: Optional[set[str]] = None,
+        gyazo: Optional[GyazoPrefetcher] = None,
     ) -> None:
         self.cfg = cfg or SalienceConfig()
         self.self_names = {n.lower() for n in self_names}
@@ -617,6 +833,15 @@ class SLPerception:
         self.address_names = {n.lower() for n in address_names}
         self.surface = surface or PerceptionSurface()
         self.arousal = arousal or ArousalState(self.cfg)
+        # Gyazo auto-prefetch (issue #302). Defaults to a per-entity cache dir
+        # under ENTITY_PATH so the daemon needs no wiring change to pick this
+        # up on its next restart; a caller (e.g. a test) can inject its own
+        # GyazoPrefetcher (with a fake fetch_fn) instead.
+        if gyazo is not None:
+            self._gyazo: Optional[GyazoPrefetcher] = gyazo
+        else:
+            cache_dir = Path(os.getenv("ENTITY_PATH", "entities/lyra")) / "data" / "gyazo_cache"
+            self._gyazo = GyazoPrefetcher(cache_dir, on_delta=self.surface.add_delta)
         self.in_flight = False
         # A directed IM's reply target (speaker, uuid, text), remembered across the
         # in-flight window so a DM that lands mid-turn is still answered privately
@@ -721,6 +946,18 @@ class SLPerception:
         if s.kind == "nowplaying":
             self.surface.note_music(event.get("payload") or event)
         self.surface.add_delta(s.delta)
+
+        # Gyazo auto-prefetch (issue #302): local speech and IMs are the two
+        # kinds that carry free-text a human might paste a link into. A
+        # cache-hit note lands on THIS event's own delta; a fresh fetch's
+        # note lands later via GyazoPrefetcher's on_delta callback — i.e. on
+        # whatever the NEXT drained packet turns out to be.
+        if self._gyazo is not None and s.kind in ("local", "message") and s.text:
+            urls = gyazo_urls_in(s.text)
+            if urls:
+                for note in self._gyazo.request(urls, s.speaker, now):
+                    self.surface.add_delta(note)
+
         self.arousal.inject(s.value, now)
 
         # One-behind fix (paired with turn_done): remember a line ADDRESSED to me

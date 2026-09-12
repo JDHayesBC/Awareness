@@ -144,3 +144,73 @@ class HeartbeatController:
         else:
             mode = f"tempo({floor:.0f}s, gap≈{self._ema_gap:.0f}s)"
         return mode
+
+
+@dataclass
+class IdleBackoff:
+    """Exponential back-off on the idle-watchdog's own cadence + a gate on
+    authored speech, while nobody but me has spoken in the venue for a long
+    while (issue #323 — "loops its own lines when idle-driven with a silent
+    partner"). Two effects driven by ONE clock — `last_other_speech`, the
+    timestamp anyone OTHER than me last spoke or addressed me:
+
+      * once that goes stale past `quiet_after`, the room counts as "quiet"
+        (:meth:`is_quiet`) — an idle-triggered turn should still PERCEIVE but
+        must not AUTHOR a real spoken line (the caller checks
+        :meth:`should_suppress_speech`; emotes/silence stay fine — that
+        distinction lives in the caller, e.g. sl_daemon._speech_is_pure_emote);
+      * the watchdog's own polling interval widens exponentially while quiet
+        (×`multiplier` per idle fire — :meth:`note_idle_fire` — capped at `cap`
+        seconds via :meth:`effective_floor`), so a silent room is polled less
+        and less often rather than every fixed `floor` seconds forever.
+
+    Both reset to normal (full cadence, speech allowed) the instant anyone else
+    speaks or addresses me — :meth:`note_other_speech`. A ``♪ now playing``
+    track-change event must NEVER call this — it isn't someone speaking.
+
+    Pure / clock-free (every method takes `now`), same discipline as
+    :class:`HeartbeatController` and for the same reason: unit-testable with a
+    fake clock, no wall-clock timer of its own.
+    """
+    quiet_after: float = 1200.0   # SL_IDLE_QUIET_SECS default (20 min)
+    multiplier: float = 2.0       # SL_IDLE_BACKOFF_MULT default
+    cap: float = 1800.0           # SL_IDLE_BACKOFF_CAP default (30 min)
+
+    _last_other: float = field(default=0.0)
+    _factor: float = field(default=1.0)
+
+    def note_other_speech(self, now: float) -> None:
+        """Someone other than me spoke, or I was addressed — the room is live
+        again: reset the quiet clock AND the back-off factor to full cadence."""
+        self._last_other = now
+        self._factor = 1.0
+
+    # Being addressed IS someone speaking to me; identical reset. Named
+    # separately so call sites read intent-first.
+    note_addressed = note_other_speech
+
+    def is_quiet(self, now: float) -> bool:
+        """True once `quiet_after` seconds have passed since anyone but me
+        last spoke (or the controller was never told anyone has)."""
+        return (now - self._last_other) > self.quiet_after
+
+    def note_idle_fire(self, now: float) -> None:
+        """An idle-triggered watchdog turn just fired — widen the back-off for
+        NEXT time. No-op when the room isn't currently quiet: a real-tempo beat
+        (or one that just transitioned back to live) shouldn't grow the
+        multiplier, only a genuinely quiet room earns a wider gap."""
+        if self.is_quiet(now):
+            self._factor *= self.multiplier
+
+    def effective_floor(self, now: float, base_floor: float) -> float:
+        """The watchdog interval to actually poll with: `base_floor` unchanged
+        while live, or widened by the current back-off factor (clamped to
+        `cap`) while quiet."""
+        if not self.is_quiet(now):
+            return base_floor
+        return min(base_floor * self._factor, self.cap)
+
+    def should_suppress_speech(self, now: float) -> bool:
+        """True when a currently-firing IDLE turn should not author a real
+        spoken line (emotes/silence still allowed) — i.e. the room is quiet."""
+        return self.is_quiet(now)

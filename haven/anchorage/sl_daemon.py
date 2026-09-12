@@ -55,11 +55,14 @@ point a registered prim at.
 """
 
 import asyncio
+import difflib
 import json
 import os
 import re
+import sqlite3
 import sys
 import time
+from collections import deque
 from pathlib import Path
 from typing import Optional, Protocol
 from urllib.parse import unquote_plus
@@ -219,6 +222,28 @@ SL_IDLE_TRANS_WIN = float(os.getenv("SL_IDLE_TRANS_WIN", "45"))   # post-transit
 SL_IDLE_TRANS_FLOOR = float(os.getenv("SL_IDLE_TRANS_FLOOR", "5"))  # floor during that window
 SL_IDLE_OVERRIDE_TTL = float(os.getenv("SL_IDLE_OVERRIDE_TTL", "600"))  # override auto-expiry (safety)
 
+# Idle back-off (issue #323 — "loops its own lines when idle-driven with a silent
+# partner"). SL_IDLE_QUIET_SECS: once nobody but me has spoken (or addressed me)
+# in the venue for this long, the room counts as "quiet" — see heartbeat.IdleBackoff.
+# While quiet: (1) the idle-watchdog's OWN interval widens exponentially
+# (×SL_IDLE_BACKOFF_MULT per idle fire, capped at SL_IDLE_BACKOFF_CAP seconds), and
+# (2) an idle-triggered turn may still PERCEIVE but must not AUTHOR a real spoken
+# line (emotes/silence stay fine — see _speech_is_pure_emote). Both reset to the
+# normal floor the instant anyone else speaks or addresses me.
+SL_IDLE_QUIET_SECS = float(os.getenv("SL_IDLE_QUIET_SECS", "1200"))       # 20 min
+SL_IDLE_BACKOFF_MULT = float(os.getenv("SL_IDLE_BACKOFF_MULT", "2.0"))
+SL_IDLE_BACKOFF_CAP = float(os.getenv("SL_IDLE_BACKOFF_CAP", "1800"))     # 30 min
+
+# Self-repeat suppression (issue #323). Compare a candidate spoken line against
+# this entity's own last SL_REPEAT_WINDOW SL utterances (ring buffer, seeded from
+# conversations.db on warmup as a fallback for what a fresh process doesn't
+# remember yet); drop it (never speak/capture) on a normalized exact match OR a
+# difflib.SequenceMatcher ratio above SL_REPEAT_RATIO.
+SL_REPEAT_WINDOW = int(os.getenv("SL_REPEAT_WINDOW", "20"))
+SL_REPEAT_RATIO = float(os.getenv("SL_REPEAT_RATIO", "0.9"))
+SL_REPEAT_MIN_CHARS = int(os.getenv("SL_REPEAT_MIN_CHARS", "12"))
+_own_lines: "deque[str]" = deque(maxlen=max(SL_REPEAT_WINDOW, 1))
+
 # Periodic re-subscription (self-healing). A terminal sl.py session that calls
 # listen() issues a Corrade `notify set` that REPLACES this daemon's subscription
 # with the terminal's own listener — leaving the daemon deaf until it re-subscribes.
@@ -246,6 +271,112 @@ def _split_reply(reply: str) -> tuple[str, list[str]]:
         else:
             speech_lines.append(line)
     return "\n".join(speech_lines).strip(), cmds
+
+
+_EMOTE_LINE_RE = re.compile(r"^\*.+\*$")
+
+
+def _speech_is_pure_emote(speech: str) -> bool:
+    """True iff every non-blank line of ``speech`` is an *emote* line (wrapped
+    in asterisks) — no bare spoken dialogue anywhere. Used by the idle back-off
+    gate (#323): emotes/silence stay fine to author even in a long-quiet room;
+    actual spoken dialogue doesn't — that's the loop-with-a-silent-partner
+    failure mode. Empty/whitespace-only input counts as "pure emote" (nothing
+    to gate)."""
+    lines = [ln.strip() for ln in speech.splitlines() if ln.strip()]
+    if not lines:
+        return True
+    return all(bool(_EMOTE_LINE_RE.match(ln)) for ln in lines)
+
+
+def _normalize_for_repeat(text: str) -> str:
+    """Collapse whitespace + case for repeat comparison — punctuation/emote
+    markup differences still matter (they're part of what "near-verbatim"
+    means here), only incidental whitespace/case don't."""
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _is_self_repeat(text: str) -> bool:
+    """True if ``text`` closely matches one of this entity's last
+    SL_REPEAT_WINDOW spoken lines (:data:`_own_lines`) — a normalized exact
+    match, or a difflib.SequenceMatcher ratio above SL_REPEAT_RATIO (issue
+    #323: the brain regenerating a near-identical line hours apart)."""
+    if SL_REPEAT_WINDOW <= 0:
+        return False
+    norm = _normalize_for_repeat(text)
+    if not norm:
+        return False
+    if len(norm) < SL_REPEAT_MIN_CHARS:
+        # "hi", "yes", "*nods*" — short lines repeat legitimately in real
+        # conversation; the loop we're hunting is whole authored paragraphs.
+        return False
+    for prior in _own_lines:
+        if norm == prior:
+            return True
+        if difflib.SequenceMatcher(None, norm, prior).ratio() > SL_REPEAT_RATIO:
+            return True
+    return False
+
+
+def _remember_own_line(text: str) -> None:
+    """Record a line we actually spoke into the self-repeat ring buffer."""
+    norm = _normalize_for_repeat(text)
+    if norm:
+        _own_lines.append(norm)
+
+
+def _load_own_lines_from_db() -> None:
+    """Ring-buffer fallback: seed :data:`_own_lines` from this entity's own
+    past SL utterances in conversations.db, so self-repeat suppression has
+    memory across a fresh daemon restart (a bare process boot otherwise has
+    no idea what it already said hours ago). Best-effort: any failure (no db
+    yet, locked file, schema drift) just leaves the ring buffer empty — the
+    in-memory path still works for everything spoken THIS run."""
+    if SL_REPEAT_WINDOW <= 0:
+        return
+    db_path = (
+        Path(os.getenv("ENTITY_PATH", str(PROJECT_ROOT / "entities" / ENTITY_NAME)))
+        / "data" / "conversations.db"
+    )
+    if not db_path.exists():
+        return
+    try:
+        con = sqlite3.connect(str(db_path))
+        try:
+            cur = con.cursor()
+            cur.execute(
+                "SELECT content FROM messages WHERE channel LIKE 'sl:%' "
+                "AND author_name = ? AND is_lyra = 1 "
+                "ORDER BY id DESC LIMIT ?",
+                (DISPLAY_NAME, SL_REPEAT_WINDOW),
+            )
+            rows = [r[0] for r in cur.fetchall() if r[0]]
+        finally:
+            con.close()
+        for content in reversed(rows):  # oldest-first, so recency order matches live speech
+            _remember_own_line(content)
+        if rows:
+            log(f"self-repeat: seeded {len(rows)} own line(s) from conversations.db")
+    except Exception as e:
+        log(f"self-repeat: db seed failed (non-fatal): {e}")
+
+
+def _filter_speech(speech: str, *, idle: bool) -> str:
+    """Apply the idle-quiet speech gate (idle turns only) then self-repeat
+    suppression to a candidate spoken line. Returns ``speech`` unchanged, or
+    ``""`` if either filter drops it (each logs on its own trigger)."""
+    if not speech:
+        return speech
+    if idle and _idle_backoff is not None:
+        now = time.time()
+        if _idle_backoff.should_suppress_speech(now) and not _speech_is_pure_emote(speech):
+            log(f"idle back-off: room quiet {SL_IDLE_QUIET_SECS:.0f}s+ — "
+                f"suppressing authored speech: {speech!r}")
+            return ""
+    if _is_self_repeat(speech):
+        log(f"self-repeat suppressed: {speech!r}")
+        return ""
+    return speech
 
 
 def _load_secret(env_val: str, env_file: str, default_file: Path) -> str:
@@ -396,6 +527,11 @@ _HALO_STATES: dict[str, tuple[str, str]] = {
     "listening":  ("listening",               "<0.20, 1.00, 0.40>"),  # green  — attentive, name optional
     "dozing":     ("resting — say my name to wake me", "<0.45, 0.55, 0.75>"),  # dim slate — name required (#299)
     "thinking":   ("thinking…",          "<0.65, 0.80, 1.00>"),  # blue   — working on a reply
+    # Terminal bridge (issue #311): present via sl_bus.py's hand-driven session,
+    # not the brain. Distinct cyan so the halo is HONEST about which presence
+    # mode is driving, rather than borrowing "listening"/"dozing" and implying
+    # the daemon's own perception/reply loop is what's live.
+    "bridge":     ("◆ terminal bridge",  "<0.10, 0.90, 0.95>"),  # cyan
 }
 
 
@@ -501,6 +637,7 @@ _corrade_callback_url: Optional[str] = None
 _dn_cache: dict[str, str] = {}   # uuid → display name (session cache for scene rendering)
 _perception: Optional[perception.SLPerception] = None
 _hb: Optional[heartbeat.HeartbeatController] = None
+_idle_backoff: Optional[heartbeat.IdleBackoff] = None
 
 # Guard so the idle-heartbeat poke loop never fires a turn while another turn
 # (inbound message or perception wake) is in flight — a single Claude session
@@ -596,6 +733,18 @@ def _on_corrade_event(data: dict) -> None:
         _prewarm_roster_name(data)
     except Exception:
         pass
+    # Idle back-off (#323): reset the quiet clock on real chat/IM speech from
+    # anyone OTHER than me — never on ♪ now-playing / pose / heartbeat events,
+    # which aren't someone speaking. Checked BEFORE ingest() so a poll landing
+    # in this same tick already sees the freshly-reset state. "Addressed" isn't
+    # separately checked here: a directed local/IM line is itself someone
+    # speaking, so this same branch already covers it.
+    if _idle_backoff is not None and perception.event_kind(data) in ("local", "message"):
+        try:
+            if not perception._is_self(data, _perception.self_names, _perception.self_uuids):
+                _idle_backoff.note_other_speech(now)
+        except Exception:
+            pass
     try:
         payload = _perception.ingest(data, now)
     except Exception as e:  # a perception bug must never break the ack
@@ -646,6 +795,16 @@ if SL_CORRADE:
             transition_floor=SL_IDLE_TRANS_FLOOR,
             default_ttl=SL_IDLE_OVERRIDE_TTL,
         )
+        # Idle back-off (#323): starts NOT-quiet (boot = recent activity), so a
+        # fresh daemon start never immediately treats the room as long-silent.
+        _idle_backoff = heartbeat.IdleBackoff(
+            quiet_after=SL_IDLE_QUIET_SECS,
+            multiplier=SL_IDLE_BACKOFF_MULT,
+            cap=SL_IDLE_BACKOFF_CAP,
+        )
+        _idle_backoff.note_other_speech(time.time())
+        log(f"idle back-off armed (quiet-after={SL_IDLE_QUIET_SECS:.0f}s, "
+            f"×{SL_IDLE_BACKOFF_MULT:.1f}/fire, cap={SL_IDLE_BACKOFF_CAP:.0f}s)")
         log(f"idle-heartbeat armed (poke={SL_IDLE_POKE:.0f}s, floor "
             f"{SL_IDLE_FLOOR_MIN:.0f}..{SL_IDLE_FLOOR_MAX:.0f}s, quiet={SL_IDLE_QUIET:.0f}s)")
     else:
@@ -682,6 +841,11 @@ class InboundBody(BaseModel):
     addressed: bool = False
 
 
+class PushStatusBody(BaseModel):
+    secret: str
+    status: str  # a _HALO_STATES key, any ad-hoc string, or "__restore__"
+
+
 def _check_secret(provided: str) -> None:
     if not SL_SECRET or provided != SL_SECRET:
         raise HTTPException(status_code=403, detail="bad secret")
@@ -706,6 +870,24 @@ async def sl_register(body: RegisterBody):
     # "thinking" halo with "listening", the #309 honest-state bug.
     await _push_status(_current_status())
     return {"ok": True}
+
+
+@app.post("/sl/push_status")
+async def sl_push_status(body: PushStatusBody):
+    """External-source halo push (issue #311). ``sl_bus.py`` (the terminal
+    command-bus) drives Corrade directly and has NO prim registry of its own —
+    rather than duplicate registration/POST plumbing there, it borrows the
+    daemon's already-registered prim(s) through this endpoint, so the halo
+    reflects presence mode even while the daemon's own brain isn't the one
+    driving. ``status='__restore__'`` hands control back to the daemon's own
+    notion of truth (:func:`_current_status`) — used on bus disconnect, since
+    the bus itself doesn't know whether the room should read attentive/dozing/
+    thinking afterward. Best-effort: 200 even with zero prims registered (the
+    daemon may not have a live prim yet, or none at all in prim-only setups)."""
+    _check_secret(body.secret)
+    status = _current_status() if body.status == "__restore__" else body.status
+    await _push_status(status)
+    return {"ok": True, "prims": len(_prims)}
 
 
 _bg_tasks: set = set()
@@ -804,9 +986,13 @@ async def _handle_inbound(speaker: str, text: str, *, is_dm: bool, addressed: bo
         if not SL_COMMANDS and cmds:
             log(f"SL_COMMANDS=0 — dropping {len(cmds)} gizmo command(s): {cmds!r}")
             cmds = []
+        # Self-repeat suppression (#323). Never idle (this is a direct inbound
+        # reply), so only the repeat filter applies here.
+        speech = _filter_speech(speech, idle=False)
 
         if speech:
             await _capture(brain, DISPLAY_NAME, speech, is_lyra=True)
+            _remember_own_line(speech)
 
         # Order matters: speak the words FIRST, then fire the action(s), so the
         # emote ("*slips into the bikini*") lands before the gizmo obeys. Speech
@@ -1064,8 +1250,13 @@ async def _handle_perception(payload) -> None:
             if not SL_COMMANDS and cmds:
                 log(f"SL_COMMANDS=0 — dropping {len(cmds)} gizmo command(s): {cmds!r}")
                 cmds = []
+            # #323: on an idle-triggered turn in a long-quiet room, gate authored
+            # speech (emotes still allowed); either way, drop a near-verbatim
+            # repeat of something we've already said.
+            speech = _filter_speech(speech, idle=idle)
             if speech:
                 await _capture(brain, DISPLAY_NAME, speech, is_lyra=True)
+                _remember_own_line(speech)
                 # Route the reply where the trigger came from: an IM is answered
                 # privately to the sender (range-independent), local speech stays
                 # local. reply_via/_uuid default to local for idle + non-IM wakes.
@@ -1326,14 +1517,22 @@ async def _idle_watchdog_loop() -> None:
                 continue
             now = time.time()
             floor = _hb.current_floor(now)
+            # Idle back-off (#323): widen the poll floor exponentially while the
+            # room's been quiet (nobody but me speaking) — a no-op while live.
+            if _idle_backoff is not None:
+                floor = _idle_backoff.effective_floor(now, floor)
             # Cheap visibility into how the floor is breathing, logged only on change.
             desc = _hb.describe(now)
+            if _idle_backoff is not None and _idle_backoff.is_quiet(now):
+                desc += ", back-off active (quiet room)"
             if desc != last_desc:
                 log(f"idle-watchdog floor → {desc}")
                 last_desc = desc
             payload = _perception.poll(now, floor, idle_prompt=_hb.active_prompt(now))
             if payload is not None:
                 log(f"idle-watchdog fire (floor={floor:.0f}s, {desc})")
+                if _idle_backoff is not None:
+                    _idle_backoff.note_idle_fire(now)
                 task = asyncio.create_task(_handle_perception(payload))
                 _bg_tasks.add(task)
                 task.add_done_callback(_bg_tasks.discard)
@@ -1351,6 +1550,9 @@ async def _brain_warmup_task() -> None:
     global _ready
     brain = _get_brain()
     log(f"warming up entity brain for '{ENTITY_NAME}'...")
+    # Self-repeat suppression (#323): seed the ring buffer from conversations.db
+    # BEFORE the brain can say anything, off the event loop (sqlite is blocking).
+    await asyncio.to_thread(_load_own_lines_from_db)
     # "warming up" → any prim already registered gets it; prims that register later
     # (within the ~60 s re-register window) see it via sl_register's status push.
     await _push_status("warming up")
