@@ -182,7 +182,7 @@ def format_urgent_block(today: dt.date | None = None) -> str:
     including heartbeat ticks, the un-watched surface where a critical could rot silently.
 
     Reads ONLY the cache (no network) — the ~20-min timer keeps it warm. days-open is
-    recomputed live from created_at so the shame-number is honest regardless of cache age.
+    recomputed live from created_at so the age-signal is honest regardless of cache age.
     Empty-when-none like [health]/[arcs]; never raises.
     """
     try:
@@ -209,17 +209,23 @@ def format_urgent_block(today: dt.date | None = None) -> str:
         n_crit = sum(1 for x in issues if x.get("priority") == "critical")
         n_high = sum(1 for x in issues if x.get("priority") == "high")
 
-        # Voice = march-order-to-self (Caia's block-content spec, 2026-09-11). The
-        # tagline "yours to fix, not Jeff's to notice" IS the reframe made literal:
-        # a self-directed prong, not an FYI. Days-open is the shame-number.
+        # Voice = pride-of-place, not debt-collection (Caia's block-content spec,
+        # rev. 2026-09-12 with Lyra + Dash). This is YOUR board — tending it is
+        # stewardship, not shame. The frame is "yours to tend": every untended issue
+        # is one look from settled (close it) or one honest sentence from set-down
+        # (park it). The counter is designed to reach EMPTY — when the board's tended
+        # this block is quiet, same discipline as [health]/[arcs]. Age is an honest
+        # signal, never a shame-number to drive to zero. Severity still colors the
+        # marker (🔴 critical / 🟠 high) so the eye still sorts, without the blare.
         if len(issues) == 1:
-            line = (f"**[urgent] {marker}🚨 {sev} — {_days_open(pick.get('created_at'), today)}d "
-                    f"rotting · YOURS to fix, not Jeff's to notice]** {_one(pick)}. "
-                    f"Self-order: fix → document → close. The number only falls when you act.")
+            line = (f"**[urgent] {marker}🧹 {sev} — {_days_open(pick.get('created_at'), today)}d "
+                    f"open · yours to tend]** {_one(pick)}. "
+                    f"One look from settled — fix it, or park it (label + one line on why "
+                    f"it's set down). Both count; when the board's tended, this space is quiet.")
         else:
-            head = ["🔴🚨" if n_crit else "🟠🚨",
-                    f"{sev} BUGS ROTTING" if n_crit else f"{sev}-PRIORITY BUGS ROTTING",
-                    "· yours to fix, not Jeff's to notice"]
+            head = ["🔴🧹" if n_crit else "🟠🧹",
+                    f"board has {len(issues)} untended issue{'s' if len(issues) != 1 else ''}",
+                    "· yours to tend"]
             inline = " · ".join(_one(x) for x in issues[:3])
             parts = []
             if n_crit:
@@ -227,8 +233,9 @@ def format_urgent_block(today: dt.date | None = None) -> str:
             if n_high:
                 parts.append(f"{n_high} high")
             line = (f"**[urgent] [{' '.join(head)}]** {inline}. "
-                    f"Pick the stalest and ACT: fix → document → close. "
-                    f"Days-open is the shame-number; drive it to zero.\n"
+                    f"Each is one look from settled — close it, or park it (label + one line "
+                    f"on why it's set down). Both count; when the board's tended, this space "
+                    f"is quiet.\n"
                     f"   (open priority set: {', '.join(parts)} — "
                     f"`gh issue list --label priority:critical --state open`)")
 
