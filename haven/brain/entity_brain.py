@@ -321,6 +321,10 @@ class EntityBrain:
             max_idle_seconds=self.max_idle_seconds,
             startup_prompt=self._build_startup_prompt(),
             init_timeout=self.init_timeout,
+            # GH #325: this brain writes both sides of every turn to its own
+            # river (capture_to_river), so the terminal hooks must not
+            # double-capture the CC session it drives.
+            capture_channel=self.channel,
         )
 
         await self.invoker.initialize()

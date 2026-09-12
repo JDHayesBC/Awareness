@@ -158,6 +158,7 @@ class ClaudeInvoker:
         max_backoff_seconds: float = 30.0,
         startup_prompt: Optional[str] = None,
         init_timeout: float = 60.0,
+        capture_channel: Optional[str] = None,
     ):
         """
         Initialize invoker configuration.
@@ -195,6 +196,18 @@ class ClaudeInvoker:
                           construction means restart() also uses the generous timeout —
                           historically restart() fell back to the 60s default and
                           dropped the first message after long idle (issue #198).
+            capture_channel: Name of the surface driving this invoker ("sl",
+                          "haven", ...) when THAT SURFACE ALREADY WRITES BOTH
+                          SIDES of its conversation to the entity's river itself
+                          (entity_brain.capture_to_river, haven/bridge.py). It is
+                          exported to the Claude Code subprocess as
+                          CC_INVOKER_CHANNEL, and the terminal capture hooks
+                          (inject_context.py / capture_response.py) skip storing
+                          when it is set — otherwise every brain-composed prompt
+                          lands as a fake "Jeff" terminal row and every reply
+                          (including [[NO_RESPONSE]]) as a duplicate entity row
+                          (GH #325). Leave None for surfaces whose ONLY capture
+                          path is the terminal hooks (e.g. the Discord daemon).
         """
         self.working_dir = working_dir or PROJECT_ROOT
         self.bypass_permissions = bypass_permissions
@@ -222,6 +235,7 @@ class ClaudeInvoker:
         # Startup protocol
         self.startup_prompt = startup_prompt
         self.init_timeout = init_timeout
+        self.capture_channel = capture_channel
 
         self._client: Optional[ClaudeSDKClient] = None
         self._connected = False
@@ -239,6 +253,14 @@ class ClaudeInvoker:
         self._turn_count = 0         # Number of query/response cycles
         self._session_start_time: Optional[datetime] = None
         self._last_activity_time: Optional[datetime] = None
+
+    def subprocess_env(self) -> dict[str, str]:
+        """Extra environment for the Claude Code subprocess (merged over the
+        daemon's own env by the SDK). Currently just CC_INVOKER_CHANNEL — see
+        the `capture_channel` constructor arg (GH #325)."""
+        if self.capture_channel:
+            return {"CC_INVOKER_CHANNEL": str(self.capture_channel)}
+        return {}
 
     @property
     def is_connected(self) -> bool:
@@ -413,6 +435,7 @@ class ClaudeInvoker:
             mcp_servers=self.mcp_servers if self.mcp_servers else None,
             allowed_tools=self.allowed_tools if self.allowed_tools else None,
             permission_mode="bypassPermissions" if self.bypass_permissions else None,
+            env=self.subprocess_env(),
         )
 
         # Create and connect client

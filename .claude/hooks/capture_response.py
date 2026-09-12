@@ -198,6 +198,12 @@ def extract_assistant_responses(transcript_path: str, session_id: str, start_lin
     return responses
 
 
+def invoker_channel() -> str:
+    """Non-empty when this Claude Code process was spawned by a surface that
+    captures its own conversation (see ClaudeInvoker.capture_channel, GH #325)."""
+    return os.environ.get("CC_INVOKER_CHANNEL", "").strip()
+
+
 def main():
     debug("Stop hook started")
 
@@ -216,6 +222,17 @@ def main():
     # Only process Stop events
     if event != "Stop":
         debug(f"Skipping non-Stop event: {event}")
+        sys.exit(0)
+
+    # GH #325: a brain-driven session (SL brain, Haven bot) exports
+    # CC_INVOKER_CHANNEL via ClaudeInvoker(capture_channel=...). Those surfaces
+    # already write both sides of the conversation to the entity's river on
+    # their own channel (sl:/haven:), so storing the assistant turns here again
+    # only produces duplicate terminal rows (10k+ of them literally
+    # "[[NO_RESPONSE]]"). Skip without advancing the bookmark.
+    if invoker_channel():
+        debug(f"Skipping capture: CC_INVOKER_CHANNEL={invoker_channel()!r} "
+              f"(surface captures its own river)")
         sys.exit(0)
 
     if not transcript_path or not Path(transcript_path).exists():

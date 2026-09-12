@@ -265,6 +265,10 @@ async def init_invoker() -> ClaudeInvoker:
         max_turns=100,
         max_idle_seconds=4 * 3600,
         startup_prompt=build_startup_prompt(),
+        # GH #325: Haven already mirrors both sides of every room turn into the
+        # entity's river (haven/bridge.py), so the terminal hooks must not
+        # double-capture the CC session this bot drives.
+        capture_channel="haven",
         # 180s for the full identity-reconstruction startup ritual (read several
         # entity files, ambient_recall, etc.). Stored on the invoker so restart()
         # also uses it — pre-#198 the restart path silently fell back to the 60s
