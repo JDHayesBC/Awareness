@@ -11,6 +11,11 @@ one-command capability:
               at a glance, like a human scanning the storefront) + a manifest that
               maps each tile-number to {name, price L$, brand/store, rating,
               product URL, local image}.
+    harvest → take a settled search URL (e.g. one Playwright navigated to after
+              setting a store / sort / filters in a real browser) and paginate it
+              + the next n-1 pages into per-page contact sheets with continuous
+              numbering. Browser navigates → headless harvester bulk-scans; this
+              is how you browse a specific maker's storefront cheaply.
     view    → hand back the full images + product URLs for the tile-numbers you like.
 
 Why a contact sheet: reading 48 images one-by-one is expensive and blind to the
@@ -32,7 +37,7 @@ RUN with the pps venv (needs Pillow + curl):
 """
 import argparse, hashlib, html, json, os, re, subprocess, sys, time
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse, parse_qsl, urlencode, urlunparse
 
 CACHE   = Path(os.environ.get("SL_SHOP_CACHE", Path.home() / ".claude/sl_shop_cache"))
 PAGES   = CACHE / "pages"
@@ -119,7 +124,7 @@ def parse_listings(text):
     return items
 
 
-def contact_sheet(items, path, cols=6, tile=210, pad=8, labelh=36):
+def contact_sheet(items, path, cols=6, tile=210, pad=8, labelh=36, start_index=0):
     from PIL import Image, ImageDraw, ImageFont
     n = max(len(items), 1)
     rows = (n + cols - 1) // cols
@@ -150,7 +155,7 @@ def contact_sheet(items, path, cols=6, tile=210, pad=8, labelh=36):
             draw.rectangle([x, y, x + tile, y + tile], outline=(80, 70, 80))
             draw.text((x + 6, y + 6), "(no image)", fill=(120, 110, 115), font=font)
         ly = y + tile + 3
-        draw.text((x + 2, ly), str(i + 1), fill=(212, 165, 116), font=fontb)     # gold number
+        draw.text((x + 2, ly), str(start_index + i + 1), fill=(212, 165, 116), font=fontb)  # gold number
         draw.text((x + 26, ly), (it.get("name") or "?")[:24], fill=(232, 224, 212), font=font)
         price = it.get("price")
         draw.text((x + 2, ly + 17),
@@ -214,6 +219,73 @@ def cmd_search(a):
         print(f"  … +{len(items)-12} more on the sheet")
 
 
+def _set_page(url, page):
+    """Return `url` with its top-level `page` query param forced to `page`
+    (SL paginates search results with `&page=N`). Other params preserved."""
+    parts = urlparse(url)
+    q = [(k, v) for (k, v) in parse_qsl(parts.query, keep_blank_values=True) if k != "page"]
+    q.append(("page", str(page)))
+    return urlunparse(parts._replace(query=urlencode(q)))
+
+
+def cmd_harvest(a):
+    """Take a settled search URL (e.g. one Playwright navigated to after setting
+    store/sort/filters) and harvest it + the next n-1 pages into per-page contact
+    sheets with continuous global numbering + one combined manifest. This is the
+    'browser navigates → headless harvester bulk-scans' half: it closes the
+    store-browse gap because it paginates whatever search URL it's handed."""
+    parts = urlparse(a.url)
+    if "/products/search" not in parts.path:
+        print("warning: URL is not a /products/search endpoint; a store *landing* page "
+              "has different markup and will likely parse to 0. Set a search/filter in "
+              "the browser first, then hand over that URL.")
+    start = 1
+    for k, v in parse_qsl(parts.query):
+        if k == "page" and v.isdigit():
+            start = int(v)
+
+    sid = hashlib.sha1(f"{a.url}|{start}|{a.pages}".encode()).hexdigest()[:10]
+    outdir = OUT / sid
+    all_items, sheets = [], []
+    for p in range(start, start + a.pages):
+        purl = _set_page(a.url, p)
+        body = fetch(purl, PAGES / f"{hashlib.sha1(purl.encode()).hexdigest()[:10]}.html",
+                     ttl=PAGE_TTL, fresh=a.fresh)
+        if not body:
+            print(f"  page {p}: fetch failed — stopping (retry with --fresh?).")
+            break
+        items = parse_listings(body.decode("utf-8", "replace"))
+        if not items:
+            print(f"  page {p}: parsed 0 listings — stopping (end of results, or not a search URL).")
+            break
+        for it in items:
+            it["page"] = p
+            if it.get("image"):
+                dest = ASSETS / f"{_asset_id(it['image'])}.jpg"
+                if fetch(it["image"], dest, binary=True):
+                    it["local"] = str(dest)
+        sheet = outdir / f"sheet_p{p}.png"
+        contact_sheet(items, sheet, start_index=len(all_items))
+        sheets.append(str(sheet))
+        all_items.extend(items)
+        print(f"  page {p}: {len(items)} items → {sheet}")
+
+    if not all_items:
+        sys.exit("harvested 0 listings — see the warning above.")
+
+    manifest = {"search_id": sid, "url": a.url, "start_page": start, "pages": len(sheets),
+                "fetched": time.strftime("%Y-%m-%d %H:%M"), "count": len(all_items),
+                "sheets": sheets, "items": all_items}
+    (outdir / "manifest.json").write_text(json.dumps(manifest, indent=1))
+
+    print(f"\nsearch_id={sid}  {len(all_items)} items across {len(sheets)} page(s)  "
+          f"(pages {start}..{start + len(sheets) - 1})")
+    for s in sheets:
+        print(f"CONTACT SHEET → {s}")
+    print(f"manifest      → {outdir/'manifest.json'}")
+    print(f"next: view {sid} <global-numbers>   (numbering is continuous across the sheets)")
+
+
 def cmd_view(a):
     man = OUT / a.search_id / "manifest.json"
     if not man.exists():
@@ -250,6 +322,12 @@ def main():
     s.add_argument("--sort", default="_score_desc")
     s.add_argument("--fresh", action="store_true", help="bypass the page cache")
     s.set_defaults(func=cmd_search)
+
+    h = sub.add_parser("harvest", help="paginate a settled search URL (from the browser) into contact sheets")
+    h.add_argument("url", help="a marketplace /products/search URL; pagination is added automatically")
+    h.add_argument("--pages", type=int, default=3, help="how many consecutive pages to harvest (default 3)")
+    h.add_argument("--fresh", action="store_true", help="bypass the page cache")
+    h.set_defaults(func=cmd_harvest)
 
     v = sub.add_parser("view", help="print full images + product URLs for tile numbers")
     v.add_argument("search_id")
