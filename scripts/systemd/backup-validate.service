@@ -1,0 +1,38 @@
+[Unit]
+Description=Validate the most recent PPS backup is non-corrupt and restorable
+Documentation=file:///mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/validate_backup.py
+Documentation=https://github.com/JDHayesBC/Awareness/issues/317
+After=network-online.target
+
+[Service]
+Type=oneshot
+
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
+
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python3 /mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/validate_backup.py
+
+# Non-zero exit means validation FAILED (or errored) — that's a real signal,
+# don't mask it. The script itself alerts via notify.py on failure.
+SuccessExitStatus=0
+
+# Extraction of the sqlite sources + chromadb from a ~1.9GB archive currently
+# takes ~2 minutes end to end (measured 2026-09-12); give it plenty of room.
+TimeoutStartSec=900
+MemoryMax=2048M
+CPUQuota=75%
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=backup-validate
+
+# Install (user units):
+#   cp scripts/systemd/backup-validate.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now backup-validate.timer
+#
+# NOTE: do NOT enable/start this automatically as part of a code change —
+# Lyra (or whoever's driving) runs the enable step by hand once this is
+# reviewed, per standing practice for new persistent daemons/timers.

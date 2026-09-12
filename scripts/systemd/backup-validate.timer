@@ -1,0 +1,21 @@
+[Unit]
+Description=Fire backup-validate.service ~30 minutes after the nightly PPS backup
+Requires=backup-validate.service
+
+[Timer]
+# lyra-backup.timer runs DAILY at 04:00 (stops the stack, tars, restarts).
+# Issue #317 deliberately asks for a LONGER interval than the backup itself
+# ("weekly, or every N days") — the point is proving the current state of
+# backups is trustworthy, not re-proving it every night. Weekly, offset 30
+# minutes after the daily 04:00 backup so Sunday's run always validates a
+# same-morning archive; the extraction/PRAGMA checks take ~2 minutes
+# end-to-end (measured 2026-09-12 against a ~1.9GB real backup), so a
+# 30-minute cushion is generous even on a slow night (neo4j health-gate
+# retries, WSL2 NTFS flush, etc.).
+OnCalendar=Sun *-*-* 04:30:00
+AccuracySec=5min
+Persistent=true
+Unit=backup-validate.service
+
+[Install]
+WantedBy=timers.target
