@@ -4113,4 +4113,11 @@ if __name__ == "__main__":
         port=8000,
         log_level="info",
         workers=workers,
+        # uvicorn >= 0.30 pings each worker during startup and kills it if it
+        # doesn't answer within this many seconds (default 5). Our lifespan
+        # takes ~17s on Lyra's graph (torch model load + Neo4j health over
+        # 200K edges), so the default made the supervisor kill and respawn
+        # workers forever ("Child process [N] died" every few seconds,
+        # 2026-09-12 after an unpinned rebuild pulled 0.52.4).
+        timeout_worker_healthcheck=int(os.environ.get("PPS_WORKER_HEALTHCHECK_TIMEOUT", "120")),
     )
