@@ -17,6 +17,7 @@ import chromadb
 from chromadb.config import Settings
 
 from . import PatternLayer, LayerType, SearchResult, LayerHealth
+from .chroma_utils import call_with_collection_retry
 
 
 class TechRAGLayer(PatternLayer):
@@ -68,15 +69,37 @@ class TechRAGLayer(PatternLayer):
             )
         return self._client
 
-    def _get_collection(self):
-        """Get or create the tech_docs collection."""
-        if self._collection is None:
+    def _get_collection(self, force_refresh: bool = False):
+        """
+        Get or create the tech_docs collection.
+
+        Args:
+            force_refresh: drop any cached handle and re-resolve by name
+                (Issue #315 — a stale cached handle keeps pointing at a
+                collection UUID Chroma no longer has after the collection is
+                recreated out from under this process, e.g. a reboot).
+        """
+        if force_refresh or self._collection is None:
             client = self._get_client()
             self._collection = client.get_or_create_collection(
                 name=self.COLLECTION_NAME,
                 metadata={"description": "Technical documentation for family knowledge"}
             )
         return self._collection
+
+    def _collection_call(self, op):
+        """
+        Run `op(collection)` against the cached collection handle, transparently
+        re-resolving and retrying once if Chroma reports the handle is stale
+        (Issue #315).
+        """
+        def _log_stale(exc: BaseException) -> None:
+            print(
+                f"[TechRAG] stale collection handle for "
+                f"'{self.COLLECTION_NAME}' ({exc}); re-resolving and retrying"
+            )
+
+        return call_with_collection_retry(self._get_collection, op, on_stale=_log_stale)
 
     def _chunk_document(self, content: str, doc_id: str) -> list[dict]:
         """
@@ -170,11 +193,10 @@ class TechRAGLayer(PatternLayer):
             content_hash = hashlib.md5(content.encode()).hexdigest()
 
             # Check if already indexed with same hash
-            collection = self._get_collection()
-            existing = collection.get(
+            existing = self._collection_call(lambda c: c.get(
                 where={"doc_id": doc_id},
                 include=["metadatas"]
-            )
+            ))
 
             if existing and existing['ids']:
                 # Check if content changed
@@ -187,7 +209,7 @@ class TechRAGLayer(PatternLayer):
                         "message": "Document already indexed with same content"
                     }
                 # Delete all old chunks before re-indexing (content changed or force=True)
-                collection.delete(where={"doc_id": doc_id})
+                self._collection_call(lambda c: c.delete(where={"doc_id": doc_id}))
 
             # Chunk the document
             chunks = self._chunk_document(content, doc_id)
@@ -212,11 +234,11 @@ class TechRAGLayer(PatternLayer):
                 for c in chunks
             ]
 
-            collection.add(
+            self._collection_call(lambda c: c.add(
                 ids=chunk_ids,
                 documents=chunk_contents,
                 metadatas=chunk_metadatas
-            )
+            ))
 
             # Copy file to tech_docs directory for reference
             dest_path = self.tech_docs_path / filepath.name
@@ -253,17 +275,15 @@ class TechRAGLayer(PatternLayer):
             List of SearchResult ordered by relevance
         """
         try:
-            collection = self._get_collection()
-
             # Build where clause if category specified
             where = {"category": category} if category else None
 
-            results = collection.query(
+            results = self._collection_call(lambda c: c.query(
                 query_texts=[query],
                 n_results=limit,
                 where=where,
                 include=["documents", "metadatas", "distances"]
-            )
+            ))
 
             search_results = []
 
@@ -301,11 +321,10 @@ class TechRAGLayer(PatternLayer):
             client = self._get_client()
             client.heartbeat()
 
-            collection = self._get_collection()
-            count = collection.count()
+            count = self._collection_call(lambda c: c.count())
 
             # Count unique documents
-            all_items = collection.get(include=["metadatas"])
+            all_items = self._collection_call(lambda c: c.get(include=["metadatas"]))
             doc_ids = set()
             if all_items and all_items['metadatas']:
                 for m in all_items['metadatas']:
@@ -329,6 +348,61 @@ class TechRAGLayer(PatternLayer):
                 details={"error": str(e)}
             )
 
+    async def startup_self_check(self) -> dict:
+        """
+        Startup self-heal check (Issue #315).
+
+        Tech RAG has no automatic disk->ChromaDB sync — ingestion is an
+        explicit `tech_ingest` call per document — so unlike
+        CoreAnchorsChromaLayer there's no safe auto-resync path here (we'd
+        have to guess which category each doc belongs under). This detects
+        and loudly logs a disk/collection divergence (collection unreachable,
+        or empty while docs exist on disk) so a human notices promptly
+        instead of tech_search silently reading empty after a reboot.
+
+        Returns dict describing what was found. Never raises.
+        """
+        file_count = (
+            len(list(self.tech_docs_path.glob("*.md")))
+            if self.tech_docs_path.exists()
+            else 0
+        )
+
+        try:
+            count = self._collection_call(lambda c: c.count())
+        except Exception as e:
+            reason = f"collection unreachable ({e})"
+            print(
+                f"[TechRAG] STARTUP SELF-CHECK: {reason}; {file_count} docs on "
+                f"disk. Re-run `tech_ingest` for each doc to restore search."
+            )
+            return {
+                "self_healed": False,
+                "needs_attention": True,
+                "reason": reason,
+                "disk_file_count": file_count,
+            }
+
+        if file_count > 0 and count == 0:
+            reason = "collection empty (0 chunks) while disk has docs"
+            print(
+                f"[TechRAG] STARTUP SELF-CHECK: {reason} — collection was "
+                f"likely lost/recreated. Re-run `tech_ingest` for each doc "
+                f"to restore search."
+            )
+            return {
+                "self_healed": False,
+                "needs_attention": True,
+                "reason": reason,
+                "disk_file_count": file_count,
+            }
+
+        return {
+            "self_healed": False,
+            "disk_file_count": file_count,
+            "chroma_chunk_count": count,
+        }
+
     async def list_docs(self) -> dict:
         """
         List all indexed documents.
@@ -337,8 +411,7 @@ class TechRAGLayer(PatternLayer):
             Dict with document info
         """
         try:
-            collection = self._get_collection()
-            all_items = collection.get(include=["metadatas"])
+            all_items = self._collection_call(lambda c: c.get(include=["metadatas"]))
 
             docs = {}
             if all_items and all_items['metadatas']:
@@ -375,17 +448,15 @@ class TechRAGLayer(PatternLayer):
             Dict with deletion status
         """
         try:
-            collection = self._get_collection()
-
             # Get count before delete
-            before = collection.get(where={"doc_id": doc_id})
+            before = self._collection_call(lambda c: c.get(where={"doc_id": doc_id}))
             chunks_deleted = len(before['ids']) if before and before['ids'] else 0
 
             if chunks_deleted == 0:
                 return {"success": False, "error": f"Document not found: {doc_id}"}
 
             # Delete from ChromaDB
-            collection.delete(where={"doc_id": doc_id})
+            self._collection_call(lambda c: c.delete(where={"doc_id": doc_id}))
 
             # Delete from disk if present
             disk_deleted = False

@@ -26,10 +26,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 import os
+import re
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
+
+import numpy as np
 
 from . import LayerHealth, LayerType, PatternLayer, SearchResult
 from .entity_extractor import EntityExtractor, ExtractionResult
@@ -168,6 +173,27 @@ ORDER BY coalesce(r.mention_count, 1) DESC
 LIMIT $k
 """
 
+# Ambient graph-recall v2 (work/ambient-recall-v3/README.md §5) — edges only,
+# with the fields the re-ranker needs (embedding, mention_count, created_at)
+# that the plain _FULLTEXT_EDGES/_VECTOR_EDGES queries above don't return.
+_RECALL_FULLTEXT_EDGES = """
+CALL db.index.fulltext.queryRelationships('edge_fact_ft', $query) YIELD relationship AS r, score
+WHERE r.group_id = $gid
+RETURN r.uuid AS uuid, r.fact AS fact, r.name AS edge_type,
+       coalesce(r.mention_count, 1) AS mc, toString(r.created_at) AS created_at,
+       r.embedding AS emb
+LIMIT $k
+"""
+
+_RECALL_VECTOR_EDGES = """
+CALL db.index.vector.queryRelationships('edge_embedding', $k, $embedding) YIELD relationship AS r, score
+WHERE r.group_id = $gid
+RETURN r.uuid AS uuid, r.fact AS fact, r.name AS edge_type,
+       coalesce(r.mention_count, 1) AS mc, toString(r.created_at) AS created_at,
+       r.embedding AS emb
+LIMIT $k
+"""
+
 
 # ─────────────────────────────────────────────
 # Helpers
@@ -210,6 +236,140 @@ def _merge_rrf(
             rows[uid] = row
 
     return sorted(rows.values(), key=lambda r: scores[r[id_key]], reverse=True)
+
+
+# ─────────────────────────────────────────────
+# Ambient graph-recall v2 (work/ambient-recall-v3/README.md §5)
+#
+# Ported from the read-only prototype at work/ambient-recall-v3/recall_proto.py
+# (build_query_v2, new_recall_v2, specificity, global_novelty, temporal_cooldown,
+# recency, lucene_safe, render_block). Kept as free functions — same names, same
+# math — so they're unit-testable against fake edge rows without Neo4j.
+# ─────────────────────────────────────────────
+
+_LUCENE_SPECIALS = re.compile(r'[+\-!(){}\[\]^"~*?:\\/]|&&|\|\|')
+
+# There is exactly one carbon human in this graph; "prior turns by the human
+# author" (README §5 query blend) always means Jeff, regardless of which
+# entity's group_id we're recalling against.
+_RECALL_HUMAN_AUTHOR = "Jeff"
+
+
+def lucene_safe(q: str) -> str:
+    """Strip Lucene special characters so the fulltext leg never throws.
+
+    Bug fixed here (README §2/§4): the server previously fed the raw prompt
+    into `db.index.fulltext.queryNodes/queryRelationships` — a stray '?' or
+    '"' in the query text raises, the exception is swallowed by the caller's
+    try/except, and half the retrieval silently vanishes.
+    """
+    return " ".join(_LUCENE_SPECIALS.sub(" ", q or "").split())
+
+
+def specificity(fact: str) -> float:
+    """Concrete facts (numbers, quoted names, proper nouns) are the ones
+    otherwise worth asking to have repeated. Only ~6.5% of edges carry a
+    digit; ~29% a quote."""
+    s = 1.0
+    if re.search(r"\d", fact or ""):
+        s += 0.30
+    if re.search(r"['\"‘’“”]", fact or ""):
+        s += 0.15
+    caps = len(re.findall(r"\b[A-Z][a-z]{2,}", fact or ""))
+    s += 0.05 * min(max(caps - 1, 0), 4)
+    return s
+
+
+def global_novelty(mention_count: int) -> float:
+    """Well-worn in the whole graph (re-extracted many times) → already-held,
+    already-known → low novelty."""
+    return 1.0 / (1.0 + math.log(max(mention_count, 1)))
+
+
+def temporal_cooldown(edge_uuid: str, turn_idx: int, shown: dict) -> float:
+    """Shown by the formatter recently → decay. The HABITUATING sense — the
+    opposite adaptation curve from the [urgent]/[arcs] klaxon, which must
+    escalate and never fade. `shown` is {edge_uuid: turn_idx last surfaced},
+    kept by the caller across calls so cooldown persists turn to turn."""
+    last = shown.get(edge_uuid)
+    if last is None:
+        return 1.0
+    d = turn_idx - last
+    return 0.10 if d < 4 else (0.45 if d < 12 else 1.0)
+
+
+def recency(created_at: str, now: datetime) -> float:
+    """Mild boost for facts from the last ~6 weeks. The echo/in-window drops
+    already suppress facts literally still in view; this lifts recent-but-
+    unheld facts (e.g. something said in Haven a few hours ago)."""
+    try:
+        ts = (created_at or "").replace("Z", "+00:00").replace(" ", "T")
+        t = datetime.fromisoformat(ts)
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        age = (now - t).total_seconds() / 86400.0
+        return 1.0 + 0.4 * math.exp(-max(age, 0) / 45.0)
+    except Exception:
+        return 1.0
+
+
+def render_recall_block(picked: list[dict]) -> str:
+    """Render the ambient `[recall]` block (README §5). Replaces the old
+    '- rich_texture: N facts matched …' manifest count line. Empty-when-none
+    so the composer can omit the block entirely rather than print a header
+    with nothing under it."""
+    if not picked:
+        return ""
+    lines = ["**[recall]**"]
+    for s in picked:
+        lines.append(f"· {s.get('fact', '')}  ({s.get('created_at', '?')})")
+    return "\n".join(lines)
+
+
+def _unit_vec(v) -> np.ndarray:
+    arr = np.asarray(v, dtype=np.float32)
+    n = np.linalg.norm(arr)
+    return arr / n if n else arr
+
+
+def _cosine(a: np.ndarray, b: np.ndarray) -> float:
+    na, nb = np.linalg.norm(a), np.linalg.norm(b)
+    return float(a @ b / (na * nb)) if na and nb else 0.0
+
+
+def _normalize_ts(ts: str) -> str:
+    """Normalize an ISO or space-separated timestamp to 'YYYY-MM-DD HH:MM'
+    (minute precision — matches the composer's window-row timestamps) so
+    lexical comparison works regardless of which format a given caller used."""
+    if not ts:
+        return ""
+    return ts.replace("T", " ")[:16]
+
+
+def _build_recall_query(
+    embedder: GraphEmbedder,
+    prompt: str,
+    window_rows: list[dict],
+    w_prompt: float = 0.65,
+) -> tuple[np.ndarray, str]:
+    """Blend prompt + prior *human* turns in EMBEDDING space (README §4: a v1
+    that concatenated prompt + the entity's own last responses lost, because
+    the entity's own turns lead with scene/mood and out-scored the actual
+    topic). The entity's own turns are excluded — they're already in context,
+    not the topic Jeff is steering toward. Fulltext leg gets the prompt alone.
+    """
+    human_prev = [
+        (row.get("content") or "")[:400]
+        for row in window_rows
+        if row.get("author") == _RECALL_HUMAN_AUTHOR
+    ]
+    embs = embedder.embed_batch([prompt[:400]] + human_prev)
+    q = w_prompt * _unit_vec(embs[0])
+    if human_prev:
+        rest = (1.0 - w_prompt) / len(human_prev)
+        for e in embs[1:]:
+            q = q + rest * _unit_vec(e)
+    return _unit_vec(q), prompt[:400]
 
 
 # ─────────────────────────────────────────────
@@ -451,11 +611,17 @@ class CustomGraphLayer(PatternLayer):
                 return [dict(r) for r in records]
             return await asyncio.to_thread(_execute)
 
+        # Sanitize the fulltext query — Lucene specials ('?', '"', etc.) in the
+        # raw prompt used to throw here, and the exception was swallowed by
+        # the try/except below, silently losing the fulltext leg (README §2/§4,
+        # work/ambient-recall-v3). The vector leg still uses the raw text.
+        ft_query = lucene_safe(query)
+
         # --- Entity fulltext ---
         entity_ft: list[dict] = []
         try:
             entity_ft = await _run_query(
-                _FULLTEXT_ENTITIES, query=query, gid=self._group_id, k=k
+                _FULLTEXT_ENTITIES, query=ft_query, gid=self._group_id, k=k
             )
         except Exception as exc:
             logger.debug("entity fulltext search failed: %s", exc)
@@ -475,7 +641,7 @@ class CustomGraphLayer(PatternLayer):
         edge_ft: list[dict] = []
         try:
             edge_ft = await _run_query(
-                _FULLTEXT_EDGES, query=query, gid=self._group_id, k=k
+                _FULLTEXT_EDGES, query=ft_query, gid=self._group_id, k=k
             )
         except Exception as exc:
             logger.debug("edge fulltext search failed: %s", exc)
@@ -530,6 +696,163 @@ class CustomGraphLayer(PatternLayer):
         # Sort all results together by relevance and trim to requested limit
         results.sort(key=lambda r: r.relevance_score, reverse=True)
         return results[:limit]
+
+    async def recall_for_ambient(
+        self,
+        prompt: str,
+        window_rows: list[dict],
+        shown: dict,
+        turn_idx: int,
+        *,
+        floor: float = 0.40,
+        cap: int = 3,
+        echo: float = 0.90,
+        div: float = 0.80,
+        thresh: float = 0.30,
+    ) -> list[dict]:
+        """
+        Ambient graph-recall v2 (work/ambient-recall-v3/README.md §5).
+
+        Replaces the old "N facts matched" manifest count line with the
+        actual facts. Query is a blended embedding (prompt at `w_prompt`=0.65,
+        prior *human* turns from `window_rows` sharing the rest — see
+        `_build_recall_query`), boosted by a sanitized fulltext leg. Only
+        edges are considered (facts, not bare entity names). Two precise
+        "already-held" filters replace the wrong "distance from live topic"
+        idea a first draft (V1) tried and got backwards (README §4):
+
+          - drop edges whose created_at falls inside the live window's time
+            span — facts about turns still visible in `window_rows`;
+          - drop edges that near-verbatim echo (cos > `echo`) any window turn.
+
+        Relevance is gated as an ABSOLUTE cosine (`floor`) rather than rank
+        position, so a weak top hit on a bad query can't claim relevance=1.0;
+        silence (empty list) is a valid, correct answer. Final score =
+        cos * specificity * global_novelty * cooldown * recency; picks are
+        greedy-diverse (skip a candidate too similar to an already-picked
+        one) and stop once score drops below `thresh`.
+
+        `shown` is the caller's {edge_uuid: turn_idx last surfaced} map — kept
+        by the caller (module-level, per group_id) so cooldown persists
+        across ambient_recall calls. `turn_idx` is the caller's monotonic
+        tick counter for that same map.
+
+        Never raises: any Neo4j or embedding failure is logged and returns [].
+        """
+        if not prompt or not prompt.strip():
+            return []
+
+        try:
+            driver = self._get_driver()
+            await self._ensure_indexes()
+        except Exception as exc:
+            logger.warning("recall_for_ambient: Neo4j unavailable: %s", exc)
+            return []
+
+        embedder = self._get_embedder()
+        window_rows = window_rows or []
+        try:
+            q_emb, ft_text = await asyncio.to_thread(
+                _build_recall_query, embedder, prompt, window_rows
+            )
+            ctx_texts = [prompt] + [(row.get("content") or "")[:600] for row in window_rows]
+            ctx_raw = await asyncio.to_thread(embedder.embed_batch, ctx_texts)
+            ctx_embs = [_unit_vec(v) for v in ctx_raw]
+        except Exception as exc:
+            logger.warning("recall_for_ambient: embedding failed: %s", exc)
+            return []
+
+        k = 24
+
+        async def _run(cypher, **params) -> list[dict]:
+            def _exec():
+                recs, _, _ = driver.execute_query(cypher, **params)
+                return [dict(r) for r in recs]
+            return await asyncio.to_thread(_exec)
+
+        try:
+            ft_rows = await _run(
+                _RECALL_FULLTEXT_EDGES, query=lucene_safe(ft_text), gid=self._group_id, k=k
+            )
+        except Exception as exc:
+            logger.debug("recall_for_ambient: fulltext leg failed: %s", exc)
+            ft_rows = []
+
+        try:
+            vec_rows = await _run(
+                _RECALL_VECTOR_EDGES, embedding=q_emb.tolist(), gid=self._group_id, k=k
+            )
+        except Exception as exc:
+            logger.warning("recall_for_ambient: vector leg failed: %s", exc)
+            vec_rows = []
+
+        if not ft_rows and not vec_rows:
+            return []
+
+        ft_ids = {r["uuid"] for r in ft_rows}
+        cands: dict[str, dict] = {r["uuid"]: r for r in vec_rows}
+        for r in ft_rows:
+            cands.setdefault(r["uuid"], r)
+
+        # "In the live window's time span" — the earliest timestamp among the
+        # recent turns the composer already has (window_rows), not the whole
+        # session (README §5 tuning note: production uses a sliding window,
+        # not session-since-start like the replay prototype did).
+        window_start = None
+        for row in window_rows:
+            ts = _normalize_ts(row.get("timestamp") or row.get("created_at") or "")
+            if ts and (window_start is None or ts < window_start):
+                window_start = ts
+
+        now = datetime.now(timezone.utc)
+        scored: list[dict] = []
+        for e in cands.values():
+            try:
+                if not e.get("emb"):
+                    continue
+                emb = _unit_vec(e["emb"])
+                created_norm = _normalize_ts(e.get("created_at") or "")
+                if window_start and created_norm and created_norm >= window_start:
+                    continue  # a fact about a turn I can still see
+                rel = _cosine(q_emb, emb) + (0.05 if e["uuid"] in ft_ids else 0.0)
+                if rel < floor:
+                    continue
+                echo_max = max((_cosine(emb, c) for c in ctx_embs), default=0.0)
+                if echo_max > echo:
+                    continue  # near-verbatim echo of a window turn
+                sp = specificity(e.get("fact") or "")
+                gn = global_novelty(int(e.get("mc") or 1))
+                cd = temporal_cooldown(e["uuid"], turn_idx, shown)
+                rc = recency(e.get("created_at") or "", now)
+                scored.append({
+                    "uuid": e["uuid"],
+                    "fact": e.get("fact") or "",
+                    "edge_type": e.get("edge_type") or "",
+                    "created_at": (e.get("created_at") or "")[:10],
+                    "emb": emb,
+                    "score": rel * sp * gn * cd * rc,
+                })
+            except Exception as exc:
+                logger.debug("recall_for_ambient: skipped malformed candidate: %s", exc)
+
+        scored.sort(key=lambda s: s["score"], reverse=True)
+
+        picked: list[dict] = []
+        for s in scored:
+            if len(picked) >= cap:
+                break
+            if s["score"] < thresh:
+                break  # lets cooldown actually silence a recent repeat
+            if any(_cosine(s["emb"], p["emb"]) > div for p in picked):
+                continue  # greedy diversity — skip near-dupe of an already-picked fact
+            picked.append(s)
+
+        for s in picked:
+            shown[s["uuid"]] = turn_idx
+        for s in picked:
+            s.pop("emb", None)
+
+        return picked
 
     async def health(self) -> LayerHealth:
         """

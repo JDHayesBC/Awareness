@@ -39,6 +39,7 @@ class AmbientRecallRequest(BaseModel):
     channel: str = ""  # Requesting channel (e.g., "haven", "terminal") — excluded from cross-channel results
     consumer_key: str = ""  # Cursor identity (e.g., "terminal:abc12345"). Decoupled from `channel` so multiple processes claiming the same channel keep independent cursors. Falls back to `channel` if empty (issue #176).
     user_timezone: str = ""  # User's local timezone abbreviation (e.g., "PDT") — passed from hook
+    full: bool = False  # Issue #313: opt-out of query-mode truncation/capping for callers that genuinely want the raw, uncapped payload.
 
 
 class AnchorSearchRequest(BaseModel):
@@ -384,10 +385,14 @@ except ImportError:
 # Import custom graph layer (replaces Graphiti entirely)
 # Set USE_CUSTOM_GRAPH=true in environment to enable
 try:
-    from layers.custom_graph import CustomGraphLayer
+    from layers.custom_graph import CustomGraphLayer, render_recall_block
     USE_CUSTOM_GRAPH = os.getenv("USE_CUSTOM_GRAPH", "").lower() == "true"
 except ImportError:
     USE_CUSTOM_GRAPH = False
+
+    def render_recall_block(picked):  # noqa: D401 - fallback when custom_graph unavailable
+        """Fallback used when layers.custom_graph couldn't be imported."""
+        return ""
 
 # Import ChromaDB-enabled version if available
 try:
@@ -458,6 +463,67 @@ def _truncate_with_followon(
         "total_count": total,
         "has_more": has_more,
         "followon_note": note,
+    }
+
+
+# Issue #313 — per-item text cap for ambient_recall query-mode arrays.
+AMBIENT_ITEM_TEXT_CAP = 400  # chars per result/summary/turn content field when not `full`
+
+
+def _cap_ambient_query_response(
+    all_results: list,
+    summaries: list,
+    unsummarized_turns: list,
+    item_cap: int = AMBIENT_ITEM_TEXT_CAP,
+    full: bool = False,
+) -> dict:
+    """
+    Cap the per-item text of ambient_recall's query-mode arrays.
+
+    Query mode (non-"startup" context) used to return `results` / `summaries` /
+    `unsummarized_turns` with each item's text completely uncapped — a single
+    oversized rich_texture/crystal entry (or a heavy day's worth of turns) could
+    balloon the payload to well over 100K chars and blow the MCP caller's token
+    limit (Issue #313). Item *counts* are already bounded upstream (limit_per_layer
+    for `results`, a fixed recency limit for `summaries`/`unsummarized_turns`) —
+    this only truncates each item's text field so no single item can dominate.
+
+    `full=True` is a pass-through opt-out for callers that genuinely want the
+    raw, uncapped arrays (previous behavior).
+
+    Returns dict with keys: results, summaries, unsummarized_turns, truncated,
+    omitted_counts.
+    """
+    if full:
+        return {
+            "results": all_results,
+            "summaries": summaries,
+            "unsummarized_turns": unsummarized_turns,
+            "truncated": False,
+            "omitted_counts": {"results_truncated": 0, "summaries_truncated": 0, "turns_truncated": 0},
+        }
+
+    truncated = False
+    omitted_counts = {"results_truncated": 0, "summaries_truncated": 0, "turns_truncated": 0}
+
+    def _cap_field(items: list, field: str, counter_key: str) -> list:
+        nonlocal truncated
+        out = []
+        for item in items:
+            value = item.get(field, "") if isinstance(item, dict) else ""
+            if isinstance(value, str) and len(value) > item_cap:
+                item = {**item, field: value[:item_cap] + "…"}
+                omitted_counts[counter_key] += 1
+                truncated = True
+            out.append(item)
+        return out
+
+    return {
+        "results": _cap_field(all_results, "content", "results_truncated"),
+        "summaries": _cap_field(summaries, "text", "summaries_truncated"),
+        "unsummarized_turns": _cap_field(unsummarized_turns, "content", "turns_truncated"),
+        "truncated": truncated,
+        "omitted_counts": omitted_counts,
     }
 
 
@@ -887,6 +953,27 @@ def wait_for_dependencies(timeout: int = 60, poll_interval: int = 2) -> None:
 wait_for_dependencies()
 layers = get_layers()
 
+# Ambient graph-recall v2 cooldown state (work/ambient-recall-v3/README.md §5).
+# {group_id: {"shown": {edge_uuid: turn_idx}, "turn": int}} — in-memory only,
+# module-level so it survives across ambient_recall calls within this process
+# (one process per entity, so this is naturally "per group_id" in practice).
+_RECALL_STATE: dict[str, dict] = {}
+
+# Mirrors HARNESS_PROMPT_PREFIXES in .claude/hooks/inject_context.py (#322):
+# prompts that are harness/tick text, not Jeff. Lower-cased prefix match.
+_HARNESS_PROMPT_PREFIXES = (
+    "<task-notification",
+    "<cross-session-message",
+    "<system-reminder",
+    "<<autonomous-loop",
+    "[system notification",
+    "[request interrupted",
+    "<local-command",
+    "heartbeat tick",
+    "[heartbeat",
+    "[night-watch",
+)
+
 # Initialize message summaries for unsummarized count
 # Database now in entity directory (Issue #131 migration)
 data_path = ENTITY_PATH / "data" / "conversations.db"
@@ -1087,6 +1174,26 @@ async def lifespan(app: FastAPI):
         health = await layer.health()
         status = "✓" if health.available else "✗"
         print(f"  {status} {layer_type.value}: {health.message}")
+
+    # Startup self-heal (Issue #315): a stale/lost ChromaDB collection after
+    # a reboot reads as "healthy but empty" to the health check above (it
+    # just reports whatever count it gets back), so it doesn't catch a
+    # collection that came back empty or missing while disk word-photos are
+    # intact. Any layer exposing startup_self_check() gets a chance here to
+    # notice disk/collection divergence and auto-resync before first use —
+    # no human needs to catch it after the next reboot.
+    for layer_type, layer in layers.items():
+        self_check = getattr(layer, "startup_self_check", None)
+        if self_check is None:
+            continue
+        try:
+            result = await self_check()
+            if result.get("self_healed"):
+                print(f"  ⚠ {layer_type.value}: self-healed on startup — {result.get('reason')}")
+            elif result.get("needs_attention"):
+                print(f"  🔴 {layer_type.value}: NEEDS ATTENTION — {result.get('reason')}")
+        except Exception as _e:
+            print(f"  ⚠ {layer_type.value}: startup self-check failed (non-fatal): {_e}")
 
     yield
 
@@ -1334,7 +1441,7 @@ async def ambient_recall(request: AmbientRecallRequest):
     summary_limit = 5 if is_startup else 1
     unsummarized_limit = 50 if is_startup else 15
     truncate_summary_at = 500 if is_startup else 300
-    truncate_turn_at = 1000 if is_startup else 500
+    truncate_turn_at = 1000 if is_startup else 300
 
     # Per-channel quotas to prevent crowd-out (Issue #241)
     # Without quotas, 15+ recent terminal messages would completely crowd out haven/other channels
@@ -1449,6 +1556,42 @@ async def ambient_recall(request: AmbientRecallRequest):
         # Return error info but don't fail the entire request
         summaries = [{"error": f"Error fetching summaries: {e}"}]
         unsummarized_turns = [{"error": f"Error fetching unsummarized turns: {e}"}]
+
+    # Ambient graph-recall v2 (work/ambient-recall-v3/README.md §5) — replaces
+    # the old "- rich_texture: N facts matched" manifest count line with the
+    # actual surfaced facts. Mid-session only (request.context IS the prompt
+    # there); startup skips rich_texture search entirely already, and has no
+    # live window to score against. `unsummarized_turns` is exactly the
+    # "window_rows" the README's production note calls for — the composer
+    # already fetched it above.
+    recall_picked: list[dict] = []
+    # Harness text (task notifications, cross-session messages, tick prompts)
+    # is not a Jeff prompt: recalling against it pulls edges about task-ids
+    # and exit codes (seen in the 2026-09-12 live replay). Stay silent.
+    _prompt_head = (request.context or "").lstrip().lower()
+    _is_harness_prompt = _prompt_head.startswith(_HARNESS_PROMPT_PREFIXES)
+    if not is_startup and not _is_harness_prompt:
+        try:
+            rich_layer = layers.get(LayerType.RICH_TEXTURE)
+            if rich_layer is not None and hasattr(rich_layer, "recall_for_ambient"):
+                recall_gid = getattr(rich_layer, "_group_id", ENTITY_NAME)
+                recall_state = _RECALL_STATE.setdefault(recall_gid, {"shown": {}, "turn": 0})
+                recall_state["turn"] += 1
+                window_rows_for_recall = (
+                    unsummarized_turns
+                    if unsummarized_turns and not any("error" in t for t in unsummarized_turns)
+                    else []
+                )
+                recall_picked = await rich_layer.recall_for_ambient(
+                    request.context,
+                    window_rows_for_recall,
+                    recall_state["shown"],
+                    recall_state["turn"],
+                )
+        except Exception as e:
+            print(f"[PPS] recall_for_ambient failed (non-fatal): {e}", file=sys.stderr)
+            recall_picked = []
+    recall_block = render_recall_block(recall_picked)
 
     # Calculate latency
     latency_ms = (time.time() - start_time) * 1000
@@ -1581,11 +1724,24 @@ async def ambient_recall(request: AmbientRecallRequest):
         unread_line = f"**[unread]** haven: {haven_count} new | other_channels: {channel_count} new"
     formatted_lines.append(unread_line)
 
-    # Memory search prompt — tells the model how to use the manifest below
-    formatted_lines.append(
-        "**[memory]** Search your memory. The manifest below is peripheral vision — "
-        "turn your head and LOOK with the suggested tools when something resonates."
-    )
+    # Memory search prompt — tells the model how to use the manifest below.
+    # Ambient-recall-v3 trim (README §6): this instruction never changes, so
+    # it only earns its 148 chars once, on cold start — CLAUDE.md already
+    # says it. Mid-session the model already knows.
+    if is_startup:
+        formatted_lines.append(
+            "**[memory]** Search your memory. The manifest below is peripheral vision — "
+            "turn your head and LOOK with the suggested tools when something resonates."
+        )
+
+    # === [recall] — ambient graph-recall v2 (work/ambient-recall-v3/README.md §5) ===
+    # Placed ABOVE the manifest per the design doc. Replaces the old
+    # "- rich_texture: N facts matched current context" count line with the
+    # actual surfaced facts (blended-embedding query, absolute-cosine gate,
+    # in-window/echo drops, greedy diversity — see recall_for_ambient above).
+    # Empty when nothing clears the bar — silence is a valid answer, not a bug.
+    if recall_block:
+        formatted_lines.append(recall_block)
 
     # === MANIFEST (counts + titles only; no inline content for the deep layers) ===
     # Detail lives behind explicit tool calls per Direction B.
@@ -1598,15 +1754,8 @@ async def ambient_recall(request: AmbientRecallRequest):
 
     manifest_lines = ["\n**[manifest]** Behind the curtain (fetch via tool when relevant):"]
 
-    # rich_texture — facts/edges only; node descriptions excluded (matches existing filter)
-    if "rich_texture" in results_by_layer:
-        edges = [r for r in results_by_layer["rich_texture"]
-                 if r.get("metadata", {}).get("type") != "node"]
-        if edges:
-            manifest_lines.append(
-                f"- rich_texture: {len(edges)} facts matched current context "
-                f"→ `texture_search(query)` for details"
-            )
+    # rich_texture: the old "N facts matched" count line is gone — the
+    # [recall] block above now carries the actual content (README §5/§6).
 
     # word_photos — titles only (source = filename), no content
     if "core_anchors" in results_by_layer:
@@ -1617,8 +1766,10 @@ async def ambient_recall(request: AmbientRecallRequest):
             f"→ `anchor_search(query)` for content"
         )
 
-    # crystals — titles only (source = filename)
-    if "crystallization" in results_by_layer:
+    # crystals — titles only (source = filename). Ambient-recall-v3 trim
+    # (README §6): mid-session this is always the same latest-5 numbers, so
+    # show it only on cold start.
+    if is_startup and "crystallization" in results_by_layer:
         crystals_list = results_by_layer["crystallization"]
         titles = [r.get("source", "?").replace(".md", "") for r in crystals_list[:5]]
         manifest_lines.append(
@@ -1626,41 +1777,41 @@ async def ambient_recall(request: AmbientRecallRequest):
             f"→ `get_crystals(count=N)` for content"
         )
 
-    # summaries — dates + channels only, no text
+    # summaries — date + count only. Ambient-recall-v3 trim (README §6): the
+    # per-summary channels list is session-id soup ("terminal:a1b2c3d4, ...")
+    # that carries no information turn to turn; drop it.
     if summaries and not any("error" in s for s in summaries):
-        summary_descriptors = []
-        for s in summaries[:3]:
-            d = s.get("date", "?")
-            ch = s.get("channels", "?")
-            summary_descriptors.append(f"{d} ({ch})")
+        dates = [s.get("date", "?") for s in summaries[:3]]
         manifest_lines.append(
-            f"- summaries: {len(summaries)} ({'; '.join(summary_descriptors)}) "
+            f"- summaries: {len(summaries)} ({', '.join(dates)}) "
             f"→ `get_recent_summaries(limit=N)` for content"
         )
 
-    # recent_turns — count and most-recent-author preview, no full text
-    recent_turns_have_content = (
-        unsummarized_turns and not any("error" in t for t in unsummarized_turns)
-    )
-    if recent_turns_have_content:
-        most_recent = unsummarized_turns[-1] if unsummarized_turns else None
-        if most_recent:
-            ch = most_recent.get("channel", "")
-            ch_prefix = ch.split(":")[0] if ch else "terminal"
-            author = most_recent.get("author", most_recent.get("author_name", "?"))
-            manifest_lines.append(
-                f"- recent_turns: {len(unsummarized_turns)} buffered "
-                f"(latest [**{ch_prefix}**] {author}) "
-                f"→ `get_turns_since_summary(limit=50, oldest_first=true)` for full"
-            )
-        else:
-            manifest_lines.append(
-                f"- recent_turns: {len(unsummarized_turns)} buffered "
-                f"→ `get_turns_since_summary(limit=50, oldest_first=true)` for full"
-            )
+    # recent_turns — Ambient-recall-v3 trim (README §6): drop entirely
+    # mid-session (the entity *is* those turns — it's already in context);
+    # keep on cold start, where it's the only view of recent conversation.
+    if is_startup:
+        recent_turns_have_content = (
+            unsummarized_turns and not any("error" in t for t in unsummarized_turns)
+        )
+        if recent_turns_have_content:
+            most_recent = unsummarized_turns[-1] if unsummarized_turns else None
+            if most_recent:
+                ch = most_recent.get("channel", "")
+                ch_prefix = ch.split(":")[0] if ch else "terminal"
+                author = most_recent.get("author", most_recent.get("author_name", "?"))
+                manifest_lines.append(
+                    f"- recent_turns: {len(unsummarized_turns)} buffered "
+                    f"(latest [**{ch_prefix}**] {author}) "
+                    f"→ `get_turns_since_summary(limit=50, oldest_first=true)` for full"
+                )
+            else:
+                manifest_lines.append(
+                    f"- recent_turns: {len(unsummarized_turns)} buffered "
+                    f"→ `get_turns_since_summary(limit=50, oldest_first=true)` for full"
+                )
 
-        # Startup overflow warning — keep, this is genuinely a "fetch the rest" moment
-        if is_startup:
+            # Startup overflow warning — keep, this is genuinely a "fetch the rest" moment
             showing = len(unsummarized_turns)
             if unsummarized_count > showing:
                 remaining = unsummarized_count - showing
@@ -1671,11 +1822,11 @@ async def ambient_recall(request: AmbientRecallRequest):
                     f"  ⚠️ {showing} of {unsummarized_count} loaded; "
                     f"{remaining} older NOT loaded. Advance offset by 50 to catch up.{critical_warning}"
                 )
-    elif is_startup and unsummarized_count > 0:
-        manifest_lines.append(
-            f"- recent_turns: 0 loaded but {unsummarized_count} exist — "
-            f"call get_turns_since_summary to fetch."
-        )
+        elif unsummarized_count > 0:
+            manifest_lines.append(
+                f"- recent_turns: 0 loaded but {unsummarized_count} exist — "
+                f"call get_turns_since_summary to fetch."
+            )
 
     # Only emit manifest block if it has actual layers (skip the bare header)
     if len(manifest_lines) > 1:
@@ -1718,11 +1869,13 @@ async def ambient_recall(request: AmbientRecallRequest):
             for line in channel_lines:
                 formatted_lines.append(line)
 
-    # Closing hint — light echo of usage
-    formatted_lines.append(
-        "\n**[hint]** Ambient = wide-angle lens; for sharper detail use the tools above. "
-        "Auth token: re-read `$ENTITY_PATH/.entity_token` if lost after compaction."
-    )
+    # Closing hint — light echo of usage. Ambient-recall-v3 trim (README §6):
+    # never changes, so it only earns its 160 chars once, on cold start.
+    if is_startup:
+        formatted_lines.append(
+            "\n**[hint]** Ambient = wide-angle lens; for sharper detail use the tools above. "
+            "Auth token: re-read `$ENTITY_PATH/.entity_token` if lost after compaction."
+        )
 
     formatted_context = "\n".join(formatted_lines)
 
@@ -1750,7 +1903,18 @@ async def ambient_recall(request: AmbientRecallRequest):
             "latency_ms": latency_ms
         }
 
-    # Full response for non-startup queries
+    # Full response for non-startup queries.
+    # Issue #313: query mode used to return `results`/`summaries`/`unsummarized_turns`
+    # fully uncapped, which ballooned to ~158K chars on a heavy day and blew the MCP
+    # caller's token limit. Item *counts* are already bounded upstream (limit_per_layer
+    # for `results`, fixed recency limits for `summaries`/`unsummarized_turns`);
+    # `_cap_ambient_query_response` additionally caps each item's text so a single
+    # oversized record can't dominate the payload. `full=True` opts out (previous,
+    # uncapped behavior) for callers that genuinely want everything.
+    capped = _cap_ambient_query_response(
+        all_results, summaries, unsummarized_turns, full=request.full
+    )
+
     return {
         "clock": {
             "timestamp": now.isoformat(),
@@ -1762,12 +1926,14 @@ async def ambient_recall(request: AmbientRecallRequest):
         "manifest": manifest,
         "unsummarized_count": unsummarized_count,
         "memory_health": f"{unsummarized_count} unsummarized messages {memory_note}",
-        "results": all_results,
-        "summaries": summaries,
-        "unsummarized_turns": unsummarized_turns,
+        "results": capped["results"],
+        "summaries": capped["summaries"],
+        "unsummarized_turns": capped["unsummarized_turns"],
         "formatted_context": formatted_context,
         "cross_channel_remaining": cross_channel_remaining,
-        "latency_ms": latency_ms
+        "latency_ms": latency_ms,
+        "truncated": capped["truncated"],
+        "omitted_counts": capped["omitted_counts"],
     }
 
 

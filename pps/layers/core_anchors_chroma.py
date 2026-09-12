@@ -15,6 +15,7 @@ import chromadb
 from chromadb.config import Settings
 
 from . import PatternLayer, LayerType, SearchResult, LayerHealth
+from .chroma_utils import call_with_collection_retry
 
 
 class CoreAnchorsChromaLayer(PatternLayer):
@@ -123,9 +124,17 @@ class CoreAnchorsChromaLayer(PatternLayer):
         ef(["warmup"])
         return ef
 
-    def _get_collection(self):
-        """Get or create the word_photos collection."""
-        if self._collection is None:
+    def _get_collection(self, force_refresh: bool = False):
+        """
+        Get or create the word_photos collection.
+
+        Args:
+            force_refresh: drop any cached handle and re-resolve by name
+                (see Issue #315 — a stale cached handle keeps pointing at a
+                collection UUID Chroma no longer has after the collection is
+                recreated out from under this process).
+        """
+        if force_refresh or self._collection is None:
             client = self._get_client()
             # Use default embedding function (sentence-transformers)
             self._collection = client.get_or_create_collection(
@@ -133,6 +142,21 @@ class CoreAnchorsChromaLayer(PatternLayer):
                 metadata={"description": "Soul anchors - foundational word-photos"}
             )
         return self._collection
+
+    def _collection_call(self, op):
+        """
+        Run `op(collection)` against the cached collection handle, transparently
+        re-resolving and retrying once if Chroma reports the handle is stale
+        (Issue #315 — happens after a reboot recreates the ChromaDB collection
+        under a new UUID, or another process runs resync()).
+        """
+        def _log_stale(exc: BaseException) -> None:
+            print(
+                f"[CoreAnchors] stale collection handle for "
+                f"'{self.collection_name}' ({exc}); re-resolving and retrying"
+            )
+
+        return call_with_collection_retry(self._get_collection, op, on_stale=_log_stale)
 
     def _file_hash(self, filepath: Path) -> str:
         """Generate hash of file for change detection."""
@@ -149,11 +173,10 @@ class CoreAnchorsChromaLayer(PatternLayer):
         if not self.word_photos_path.exists():
             return {"error": f"Path not found: {self.word_photos_path}"}
 
-        collection = self._get_collection()
         stats = {"added": 0, "updated": 0, "unchanged": 0, "errors": 0}
 
-        # Get existing IDs and their hashes
-        existing = collection.get(include=["metadatas"])
+        # Get existing IDs and their hashes (retries once on a stale handle)
+        existing = self._collection_call(lambda c: c.get(include=["metadatas"]))
         existing_map = {}
         if existing and existing['ids']:
             for idx, doc_id in enumerate(existing['ids']):
@@ -195,19 +218,19 @@ class CoreAnchorsChromaLayer(PatternLayer):
                         continue
                     else:
                         # Update existing document
-                        collection.update(
+                        self._collection_call(lambda c: c.update(
                             ids=[doc_id],
                             documents=[content],
                             metadatas=[metadata]
-                        )
+                        ))
                         stats["updated"] += 1
                 else:
                     # Add new document
-                    collection.add(
+                    self._collection_call(lambda c: c.add(
                         ids=[doc_id],
                         documents=[content],
                         metadatas=[metadata]
-                    )
+                    ))
                     stats["added"] += 1
 
             except Exception as e:
@@ -232,17 +255,16 @@ class CoreAnchorsChromaLayer(PatternLayer):
             List of SearchResult ordered by relevance
         """
         try:
-            collection = self._get_collection()
-
             # Ensure word-photos are synced
             sync_stats = await self.sync_word_photos()
 
-            # Query ChromaDB
-            results = collection.query(
+            # Query ChromaDB (retries once on a stale collection handle)
+            doc_count = self._collection_call(lambda c: c.count())
+            results = self._collection_call(lambda c: c.query(
                 query_texts=[query],
-                n_results=min(limit, collection.count() or 1),
+                n_results=min(limit, doc_count or 1),
                 include=["documents", "metadatas", "distances"]
-            )
+            ))
 
             search_results = []
 
@@ -331,8 +353,7 @@ class CoreAnchorsChromaLayer(PatternLayer):
                 client = self._get_client()
                 client.heartbeat()  # Verify connection
 
-                collection = self._get_collection()
-                doc_count = collection.count()
+                doc_count = self._collection_call(lambda c: c.count())
 
                 return LayerHealth(
                     available=True,
@@ -397,11 +418,10 @@ class CoreAnchorsChromaLayer(PatternLayer):
 
         # Delete from ChromaDB
         try:
-            collection = self._get_collection()
             # Check if exists first
-            existing = collection.get(ids=[doc_id])
+            existing = self._collection_call(lambda c: c.get(ids=[doc_id]))
             if existing and existing['ids']:
-                collection.delete(ids=[doc_id])
+                self._collection_call(lambda c: c.delete(ids=[doc_id]))
                 result["chroma_deleted"] = True
             else:
                 result["chroma_error"] = "Document not found in ChromaDB"
@@ -427,8 +447,13 @@ class CoreAnchorsChromaLayer(PatternLayer):
             except Exception:
                 pass  # Collection might not exist
 
-            # Reset cached collection reference
-            self._collection = None
+            # Invalidate the cached handle and eagerly re-resolve it against
+            # the freshly-created collection (new UUID). Without this,
+            # anchor_search — and anything else holding the old cached
+            # handle — keeps issuing calls against the just-deleted UUID
+            # (Issue #315, bug #2: resync "worked" per anchor_list but
+            # anchor_search kept failing until a full process restart).
+            self._get_collection(force_refresh=True)
 
             # Recreate and sync
             sync_stats = await self.sync_word_photos()
@@ -444,6 +469,60 @@ class CoreAnchorsChromaLayer(PatternLayer):
                 "success": False,
                 "error": str(e)
             }
+
+    async def startup_self_check(self) -> dict:
+        """
+        Startup self-heal (Issue #315, fix #3).
+
+        Compares on-disk word-photo count against the ChromaDB collection
+        count. A reboot that drops/recreates the ChromaDB volume comes back
+        with a collection that's either unreachable or present-but-empty —
+        neither of which the generic health() check above catches, since it
+        just reports whatever count comes back. If disk has word-photos but
+        the collection doesn't, auto-run resync() so the next anchor_search
+        isn't silently blind until a human notices and intervenes by hand.
+
+        Returns dict describing what was found / done. Never raises —
+        callers treat this as best-effort and non-fatal.
+        """
+        file_count = (
+            len(list(self.word_photos_path.glob("*.md")))
+            if self.word_photos_path.exists()
+            else 0
+        )
+
+        try:
+            doc_count = self._collection_call(lambda c: c.count())
+        except Exception as e:
+            reason = f"collection unreachable ({e})"
+            print(
+                f"[CoreAnchors] STARTUP SELF-CHECK: {reason}; "
+                f"{file_count} word-photos on disk. Auto-resyncing..."
+            )
+            resync_result = await self.resync()
+            return {
+                "self_healed": True,
+                "reason": reason,
+                "disk_file_count": file_count,
+                "resync_result": resync_result,
+            }
+
+        if file_count > 0 and doc_count == 0:
+            reason = "collection empty (0 docs) while disk has word-photos"
+            print(f"[CoreAnchors] STARTUP SELF-CHECK: {reason}. Auto-resyncing...")
+            resync_result = await self.resync()
+            return {
+                "self_healed": True,
+                "reason": reason,
+                "disk_file_count": file_count,
+                "resync_result": resync_result,
+            }
+
+        return {
+            "self_healed": False,
+            "disk_file_count": file_count,
+            "chroma_doc_count": doc_count,
+        }
 
     async def list_anchors(self) -> dict:
         """
@@ -469,8 +548,7 @@ class CoreAnchorsChromaLayer(PatternLayer):
 
         # Get entries in ChromaDB
         try:
-            collection = self._get_collection()
-            existing = collection.get(include=["metadatas"])
+            existing = self._collection_call(lambda c: c.get(include=["metadatas"]))
 
             chroma_ids = set()
             if existing and existing['ids']:
