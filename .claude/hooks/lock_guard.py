@@ -6,9 +6,8 @@ Backstop half of GitHub issue #305: if the file a tool is about to write is
 HELD by a *different* channel's lock (see scripts/lock.py /
 ~/.claude/locks/<basename>.lock), block the edit instead of racing it.
 
-NOT wired into .claude/settings.local.json yet — this file only implements
-the check. It fires for BOTH entities (Lyra + Caia share the hooks dir), so
-Lyra wires it in only after Caia has agreed. See the settings snippet at the
+Wired into .claude/settings.local.json 2026-09-12 (Caia agreed). It fires for
+BOTH entities (Lyra + Caia share the hooks dir). See the settings snippet at the
 bottom of this file's docstring.
 
 Hook input (stdin), PreToolUse for Edit / Write / MultiEdit:
@@ -49,6 +48,7 @@ entities):
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -77,7 +77,13 @@ def main() -> int:
     if not file_path:
         return 0
 
+    # Prefer the authoritative session id on stdin (Caia's suggestion): it
+    # survives an env where CLAUDE_CODE_SESSION_ID isn't exported.
     holder = default_holder()
+    sid = str(hook_input.get("session_id") or "")
+    entity = os.environ.get("ENTITY_NAME")
+    if sid and entity:
+        holder = f"{entity} (session {sid[:8]})"
 
     try:
         free = check(file_path, holder=holder)
