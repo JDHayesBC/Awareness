@@ -87,6 +87,19 @@ def _priority_of(labels: list) -> str | None:
     return best
 
 
+def _is_parked(labels: list) -> bool:
+    """Return True if the issue carries triage:parked — it's been set down deliberately.
+
+    Parked issues are tended (given a parking reason), not untended. The klaxon
+    should only fire for issues that genuinely need a look, not ones already triaged.
+    """
+    for lab in labels or []:
+        name = lab.get("name", "") if isinstance(lab, dict) else str(lab)
+        if name == "triage:parked":
+            return True
+    return False
+
+
 def _days_open(created_at: str, today: dt.date | None = None) -> int | None:
     """Days between an ISO-8601 created_at and today. None if unparseable."""
     if not created_at:
@@ -124,6 +137,11 @@ def refresh(limit: int = 200) -> dict:
     for i in raw:
         pr = _priority_of(i.get("labels", []))
         if pr is None:
+            continue
+        # Parked issues are tended — skip them so the klaxon only fires for issues
+        # that actually need a look. (triage:parked is ad-hoc; not in the label
+        # registry but valid on issues.)
+        if _is_parked(i.get("labels", [])):
             continue
         issues.append({
             "number": i.get("number"),
