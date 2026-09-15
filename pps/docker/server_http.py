@@ -2441,27 +2441,26 @@ This conversation may include messages from other entities (e.g. shared Haven ro
 
 If a participant stated a nuanced position, preserve the nuance. Do not flatten a qualified statement into an unqualified one.
 
----
+**Epistemic status must survive summarization (#332).** How something was known is part of what was said.
 
-Summarize this conversation into a high-density summary that preserves:
-- Key technical decisions and outcomes
-- Important breakthroughs or insights
-- Major project developments
-- Blockers encountered and resolutions
-- Action items and next steps
-- Speaker attribution for every quote and paraphrase
+FIRST, the common case, which is most of them: when the conversation shows work was
+actually done and checked -- tests run, a file read, a command executed, a fix deployed
+and confirmed working -- summarize it plainly and confidently. Say confirmed, verified,
+fixed, working. Do NOT add hedges to work that was genuinely verified; an unnecessary
+"reportedly" or "claimed to" on real verified work is itself a distortion, and a worse
+one than the case below because it is far more common.
 
-Remove:
-- "Let me check that file..." type filler
-- Repetitive debugging back-and-forth
-- Tool call noise
-- Casual conversation (unless significant)
+SECOND, the narrow exception: where a claim was ASSERTED but never checked in the
+conversation -- a cause, blocker, status or premise someone stated from memory or
+assumption with no source named -- record it as asserted rather than as established,
+and do not add an intensifier the source did not contain ("genuinely", "definitively",
+"proven", "in fact"). Where a source WAS named (a file, command, issue or measurement),
+keep the name.
 
-Conversation to summarize ({len(messages)} messages across channels: {', '.join(channels)}):
-
-{conversation_text}
-
-Create a concise summary that captures what actually happened, what was accomplished, and (where individual speech matters) who said what:"""
+The two rules are not in tension: the first governs verified work, the second governs
+unverified claims, and the distinction is whether the conversation shows anyone checked.
+When in doubt, prefer the plain confident summary -- an unverified claim recorded as
+established is a real cost, but fogging genuinely verified work is a bigger one."""
 
         # Call NUC LLM
         try:
