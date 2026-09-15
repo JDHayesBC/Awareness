@@ -112,37 +112,35 @@ HUMAN_PRESENCE_TIMEOUT_SECONDS = float(os.getenv("HUMAN_PRESENCE_TIMEOUT_SECONDS
 
 
 def is_no_response(response: str) -> bool:
-    """True when the model intends silence (the NO_RESPONSE sentinel).
+    """True when the model intends silence.
 
-    Opus 4.8 frequently muses for a sentence or two and THEN emits the sentinel
-    on a trailing line, e.g.::
+    Detects two sentinel forms (issue #283 — synced from haven/bot.py):
 
-        We've converged, the toast is complete. NO_RESPONSE.
-        NO_RESPONSE
+    1. ``[[NO_RESPONSE]]`` **anywhere** in the output (primary form, double-bracket).
+       The double-bracket form is never typed by accident in prose, so a plain
+       ``contains`` check is safe from false-positives AND robust to placement —
+       the model can muse for a paragraph and drop the sentinel at the end, and it
+       still counts.  All new prompts in this file should use ``[[NO_RESPONSE]]``.
 
-    Detection rules:
-    - If the first non-empty line normalizes to exactly "NO_RESPONSE", it's silence.
-    - If the last non-empty line normalizes to exactly "NO_RESPONSE", it's silence.
-
-    "Normalize" means: .upper() + strip surrounding whitespace and common punctuation
-    (. , ! ? … : ; " ' ` tab space). This catches all plausible trailing-punctuation
-    variants the model emits without over-matching prose that merely *starts with* the
-    token (e.g. "NO_RESPONSE is a sentinel" → NOT silence).
-
-    Deliberately NOT a bare `contains` check — humans and bots say "NO_RESPONSE"
-    mid-sentence while discussing the feature, and that meta-talk must not vanish.
-    Anchoring to first/last line keeps false positives near zero.
+    2. Bare ``NO_RESPONSE`` anchored to the **first or last non-empty line**
+       (legacy form, kept for backward-compat with old prompts that still emit the
+       bare token).  The anchoring prevents false-positive matches on prose like
+       "humans say NO_RESPONSE while discussing the feature."
     """
     if not response:
         return True
     stripped = response.strip()
     if not stripped:
         return True
-    # Filter empty lines — guaranteed non-empty because stripped is non-empty above.
+
+    # Primary: [[NO_RESPONSE]] anywhere (double-bracket → safe contains check)
+    if "[[NO_RESPONSE]]" in stripped:
+        return True
+
+    # Legacy: bare NO_RESPONSE on the first or last non-empty line
     lines = [ln.strip() for ln in stripped.splitlines() if ln.strip()]
 
     def _normalize(line: str) -> str:
-        """Uppercase and strip surrounding whitespace/punctuation."""
         return line.upper().strip('.,!?…:;"\' `\t ')
 
     first = _normalize(lines[0])
@@ -932,7 +930,7 @@ Stay quiet if:
 - Having the last word would feel like not letting someone leave
 
 **To respond**: [DISCORD]Your message[/DISCORD]
-**To stay silent**: Output exactly NO_RESPONSE (nothing else)
+**To stay silent**: Output exactly [[NO_RESPONSE]] (nothing else)
 
 Good presence includes knowing when not to speak. Silence is a valid choice. Letting someone leave without chasing them with more words is a kindness."""
 
@@ -1362,7 +1360,7 @@ Respond if you have something valuable to add. {"Address all messages in ONE coh
 Stay silent if someone said goodbye or the conversation wound down - let them go gracefully.
 
 **To respond**: [DISCORD]Your message[/DISCORD]
-**To stay silent**: NO_RESPONSE
+**To stay silent**: [[NO_RESPONSE]]
 
 Good presence includes knowing when not to speak. Letting someone leave is a kindness."""
 

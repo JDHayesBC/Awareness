@@ -289,6 +289,33 @@ def _alert_restart_failure(bad_services: list[str]) -> None:
         log(f"  (could not send ntfy alert: {e})", "WARN")
 
 
+def _alert_verify_failure(backup_path: Path, reason: str) -> None:
+    """Loudly alert Jeff when backup verification fails (issue #333).
+
+    A failed verification is WORSE than a missing backup — it means something
+    was written but is corrupt or short, and may silently replace a good archive
+    in the rotation.  entity/ is gitignored; this archive is the only safety net
+    for crystals, word-photos, memories, and journals.
+    """
+    size_mb = backup_path.stat().st_size / 1024 / 1024 if backup_path.exists() else 0
+    msg = (
+        f"PPS backup FAILED verification: {backup_path.name} "
+        f"({size_mb:.0f} MB). Reason: {reason}. "
+        f"Entity data (crystals/memories/journals) is NOT safely backed up."
+    )
+    log(msg, "ERROR")
+    try:
+        notify = PROJECT_ROOT / "scripts" / "notify.py"
+        if notify.exists():
+            subprocess.run(
+                ["python3", str(notify), "--title", "🔴 BACKUP FAILED",
+                 "--priority", "urgent", msg],
+                timeout=30, capture_output=True,
+            )
+    except Exception as e:
+        log(f"  (could not send ntfy alert: {e})", "WARN")
+
+
 def stop_pps_containers(dry_run: bool = False) -> bool:
     """Stop the PPS stack and CONFIRM every container reached a stopped state
     before returning.
@@ -470,10 +497,55 @@ def create_backup(backup_dir: Path, backup_sources: dict, dry_run: bool = False)
     return backup_path, stats
 
 
-def verify_backup(backup_path: Path, backup_sources: dict) -> bool:
-    """Verify backup archive integrity."""
+def verify_backup(backup_path: Path, backup_sources: dict,
+                  size_floor_ratio: float = 0.60) -> tuple[bool, str]:
+    """Verify backup archive integrity.
+
+    Args:
+        backup_path: The archive to verify.
+        backup_sources: Source config dict (used to identify critical sources).
+        size_floor_ratio: Reject the archive if it is smaller than this fraction
+            of the most recent PRIOR backup in the same directory.  Default 0.60
+            (60%) catches the kind of half-size corruption seen in issue #333
+            while tolerating normal day-to-day variation.  Pass 0.0 to disable
+            the size check.
+
+    Returns:
+        (ok, reason) — reason is a human-readable string; empty when ok=True.
+    """
     log(f"Verifying backup integrity...")
 
+    # ── size sanity: compare against the most recent prior backup ─────────────
+    if size_floor_ratio > 0:
+        backup_dir = backup_path.parent
+        prior_backups = sorted(
+            [p for p in backup_dir.glob("pps_backup_*.tar.gz") if p != backup_path],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if prior_backups:
+            prev = prior_backups[0]
+            new_bytes = backup_path.stat().st_size
+            prev_bytes = prev.stat().st_size
+            ratio = new_bytes / prev_bytes if prev_bytes else 1.0
+            log(
+                f"  Size: {new_bytes / 1024 / 1024:.1f} MB "
+                f"vs prior {prev.name}: {prev_bytes / 1024 / 1024:.1f} MB "
+                f"(ratio {ratio:.2f})"
+            )
+            if ratio < size_floor_ratio:
+                reason = (
+                    f"archive is {ratio:.0%} of prior backup "
+                    f"({new_bytes / 1024 / 1024:.0f} MB vs "
+                    f"{prev_bytes / 1024 / 1024:.0f} MB) — "
+                    f"below floor of {size_floor_ratio:.0%}"
+                )
+                log(f"  FAIL: {reason}", "ERROR")
+                return False, reason
+        else:
+            log("  No prior backup found — skipping size comparison")
+
+    # ── content check: all critical sources present ────────────────────────────
     try:
         with tarfile.open(backup_path, "r:gz") as tar:
             # List all members to verify archive is readable
@@ -491,15 +563,17 @@ def verify_backup(backup_path: Path, backup_sources: dict) -> bool:
             missing = critical_sources - critical_found
 
             if missing:
-                log(f"  WARNING: Missing critical sources: {missing}", "WARN")
-                return False
+                reason = f"missing critical sources: {missing}"
+                log(f"  FAIL: {reason}", "WARN")
+                return False, reason
 
             log(f"  All critical sources present: {critical_found}")
-            return True
+            return True, ""
 
     except Exception as e:
+        reason = f"archive unreadable: {e}"
         log(f"  Verification failed: {e}", "ERROR")
-        return False
+        return False, reason
 
 
 def cleanup_old_backups(backup_dir: Path, keep: int, dry_run: bool = False) -> int:
@@ -680,8 +754,10 @@ Examples:
 
         # Verify backup (skip if dry run)
         if backup_path and not args.dry_run:
-            if not verify_backup(backup_path, backup_sources):
-                log("Backup verification FAILED!", "ERROR")
+            ok, reason = verify_backup(backup_path, backup_sources)
+            if not ok:
+                log(f"Backup verification FAILED: {reason}", "ERROR")
+                _alert_verify_failure(backup_path, reason)
                 sys.exit(1)
 
         # Cleanup old backups
