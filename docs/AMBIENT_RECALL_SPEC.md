@@ -2,7 +2,7 @@
 
 *Canonical reference for what `ambient_recall` returns and how the UserPromptSubmit hook surfaces it. Read this when something feels off about the ambient peripheral vision.*
 
-**Last verified against code:** 2026-09-15 (Issue #238 — added `[channel]` line)
+**Last verified against code:** 2026-09-15 (Issue #223 — terminal-channel turns zeroed on non-startup)
 **Authoritative implementation:** `pps/docker/server_http.py` line 1073
 **Hook implementation:** `.claude/hooks/inject_context.py`
 
@@ -52,10 +52,10 @@ Semantic-search package retrieval for per-turn peripheral vision.
 - **All layers**: semantic search against `context`, `limit_per_layer` (default 5) results per layer.
 - **Rich texture**: only edges (facts) emitted; node descriptions filtered out (~300-500 token savings per turn for near-zero signal, since entity names already appear in edges).
 - **Summaries**: 1 most recent, truncated to 300 chars.
-- **Unsummarized turns**: 15 most recent with per-channel quota (5 terminal + 5 haven + 5 other), truncated to 500 chars each, with channel prefix (`[**terminal**]`, `[**haven**]`, etc.). **Cross-channel turns arrive here, NOT in a dedicated block.** Per-channel quotas prevent crowd-out (Issue #241).
+- **Unsummarized turns**: up to 10 cross-channel turns (0 terminal + 5 haven + 5 other), truncated to 300 chars each, with channel prefix (`[**haven**]`, `[**discord**]`, etc.). **Terminal-channel turns are zeroed on non-startup** — they're already in the LLM's live context window, making them redundant noise (GH#223, ~4-5KB saved per turn). Cross-channel turns (haven, other) still arrive here. Per-channel quotas prevent crowd-out (Issue #241).
 - **Haven unread**: dedicated `[haven]` block (unread chat messages polled directly from Haven).
 - **Other-channel unread**: dedicated `[other_channels]` block from raw-capture DB, up to 100 messages.
-- **NO overflow warning**: per-turn 15-cap is intentional peripheral-vision; "fetch the rest" is wrong action.
+- **NO overflow warning**: per-turn 10-cap is intentional peripheral-vision; "fetch the rest" is wrong action.
 
 ---
 
@@ -91,9 +91,11 @@ The hook also stores Jeff's prompt to the raw-capture layer as a side effect. So
 | Word-photos returned                    | 2       | up to 5  | server_http.py:1133, layer.search |
 | Rich-texture edges returned             | 0 (skipped) | up to 5 | server_http.py:1150-1151        |
 | Summaries returned                      | 5       | 1        | server_http.py:1227             |
-| Unsummarized turns                      | 50      | 15       | server_http.py:1228             |
+| Unsummarized turns (terminal)           | 17      | 0        | server_http.py quota_terminal (GH#223) |
+| Unsummarized turns (haven)              | 17      | 5        | server_http.py quota             |
+| Unsummarized turns (other)              | 16      | 5        | server_http.py quota_other       |
 | Summary text truncated at (chars)       | 500     | 300      | server_http.py:1229             |
-| Turn content truncated at (chars)       | 1000    | 500      | server_http.py:1230             |
+| Turn content truncated at (chars)       | 1000    | 300      | server_http.py:1230             |
 | Word-photo content truncated (chars)    | 300     | 300      | server_http.py:1422             |
 | Crystal content truncated (chars)       | 200     | 200      | server_http.py:1433             |
 | Haven unread message limit              | n/a*    | unlimited | poll_haven                     |

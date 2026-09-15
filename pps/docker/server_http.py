@@ -1508,6 +1508,10 @@ async def ambient_recall(request: AmbientRecallRequest):
     STARTUP_PER_CHANNEL_QUOTA = 17  # Startup: 17 terminal + 17 haven + 16 other = 50 total
     quota = STARTUP_PER_CHANNEL_QUOTA if is_startup else PER_CHANNEL_QUOTA
     quota_other = 16 if is_startup else 5  # Third channel gets remainder for startup (17+17+16=50)
+    # Non-startup: terminal turns are already in the LLM's live context window — skip them
+    # to eliminate ~4-5KB of redundant content per turn. (GH#223)
+    # Startup: include terminal turns — heartbeat/cold-start sessions have no prior window.
+    quota_terminal = quota if is_startup else 0
 
     try:
         # Get recent summaries (compressed history - ~200 tokens each)
@@ -1547,7 +1551,8 @@ async def ambient_recall(request: AmbientRecallRequest):
 
             if 'summary_id' in columns:
                 # Per-channel UNION query to prevent crowd-out
-                # Each channel group gets independent quota, then combined and sorted
+                # Each channel group gets independent quota, then combined and sorted.
+                # quota_terminal=0 on non-startup: terminal turns already in LLM's live window (GH#223)
                 cursor.execute("""
                     SELECT * FROM (SELECT author_name, content, created_at, channel
                      FROM messages
@@ -1567,7 +1572,7 @@ async def ambient_recall(request: AmbientRecallRequest):
                      ORDER BY created_at DESC LIMIT ?)
                     ORDER BY created_at DESC
                     LIMIT ?
-                """, (quota, quota, quota_other, unsummarized_limit))
+                """, (quota_terminal, quota, quota_other, unsummarized_limit))
             else:
                 # Fallback: get recent messages (per-channel UNION for consistency)
                 cursor.execute("""
@@ -1588,7 +1593,7 @@ async def ambient_recall(request: AmbientRecallRequest):
                      ORDER BY created_at DESC LIMIT ?)
                     ORDER BY created_at DESC
                     LIMIT ?
-                """, (quota, quota, quota_other, unsummarized_limit))
+                """, (quota_terminal, quota, quota_other, unsummarized_limit))
 
             unsummarized_rows = cursor.fetchall()
             unsummarized_rows = list(reversed(unsummarized_rows))
