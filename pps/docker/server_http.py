@@ -1765,6 +1765,12 @@ async def ambient_recall(request: AmbientRecallRequest):
             # Skip blank lines and headers
             if not stripped or stripped.startswith("#"):
                 continue
+            # Handle metadata-prefixed lines (Issue #268): "*Updated: DATE — location. prose.*"
+            # Strip the "*Updated: ...*" wrapper and use the clause after the em-dash.
+            if stripped.startswith("*") and "—" in stripped:
+                after_dash = stripped.split("—", 1)[1].strip().rstrip("*").strip()
+                if after_dash:
+                    stripped = after_dash
             # Found first prose line — extract up to first ". " or take whole line
             if ". " in stripped:
                 scene_text = stripped.split(". ", 1)[0] + "."
