@@ -123,6 +123,23 @@ def first_date(value: str):
         return None
 
 
+def _state_head(state: str) -> str:
+    """The classifying part of a `state:` field.
+
+    `state` is prose: "shipping — Articles 1 & 2 PUBLISHED (caia2025)". Only the HEAD
+    is the state; the rest is history about it. Matching hints against the whole string
+    lets a word in the narrative tail decide the classification — which is how
+    Foundation Series sat invisible to the starving-arc pointer for 102 days: "shipping"
+    was its state, but "PUBLISHED" appeared later in the same line and the not-moving
+    check ran first and won.
+
+    Split on em-dash / colon / paren only. NOT on a plain hyphen, which is load-bearing
+    inside real states ("active-strategic-P0", "write-when-whim").
+    """
+    head = re.split(r"[—:(]", state, maxsplit=1)[0]
+    return (head or state).strip().lower()
+
+
 def _is_moving(fm: dict) -> bool:
     """Whether this arc's staleness is a failure signal.
 
@@ -132,9 +149,15 @@ def _is_moving(fm: dict) -> bool:
     if "needs_attention" in fm:
         return fm.get("needs_attention", "false").lower().startswith("true")
     state = fm.get("state", "").lower()
-    if any(h in state for h in NOT_MOVING_HINTS):
-        return False
-    return any(h in state for h in MOVING_HINTS)
+    head = _state_head(state)
+    # Classify on the head. Fall back to the full string only when the head is
+    # silent, so a state that says nothing up front still gets read.
+    for scope in (head, state):
+        if any(h in scope for h in NOT_MOVING_HINTS):
+            return False
+        if any(h in scope for h in MOVING_HINTS):
+            return True
+    return False
 
 
 def _wants_attention(fm: dict) -> bool:
