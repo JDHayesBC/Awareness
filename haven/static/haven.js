@@ -815,7 +815,9 @@ const haven = (() => {
                 `;
                 list.appendChild(el);
             });
-            scrollToBottom();
+            // Only auto-scroll for typing indicators if user is already at the
+            // bottom — same policy as new messages (#284).
+            if (userAtBottom) scrollToBottom();
         }
     }
 
@@ -1134,6 +1136,24 @@ const haven = (() => {
     async function leaveRoom() {
         if (!currentRoomId) return;
         const room = rooms.find(r => r.id === currentRoomId);
+
+        // DMs: "close" just hides from sidebar — does NOT remove membership (#286).
+        // Leaving a DM would DELETE the room_members row, causing a UNIQUE
+        // constraint violation on re-open (the room name already exists but
+        // membership is gone → create branch fails).  Client-side hide is the
+        // right semantic: the DM history persists and reopens via name-click.
+        if (room && room.is_dm) {
+            const closedId = currentRoomId;
+            rooms = rooms.filter(r => r.id !== closedId);
+            currentRoomId = null;
+            $('room-name').textContent = '';
+            $('message-list').innerHTML = '';
+            renderRooms();
+            if (rooms.length > 0) selectRoom(rooms[0].id);
+            else { saveCurrentRoomId(null); roomMembers = []; renderRoomUsers(); }
+            return;
+        }
+
         if (!confirm(`Leave "${room ? room.display_name : 'this room'}"?`)) return;
 
         const res = await fetch(`/api/rooms/${currentRoomId}/leave`, {

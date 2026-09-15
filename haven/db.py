@@ -400,7 +400,15 @@ class HavenDB:
             return cursor.rowcount > 0
 
     async def find_or_create_dm(self, user1_id: str, user2_id: str) -> dict:
-        """Find existing DM between two users, or create one."""
+        """Find existing DM between two users, or create one.
+
+        Self-healing (issue #286): if the DM room exists by name but a
+        member row is missing (e.g. they used "leave room" on a DM before
+        this fix landed), re-insert the missing membership rather than
+        attempting to INSERT a duplicate-named room (which would 500 due to
+        the UNIQUE constraint on rooms.name).
+        """
+        # 1. Happy path: both users are current members.
         async with self._db.execute(
             """SELECT r.* FROM rooms r
                JOIN room_members rm1 ON r.id = rm1.room_id AND rm1.user_id = ?
@@ -412,9 +420,33 @@ class HavenDB:
             if row:
                 return dict(row)
 
-        # Create new DM
         u1 = await self.get_user(user1_id)
         u2 = await self.get_user(user2_id)
+
+        # 2. Self-healing: room may exist with one member's row missing.
+        #    Try both username orderings used at creation time.
+        possible_names = (
+            f"dm-{u1['username']}-{u2['username']}",
+            f"dm-{u2['username']}-{u1['username']}",
+        )
+        async with self._db.execute(
+            "SELECT * FROM rooms WHERE name IN (?, ?) AND is_dm = 1",
+            possible_names,
+        ) as cursor:
+            existing = await cursor.fetchone()
+
+        if existing:
+            # Room exists — restore any missing membership rows.
+            room_id = existing["id"]
+            for uid in (user1_id, user2_id):
+                await self._db.execute(
+                    "INSERT OR IGNORE INTO room_members (room_id, user_id) VALUES (?, ?)",
+                    (room_id, uid),
+                )
+            await self._db.commit()
+            return dict(existing)
+
+        # 3. Truly new DM — create it.
         name = f"dm-{u1['username']}-{u2['username']}"
         display_name = f"{u1['display_name']} & {u2['display_name']}"
         room_id = str(uuid.uuid4())
