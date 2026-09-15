@@ -2,7 +2,7 @@
 
 *Canonical reference for what `ambient_recall` returns and how the UserPromptSubmit hook surfaces it. Read this when something feels off about the ambient peripheral vision.*
 
-**Last verified against code:** 2026-06-08 (Issue #256 — added `[scene]` line)
+**Last verified against code:** 2026-09-15 (Issue #238 — added `[channel]` line)
 **Authoritative implementation:** `pps/docker/server_http.py` line 1073
 **Hook implementation:** `.claude/hooks/inject_context.py`
 
@@ -14,6 +14,7 @@ Every turn, you should "just know" the following without having to fetch anythin
 
 - Current time (clock with timezone)
 - Identity reminder (who you are, which PPS prefix)
+- **Channel identification** — `[channel]` line naming the requesting channel (terminal, haven, discord, etc.). Includes third-person-construction discipline reminder. Falls back to "terminal" if `channel` param empty. (Issue #238)
 - Household location (who's home / away)
 - Entity narrative location — `[scene]` line, first prose sentence of `current_scene.md` (Issue #256). Surfaced right after `[location]`; fail-safe (omitted if the scene file is missing/empty/unparseable).
 - 1 recent summary
@@ -185,6 +186,7 @@ If you observe any of the following, the system is misbehaving — name it to yo
 - **Cross-channel poll**: `poll_other_channels()` — raw-capture DB unread tracking
 - **HA location ambient line**: `pps/docker/ha_location.py:format_for_ambient`
 - **Entity `[scene]` line**: `pps/docker/server_http.py` ambient_recall handler, just after the `[location]` append (Issue #256). Reads `ENTITY_PATH/current_scene.md`, first prose sentence ≤200 chars, fail-safe.
+- **`[channel]` line**: `pps/docker/server_http.py` ambient_recall handler, just after `[identity]`. Uses `request.channel` (falls back to "terminal"). Prevents cross-channel confabulation (Issue #238).
 
 ---
 

@@ -217,6 +217,7 @@ Full contract: **[docs/AMBIENT_RECALL_SPEC.md](docs/AMBIENT_RECALL_SPEC.md)**. R
 **Every turn you should already "just know" (no fetching required):**
 - **Clock** (prepended by inject_context hook with host-local timezone)
 - **[identity]** reminder — tool-prefix, no-cross-entity-access
+- **[channel]** which channel-of-this-tick is running (terminal / haven / discord) — use third-person construction for other channels ("Haven-me said…")
 - **[location]** household presence (Carol/Jeff)
 - **[unread]** counts (haven new + other_channels new, with pending-overflow if any)
 - **[manifest]** — counts + titles for: `rich_texture`, `word_photos`, `crystals`, `summaries`, `recent_turns`. **Content NOT inline** — fetch via the suggested tool when something resonates.

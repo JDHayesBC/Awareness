@@ -1733,6 +1733,18 @@ async def ambient_recall(request: AmbientRecallRequest):
         f"Do not access other entities' memory tools."
     )
 
+    # Channel identification (Issue #238) — tells the entity which channel-of-this-tick
+    # is running. Prevents the confabulation where terminal-Lyra narrates Haven-Lyra's
+    # experience in first person. Channel-marked self-reference ("terminal-me did X,
+    # Haven-me did Y") should be the natural construction.
+    _channel = request.channel or "terminal"
+    formatted_lines.append(
+        f"**[channel]** {_channel} — when referencing other-channel activity, "
+        f"use third-person channel-marked construction (e.g. 'Haven-me said…', "
+        f"'terminal-me observed…'). You cannot see other channels' live present-moment "
+        f"state; cross-channel turns arrive via ambient_recall, not direct observation."
+    )
+
     # Household location (Issue #218) — sacred per bedtime-architecture-chat 2026-05-17
     try:
         from ha_location import format_for_ambient as _loc_format
