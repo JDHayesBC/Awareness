@@ -885,12 +885,62 @@ def get_layers():
     return layers
 
 
-def wait_for_dependencies(timeout: int = 60, poll_interval: int = 2) -> None:
+def _record_boot_wait(outcome: str, elapsed: float, timeout: int, pending) -> None:
+    """Append one line of cold-boot evidence to a path that survives a recreate.
+
+    Container logs are lost when a container is RECREATED rather than restarted,
+    which is exactly what the manual recovery does -- so the 2026-09-14 failure
+    left no trace and the root cause had to be inferred from arithmetic instead
+    of read off a log line (#330). /app/claude_home/data is bind-mounted from the
+    host, so this record outlives the container. Never fatal: evidence collection
+    must not be able to take down the service it is observing.
+    """
+    try:
+        import datetime
+        line = (
+            f"{datetime.datetime.now().isoformat(timespec='seconds')} "
+            f"entity={os.getenv('ENTITY_NAME', '?')} outcome={outcome} "
+            f"elapsed={elapsed:.1f}s timeout={timeout}s "
+            f"unmet={sorted(pending) if pending else '[]'}\n"
+        )
+        path = os.path.join(os.getenv("CLAUDE_HOME", "/app/claude_home"), "data", "boot_dependency_wait.log")
+        with open(path, "a") as fh:
+            fh.write(line)
+    except Exception as exc:  # noqa: BLE001 - never let logging kill startup
+        print(f"[PPS] (could not persist boot-wait record: {exc})", file=sys.stderr)
+
+
+# Cold-boot dependency wait (#330).
+#
+# MUST stay comfortably above neo4j's own `start_period` in docker-compose.yml
+# (90s). It was 60s, which is LESS than the 90s neo4j declares it may need --
+# so on a cold boot the wait was arithmetically guaranteed to lose the race and
+# exit(1). That is the "PPS never cleanly restarts after a Docker/Windows
+# reboot" firedrill: pps-lyra and pps-caia are the only two services with this
+# hard ceiling, and they were the only two that needed hand-starting.
+#
+# Why the ceiling is reached at all -- `depends_on: condition: service_healthy`
+# does NOT protect us here. depends_on is a `docker compose up` construct; the
+# Docker DAEMON's restart-on-boot ignores it entirely and starts every
+# `unless-stopped` container simultaneously (observed 2026-09-15: eleven
+# containers started inside a 40ms window). So on a host reboot we race neo4j
+# instead of waiting for it. Running `docker compose up` a second time is what
+# made it work -- compose supplies the ordering the daemon won't.
+#
+# Override with PPS_DEP_TIMEOUT (seconds) if a host is slower still.
+DEFAULT_DEP_TIMEOUT = int(os.getenv("PPS_DEP_TIMEOUT", "300"))
+
+
+def wait_for_dependencies(timeout: int | None = None, poll_interval: int = 2) -> None:
     """Poll critical dependencies until ready or timeout.
 
     Checks Neo4j (bolt port) and ChromaDB (HTTP /api/v2/heartbeat) before
     layer initialization so we don't fail silently on a cold boot where
     containers start before their dependencies are fully responsive.
+
+    `timeout` defaults to DEFAULT_DEP_TIMEOUT (300s, env-tunable) -- deliberately
+    longer than neo4j's 90s start_period, because a post-Windows-update boot is
+    the slowest, most contended case and is exactly when this path runs.
 
     Note: ChromaDB /api/v1/heartbeat returns 410 Gone as of chroma:latest.
     Use /api/v2/heartbeat which returns 200 OK.
@@ -900,7 +950,10 @@ def wait_for_dependencies(timeout: int = 60, poll_interval: int = 2) -> None:
     import urllib.error
     import time
 
-    deadline = time.monotonic() + timeout
+    if timeout is None:
+        timeout = DEFAULT_DEP_TIMEOUT
+    started = time.monotonic()
+    deadline = started + timeout
     pending: set[str] = set()
 
     # Parse Neo4j bolt host/port from NEO4J_URI (e.g. "bolt://neo4j:7687")
@@ -944,9 +997,14 @@ def wait_for_dependencies(timeout: int = 60, poll_interval: int = 2) -> None:
 
     if pending:
         print(f"[PPS] ERROR: dependencies not ready after {timeout}s: {sorted(pending)}", file=sys.stderr)
+        print("[PPS] Exiting so the restart policy retries. If this repeats on every "
+              "host reboot, raise PPS_DEP_TIMEOUT -- see #330.", file=sys.stderr)
+        _record_boot_wait("TIMEOUT", time.monotonic() - started, timeout, pending)
         sys.exit(1)
 
-    print(f"[PPS] All dependencies ready, proceeding with layer initialization")
+    waited = time.monotonic() - started
+    _record_boot_wait("ready", waited, timeout, None)
+    print(f"[PPS] All dependencies ready after {waited:.1f}s, proceeding with layer initialization")
 
 
 # Initialize layers
