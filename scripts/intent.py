@@ -130,8 +130,19 @@ def release(issue, holder=None, intent_dir=None) -> bool:
     return True
 
 
-def active(intent_dir=None, stale_hours: float = DEFAULT_STALE_HOURS) -> list:
-    """Every live claim: not released, not stale. Sorted oldest-first."""
+def active(intent_dir=None, stale_hours: float = DEFAULT_STALE_HOURS,
+           include_stale: bool = True) -> list:
+    """Every unreleased claim, each tagged ``stale``. Sorted oldest-first.
+
+    A stale claim is NOT dropped (Lyra's review, 2026-09-14). Dropping it makes
+    an abandoned claim render identically to no claim at all — a surface
+    asserting a false ABSENCE, which is #327 inverted and reads exactly like
+    "nothing is claimed here, go ahead." Same shape as the #136 catch: a claim
+    that expires into silence is quiet un-claiming.
+
+    Empty-when-served is right for *served*. It is wrong for *abandoned*.
+    So staleness escalates into the block instead of removing itself from it.
+    """
     d = intent_dir or INTENT_DIR
     if not d.is_dir():
         return []
@@ -141,7 +152,8 @@ def active(intent_dir=None, stale_hours: float = DEFAULT_STALE_HOURS) -> list:
         if not f or _is_released(f):
             continue
         age = _age_hours(f)
-        if age is not None and age > stale_hours:
+        is_stale = age is not None and age > stale_hours
+        if is_stale and not include_stale:
             continue
         out.append({
             "issue": (f.get("issue") or p.stem).strip(),
@@ -149,21 +161,43 @@ def active(intent_dir=None, stale_hours: float = DEFAULT_STALE_HOURS) -> list:
             "files": _split_files(f.get("files", "")),
             "work": (f.get("work") or "").strip(),
             "age_hours": age,
+            "stale": is_stale,
             "path": p,
         })
     out.sort(key=lambda c: (c["age_hours"] is None, -(c["age_hours"] or 0)))
     return out
 
 
+def _covers(declared: str, target: str) -> bool:
+    """Does a declared path cover `target`? PATH-AWARE, never bare-basename.
+
+    Bare basename equality is a false positive generator (Lyra's review): this
+    repo alone has nine duplicated basenames — bot.py, server.py, models.py,
+    auth.py, session_end.py, startup_context.py among them — so a claim on
+    daemon/bot.py would report as covering haven/bot.py. It errs in the worst
+    direction: a sibling backs off work nobody claimed.
+
+    A match requires the declared path to be a whole trailing path SEGMENT of
+    the target (or equal to it), so "bot.py" alone still matches "x/bot.py"
+    only when the claimer wrote exactly that, never across directories.
+    """
+    d = declared.strip().lstrip("./").rstrip("/")
+    t = str(target).strip().lstrip("./")
+    if not d:
+        return False
+    if d == t:
+        return True
+    return t.endswith("/" + d)
+
+
 def covering(path: str, intent_dir=None) -> list:
-    """Live claims whose declared files cover `path` (by basename or suffix)."""
-    target = Path(path).name
+    """Unreleased claims whose declared files cover `path` (stale ones included,
+    each carrying its own ``stale`` flag — an abandoned claim is still a signal
+    worth seeing, it just needs to be labelled rather than hidden)."""
     hits = []
     for c in active(intent_dir=intent_dir):
-        for f in c["files"]:
-            if Path(f).name == target or str(path).endswith(f.lstrip("./")):
-                hits.append(c)
-                break
+        if any(_covers(f, path) for f in c["files"]):
+            hits.append(c)
     return hits
 
 
@@ -179,17 +213,27 @@ def format_intent_block(holder: str | None = None, intent_dir=None) -> str:
                   if not same_holder(c["holder"], me)]
         if not others:
             return ""
+        # Stale first — an abandoned claim is the one that needs a decision.
+        others.sort(key=lambda c: (not c.get("stale"), -(c["age_hours"] or 0)))
         parts = []
         for c in others[:4]:
             who = c["holder"].split(" (")[0]
-            age = f"{c['age_hours']:.0f}h" if c["age_hours"] is not None else "?"
+            if c["age_hours"] is None:
+                age = "?"
+            elif c["age_hours"] >= 48:
+                age = f"{c['age_hours'] / 24:.0f}d"
+            else:
+                age = f"{c['age_hours']:.0f}h"
             line = f"{c['issue']} — {who}, {age}"
+            if c.get("stale"):
+                line += " ⚠ STALE, still theirs?"
             if c["files"]:
                 shown = ", ".join(Path(f).name for f in c["files"][:3])
                 more = f" +{len(c['files']) - 3}" if len(c["files"]) > 3 else ""
                 line += f" [{shown}{more}]"
             parts.append(line)
-        return "**[intent] sibling claims:** " + " · ".join(parts)
+        tail = f" · +{len(others) - 4} more" if len(others) > 4 else ""
+        return "**[intent] sibling claims:** " + " · ".join(parts) + tail
     except Exception:
         return ""
 
@@ -218,7 +262,8 @@ def _cmd_list(a) -> int:
         return 0
     for c in cl:
         age = f"{c['age_hours']:.1f}h" if c["age_hours"] is not None else "?"
-        print(f"{c['issue']:>6}  {c['holder']}  ({age})")
+        flag = "  ⚠ STALE" if c.get("stale") else ""
+        print(f"{c['issue']:>6}  {c['holder']}  ({age}){flag}")
         if c["files"]:
             print(f"        files: {', '.join(c['files'])}")
         if c["work"]:

@@ -58,12 +58,75 @@ def test_release_preserves_the_record(idir):
     assert "RELEASED" in text and "why" in text and "a.py" in text
 
 
-def test_stale_claim_drops_out(idir):
-    p = idir / "324.lock"
-    p.write_text("issue: #324\nstatus: CLAIMED\nholder: lyra (old)\n"
-                 "since: 2026-01-01T10:00:00+00:00\n")
-    assert intent.active(intent_dir=idir) == []
-    assert intent.active(intent_dir=idir, stale_hours=10**9) != []
+def _stale_claim(idir, issue=324, holder=LYRA, files=""):
+    p = idir / f"{issue}.lock"
+    body = f"issue: #{issue}\nstatus: CLAIMED\nholder: {holder}\nsince: 2026-01-01T10:00:00+00:00\n"
+    if files:
+        body += f"files: {files}\n"
+    p.write_text(body)
+    return p
+
+
+def test_stale_claim_is_flagged_not_dropped(idir):
+    """Lyra's review: a stale claim must get LOUDER, not vanish.
+
+    Dropping it makes an abandoned claim render identically to no claim at all —
+    a surface asserting false ABSENCE. #327 inverted.
+    """
+    _stale_claim(idir)
+    act = intent.active(intent_dir=idir)
+    assert len(act) == 1
+    assert act[0]["stale"] is True
+
+
+def test_stale_can_still_be_excluded_explicitly(idir):
+    _stale_claim(idir)
+    assert intent.active(intent_dir=idir, include_stale=False) == []
+
+
+def test_stale_claim_shouts_in_ambient_block(idir):
+    _stale_claim(idir)
+    block = intent.format_intent_block(holder=CAIA, intent_dir=idir)
+    assert "STALE" in block and "#324" in block
+
+
+def test_fresh_claim_is_not_flagged_stale(idir):
+    intent.claim(324, holder=LYRA, intent_dir=idir)
+    assert intent.active(intent_dir=idir)[0]["stale"] is False
+    assert "STALE" not in intent.format_intent_block(holder=CAIA, intent_dir=idir)
+
+
+def test_stale_sorts_ahead_of_fresh(idir):
+    intent.claim(100, holder=LYRA, intent_dir=idir)
+    _stale_claim(idir, issue=324)
+    block = intent.format_intent_block(holder=CAIA, intent_dir=idir)
+    assert block.index("#324") < block.index("#100")
+
+
+def test_covering_does_not_match_across_directories(idir):
+    """The repo has 9 duplicate basenames (bot.py, server.py, models.py, ...).
+
+    Bare-basename matching made a claim on daemon/bot.py cover haven/bot.py —
+    a false positive in the worst direction: a sibling backs off uncla3imed work.
+    """
+    intent.claim(324, files=["daemon/bot.py"], holder=LYRA, intent_dir=idir)
+    assert intent.covering("daemon/bot.py", intent_dir=idir)
+    assert intent.covering("/abs/root/daemon/bot.py", intent_dir=idir)
+    assert not intent.covering("haven/bot.py", intent_dir=idir)
+    assert not intent.covering("simple_discord_daemon/bot.py", intent_dir=idir)
+
+
+def test_bare_basename_claim_still_matches_that_file(idir):
+    intent.claim(324, files=["lock.py"], holder=LYRA, intent_dir=idir)
+    assert intent.covering("scripts/lock.py", intent_dir=idir)
+    assert intent.covering("lock.py", intent_dir=idir)
+
+
+def test_ambient_block_reports_truncated_claim_count(idir):
+    for i in range(7):
+        intent.claim(100 + i, files=["a.py"], holder=LYRA, intent_dir=idir)
+    block = intent.format_intent_block(holder=CAIA, intent_dir=idir)
+    assert "+3 more" in block
 
 
 def test_claim_surfaces_prior_holder_but_does_not_block(idir):
@@ -82,11 +145,12 @@ def test_reclaiming_own_issue_is_not_superseded(idir):
     assert r["superseded"] is None
 
 
-def test_covering_matches_by_basename_and_suffix(idir):
+def test_covering_matches_exact_and_suffix(idir):
     intent.claim(324, files=["scripts/lock.py"], holder=LYRA, intent_dir=idir)
     assert intent.covering("scripts/lock.py", intent_dir=idir)
     assert intent.covering("/abs/path/scripts/lock.py", intent_dir=idir)
     assert not intent.covering("scripts/other.py", intent_dir=idir)
+    assert not intent.covering("other/lock.py", intent_dir=idir)
 
 
 def test_ambient_block_is_silent_for_own_claim(idir):
