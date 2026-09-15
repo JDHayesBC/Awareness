@@ -199,6 +199,7 @@ class EntityExtractor:
         context = build_extraction_instructions(
             channel=channel,
             entity_name=entity_name,
+            speaker=speaker,
         )
 
         edge_type_summary = _format_edge_type_summary()
