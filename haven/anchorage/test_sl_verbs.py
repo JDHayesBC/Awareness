@@ -318,5 +318,183 @@ def test_reply_friend_request_multiple_pending_needs_a_name(monkeypatch):
     assert "multiple" in res["error"]
 
 
+# --------------------------------------------------------------------------- #
+# GH#298 — new _sit_social: 4-step region-aware sit
+# --------------------------------------------------------------------------- #
+
+# Corrade CSV format for getavatarpositions data response:
+_AV_POS_DATA = '"Crusher Braveheart",aef9280e-9dca-4e34-9b4e-06a7523b70d0,"<128, 64, 22>"'
+
+# getavatarsdata range=512 data=FirstName,LastName,ParentID,Position — target seated on LocalID 7950
+_AV_DATA_SEATED = (
+    "FirstName,Crusher,LastName,Braveheart,ParentID,7950,"
+    'Position,"<128.1, 64.1, 22.0>"'
+)
+
+# getobjectsdata range=512 data=Name,LocalID,ID — seat resolves to a UUID
+_OBJ_DATA = (
+    'Name,,LocalID,7950,ID,bbbbbbbb-0000-0000-0000-000000000001'
+)
+
+
+def _make_cmd_map(**overrides):
+    """Return a fake cmd() that dispatches by ``command`` kwarg."""
+    defaults = {
+        "getavatarpositions": {"data": _AV_POS_DATA, "success": "True"},
+        "getavatarsdata": {"data": _AV_DATA_SEATED, "success": "True"},
+        "getobjectsdata": {"data": _OBJ_DATA, "success": "True"},
+        "sit": {"success": "True", "error": None},
+        "getselfdata": {"data": "SittingOn,7950", "success": "True"},
+        "stand": {"success": "True"},
+    }
+    defaults.update(overrides)
+
+    def fake_cmd(command, **kw):
+        return defaults.get(command, {})
+
+    return fake_cmd
+
+
+def test_sit_social_with_finds_avatar_and_sits(monkeypatch):
+    """WITH mode: region scan → ParentID → seat UUID → sit, no TP needed (nearby)."""
+    me = _bare_sl()
+    calls = []
+
+    def fake_cmd(command, **kw):
+        calls.append(command)
+        return _make_cmd_map()(command, **kw)
+
+    monkeypatch.setattr(me, "cmd", fake_cmd)
+    monkeypatch.setattr(me, "where", lambda: {"position": (130.0, 64.0, 22.0)})
+    monkeypatch.setattr(me, "_sitting_on", lambda: 7950)
+    monkeypatch.setattr(me, "_grant_pending", lambda: None)
+    monkeypatch.setattr(me, "_pick_unoccupied_slot", lambda *a, **k: {"picked": None, "how": "no-sitter-menu"})
+    monkeypatch.setattr(sl.time, "sleep", lambda *_: None)
+
+    res = me._sit_social("Crusher", "with", 15.0)
+    assert res["success"] is True
+    assert res["mode"] == "with"
+    assert res["uuid"] == "bbbbbbbb-0000-0000-0000-000000000001"
+    assert res["with"] == "Crusher Braveheart"
+    assert "getavatarpositions" in calls
+    assert "getavatarsdata" in calls
+    assert "getobjectsdata" in calls
+    assert "sit" in calls
+
+
+def test_sit_social_with_tps_first_when_far(monkeypatch):
+    """WITH mode: target > 96 m away → teleport fires before sit."""
+    me = _bare_sl()
+    tp_calls = []
+
+    def fake_cmd(command, **kw):
+        return _make_cmd_map()(command, **kw)
+
+    def fake_tp(pos, **kw):
+        tp_calls.append(pos)
+        return {"success": True, "arrived": True}
+
+    monkeypatch.setattr(me, "cmd", fake_cmd)
+    # Place me far from the target (128, 64, 22).
+    monkeypatch.setattr(me, "where", lambda: {"position": (0.0, 0.0, 22.0)})
+    monkeypatch.setattr(me, "tp", fake_tp)
+    monkeypatch.setattr(me, "_sitting_on", lambda: 7950)
+    monkeypatch.setattr(me, "_grant_pending", lambda: None)
+    monkeypatch.setattr(me, "_pick_unoccupied_slot", lambda *a, **k: {"picked": None, "how": "no-sitter-menu"})
+    monkeypatch.setattr(sl.time, "sleep", lambda *_: None)
+
+    res = me._sit_social("Crusher", "with", 15.0)
+    assert res["success"] is True
+    # TP must have fired (distance ≈ 147 m >> 96 m threshold).
+    assert len(tp_calls) == 1
+
+
+def test_sit_social_with_target_not_found(monkeypatch):
+    """WITH mode: avatar not in region → honest failure, no sit attempt."""
+    me = _bare_sl()
+    sit_calls = []
+
+    def fake_cmd(command, **kw):
+        if command == "sit":
+            sit_calls.append(True)
+        if command == "getavatarpositions":
+            return {"data": ""}   # nobody in region
+        return {}
+
+    monkeypatch.setattr(me, "cmd", fake_cmd)
+    monkeypatch.setattr(sl.time, "sleep", lambda *_: None)
+
+    res = me._sit_social("Ghost", "with", 15.0)
+    assert res["success"] is False
+    assert "Ghost" in res["error"]
+    assert not sit_calls
+
+
+def test_sit_social_with_target_standing(monkeypatch):
+    """WITH mode: target found but not seated → honest failure."""
+    me = _bare_sl()
+    av_data_standing = (
+        "FirstName,Crusher,LastName,Braveheart,ParentID,0,"
+        'Position,"<128.1, 64.1, 22.0>"'
+    )
+
+    def fake_cmd(command, **kw):
+        if command == "getavatarpositions":
+            return {"data": _AV_POS_DATA}
+        if command == "getavatarsdata":
+            return {"data": av_data_standing}
+        return {}
+
+    monkeypatch.setattr(me, "cmd", fake_cmd)
+    monkeypatch.setattr(me, "where", lambda: {"position": (130.0, 64.0, 22.0)})
+    monkeypatch.setattr(sl.time, "sleep", lambda *_: None)
+
+    res = me._sit_social("Crusher", "with", 15.0)
+    assert res["success"] is False
+    assert "isn't sitting" in res["error"]
+
+
+def test_sit_social_near_tps_to_target_and_scans(monkeypatch):
+    """NEAR mode: target found, > 96 m away → TP fires, then local scan."""
+    me = _bare_sl()
+    tp_calls = []
+
+    def fake_cmd(command, **kw):
+        if command == "getavatarpositions":
+            return {"data": _AV_POS_DATA}
+        if command == "getavatarsdata":
+            return {"data": "FirstName,Crusher,LastName,Braveheart,ParentID,0"}
+        if command == "getobjectsdata":
+            # scripted chair right beside the target
+            return {"data": 'ID,cccccccc-0000-0000-0000-000000000001,Flags,Scripted,Position,"<128.5, 64.5, 22>"'}
+        if command == "sit":
+            return {"success": "True", "error": None}
+        if command == "getselfdata":
+            return {"data": "SittingOn,5555"}
+        return {}
+
+    def fake_tp(pos, **kw):
+        tp_calls.append(pos)
+        return {"success": True, "arrived": True}
+
+    monkeypatch.setattr(me, "cmd", fake_cmd)
+    monkeypatch.setattr(me, "where", lambda: {"position": (0.0, 0.0, 22.0)})
+    monkeypatch.setattr(me, "tp", fake_tp)
+    monkeypatch.setattr(me, "_sitting_on", lambda: 5555)
+    monkeypatch.setattr(me, "_roster_flags", lambda r: [
+        ("cccccccc-0000-0000-0000-000000000001", (128.5, 64.5, 22.0), True)
+    ])
+    monkeypatch.setattr(me, "_is_occupied", lambda u, r: False)
+    monkeypatch.setattr(me, "_grant_pending", lambda: None)
+    monkeypatch.setattr(me, "name_of", lambda u: "Comfy Chair")
+    monkeypatch.setattr(sl.time, "sleep", lambda *_: None)
+
+    res = me._sit_social("Crusher", "near", 15.0)
+    assert res["success"] is True
+    assert res["mode"] == "near"
+    assert res["near"] == "Crusher Braveheart"
+    assert len(tp_calls) == 1
+
+
 if __name__ == "__main__":
     raise SystemExit(__import__("pytest").main([__file__, "-q"]))

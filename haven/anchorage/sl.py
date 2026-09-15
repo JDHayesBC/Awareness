@@ -546,57 +546,90 @@ class SL:
                 self.stop_listening()
 
     def _sit_social(self, target: str, mode: str, radius: float) -> dict:
-        """WITH / NEAR helpers — both key off a named/uuid avatar.
+        """WITH / NEAR — four-step region-aware sit (GH#298 mechanism).
 
-        Falls back to a region-wide search when the target isn't in local radius,
-        then sits with range=500 so SL auto-TPs us to the target's furniture.
+        Step 1: getavatarpositions entity=region — region-wide position + UUID.
+                Unlimited draw distance; no concentric-scan required.
+        Step 2: getavatarsdata entity=range range=512 — get the target's ParentID
+                (the seat's LocalID; 0 = standing).  Range-scan only — entity=uuid
+                and entity=firstname both return "unknown entity" (61113).
+        Step 3: getobjectsdata entity=range range=512 — map LocalID → seat UUID.
+                Enumerates root prims only; Names may be blank — resolve by LocalID.
+        Step 4: sit.  If distance > SIT_TP_THRESHOLD (96 m), teleport to the
+                target's position first, then sit.  Threshold is conservative and
+                can be tuned once the exact SL sit-TP limit is measured.
+
+        No skeptical-permission gate here — "come sit with me" is a social invitation;
+        whether to accept is agent judgment upstream in the brain.  The on-sit
+        animation-permission grant (via _grant_pending) stays — it just completes
+        the sit once we're there.
         """
-        av = self._find_avatar(target, radius)
-        region_fallback = False
-        if not av:
-            av = self._find_avatar_region(target)
-            if av:
-                region_fallback = True
-            else:
-                return {"success": False, "error": f"could not find avatar {target!r} in region"}
+        _SIT_TP_THRESHOLD = 96.0  # metres; conservative estimate of sit's own TP reach
 
+        needle = (target or "").strip().lower()
+
+        # ---- Step 1: region-wide position scan --------------------------------
+        av_name: str | None = None
+        av_uuid: str | None = None
+        av_pos: tuple[float, float, float] | None = None
+
+        raw_pos = self.cmd("getavatarpositions", entity="region",
+                            data="name,id,position").get("data", "") or ""
+        for r_name, r_uuid, r_pos in re.findall(
+            r'"([^"]*)",([0-9a-f-]{36}),"<([^>]+)>"', raw_pos
+        ):
+            nm = unquote_plus(r_name).strip()
+            if (needle and needle in nm.lower()) or (needle == r_uuid):
+                av_name = nm
+                av_uuid = r_uuid
+                av_pos = _vec(f"<{r_pos}>")
+                break
+
+        if not av_name:
+            return {"success": False, "error": f"could not find avatar {target!r} in region"}
+
+        # ---- Step 2: ParentID via range-512 scan ------------------------------
+        parent_local: int = 0
+        d2 = self.cmd("getavatarsdata", entity="range", range=512,
+                       data="FirstName,LastName,ParentID,Position").get("data", "") or ""
+        for fn, ln, pid in re.findall(
+            r"FirstName,([^,]*),LastName,([^,]*),ParentID,(\d+)", d2
+        ):
+            nm2 = f"{fn} {ln}".strip()
+            if needle in nm2.lower():
+                parent_local = int(pid)
+                # If position from step 1 was missing (seated avatar not in
+                # getavatarpositions), try to fill it from the range scan's Position.
+                if not av_pos:
+                    pm = re.search(
+                        rf"FirstName,{re.escape(fn)},LastName,{re.escape(ln)}.*?Position,\"(<[^>]+>)\"",
+                        d2)
+                    if pm:
+                        av_pos = _vec(pm.group(1))
+                break
+
+        # ---- NEAR: find an unoccupied sittable within 3 m of the target ------
         if mode == "near":
-            avpos = av.get("pos") or self._avatar_pos(av.get("name") or target)
-            if not avpos and av.get("sitting_on"):
-                # #42 (Lyra, live 2026-09-05): getavatarpositions OMITS seated
-                # avatars, so a SEATED target reports no global pos and NEAR bailed
-                # here — the common case, since "sit near someone" usually means
-                # someone already at rest. But we hold their seat's LocalID: anchor
-                # on the SEAT (LocalID → UUID → roster pos). "Near a seated person"
-                # IS "near their seat". Reuses two live-proven helpers, no new query.
-                seat_uuid = self._uuid_for_localid(av["sitting_on"], radius,
-                                                   region_fallback=region_fallback)
-                if seat_uuid:
-                    avpos = next((p for (u, p, _s) in self._roster_flags(radius)
-                                  if u == seat_uuid), None)
-                # far+seated (seat beyond the self-centred local roster) still bails
-                # below — rare for NEAR; TODO if it bites: region-wide object-pos.
-            if not avpos:
-                # #42 (Lyra live 2026-09-05): a helpful nudge only when it's TRUE —
-                # WITH works on a seated target (range=500), but on a STANDING target
-                # it hits "isn't sitting on anything to join" (Caia's catch). We can
-                # discriminate on sitting_on: only suggest WITH when they're seated.
-                if av.get("sitting_on"):
+            if not av_pos:
+                if parent_local:
                     return {"success": False, "mode": "near",
-                            "error": f"{av.get('name', target)!r} is seated but too far to place you near them; try mode='with' to join their seat"}
-                return {"success": False, "error": f"couldn't locate {av.get('name', target)!r}"}
+                            "error": (f"{av_name!r} is seated but position unknown; "
+                                      "try mode='with' to join their seat")}
+                return {"success": False, "mode": "near",
+                        "error": f"couldn't locate {av_name!r}"}
+
             me_pos = self.where().get("position") or (0.0, 0.0, 0.0)
-            if region_fallback or _dist(me_pos, avpos) > radius:
-                # #42: NEAR used to refuse a region-fallback target outright. Instead
-                # TP to their position first, then the self-centred roster can see the
-                # 3m sittables around them. NEEDS-LIVE-TEST: tp arrival timing
-                # (#42 tp false-negatives) + post-tp roster visibility of their seats.
-                self.tp(avpos)
+            if _dist(me_pos, av_pos) > _SIT_TP_THRESHOLD:
+                self.tp(av_pos)
                 time.sleep(2.0)  # let arrival settle before the roster read
+            elif _dist(me_pos, av_pos) > radius:
+                self.tp(av_pos)
+                time.sleep(2.0)
+
             cands = sorted(
                 ((u, p) for (u, p, scr) in self._roster_flags(radius)
-                 if scr and _dist(p, avpos) <= 3.0),
-                key=lambda up: _dist(up[1], avpos),
+                 if scr and _dist(p, av_pos) <= 3.0),
+                key=lambda up: _dist(up[1], av_pos),
             )
             for uid, _p in cands:
                 if self._is_occupied(uid, radius):
@@ -605,30 +638,42 @@ class SL:
                 time.sleep(1.5)
                 self._grant_pending()
                 if self._sitting_on():
-                    return {"success": True, "mode": "near", "near": av.get("name"),
+                    return {"success": True, "mode": "near", "near": av_name,
                             "uuid": uid, "name": self.name_of(uid),
                             "sitting_on": self._sitting_on()}
             return {"success": False, "mode": "near",
-                    "error": f"no unoccupied sittable within 3 m of {av.get('name', target)!r}"}
+                    "error": f"no unoccupied sittable within 3 m of {av_name!r}"}
 
-        # ---- WITH: join their seat ----
-        seat_local = av.get("sitting_on")
-        if not seat_local:
+        # ---- WITH: join their seat --------------------------------------------
+        if not parent_local:
             return {"success": False, "mode": "with",
-                    "error": f"{av.get('name', target)!r} isn't sitting on anything to join"}
-        sit_range = 500 if region_fallback else radius
-        obj = self._uuid_for_localid(seat_local, radius, region_fallback=region_fallback)
-        if not obj:
+                    "error": f"{av_name!r} isn't sitting on anything to join"}
+
+        # Step 3: map seat LocalID → object UUID via range-512 object scan.
+        seat_uuid: str | None = None
+        d3 = self.cmd("getobjectsdata", entity="range", range=512,
+                       data="Name,LocalID,ID").get("data", "") or ""
+        m3 = (re.search(rf"LocalID,{parent_local},ID,([0-9a-f-]{{36}})", d3)
+              or re.search(rf"ID,([0-9a-f-]{{36}}),LocalID,{parent_local}\b", d3))
+        if m3:
+            seat_uuid = m3.group(1)
+
+        if not seat_uuid:
             return {"success": False, "mode": "with",
                     "error": "couldn't resolve their seat object's UUID"}
-        r = self.cmd("sit", item=obj, range=str(sit_range))
+
+        # Step 4: teleport first if seat is beyond the sit TP threshold.
+        if av_pos and _dist(self.where().get("position") or (0.0, 0.0, 0.0), av_pos) > _SIT_TP_THRESHOLD:
+            self.tp(av_pos)
+            time.sleep(2.0)  # let the TP settle before the sit fires
+
+        r = self.cmd("sit", item=seat_uuid, range="500")
         time.sleep(1.5)
         self._grant_pending()
-        slot = self._pick_unoccupied_slot(sit_range)
+        slot = self._pick_unoccupied_slot(500)
         return {"success": bool(self._sitting_on()), "mode": "with",
-                "with": av.get("name"), "uuid": obj, "slot": slot,
-                "sitting_on": self._sitting_on(), "error": r.get("error"),
-                "region_fallback": region_fallback}
+                "with": av_name, "uuid": seat_uuid, "slot": slot,
+                "sitting_on": self._sitting_on(), "error": r.get("error")}
 
     def _pick_unoccupied_slot(self, radius: float, *, timeout: float = 8.0) -> dict:
         """After a WITH-sit, some furniture pops a sitter/SWAP menu. If one shows,

@@ -280,6 +280,35 @@ class CorradeClient:
         result = self.command(command="getavatarsdata", entity="range", range=rng, data=data)
         return _group_csv(result.get("data", ""), data.split(","))
 
+    def avatar_positions_region(self) -> list[dict]:
+        """``getavatarpositions entity=region`` — region-wide avatar positions.
+
+        Requires the ``interact`` permission. Returns every avatar visible in
+        the region as ``[{name, uuid, position}, ...]`` where ``position`` is a
+        ``[x, y, z]`` float list (or ``None`` if unparseable). Note: Corrade
+        returns the raw CSV inline (not under a ``data`` key) as
+        ``"First Last",uuid,"<x, y, z>"`` — parse it directly from the response
+        body rather than via ``_group_csv``.
+
+        Empirically confirmed live (corrade.md §"Sensing verbs — proven live"):
+        region-scoped, unlimited draw distance.
+        """
+        import re as _re
+        import urllib.parse as _up
+        result = self.command(command="getavatarpositions", entity="region")
+        raw = (result.get("data") or "").strip()
+        out: list[dict] = []
+        for name, uid, pos in _re.findall(r'"([^"]*)",([0-9a-f-]{36}),"<([^>]+)>"', raw):
+            nm = _up.unquote_plus(name).strip()
+            try:
+                xyz: list[float] | None = [float(x.replace("+", "").strip()) for x in pos.split(",")]
+                if len(xyz) != 3:  # type: ignore[arg-type]
+                    xyz = None
+            except ValueError:
+                xyz = None
+            out.append({"name": nm, "uuid": uid, "position": xyz})
+        return out
+
     def get_parcel_music_url(self) -> Optional[str]:
         """``getparceldata data=MusicURL`` — the parcel's audio-stream URL, or None.
 
