@@ -112,11 +112,19 @@ def render(arcs: list[dict]) -> str:
     )
 
 
+# Splice boundaries for --write. The start marker is emitted by render() itself; the
+# end marker is the hand-authored index-drift note that must survive a rewrite.
+RENDER_MARKER = "<!-- RENDERED by scripts/arc_index.py"
+END_MARKER = "> **Index-drift note"
+
+
 def main():
     ap = argparse.ArgumentParser(description="Render the §VIII arc list from frontmatter.")
     ap.add_argument("--entity", default=None, help="entity name (default: $ENTITY_NAME, else lyra)")
     ap.add_argument("--check", action="store_true",
                     help="report arcs on disk that the entity's CLAUDE.md §VIII never mentions")
+    ap.add_argument("--write", action="store_true",
+                    help="splice the render into the entity's CLAUDE.md §VIII in place")
     args = ap.parse_args()
 
     arcs_dir = resolve_arcs_dir(args.entity)
@@ -138,7 +146,34 @@ def main():
         print(f"§VIII mentions all {len(arcs)} arcs on disk.")
         return
 
-    print(render(arcs))
+    block = render(arcs)
+
+    if not args.write:
+        print(block)
+        return
+
+    # A render that has to be hand-pasted drifts -- which is the very failure this
+    # script exists to kill (#327). Splice it in place instead.
+    claude_md = arcs_dir.parent / "CLAUDE.md"
+    if not claude_md.is_file():
+        sys.exit(f"no CLAUDE.md at {claude_md}")
+    text = claude_md.read_text(encoding="utf-8")
+
+    start = text.find(RENDER_MARKER)
+    if start == -1:
+        sys.exit(f"no rendered block found in {claude_md} (looked for {RENDER_MARKER!r}).\n"
+                 "Paste the render in once by hand, then --write keeps it current.")
+    end = text.find(END_MARKER, start)
+    if end == -1:
+        sys.exit(f"found the render start but no {END_MARKER!r} terminator after it; "
+                 "refusing to guess where the block ends.")
+
+    new = text[:start] + block.rstrip("\n") + "\n\n" + text[end:]
+    if new == text:
+        print("§VIII already current — no change.")
+        return
+    claude_md.write_text(new, encoding="utf-8")
+    print(f"§VIII rewritten in {claude_md} ({len(arcs)} arcs).")
 
 
 if __name__ == "__main__":
