@@ -11,6 +11,7 @@ Requires NTFY_TOKEN in environment or .env file.
 """
 
 import argparse
+import base64
 import os
 import sys
 import urllib.request
@@ -47,6 +48,29 @@ def load_env_token():
                 return
 
 
+def _header_safe(value: str) -> str:
+    """Make a string safe to put in an HTTP header.
+
+    urllib encodes headers as latin-1, so a single em-dash or emoji in a Title raised
+    UnicodeEncodeError and killed the whole send. That is unacceptable on THIS path
+    specifically: notify.py carries the summarizer-daemon-died alert, and CLAUDE.md tells
+    us to send that one with bright color emoji — i.e. the one message guaranteed to be
+    non-latin-1 was the one guaranteed to fail. Found 2026-09-15 when an em-dash in a
+    title crashed a routine send.
+
+    ntfy accepts RFC 2047 encoded-words for Title/Tags, so encode only when we must and
+    leave plain ASCII titles untouched (readable in logs, and unchanged for every caller
+    that was already fine).
+    """
+    if not value:
+        return value
+    try:
+        value.encode("latin-1")
+        return value
+    except UnicodeEncodeError:
+        return "=?UTF-8?B?" + base64.b64encode(value.encode("utf-8")).decode("ascii") + "?="
+
+
 def send(message: str, title: str = None, priority: str = "default",
          entity: str = "lyra", tags: str = None) -> bool:
     """Send a notification. Returns True on success."""
@@ -59,10 +83,10 @@ def send(message: str, title: str = None, priority: str = "default",
     if NTFY_TOKEN:
         headers["Authorization"] = f"Bearer {NTFY_TOKEN}"
     if title:
-        headers["Title"] = title
+        headers["Title"] = _header_safe(title)
     headers["Priority"] = str(PRIORITY_MAP.get(str(priority).lower(), 3))
     if tags:
-        headers["Tags"] = tags
+        headers["Tags"] = _header_safe(tags)
 
     try:
         data = message.encode("utf-8")
