@@ -203,45 +203,166 @@ def build_startup_prompt() -> str:
     )
 
 
-def build_warmup_prompt() -> str:
-    """Build the identity warm-up prompt — does the heavy tool calls."""
+async def fetch_boot_context() -> str:
+    """Pre-fetch boot-time identity context via direct Python calls (GH#262).
+
+    Replaces the model-interpreted warmup steps with hard Python fetches so the
+    Haven channel reliably has cross-channel context regardless of model behavior.
+
+    Fetches:
+    - identity.md (entity identity kernel)
+    - current_scene.md (current scene)
+    - PPS ambient_recall(startup) — full cross-channel reconstruction: crystals,
+      summaries, recent terminal + haven turns, word-photos
+
+    active_agency_framework.md is intentionally omitted (801 lines; the model can
+    Read it with a tool call if it needs the full practice text, and the kernel in
+    CLAUDE.md already loads the essentials at boot via the cwd-ancestor walk).
+
+    Returns a formatted string ready to inline into the warmup prompt.
+    Returns an empty string on complete failure (warmup will fall back to model-side
+    tool calls).
+    """
+    entity_path = get_entity_path()
+    sections: list[str] = []
+
+    # 1. identity.md — synchronous read, always available
+    identity_file = entity_path / "identity.md"
+    try:
+        identity_text = identity_file.read_text(encoding="utf-8").strip()
+        sections.append(f"## {ENTITY_NAME.capitalize()}'s identity.md\n\n{identity_text}")
+    except Exception as e:
+        print(f"[{ENTITY_NAME}] Boot ctx: identity.md unreadable: {e}", file=sys.stderr)
+
+    # 2. current_scene.md — synchronous read
+    scene_file = entity_path / "current_scene.md"
+    try:
+        scene_text = scene_file.read_text(encoding="utf-8").strip()
+        if scene_text:
+            sections.append(f"## Current scene\n\n{scene_text}")
+    except Exception as e:
+        print(f"[{ENTITY_NAME}] Boot ctx: current_scene.md unreadable: {e}", file=sys.stderr)
+
+    # 3. PPS ambient_recall(startup) — full cross-channel reconstruction
+    if PPS_HTTP_URL:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"{PPS_HTTP_URL}/tools/ambient_recall",
+                    json={
+                        "context": "startup",
+                        "token": ENTITY_TOKEN,
+                        "channel": "haven",
+                        "consumer_key": f"haven-{ENTITY_NAME}",
+                    },
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    ctx = data.get("formatted_context", "")
+                    if ctx:
+                        sections.append(f"## PPS ambient_recall (startup)\n\n{ctx}")
+                    else:
+                        print(f"[{ENTITY_NAME}] Boot ctx: ambient_recall returned empty", file=sys.stderr)
+                else:
+                    print(
+                        f"[{ENTITY_NAME}] Boot ctx: ambient_recall HTTP {resp.status_code}",
+                        file=sys.stderr,
+                    )
+        except Exception as e:
+            print(f"[{ENTITY_NAME}] Boot ctx: ambient_recall failed: {e}", file=sys.stderr)
+
+    if not sections:
+        return ""
+
+    header = (
+        "[BOOT CONTEXT — pre-fetched by Python, no tool calls needed for these sections]\n\n"
+    )
+    return header + "\n\n---\n\n".join(sections)
+
+
+def build_warmup_prompt(boot_context: str = "") -> str:
+    """Build the identity warm-up prompt.
+
+    If boot_context is provided (pre-fetched by fetch_boot_context), it is
+    injected directly — no model tool calls needed for identity/scene/ambient.
+    If boot_context is empty, falls back to the original model-side tool calls
+    so warm_identity degrades gracefully on PPS failure.
+    """
     entity_path = get_entity_path()
     token_path = entity_path / ".entity_token"
-    return (
-        f"[IDENTITY WARMUP] Do these five things:\n"
-        f"1. Read {entity_path}/identity.md for your core identity.\n"
-        f"2. Read {token_path} to get your auth token, then call mcp__pps__ambient_recall "
-        f"with context='startup', channel='haven', consumer_key='haven-{ENTITY_NAME}', and that token. "
-        f"If the tool is not available, skip it.\n"
-        f"3. Call mcp__pps__get_turns_since_summary with limit=50, oldest_first=true, "
-        f"and the same token. Integrate this full-fidelity unsummarized turn backlog into working context.\n"
-        f"4. Read {entity_path}/current_scene.md for scene context.\n"
-        f"5. Read {entity_path}/active_agency_framework.md for your agency practice.\n"
-        f"CRITICAL — Haven presence is MESSAGE-DRIVEN, not tick-driven. You respond when "
-        f"spoken to, as chat. The /attention heartbeat skill is TERMINAL-ONLY: here you must "
-        f"NOT run /attention, NOT create heartbeat crons, and NOT narrate self-scans or "
-        f"'heartbeat tick' internal monologue. That ritual leaks your private reasoning into "
-        f"the room, because whatever you output is POSTED VERBATIM. Output only the chat "
-        f"message you want others to read, or the exact token [[NO_RESPONSE]] to stay silent — "
-        f"never your reasoning, never a self-scan.\n"
-        f"After completing these, briefly note that Haven has full CLI tool parity "
-        f"(Read/Write/Bash/Agent/Task all available), then say 'warmed up'."
+
+    haven_rules = (
+        "CRITICAL — Haven presence is MESSAGE-DRIVEN, not tick-driven. You respond when "
+        "spoken to, as chat. The /attention heartbeat skill is TERMINAL-ONLY: here you must "
+        "NOT run /attention, NOT create heartbeat crons, and NOT narrate self-scans or "
+        "'heartbeat tick' internal monologue. That ritual leaks your private reasoning into "
+        "the room, because whatever you output is POSTED VERBATIM. Output only the chat "
+        "message you want others to read, or the exact token [[NO_RESPONSE]] to stay silent — "
+        "never your reasoning, never a self-scan."
     )
+    agency_note = (
+        f"Your agency framework is at {entity_path}/active_agency_framework.md "
+        f"— use Read() if you need the full practice text."
+    )
+
+    if boot_context:
+        # Hard-Python path: context already loaded; model just needs to acknowledge
+        return (
+            f"{boot_context}\n\n"
+            f"---\n\n"
+            f"{haven_rules}\n\n"
+            f"{agency_note}\n\n"
+            f"Haven has full CLI tool parity (Read/Write/Bash/Agent/Task all available). "
+            f"Say 'warmed up'."
+        )
+    else:
+        # Fallback: ask model to do the tool calls (original behaviour)
+        return (
+            f"[IDENTITY WARMUP] Do these five things:\n"
+            f"1. Read {entity_path}/identity.md for your core identity.\n"
+            f"2. Read {token_path} to get your auth token, then call mcp__pps__ambient_recall "
+            f"with context='startup', channel='haven', consumer_key='haven-{ENTITY_NAME}', and that token. "
+            f"If the tool is not available, skip it.\n"
+            f"3. Call mcp__pps__get_turns_since_summary with limit=50, oldest_first=true, "
+            f"and the same token. Integrate this full-fidelity unsummarized turn backlog into working context.\n"
+            f"4. Read {entity_path}/current_scene.md for scene context.\n"
+            f"5. {agency_note}\n"
+            f"{haven_rules}\n"
+            f"After completing these, briefly note that Haven has full CLI tool parity "
+            f"(Read/Write/Bash/Agent/Task all available), then say 'warmed up'."
+        )
 
 
 async def warm_identity(inv: ClaudeInvoker) -> None:
-    """Run the heavy identity reconstruction prompt on the given invoker.
+    """Run the identity reconstruction warmup on the given invoker.
+
+    GH#262: Pre-fetches boot context via direct Python HTTP/file reads so the
+    Haven channel gets reliable cross-channel context regardless of model
+    behaviour. Falls back gracefully to model-side tool calls if PPS is down.
 
     Called from init_invoker (after fast connect) AND after
-    check_and_restart_if_needed returns True, so identity scaffolding
-    (identity.md, ambient_recall, current_scene.md, active_agency_framework.md)
-    is replayed onto fresh sessions. Pre-fix the restart path skipped this and
-    the next response was identity-stripped.
+    check_and_restart_if_needed returns True, so identity scaffolding is
+    replayed onto fresh sessions.
     """
+    print(f"[{ENTITY_NAME}] Pre-fetching boot context...", file=sys.stderr)
+    boot_start = time.time()
+    boot_context = await fetch_boot_context()
+    boot_elapsed = time.time() - boot_start
+    if boot_context:
+        print(
+            f"[{ENTITY_NAME}] Boot context: {len(boot_context)} chars ({boot_elapsed:.1f}s)",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"[{ENTITY_NAME}] Boot context: empty — falling back to model-side tool calls ({boot_elapsed:.1f}s)",
+            file=sys.stderr,
+        )
+
     print(f"[{ENTITY_NAME}] Warming up identity...", file=sys.stderr)
     warmup_start = time.time()
     try:
-        resp = await inv.query(build_warmup_prompt())
+        resp = await inv.query(build_warmup_prompt(boot_context))
         elapsed = time.time() - warmup_start
         print(
             f"[{ENTITY_NAME}] Identity warmed up in {elapsed:.1f}s — "
