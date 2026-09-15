@@ -57,6 +57,17 @@ except Exception:  # pragma: no cover - counterweight must never break the hook
     def format_arc_block(*_a, **_k) -> str:
         return ""
 
+# Sibling intent claims (scripts/intent.py, #324). The PREVENTION half of #305:
+# lock.py catches a collision at edit time, when both channels are already
+# invested; this surfaces a sibling's declared claim on the tick BEFORE you open
+# anything. Empty-when-none (silent unless a SIBLING holds a claim — never your
+# own), verified-from-world-state (claim files on disk). Same defensive import.
+try:
+    from intent import format_intent_block
+except Exception:  # pragma: no cover - must never break the hook
+    def format_intent_block(*_a, **_k) -> str:
+        return ""
+
 # Critical-issue klaxon (scripts/urgent_scan.py). Jeff's charge 2026-09-10,
 # reframed 2026-09-11: a THIRD self-directed prong beside [health]/[arcs] — open
 # priority:critical/high GitHub issues surfaced LOUD above [arcs], addressed to the
@@ -704,6 +715,25 @@ def main():
                 context = context + "\n" + arc_block
         else:
             context = arc_block + "\n" + context
+
+    # Inject [intent] sibling-claim sense (#324). Sits directly above [arcs]: a live
+    # claim by the OTHER channel is more actionable than a starving arc ("don't build
+    # what she's already building") but never outranks the [urgent] klaxon. Silent
+    # whenever no sibling holds a claim, which is most of the time.
+    try:
+        intent_block = format_intent_block()
+    except Exception:
+        intent_block = ""
+    if intent_block:
+        if "**[arcs]" in context:
+            idx = context.find("**[arcs]")
+            context = context[:idx] + intent_block + "\n" + context[idx:]
+        elif "[location]" in context:
+            loc_end = context.find("\n", context.find("[location]"))
+            context = (context[:loc_end + 1] + intent_block + "\n" + context[loc_end + 1:]
+                       if loc_end != -1 else context + "\n" + intent_block)
+        else:
+            context = intent_block + "\n" + context
 
     # Inject [urgent] critical-issue klaxon — the loudest self-directed prong, sitting
     # ABOVE [arcs] in the sacred front block (2026-09-11, Jeff's reframe: it yells at the

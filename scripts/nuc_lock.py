@@ -6,8 +6,8 @@ Two daemons drive the same local NUC LLM:
   - scripts/kg_ingest_daemon.py  (lower priority — defers when summarizer is active)
 
 Protocol:
-  - summarizer writes  ~/.claude/locks/summarizer.lock  while doing LLM work
-  - kg_ingest writes   ~/.claude/locks/kg_ingest.lock   while running
+  - summarizer writes  <repo>/.locks/summarizer.lock  while doing LLM work
+  - kg_ingest writes   <repo>/.locks/kg_ingest.lock   while running
 
 Lockfile format (JSON):
   {"pid": <int>, "started_at": "<ISO-8601 UTC>"}
@@ -33,7 +33,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Directory shared with the existing instance-coordination locks in the repo.
-LOCKS_DIR = Path(os.environ.get("CLAUDE_LOCKS_DIR", Path.home() / ".claude" / "locks"))
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+LOCKS_DIR = Path(os.environ.get("CLAUDE_LOCKS_DIR", _REPO_ROOT / ".locks"))
 
 SUMMARIZER_LOCK = LOCKS_DIR / "summarizer.lock"
 KG_INGEST_LOCK = LOCKS_DIR / "kg_ingest.lock"

@@ -420,13 +420,13 @@ cat entities/lyra/memories/word_photos/embodiment_one_stream.md
 
 ---
 
-## Coordination Locks (`~/.claude/locks/`)
+## Coordination Locks (`<repo>/.locks/`)
 
 **What**: Files that prevent conflicting access between instances
 
 **Structure**:
 ```
-~/.claude/locks/
+<repo>/.locks/
 └── awareness.lock         # Indicates terminal is actively working
 ```
 
@@ -441,10 +441,10 @@ Expected duration: 30 minutes
 **Usage**:
 ```bash
 # Check if project is locked
-cat ~/.claude/locks/awareness.lock  # Shows who's working
+cat <repo>/.locks/awareness.lock  # Shows who's working
 
 # Manual lock release (if stale)
-rm ~/.claude/locks/awareness.lock
+rm <repo>/.locks/awareness.lock
 ```
 
 **Accessed via**: `project_lock.py` (daemon coordination)

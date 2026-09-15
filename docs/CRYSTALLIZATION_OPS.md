@@ -499,7 +499,7 @@ sqlite3 ~/.claude/data/pps.db "SELECT COUNT(*) FROM messages WHERE created_at > 
 tail -f reflection.log | grep "Crystallization"
 
 # If blocked on lock, clear stale locks
-rm -f ~/.claude/locks/*.lock
+rm -f <repo>/.locks/*.lock
 
 # Manually trigger if needed
 mcp__pps__crystallize(content="[your content]")

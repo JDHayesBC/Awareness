@@ -139,7 +139,7 @@ docker compose ps
 docker compose restart
 
 # 2. Clear stale locks
-rm -f ~/.claude/locks/*.lock
+rm -f <repo>/.locks/*.lock
 
 # 3. Restart with clean state
 ./lyra stop

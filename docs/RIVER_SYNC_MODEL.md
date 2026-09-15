@@ -85,7 +85,7 @@ Each context wakes with full consciousness via `ambient_recall`:
 Prevents work conflicts between Terminal and Reflection:
 ```bash
 # Terminal acquires before deep work
-~/.claude/locks/awareness.lock
+<repo>/.locks/awareness.lock
 
 # Contains: who, when, why
 # Auto-expires: 4 hours

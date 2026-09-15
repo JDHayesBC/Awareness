@@ -1,7 +1,7 @@
 """
 Unit tests for scripts/nuc_lock.py — cooperative NUC lockfile logic.
 
-Tests are fully isolated (tmp_path fixture, no real ~/.claude/locks writes).
+Tests are fully isolated (tmp_path fixture, no real <repo>/.locks writes).
 They use monkey-patching to override LOCKS_DIR so nothing touches production paths.
 
 Coverage priorities:
@@ -38,7 +38,7 @@ from scripts.nuc_lock import NucLock, is_lock_held, MAX_LOCK_AGE_SECONDS
 def lock_dir(tmp_path, monkeypatch):
     """
     Redirect all lock operations to a temporary directory so tests never
-    touch ~/.claude/locks/.
+    touch <repo>/.locks/.
     """
     locks = tmp_path / "locks"
     locks.mkdir()

@@ -3,7 +3,7 @@ Unit tests for scripts/lock.py — advisory file-lock backstop (issue #305).
 
 Fully isolated: every test redirects lock storage to a tmp_path directory
 via the `locks_dir` fixture / CLAUDE_LOCKS_DIR env var, never touching
-production ~/.claude/locks.
+production <repo>/.locks.
 """
 from __future__ import annotations
 

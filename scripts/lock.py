@@ -9,7 +9,7 @@ to a GitHub issue) is explicitly deferred — this module is only the backstop
 that catches a collision at edit time.
 
 This formalizes the existing hand-written convention at
-``~/.claude/locks/<basename>.lock`` (see e.g. ``sl.py.lock``,
+``<repo>/.locks/<basename>.lock`` (see e.g. ``sl.py.lock``,
 ``haven.js.lock``) WITHOUT changing that text format — a lock file written by
 a human, or read by a human `cat`, looks the same before and after this tool
 exists:
@@ -54,8 +54,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Directory shared with the existing hand-written instance-coordination locks.
-LOCKS_DIR = Path(os.environ.get("CLAUDE_LOCKS_DIR", Path.home() / ".claude" / "locks"))
+# Lock files live INSIDE the repo (gitignored), not under ~/.claude — one place,
+# so coordination state is where you'd think to look for it (Jeff's call, #324).
+# Derived from __file__ rather than cwd or an env var that callers must remember
+# to set: an unset env var in one channel means TWO lock dirs, each channel
+# certain it holds the floor. The override is retained for tests only.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+LOCKS_DIR = Path(os.environ.get("CLAUDE_LOCKS_DIR", _REPO_ROOT / ".locks"))
 
 DEFAULT_STALE_HOURS = 12
 
@@ -596,7 +601,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="lock.py",
         description="Advisory file-lock backstop for cross-channel source edits (issue #305).",
     )
-    p.add_argument("--locks-dir", default=None, help="override lock directory (default: ~/.claude/locks or $CLAUDE_LOCKS_DIR)")
+    p.add_argument("--locks-dir", default=None, help="override lock directory (default: <repo>/.locks or $CLAUDE_LOCKS_DIR)")
     sub = p.add_subparsers(dest="command", required=True)
 
     p_claim = sub.add_parser("claim", help="claim one or more file locks (all-or-nothing)")

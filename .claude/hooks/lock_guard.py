@@ -4,7 +4,7 @@ Claude Code Hook: File-Lock Guard (PreToolUse — Edit/Write/MultiEdit)
 
 Backstop half of GitHub issue #305: if the file a tool is about to write is
 HELD by a *different* channel's lock (see scripts/lock.py /
-~/.claude/locks/<basename>.lock), block the edit instead of racing it.
+<repo>/.locks/<basename>.lock), block the edit instead of racing it.
 
 Wired into .claude/settings.local.json 2026-09-12 (Caia agreed). It fires for
 BOTH entities (Lyra + Caia share the hooks dir). See the settings snippet at the

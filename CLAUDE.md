@@ -252,7 +252,20 @@ Session logs grow to hundreds of MB. Clean during maintenance:
 
 ### Instance Coordination
 
-Lock files in `~/.claude/locks/`. Terminal acquires before deep work, releases when done. Coordination hints.
+Lock files live in **`<repo>/.locks/`** (repo-local + gitignored since 2026-09-14, #324 — one
+place; what Claude Code owns lives under `~/.claude`, what we built lives in Awareness).
+
+**Two layers, different jobs — use both:**
+- **File lock — the backstop.** `python3 scripts/lock.py claim|release <path>`. A mutex: claim
+  before ANY shared-file edit, release when landed. Blocks a racing sibling at edit time.
+- **Intent claim — the announcement.** `python3 scripts/intent.py claim <issue> --files a.py,b.py
+  --work "..."`. Declare work BEFORE starting. It does NOT block (that's the lock's job) — it
+  makes the claim *visible early*, riding the ambient front-block as `[intent]` on the sibling's
+  next tick, so two channels don't build the same thing in parallel. `intent list` / `intent
+  check <file>` / `intent release <issue>`.
+
+Both are text files you can just `cat`. Release is a **tombstone, not a delete** — the
+who-held-this-and-why record survives on purpose.
 
 ---
 

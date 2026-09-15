@@ -25,7 +25,7 @@ from scripts.nuc_lock import NucLock, is_lock_held, MAX_LOCK_AGE_SECONDS
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Fixture: sandboxed locks dir (never touches ~/.claude/locks/)
+# Fixture: sandboxed locks dir (never touches <repo>/.locks/)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.fixture()

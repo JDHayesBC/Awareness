@@ -297,7 +297,7 @@ cd daemon/
 
 1. **Stale locks** (most common)
    ```bash
-   rm -f ~/.claude/locks/*.lock
+   rm -f <repo>/.locks/*.lock
    ./lyra restart
    ```
 
@@ -523,7 +523,7 @@ watch -n 5 'ps aux | grep lyra'
 
 # If growing continuously, logs will show context building up
 # Clear locks and restart:
-rm ~/.claude/locks/*.lock
+rm <repo>/.locks/*.lock
 ./lyra restart
 ```
 
@@ -536,7 +536,7 @@ When daemons aren't working:
 ```
 [ ] 1. PPS running? docker compose ps
 [ ] 2. Discord token valid? Check .env
-[ ] 3. Stale locks? rm ~/.claude/locks/*.lock
+[ ] 3. Stale locks? rm <repo>/.locks/*.lock
 [ ] 4. Check logs? ./lyra logs | grep ERROR
 [ ] 5. Restart infrastructure? docker compose restart
 [ ] 6. Restart daemons? ./lyra restart

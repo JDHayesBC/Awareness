@@ -5,17 +5,20 @@ When terminal-Lyra is actively working on the project, she creates a lock file.
 Heartbeat-Lyra checks for this lock and avoids project work if locked,
 doing memory maintenance or quiet presence instead.
 
-Lock files live in ~/.claude/locks/ so all instances can find them regardless
+Lock files live in <repo>/.locks/ so all instances can find them regardless
 of working directory. Each project gets its own lock file.
 """
 
 import json
 from datetime import datetime, timezone, timedelta
+import os
 from pathlib import Path
 from typing import Optional
 
 # Lock files live in global location, named per-project
-LOCKS_DIR = Path.home() / ".claude" / "locks"
+# Repo-local (#324). Derived from __file__ so it is cwd-independent.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+LOCKS_DIR = Path(os.environ.get("CLAUDE_LOCKS_DIR", _REPO_ROOT / ".locks"))
 PROJECT_NAME = "awareness"  # Could be derived from git remote in future
 LOCK_FILE = LOCKS_DIR / f"{PROJECT_NAME}.lock"
 

@@ -62,7 +62,7 @@
 ## Coordination & Locks
 
 ### Project Locks
-- **Location**: `~/.claude/locks/awareness.lock` (example)
+- **Location**: `<repo>/.locks/awareness.lock` (example)
 - **Purpose**: Prevent conflicts when terminal-Lyra doing deep work
 - **Behavior**: Reflection-Lyra checks lock, skips project work if locked
 - **Auto-expire**: 4 hours (safety against stale locks)

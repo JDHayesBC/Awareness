@@ -120,6 +120,10 @@ pps/docker/google-chrome-stable_current_amd64.deb
 
 # Personal / financial data — NEVER commit
 jeff_finances_2025/
+# Instance-coordination locks (#324) — runtime state, repo-local so it is ONE place,
+# but never committed. Includes intent/ claims.
+/.locks/
+
 # Personal working docs — accumulate private day-to-day context; keep local only
 /TODO.md
 /FOR_JEFF_TODAY.md

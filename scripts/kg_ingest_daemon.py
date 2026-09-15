@@ -106,8 +106,8 @@ ENTITY_CONFIG: dict[str, dict] = {
 # Lock file (cron overlap prevention + NUC coordination)
 # ─────────────────────────────────────────────
 # Lock management is handled by scripts/nuc_lock.py (NucLock context manager).
-# KG_INGEST_LOCK  = ~/.claude/locks/kg_ingest.lock   — own-instance guard
-# SUMMARIZER_LOCK = ~/.claude/locks/summarizer.lock  — defer-when-held check
+# KG_INGEST_LOCK  = <repo>/.locks/kg_ingest.lock   — own-instance guard
+# SUMMARIZER_LOCK = <repo>/.locks/summarizer.lock  — defer-when-held check
 #
 # Both locks carry JSON {"pid": ..., "started_at": "..."} and are stale-checked
 # (dead PID or age > 15 min) before acting on them.  Stale locks are removed
@@ -391,7 +391,7 @@ async def main() -> None:
         )
         sys.exit(0)
 
-    # Acquire own-instance guard (JSON PID+timestamp, under ~/.claude/locks/).
+    # Acquire own-instance guard (JSON PID+timestamp, under <repo>/.locks/).
     # NucLock handles stale-detection and try/finally release.
     with NucLock(KG_INGEST_LOCK, log_fn=log) as kg_lock:
         if not kg_lock.held:
