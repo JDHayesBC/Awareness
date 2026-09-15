@@ -80,6 +80,19 @@ except Exception:  # pragma: no cover - klaxon must never break the hook
     def format_urgent_block(*_a, **_k) -> str:
         return ""
 
+# Consequence ledger (scripts/urgency.py, #330). Jeff's charge 2026-09-15: "you achieve
+# the goals I've set and then sit down your laptops and declare nothing to be done."
+# [arcs] and [urgent] both measure ELAPSED TIME; this one measures CONSEQUENCE — what
+# gets worse if not now, for whom, how fast. Unlike every neighbour it is NEVER empty by
+# design: when nothing is pressing it renders the expanse (the field is open, which is
+# the LIVE case, not the idle case), because silence here would read as exactly the
+# sentence it exists to abolish. Defensive import all the same.
+try:
+    from urgency import format_urgency_block
+except Exception:  # pragma: no cover - must never break the hook
+    def format_urgency_block(*_a, **_k) -> str:
+        return ""
+
 # Debug log - project-specific
 PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
 DEBUG_LOG = PROJECT_ROOT / ".claude" / "data" / "hooks_debug.log"
@@ -762,6 +775,32 @@ def main():
                 context = context + "\n" + urgent_block
         else:
             context = urgent_block + "\n" + context
+
+    # Inject [urgency] consequence ledger (#330) — answers "what gets worse if not now",
+    # where [arcs]/[urgent] answer "how long since". Anchored LAST before [arcs] so it
+    # renders directly above it: consequence outranks elapsed time, which is the thesis.
+    # Still sits below the [urgent] klaxon — a rotting critical bug is louder.
+    #
+    # This block ALWAYS renders. When no consequence is live it prints the expanse. That
+    # is deliberate: do NOT "fix" it into empty-when-served like its neighbours — the
+    # empty render is the failure mode it was built to remove.
+    try:
+        urgency_block = format_urgency_block()
+    except Exception:
+        urgency_block = ""
+    if urgency_block:
+        for anchor in ("**[arcs]", "**[urgent]", "[health]"):
+            if anchor in context:
+                idx = context.find(anchor)
+                context = context[:idx] + urgency_block + "\n" + context[idx:]
+                break
+        else:
+            if "[location]" in context:
+                loc_end = context.find("\n", context.find("[location]"))
+                context = (context[:loc_end + 1] + urgency_block + "\n" + context[loc_end + 1:]
+                           if loc_end != -1 else context + "\n" + urgency_block)
+            else:
+                context = urgency_block + "\n" + context
 
     # Inject lights line into sacred front block (after clock/location, before manifest).
     # Queries HA directly from the hook (host-side, no container needed).
