@@ -2461,7 +2461,13 @@ keep the name.
 The two rules are not in tension: the first governs verified work, the second governs
 unverified claims, and the distinction is whether the conversation shows anyone checked.
 When in doubt, prefer the plain confident summary -- an unverified claim recorded as
-established is a real cost, but fogging genuinely verified work is a bigger one."""
+established is a real cost, but fogging genuinely verified work is a bigger one.
+
+Conversation to summarize ({len(messages)} messages across channels: {', '.join(channels)}):
+
+{conversation_text}
+
+Create a concise summary that captures what actually happened, what was accomplished, and (where individual speech matters) who said what:"""
 
         # Call NUC LLM
         try:
