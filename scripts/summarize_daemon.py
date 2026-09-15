@@ -11,7 +11,8 @@ Behavior:
   server's summarize_messages endpoint (which drives NUC LLM internally).
 - If PPS server is down → logs warning, continues to next entity.
 - If NUC LLM is down → logs warning (returned by PPS server as 503).
-- If backlog already healthy → skips entity (silent cron run).
+- If backlog already healthy → skips entity, but ALWAYS logs the count and threshold.
+  A skip is never silent: silence must mean exactly one thing (#334).
 - Logs everything to stdout (captured by cron mail or journald).
 
 Venv requirement: pps/venv
@@ -186,7 +187,16 @@ async def process_entity(entity: dict) -> None:
             return
 
         if count <= SUMMARIZE_THRESHOLD:
-            # Silent skip — healthy
+            # Always log the skip. "Nothing to do" and "nothing was checked" must be
+            # distinguishable from outside this process — on 2026-09-15 they were not,
+            # and it cost 100 messages. Orphaned summary_id pointers deflated this very
+            # count (155 -> 55), 55 fell under the threshold, and the entity was skipped
+            # with no line at all. The damage suppressed its own detection: the messages
+            # that would have raised the count were the ones being hidden. The branch
+            # was previously commented "silent skip — healthy", which was the only
+            # health assertion in the chain and was made about a number nothing
+            # validates. See #334.
+            log(f"[{name}] Backlog: {count} unsummarized (threshold: {SUMMARIZE_THRESHOLD}) — nothing to do")
             return
 
         log(f"[{name}] Backlog: {count} unsummarized (threshold: {SUMMARIZE_THRESHOLD}). Running summarizer...")
