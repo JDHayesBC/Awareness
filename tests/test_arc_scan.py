@@ -79,3 +79,27 @@ def test_known_moving_states_all_still_move():
 def test_known_not_moving_states_all_still_rest():
     for s in ("dormant", "archived", "legacy", "complete", "outline", "published"):
         assert _is_moving(st(s)) is False, s
+
+
+# --- blindness must not look like calm ------------------------------------------------
+
+def test_a_crashed_scan_says_so_instead_of_rendering_silence(monkeypatch):
+    """Silence in this block means "nothing starving". A crash that ALSO renders as
+    silence is a lie in the one direction nobody checks: a broken sense is
+    indistinguishable from a tended board. The hook must survive — but it must say so."""
+    import arc_scan
+    monkeypatch.setattr(arc_scan, "_resolve_arcs_dir",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("disk on fire")))
+    out = arc_scan.format_arc_block()
+    assert out != ""
+    assert "BLIND" in out and "RuntimeError" in out
+
+
+def test_a_healthy_scan_with_nothing_starving_is_still_silent(tmp_path, monkeypatch):
+    """The fix must not make the block chatty — empty-when-served is the design."""
+    import arc_scan, datetime as dt
+    (tmp_path / "a.md").write_text(
+        "---\ntitle: Fresh\nstate: active\nlast_touched: "
+        f"{dt.date.today().isoformat()}\n---\n\n# Fresh\n")
+    monkeypatch.setattr(arc_scan, "_resolve_arcs_dir", lambda *a, **k: tmp_path)
+    assert arc_scan.format_arc_block() == ""

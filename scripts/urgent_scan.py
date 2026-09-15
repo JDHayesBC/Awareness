@@ -264,8 +264,14 @@ def format_urgent_block(today: dt.date | None = None) -> str:
             line += (f"\n   ⚠ urgent-cache is {age:.0f}h stale — the refresh timer may be "
                      f"down (`systemctl --user status urgent-refresh.timer`).")
         return line
-    except Exception:
-        return ""
+    except Exception as exc:  # pragma: no cover - must never break the hook
+        # Silence in this block means "nothing to report". A crash that also renders as
+        # silence is therefore a LIE in the one direction nobody checks — it looks
+        # exactly like a tended board. Never raise (the hook must survive), but never
+        # go quiet about going blind either.
+        return ("**[{name}] \u26a0 scan failed — this sense is BLIND this tick "
+                "({exc}). Silence here does not mean nothing to report.**").format(
+                    name="urgent", exc=f"{type(exc).__name__}: {exc}"[:120])
 
 
 def _list_table(cache: dict) -> str:
