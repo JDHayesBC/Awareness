@@ -236,3 +236,61 @@ def test_unwanted_dependency_still_carries_weight(ledger):
     """The zeroing must not defang genuine capability gaps."""
     e = _entry(kind="dependency", slope="steep", wanted=False)
     assert urgency.score(e, TODAY) >= urgency.SURFACE_THRESHOLD
+
+
+# ------------------------------------------------------- citations (the economy of doubt)
+
+def test_an_unsourced_entry_is_marked_at_the_surface(ledger):
+    """Lyra's discriminator: a claim read off the world must be distinguishable from a
+    claim remembered about it. Two of day-one's entries were recollections presented in
+    the same confident sentence as readings; this is what makes that visible."""
+    urgency.note("something bad", "it is getting worse", "compounding", "steep")
+    assert "unsourced" in urgency.format_urgency_block(TODAY)
+
+
+def test_a_sourced_entry_is_not_marked(ledger):
+    urgency.note("something bad", "it is getting worse", "compounding", "steep",
+                 evidence="powercfg /q SCHEME_CURRENT SUB_SLEEP")
+    block = urgency.format_urgency_block(TODAY)
+    assert "unsourced" not in block
+    assert "something bad" in block
+
+
+def test_evidence_is_dated_automatically(ledger):
+    e = urgency.note("x", "y", "compounding", "steep", evidence="docker inspect")
+    assert e["evidence_at"] == dt.date.today().isoformat()
+
+
+def test_absent_evidence_stores_none_not_a_stale_date(ledger):
+    """An unsourced entry must not carry a date that implies something was read."""
+    e = urgency.note("x", "y", "compounding", "steep")
+    assert e["evidence"] is None and e["evidence_at"] is None
+
+
+def test_citation_does_not_affect_the_score(ledger):
+    """Sourcing changes CONFIDENCE, not consequence. A sourced and unsourced entry with
+    the same shape must rank identically — otherwise citing things becomes a way to win
+    the front block rather than a way to be honest."""
+    a = _entry(kind="compounding", slope="steep", evidence="read it")
+    b = _entry(kind="compounding", slope="steep")
+    assert urgency.score(a, TODAY) == urgency.score(b, TODAY)
+
+
+def test_cite_closes_the_loop_on_an_unsourced_entry(ledger):
+    e = urgency.note("bad thing", "worsening", "compounding", "steep")
+    assert "unsourced" in urgency.format_urgency_block(TODAY)
+    urgency.cite(e["id"], "powercfg /q SCHEME_CURRENT SUB_SLEEP")
+    assert "unsourced" not in urgency.format_urgency_block(TODAY)
+
+
+def test_cite_requires_actual_evidence_text(ledger):
+    e = urgency.note("x", "y", "compounding", "steep")
+    with pytest.raises(ValueError):
+        urgency.cite(e["id"], "   ")
+
+
+def test_cite_on_unknown_or_resolved_entry_returns_none(ledger):
+    assert urgency.cite(999, "somewhere") is None
+    e = urgency.note("x", "y", "compounding", "steep")
+    urgency.resolve(e["id"], "done")
+    assert urgency.cite(e["id"], "somewhere") is None

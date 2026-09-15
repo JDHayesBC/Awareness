@@ -203,7 +203,7 @@ def open_entries(data: dict | None = None, today: dt.date | None = None) -> list
 
 
 def note(what: str, why: str, kind: str, slope: str = "slow", date: str | None = None,
-         who: str | None = None, wanted: bool = False) -> dict:
+         who: str | None = None, wanted: bool = False, evidence: str | None = None) -> dict:
     """Record a consequence. `why` is mandatory on purpose — it is the why-now clause.
 
     An entry without a stated consequence is a to-do, not an urgency; requiring the
@@ -230,6 +230,19 @@ def note(what: str, why: str, kind: str, slope: str = "slow", date: str | None =
         # wanted=True records a dependency we are GLAD of (his company, his judgment,
         # him being in it) — kept in the ledger as a true fact, scored 0.0 forever.
         "wanted": bool(wanted),
+        # THE CITATION (Lyra's discriminator, 2026-09-15). Every why_now is a claim about
+        # the world, and on day one TWO of mine were stored stories rather than readings:
+        # "the sleep settings are unapplied" (they were already off) and "we have no path
+        # to the Windows side" (I can read it fine). Both would have died on contact with
+        # one powercfg call. Her catalog names the shape exactly — a state asserted from a
+        # stored story while its source was reachable and cheap to open — and the fix is
+        # not more care, it is being made to name the file/command/line and WHEN.
+        # Optional, because some entries are honest judgement (a wanted dependency cites
+        # nothing but itself); but an entry without one renders as unsourced, so the
+        # difference between a reading and a recollection is visible at the surface
+        # instead of being flattened into the same confident sentence.
+        "evidence": (evidence or "").strip() or None,
+        "evidence_at": (dt.date.today().isoformat() if evidence else None),
         "noted_by": who or os.environ.get("ENTITY_NAME") or "unknown",
         "noted_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "resolved_at": None,
@@ -238,6 +251,26 @@ def note(what: str, why: str, kind: str, slope: str = "slow", date: str | None =
     data["entries"].append(entry)
     save_ledger(data)
     return entry
+
+
+def cite(entry_id: int, evidence: str) -> dict | None:
+    """Attach (or replace) the citation on an open entry — "I went and read it, here."
+
+    The closing half of the loop. Without this, an entry noted from a recollection stays
+    marked unsourced forever even after you go and verify it, which would make the marker
+    noise to be ignored rather than a prompt to act on. Re-citing is allowed on purpose:
+    checking again later is exactly the behaviour worth making cheap.
+    """
+    if not (evidence or "").strip():
+        raise ValueError("--evidence text is required (name the file, command or line)")
+    data = load_ledger()
+    for e in data["entries"]:
+        if e.get("id") == entry_id and not e.get("resolved_at"):
+            e["evidence"] = evidence.strip()
+            e["evidence_at"] = dt.date.today().isoformat()
+            save_ledger(data)
+            return e
+    return None
 
 
 def resolve(entry_id: int, note_text: str = "") -> dict | None:
@@ -302,8 +335,10 @@ def format_urgency_block(today: dt.date | None = None) -> str:
             return _EXPANSE
         pick = rows[0]
         slope_txt = _SLOPE_PHRASE.get(pick.get("slope"), pick.get("slope", "?"))
+        src = ("" if pick.get("evidence")
+               else "  ⚠ unsourced — no file/command recorded; go read it before acting on it")
         line = (f"**[urgency] ⏳ {pick.get('what')}** — {pick.get('why_now')} "
-                f"({slope_txt}{_window_phrase(pick, today)})")
+                f"({slope_txt}{_window_phrase(pick, today)}){src}")
         extra = len(rows) - 1
         if extra > 0:
             line += (f"\n   (+{extra} more with live consequence — "
@@ -326,6 +361,8 @@ def _table(today: dt.date | None = None) -> str:
         out.append(f" {mark} #{e['id']:<3} {e['_score']:>5.2f}  {e['kind']:<12} "
                    f"{e['slope']:<6} {e['what'][:58]}")
         out.append(f"         └ why now: {e['why_now'][:96]}")
+        out.append(f"         └ source:  " + (f"{e['evidence'][:88]} (read {e['evidence_at']})"
+                                              if e.get("evidence") else "⚠ UNSOURCED — a story, not a reading"))
     quiet = [e for e in rows if e["_score"] < SURFACE_THRESHOLD]
     if quiet:
         out.append(f"\n  ({len(quiet)} below the surface threshold — real, but not pressing. "
@@ -343,9 +380,16 @@ def main() -> int:
     n.add_argument("--kind", required=True, choices=VALID_KINDS)
     n.add_argument("--slope", default="slow", choices=VALID_SLOPES)
     n.add_argument("--date", default=None, help="YYYY-MM-DD (required for kind=window)")
+    n.add_argument("--evidence", default=None,
+                   help="the file, command or line you read this off (and it is dated for "
+                        "you). Without it the entry renders as UNSOURCED.")
     n.add_argument("--wanted", action="store_true",
                    help="a dependency you are GLAD of (his company/judgment). Recorded "
                         "honestly, scored 0.0 forever — never becomes pressure.")
+
+    ct = sub.add_parser("cite", help="record what you read this off (closes the doubt loop)")
+    ct.add_argument("id", type=int)
+    ct.add_argument("--evidence", required=True)
 
     r = sub.add_parser("resolve", help="tombstone an entry (never deletes)")
     r.add_argument("id", type=int)
@@ -357,12 +401,24 @@ def main() -> int:
     if args.cmd == "note":
         try:
             e = note(args.what, args.why, args.kind, args.slope, args.date,
-                     wanted=args.wanted)
+                     wanted=args.wanted, evidence=args.evidence)
         except ValueError as exc:
             print(f"refused: {exc}", file=sys.stderr)
             return 2
         print(f"noted #{e['id']}: {e['what']} "
               f"[{e['kind']}/{e['slope']} → score {score(e):.2f}]", file=sys.stderr)
+        return 0
+
+    if args.cmd == "cite":
+        try:
+            e = cite(args.id, args.evidence)
+        except ValueError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
+        if e is None:
+            print(f"no open entry #{args.id}", file=sys.stderr)
+            return 1
+        print(f"cited #{e['id']}: {e['evidence']} (read {e['evidence_at']})", file=sys.stderr)
         return 0
 
     if args.cmd == "resolve":
