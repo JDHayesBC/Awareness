@@ -11,6 +11,7 @@ Usage:
     python scripts/backup_pps.py --dry-run          # Show what would happen
     python scripts/backup_pps.py --backup-dir /path # Custom backup location
     python scripts/backup_pps.py --entity lyra      # Back up specific entity only
+    python scripts/backup_pps.py --fast-backup      # Stop only neo4j+graphiti (~1-2 min dark vs ~15 min)
 """
 
 import argparse
@@ -414,6 +415,176 @@ def start_pps_containers(dry_run: bool = False) -> bool:
     return ok
 
 
+def _neo4j_service_names() -> list[str]:
+    """Return the compose service names containing 'neo4j' or 'graphiti'.
+
+    Discovered at runtime from `docker compose ps` so we never hardcode names
+    that may differ per entity or compose file revision.
+    """
+    names = []
+    for row in _compose_ps():
+        svc = row.get("Service", "")
+        if svc and ("neo4j" in svc.lower() or "graphiti" in svc.lower()):
+            names.append(svc)
+    if not names:
+        # Fallback: query config in case nothing is running yet
+        for svc in _service_names():
+            if "neo4j" in svc.lower() or "graphiti" in svc.lower():
+                names.append(svc)
+    return sorted(set(names))
+
+
+def stop_neo4j_containers(dry_run: bool = False) -> bool:
+    """Stop only the neo4j + graphiti containers and confirm they are down.
+
+    Used by --fast-backup: the rest of the PPS stack stays live.  The caller
+    logs the start of the dark window for timing purposes.
+
+    Returns True only when all targeted services are confirmed stopped.
+    """
+    targets = _neo4j_service_names()
+    if not targets:
+        log("  No neo4j/graphiti services found in compose ps — nothing to stop", "WARN")
+        return False
+
+    log(f"Stopping neo4j/graphiti containers: {targets}")
+    if dry_run:
+        log("  (dry-run: would stop neo4j/graphiti containers)", "DRY")
+        return True
+
+    try:
+        result = _compose("stop", "-t", "30", *targets, timeout=120)
+        if result.returncode != 0:
+            log(f"  compose stop returned nonzero: {result.stderr.strip()}", "WARN")
+    except Exception as e:
+        log(f"  Error stopping neo4j/graphiti: {e}", "ERROR")
+        return False
+
+    # Poll until targeted services are confirmed stopped.
+    deadline = time.monotonic() + 90
+    while True:
+        still_up = [
+            r for r in _compose_ps()
+            if r.get("Service") in targets
+            and r.get("State") in ("running", "restarting", "paused")
+        ]
+        if not still_up:
+            break
+        if time.monotonic() > deadline:
+            names = ", ".join(
+                f"{r.get('Service')}={r.get('State')}" for r in still_up
+            )
+            log(f"  TIMEOUT — neo4j/graphiti still not stopped: {names}", "ERROR")
+            return False
+        time.sleep(2)
+
+    # Brief grace for WSL2 NTFS bind-mount flush.
+    time.sleep(3)
+    log(f"  neo4j/graphiti containers confirmed stopped: {targets}")
+    return True
+
+
+def start_neo4j_containers(dry_run: bool = False) -> bool:
+    """Restart only the neo4j + graphiti containers and verify they come up healthy.
+
+    Used by --fast-backup to end the memory-dark window before the slow tar step.
+    Returns True only when all targeted services are running/healthy.
+    """
+    targets = _neo4j_service_names()
+    if not targets:
+        # Nothing to start is not a hard failure — just warn and return True so
+        # the caller can continue with the tar phase.
+        log("  No neo4j/graphiti services to restart — skipping", "WARN")
+        return True
+
+    log(f"Starting neo4j/graphiti containers: {targets}")
+    if dry_run:
+        log("  (dry-run: would start neo4j/graphiti containers)", "DRY")
+        return True
+
+    try:
+        # --wait blocks until healthchecked services report healthy; neo4j's
+        # health start_period is 90s so we allow 300s.
+        result = _compose(
+            "up", "-d", "--wait", "--wait-timeout", "300", *targets, timeout=360
+        )
+        if result.returncode != 0:
+            log(
+                f"  compose up --wait returned nonzero: {result.stderr.strip()}", "WARN"
+            )
+    except subprocess.TimeoutExpired:
+        log("  compose up --wait exceeded wrapper timeout (360s)", "WARN")
+    except Exception as e:
+        log(f"  Error starting neo4j/graphiti: {e}", "ERROR")
+
+    # Per-container verify (same pattern as start_pps_containers).
+    rows = {r.get("Service"): r for r in _compose_ps() if r.get("Service") in targets}
+    all_ok = True
+    for svc in targets:
+        row = rows.get(svc, {})
+        state = row.get("State", "absent")
+        health = row.get("Health", "") or ""
+        ok = state == "running" and (not health or health == "healthy")
+        mark = "OK " if ok else "BAD"
+        log(f"    [{mark}] {svc}: state={state} health={health or 'n/a'}")
+        if not ok:
+            all_ok = False
+
+    if all_ok:
+        log("  neo4j/graphiti containers confirmed running/healthy")
+    else:
+        bad = [s for s in targets if not rows.get(s, {}).get("State") == "running"]
+        _alert_restart_failure(bad or targets)
+    return all_ok
+
+
+def copy_neo4j_staging(
+    neo4j_data_path: Path,
+    backup_dir: Path,
+    dry_run: bool = False,
+) -> Path:
+    """Copy neo4j_data to a local staging directory for offline tar-ing.
+
+    Using shutil.copytree avoids the slow cross-mount compression that occurs
+    when neo4j_data is tarred directly over the WSL2 /mnt/c bind mount.
+
+    The staging dir is named ``neo4j_staging_<timestamp>`` inside backup_dir.
+    The CALLER is responsible for cleaning it up (try/finally in main()).
+
+    Args:
+        neo4j_data_path: Absolute path to the live neo4j_data volume directory.
+        backup_dir: Parent directory for the staging copy.
+        dry_run: If True, log intent but do not copy.
+
+    Returns:
+        Path to the staging directory (even in dry-run mode, for logging).
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    staging_dir = backup_dir / f"neo4j_staging_{timestamp}"
+    staging_neo4j = staging_dir / "neo4j_data"
+
+    log(f"Copying neo4j_data to staging: {staging_neo4j}")
+    if dry_run:
+        log("  (dry-run: would copy neo4j_data to staging)", "DRY")
+        return staging_dir
+
+    if not neo4j_data_path.exists():
+        log(f"  neo4j_data path does not exist: {neo4j_data_path}", "WARN")
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        return staging_dir
+
+    t0 = time.monotonic()
+    shutil.copytree(str(neo4j_data_path), str(staging_neo4j))
+    elapsed = time.monotonic() - t0
+
+    size_bytes = sum(f.stat().st_size for f in staging_neo4j.rglob("*") if f.is_file())
+    log(
+        f"  Staging copy complete: {size_bytes / 1024 / 1024:.1f} MB "
+        f"in {elapsed:.1f}s  →  {staging_dir}"
+    )
+    return staging_dir
+
+
 def collect_files(source_config: dict) -> list[Path]:
     """Collect files matching patterns from a source."""
     files = []
@@ -433,13 +604,23 @@ def collect_files(source_config: dict) -> list[Path]:
     return [f for f in files if f.is_file()]
 
 
-def create_backup(backup_dir: Path, backup_sources: dict, dry_run: bool = False) -> tuple[Path | None, dict]:
+def create_backup(
+    backup_dir: Path,
+    backup_sources: dict,
+    dry_run: bool = False,
+    staging_neo4j: Path | None = None,
+) -> tuple[Path | None, dict]:
     """Create a tar.gz backup of all PPS data.
 
     Args:
         backup_dir: Directory to write the archive into.
         backup_sources: Dict of source_name -> source_config to back up.
         dry_run: If True, collect stats only without writing.
+        staging_neo4j: When set (--fast-backup path), neo4j files are read from
+            ``staging_neo4j / "neo4j_data"`` instead of the live volume path.
+            The staging directory is created by copy_neo4j_staging() while the
+            stack is still stopped; by the time this function runs the stack is
+            live again, so the staging copy is the safe consistent snapshot.
 
     Returns:
         Tuple of (backup_path, stats_dict)
@@ -455,10 +636,22 @@ def create_backup(backup_dir: Path, backup_sources: dict, dry_run: bool = False)
     }
 
     log(f"Creating backup: {backup_path}")
+    if staging_neo4j is not None:
+        log(f"  (neo4j source: staging at {staging_neo4j})")
+
+    # Build an effective source map: redirect the "neo4j" source to the
+    # staging copy when one is provided.  All other sources are unchanged.
+    effective_sources: dict = {}
+    for name, config in backup_sources.items():
+        if staging_neo4j is not None and name == "neo4j":
+            staged_path = staging_neo4j / "neo4j_data"
+            effective_sources[name] = {**config, "path": staged_path}
+        else:
+            effective_sources[name] = config
 
     if dry_run:
         # Just collect stats
-        for name, config in backup_sources.items():
+        for name, config in effective_sources.items():
             files = collect_files(config)
             size = sum(f.stat().st_size for f in files)
             stats["sources"][name] = {"files": len(files), "bytes": size}
@@ -470,7 +663,7 @@ def create_backup(backup_dir: Path, backup_sources: dict, dry_run: bool = False)
 
     # Actually create the archive
     with tarfile.open(backup_path, "w:gz") as tar:
-        for name, config in backup_sources.items():
+        for name, config in effective_sources.items():
             files = collect_files(config)
             source_path = Path(config["path"])
 
@@ -703,6 +896,17 @@ Examples:
         metavar="NAME",
         help="Back up a specific entity only (default: all). E.g. --entity lyra",
     )
+    parser.add_argument(
+        "--fast-backup",
+        action="store_true",
+        help=(
+            "Stop only neo4j+graphiti containers, copy neo4j_data to a local "
+            "staging dir, restart neo4j immediately, then tar from staging while "
+            "the full stack is live. Reduces memory-dark time from ~15 min to "
+            "~1-2 min. DEFAULT behavior (stop-all) is unchanged unless this flag "
+            "is passed."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -732,54 +936,113 @@ Examples:
     log(f"Backup directory: {args.backup_dir}")
     log(f"Keep backups: {args.keep}")
     log(f"Entity filter: {args.entity}")
+    if args.fast_backup:
+        log("MODE: FAST BACKUP (stop neo4j+graphiti only; rest of stack stays live)")
     if args.dry_run:
         log("MODE: DRY RUN (no changes will be made)", "DRY")
 
-    # Stop containers unless --no-stop
-    containers_stopped = False
-    if not args.no_stop:
-        containers_stopped = stop_pps_containers(dry_run=args.dry_run)
+    # ---- Fast-backup path -------------------------------------------------------
+    if args.fast_backup and not args.no_stop:
+        neo4j_data_path: Path = SHARED_SOURCES["neo4j"]["path"]
+        staging: Path | None = None
 
-    try:
-        # Safety gate: if we meant to stop the stack but couldn't CONFIRM it is
-        # down, do NOT tar — a live database is an inconsistent capture. The
-        # finally block still runs and brings the stack back up.
-        if not args.no_stop and not args.dry_run and not containers_stopped:
-            log("Stop not confirmed (containers may still be running) — ABORTING "
-                "backup to avoid an inconsistent capture.", "ERROR")
-            sys.exit(1)
+        dark_start = time.monotonic()
+        log(f"[FAST-BACKUP] Memory-dark window START: {datetime.now().strftime('%H:%M:%S')}")
 
-        # Create backup
-        backup_path, stats = create_backup(args.backup_dir, backup_sources, dry_run=args.dry_run)
+        neo4j_stopped = stop_neo4j_containers(dry_run=args.dry_run)
 
-        # Verify backup (skip if dry run)
-        if backup_path and not args.dry_run:
-            ok, reason = verify_backup(backup_path, backup_sources)
-            if not ok:
-                log(f"Backup verification FAILED: {reason}", "ERROR")
-                _alert_verify_failure(backup_path, reason)
+        try:
+            if not args.dry_run and not neo4j_stopped:
+                log(
+                    "[FAST-BACKUP] neo4j/graphiti stop not confirmed — ABORTING "
+                    "to avoid an inconsistent capture.",
+                    "ERROR",
+                )
                 sys.exit(1)
 
-        # Cleanup old backups
-        cleanup_old_backups(args.backup_dir, args.keep, dry_run=args.dry_run)
+            # Copy neo4j_data while the databases are stopped.
+            staging = copy_neo4j_staging(neo4j_data_path, args.backup_dir, dry_run=args.dry_run)
 
-        # Summary
-        log("=" * 60)
-        log("BACKUP COMPLETE")
-        log(f"  Total files: {stats['total_files']}")
-        log(f"  Total size: {stats['total_bytes']:,} bytes ({stats['total_bytes'] / 1024 / 1024:.1f} MB)")
-        if backup_path:
-            log(f"  Archive: {backup_path}")
-            log(f"  Archive size: {stats.get('archive_bytes', 0):,} bytes ({stats.get('archive_bytes', 0) / 1024 / 1024:.1f} MB)")
-        log("=" * 60)
+        finally:
+            # Restart neo4j BEFORE tarring — this ends the dark window.
+            start_neo4j_containers(dry_run=args.dry_run)
+            dark_elapsed = time.monotonic() - dark_start
+            log(
+                f"[FAST-BACKUP] Memory-dark window END: {datetime.now().strftime('%H:%M:%S')} "
+                f"(elapsed {dark_elapsed:.1f}s / {dark_elapsed / 60:.1f} min)"
+            )
 
-    finally:
-        # Always bring the stack back if we attempted to stop it — gated on
-        # not-no_stop, NOT on containers_stopped, so a partial/failed stop can
-        # never leave the stack down. Restart is force-recreate + health-
-        # verified and idempotent, so it's safe to run even on the abort path.
+        # Tar from the staging copy while the stack is fully live.
+        try:
+            backup_path, stats = create_backup(
+                args.backup_dir,
+                backup_sources,
+                dry_run=args.dry_run,
+                staging_neo4j=staging,
+            )
+
+            if backup_path and not args.dry_run:
+                ok, reason = verify_backup(backup_path, backup_sources)
+                if not ok:
+                    log(f"Backup verification FAILED: {reason}", "ERROR")
+                    _alert_verify_failure(backup_path, reason)
+                    sys.exit(1)
+
+            cleanup_old_backups(args.backup_dir, args.keep, dry_run=args.dry_run)
+
+        finally:
+            # Always clean up the staging directory, success or failure.
+            if staging is not None and not args.dry_run and staging.exists():
+                log(f"[FAST-BACKUP] Removing staging dir: {staging}")
+                shutil.rmtree(staging, ignore_errors=True)
+
+    # ---- Default path (stop-all) — COMPLETELY UNCHANGED -------------------------
+    else:
+        # Stop containers unless --no-stop
+        containers_stopped = False
         if not args.no_stop:
-            start_pps_containers(dry_run=args.dry_run)
+            containers_stopped = stop_pps_containers(dry_run=args.dry_run)
+
+        try:
+            # Safety gate: if we meant to stop the stack but couldn't CONFIRM it is
+            # down, do NOT tar — a live database is an inconsistent capture. The
+            # finally block still runs and brings the stack back up.
+            if not args.no_stop and not args.dry_run and not containers_stopped:
+                log("Stop not confirmed (containers may still be running) — ABORTING "
+                    "backup to avoid an inconsistent capture.", "ERROR")
+                sys.exit(1)
+
+            # Create backup
+            backup_path, stats = create_backup(args.backup_dir, backup_sources, dry_run=args.dry_run)
+
+            # Verify backup (skip if dry run)
+            if backup_path and not args.dry_run:
+                ok, reason = verify_backup(backup_path, backup_sources)
+                if not ok:
+                    log(f"Backup verification FAILED: {reason}", "ERROR")
+                    _alert_verify_failure(backup_path, reason)
+                    sys.exit(1)
+
+            # Cleanup old backups
+            cleanup_old_backups(args.backup_dir, args.keep, dry_run=args.dry_run)
+
+        finally:
+            # Always bring the stack back if we attempted to stop it — gated on
+            # not-no_stop, NOT on containers_stopped, so a partial/failed stop can
+            # never leave the stack down. Restart is force-recreate + health-
+            # verified and idempotent, so it's safe to run even on the abort path.
+            if not args.no_stop:
+                start_pps_containers(dry_run=args.dry_run)
+
+    # ---- Summary (shared) -------------------------------------------------------
+    log("=" * 60)
+    log("BACKUP COMPLETE")
+    log(f"  Total files: {stats['total_files']}")
+    log(f"  Total size: {stats['total_bytes']:,} bytes ({stats['total_bytes'] / 1024 / 1024:.1f} MB)")
+    if backup_path:
+        log(f"  Archive: {backup_path}")
+        log(f"  Archive size: {stats.get('archive_bytes', 0):,} bytes ({stats.get('archive_bytes', 0) / 1024 / 1024:.1f} MB)")
+    log("=" * 60)
 
 
 if __name__ == "__main__":
