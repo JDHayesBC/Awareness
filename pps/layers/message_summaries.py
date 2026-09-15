@@ -389,18 +389,63 @@ class MessageSummariesLayer(PatternLayer):
 
                 # Get count of summarized messages
                 summarized_count = 0
+                orphaned = 0
+                backlog_by_null = 0
+                backlog_by_id = 0
                 if has_summary_id:
                     cursor.execute("SELECT COUNT(*) FROM messages WHERE summary_id IS NOT NULL")
                     summarized_count = cursor.fetchone()[0]
 
+                    # INTEGRITY: messages pinned to a summary that no longer exists.
+                    # Deleting a message_summaries row does NOT clear messages.summary_id
+                    # (no enforced FK, no ON DELETE SET NULL), and the summarizer selects
+                    # work with `WHERE summary_id IS NULL` — so orphaned messages count as
+                    # summarized forever and drop out of long-term memory silently. This is
+                    # checked here because availability cannot see it: the layer is perfectly
+                    # healthy and serving while the store is losing memory. See issue #334.
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM messages m WHERE m.summary_id IS NOT NULL "
+                        "AND NOT EXISTS (SELECT 1 FROM message_summaries s WHERE s.id = m.summary_id)"
+                    )
+                    orphaned = cursor.fetchone()[0]
+
+                    # The same damage seen from the other side: two independent counts of
+                    # the backlog that must agree. A shortfall is the tell.
+                    cursor.execute("SELECT COUNT(*) FROM messages WHERE summary_id IS NULL")
+                    backlog_by_null = cursor.fetchone()[0]
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM messages WHERE id > "
+                        "(SELECT COALESCE(MAX(end_message_id), 0) FROM message_summaries)"
+                    )
+                    backlog_by_id = cursor.fetchone()[0]
+
+            integrity_ok = orphaned == 0 and backlog_by_null == backlog_by_id
+
+            if integrity_ok:
+                message = (f"Message summaries layer healthy ({summary_count} summaries, "
+                           f"{summarized_count} summarized messages)")
+            else:
+                message = (
+                    f"\U0001f534 INTEGRITY FAILURE: {orphaned} messages point at a deleted "
+                    f"summary and will never be re-summarized. Backlog reads {backlog_by_null}, "
+                    f"arithmetic says {backlog_by_id} "
+                    f"({backlog_by_id - backlog_by_null} messages invisible to the summarizer). "
+                    f"Fix: scripts/summary_orphans.py --entity <name> --release. See #334. "
+                    f"(Layer is serving normally — this is silent data loss, not an outage.)"
+                )
+
             return LayerHealth(
                 available=True,
-                message=f"Message summaries layer healthy ({summary_count} summaries, {summarized_count} summarized messages)",
+                message=message,
                 details={
                     "db_path": str(self.db_path),
                     "summary_count": summary_count,
                     "summarized_messages": summarized_count,
-                    "has_summary_id_column": has_summary_id
+                    "has_summary_id_column": has_summary_id,
+                    "integrity_ok": integrity_ok,
+                    "orphaned_messages": orphaned,
+                    "backlog_by_null_summary_id": backlog_by_null,
+                    "backlog_by_max_end_message_id": backlog_by_id,
                 }
             )
 

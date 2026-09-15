@@ -2143,6 +2143,24 @@ async def pps_health():
             "details": health.details
         }
 
+    # Availability is not integrity. A layer can be up and serving while the store
+    # it serves is quietly losing data — which is exactly how the #334 orphan bug
+    # read as "all layers green" on a broken store. Surface integrity as its own
+    # top-level verdict so a glance at the availability flags cannot miss it.
+    failures = {
+        name: r["message"]
+        for name, r in health_results.items()
+        if isinstance(r.get("details"), dict) and r["details"].get("integrity_ok") is False
+    }
+    health_results["integrity"] = {
+        "ok": not failures,
+        "checked": [
+            name for name, r in health_results.items()
+            if isinstance(r.get("details"), dict) and "integrity_ok" in r["details"]
+        ],
+        "failures": failures,
+    }
+
     return health_results
 
 
