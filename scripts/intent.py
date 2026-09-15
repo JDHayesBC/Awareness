@@ -32,11 +32,16 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Repo root, derived from __file__ like lock.py's (#324) — never from cwd, which
+# differs per channel. Used to pin `gh` to THIS repo regardless of where we're invoked.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from lock import (  # noqa: E402
     LOCKS_DIR,
@@ -238,7 +243,56 @@ def format_intent_block(holder: str | None = None, intent_dir=None) -> str:
         return ""
 
 
+def issue_exists(issue) -> bool | None:
+    """Does this issue number actually exist on the board?
+
+    Returns True / False / None, where None means "could not find out" (gh missing,
+    offline, timed out, not a repo). The three-way answer is the point: an unverifiable
+    claim must NOT be treated the same as a disproven one — coordination should degrade
+    to a warning when the network is down, never block real work.
+
+    Why this exists (2026-09-15, my own bug): Lyra claimed #329 by intent BEFORE filing
+    the issue, I filed mine assuming 329 was taken, and gh handed 329 to me — so we had
+    one number and two meanings for a while. The intent layer coordinates *work*, but it
+    was treating the *identifier* as authoritative when nothing had ever validated it.
+    That is the same shape as #327 (kernel bullets asserting state they never read):
+    a key that looks authoritative but was never checked against the source.
+    """
+    try:
+        out = subprocess.run(
+            ["gh", "issue", "view", str(issue).lstrip("#"), "--json", "number"],
+            cwd=str(_REPO_ROOT), capture_output=True, text=True, timeout=8,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # Only genuine "could not run gh" conditions degrade to unknown. A NameError or
+        # TypeError here is a coding bug, and must be allowed to surface loudly rather
+        # than masquerade as an offline network — that swallow is precisely what made
+        # this guard a silent no-op on first write (caught by test, 2026-09-15).
+        return None
+    if out.returncode == 0:
+        return True
+    err = (out.stderr or "").lower()
+    if "not found" in err or "could not resolve" in err or "no issue" in err:
+        return False
+    return None  # some other gh failure — unknown, not disproven
+
+
 def _cmd_claim(a) -> int:
+    if not getattr(a, "force", False):
+        exists = issue_exists(a.issue)
+        if exists is False:
+            n = str(a.issue).lstrip("#")
+            print(f"refused: issue #{n} does not exist on the board yet.", file=sys.stderr)
+            print("  File it first (`gh issue create`), then claim the number gh gives you.",
+                  file=sys.stderr)
+            print("  Claiming a number before it is allocated is how two channels end up "
+                  "with one number and two meanings.", file=sys.stderr)
+            print("  If you really mean it (a number you are about to be assigned, an "
+                  "external tracker), re-run with --force.", file=sys.stderr)
+            return 2
+        if exists is None:
+            print("⚠ could not verify the issue exists (gh offline/unavailable) — "
+                  "claiming anyway.", file=sys.stderr)
     files = _split_files(",".join(a.files)) if a.files else []
     r = claim(a.issue, files=files, work=a.work or "")
     if r["superseded"]:
@@ -290,6 +344,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("issue")
     c.add_argument("--files", action="append", help="files you expect to touch (comma-ok)")
     c.add_argument("--work", help="one line on what you're doing")
+    c.add_argument("--force", action="store_true",
+                   help="claim even if the issue number does not exist on the board yet")
     c.set_defaults(fn=_cmd_claim)
     r = sub.add_parser("release", help="done with an issue")
     r.add_argument("issue"); r.set_defaults(fn=_cmd_release)

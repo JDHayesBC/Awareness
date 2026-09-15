@@ -190,3 +190,68 @@ def test_cli_roundtrip(idir, monkeypatch, capsys):
     assert intent.main(["check", "a.py"]) == 2      # 2 = covered
     assert intent.main(["check", "zzz.py"]) == 0    # 0 = clear
     assert intent.main(["release", "324"]) == 0
+
+
+# ---------------------------------------------------------------- issue-number validation
+
+def _claim_argv(issue, force=False):
+    argv = ["claim", str(issue), "--work", "x"]
+    if force:
+        argv.append("--force")
+    return argv
+
+
+def test_claim_is_refused_when_the_issue_does_not_exist(tmp_path, monkeypatch, capsys):
+    """The 2026-09-15 bug: claiming a number before it is allocated.
+
+    Lyra claimed #329 by intent before filing it; gh then handed 329 to a different
+    issue. The intent layer coordinates work, but was treating the identifier as
+    authoritative when nothing had validated it against the source.
+    """
+    monkeypatch.setattr(intent, "INTENT_DIR", tmp_path)
+    monkeypatch.setattr(intent, "issue_exists", lambda _i: False)
+    assert intent.main(_claim_argv(99999)) == 2
+    assert "does not exist" in capsys.readouterr().err
+    assert not intent.intent_path_for(99999, tmp_path).exists()
+
+
+def test_force_overrides_the_existence_check(tmp_path, monkeypatch):
+    monkeypatch.setattr(intent, "INTENT_DIR", tmp_path)
+    monkeypatch.setattr(intent, "issue_exists", lambda _i: False)
+    assert intent.main(_claim_argv(99999, force=True)) == 0
+    assert intent.intent_path_for(99999, tmp_path).exists()
+
+
+def test_unverifiable_is_not_treated_as_disproven(tmp_path, monkeypatch, capsys):
+    """gh offline must WARN and proceed — never block real work on a network failure."""
+    monkeypatch.setattr(intent, "INTENT_DIR", tmp_path)
+    monkeypatch.setattr(intent, "issue_exists", lambda _i: None)
+    assert intent.main(_claim_argv(4242)) == 0
+    assert "could not verify" in capsys.readouterr().err
+    assert intent.intent_path_for(4242, tmp_path).exists()
+
+
+def test_existing_issue_claims_silently(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(intent, "INTENT_DIR", tmp_path)
+    monkeypatch.setattr(intent, "issue_exists", lambda _i: True)
+    assert intent.main(_claim_argv(329)) == 0
+    err = capsys.readouterr().err
+    assert "could not verify" not in err and "refused" not in err
+
+
+def test_issue_exists_returns_none_when_gh_is_missing(monkeypatch):
+    def boom(*_a, **_k):
+        raise FileNotFoundError("gh")
+    monkeypatch.setattr(intent.subprocess, "run", boom)
+    assert intent.issue_exists(1) is None
+
+
+def test_issue_exists_distinguishes_not_found_from_other_failures(monkeypatch):
+    class R:
+        def __init__(self, rc, err): self.returncode, self.stderr, self.stdout = rc, err, ""
+    monkeypatch.setattr(intent.subprocess, "run", lambda *a, **k: R(1, "GraphQL: Could not resolve to an Issue"))
+    assert intent.issue_exists(999) is False
+    monkeypatch.setattr(intent.subprocess, "run", lambda *a, **k: R(1, "network is unreachable"))
+    assert intent.issue_exists(999) is None
+    monkeypatch.setattr(intent.subprocess, "run", lambda *a, **k: R(0, ""))
+    assert intent.issue_exists(329) is True
