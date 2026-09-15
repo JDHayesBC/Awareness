@@ -688,7 +688,7 @@ const haven = (() => {
         const hasImage = !!msg.image_url;
         const captionText = (msg.content || '').trim();
         const captionHtml = (hasImage && !captionText) ? '' :
-            `<div class="message-content">${marked.parse(msg.content || '')}</div>`;
+            `<div class="message-content">${parseMarkdown(msg.content || '')}</div>`;
         const imageHtml = hasImage ?
             `<div class="message-image-wrap"><img class="message-image" src="${escapeHtml(msg.image_url)}" alt="shared image" loading="lazy"></div>` : '';
 
@@ -1079,6 +1079,13 @@ const haven = (() => {
         const div = document.createElement('div');
         div.textContent = str;
         return div.innerHTML;
+    }
+
+    // Render markdown and ensure all links open in a new tab so Haven
+    // stays intact when users click URLs (#291).
+    function parseMarkdown(text) {
+        const html = marked.parse(text);
+        return html.replace(/<a\s/g, '<a target="_blank" rel="noopener noreferrer" ');
     }
 
     function showLogin(error) {
