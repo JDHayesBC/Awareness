@@ -599,7 +599,6 @@ const haven = (() => {
     function buildUserItemEl(u) {
         const el = document.createElement('div');
         el.className = 'user-item';
-        el.title = `Click to DM @${u.username}`;
         const displayName = resolveDisplayName(u);
         const renameBtn = (currentUser && u.id !== currentUser.id)
             ? `<button class="rename-user-btn" title="Rename ${escapeHtml(u.username)}">✏️</button>`
@@ -610,10 +609,11 @@ const haven = (() => {
             ${u.is_bot ? '<span class="bot-tag">entity</span>' : ''}
             ${renameBtn}
         `;
-        // Click to start DM (on the name area, not the rename button)
+        // Name / dot click → context menu (GH#285)
         if (currentUser && u.id !== currentUser.id) {
-            el.querySelector('.user-display-name').addEventListener('click', () => startDM(u.username));
-            el.querySelector('.status-dot').addEventListener('click', () => startDM(u.username));
+            const showMenu = (e) => { e.stopPropagation(); showUserMenu(u, e); };
+            el.querySelector('.user-display-name').addEventListener('click', showMenu);
+            el.querySelector('.status-dot').addEventListener('click', showMenu);
             const btn = el.querySelector('.rename-user-btn');
             if (btn) {
                 btn.addEventListener('click', (e) => {
@@ -623,6 +623,76 @@ const haven = (() => {
             }
         }
         return el;
+    }
+
+    /** Show a small popup menu near a click event for a user (GH#285). */
+    function showUserMenu(u, e) {
+        // Dismiss any existing user menu first
+        dismissUserMenu();
+
+        const menu = document.createElement('div');
+        menu.className = 'user-menu';
+        menu.setAttribute('role', 'menu');
+
+        const items = [
+            { label: `Message @${u.username}`, action: () => startDM(u.username) },
+        ];
+        // Only non-self users get rename
+        if (currentUser && u.id !== currentUser.id) {
+            items.push({ label: `Rename…`, action: () => promptRenameUser(u) });
+        }
+
+        items.forEach(item => {
+            const btn = document.createElement('button');
+            btn.className = 'user-menu-item';
+            btn.setAttribute('role', 'menuitem');
+            btn.textContent = item.label;
+            btn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                dismissUserMenu();
+                item.action();
+            });
+            menu.appendChild(btn);
+        });
+
+        // Position near the click event
+        document.body.appendChild(menu);
+        const x = e.clientX;
+        const y = e.clientY;
+        menu.style.left = `${x}px`;
+        menu.style.top = `${y}px`;
+        // Flip left if near right edge
+        const rect = menu.getBoundingClientRect();
+        if (rect.right > window.innerWidth - 8) {
+            menu.style.left = `${x - rect.width}px`;
+        }
+        if (rect.bottom > window.innerHeight - 8) {
+            menu.style.top = `${y - rect.height}px`;
+        }
+        menu.dataset.userMenuActive = '1';
+
+        // Dismiss on outside click or Escape
+        const onOutside = (ev) => {
+            if (!menu.contains(ev.target)) dismissUserMenu();
+        };
+        const onKey = (ev) => {
+            if (ev.key === 'Escape') dismissUserMenu();
+        };
+        // Use capture so we hear the click before it propagates into components
+        document.addEventListener('click', onOutside, true);
+        document.addEventListener('keydown', onKey);
+        menu._cleanup = () => {
+            document.removeEventListener('click', onOutside, true);
+            document.removeEventListener('keydown', onKey);
+        };
+    }
+
+    function dismissUserMenu() {
+        const existing = document.querySelector('.user-menu[data-user-menu-active]');
+        if (existing) {
+            if (existing._cleanup) existing._cleanup();
+            existing.remove();
+        }
     }
 
     async function promptRenameUser(u) {
@@ -819,7 +889,7 @@ const haven = (() => {
 
         el.innerHTML = `
             <span class="msg-time">${time}</span>
-            <span class="msg-author ${authorClass}">${escapeHtml(resolvedAuthor)}</span>
+            <span class="msg-author ${authorClass}" data-username="${escapeHtml(msg.username || '')}">${escapeHtml(resolvedAuthor)}</span>
             ${captionHtml}
             ${imageHtml}
             <button class="copy-btn" title="Copy message" aria-label="Copy message">
@@ -833,6 +903,14 @@ const haven = (() => {
             e.stopPropagation();
             copyToClipboard(e.currentTarget, msg.content);
         });
+
+        // Author name click → user context menu (GH#285)
+        // Only for other users (not self, not when no user found)
+        const authorEl = el.querySelector('.msg-author');
+        if (authorEl && !isMe && msgUser && currentUser && msgUser.id !== currentUser.id) {
+            authorEl.style.cursor = 'pointer';
+            authorEl.addEventListener('click', (e) => { e.stopPropagation(); showUserMenu(msgUser, e); });
+        }
 
         const imgEl = el.querySelector('.message-image');
         if (imgEl) {
