@@ -456,13 +456,22 @@ class MessageSummariesLayer(PatternLayer):
                 details={"error": str(e)}
             )
 
-    def get_unsummarized_messages(self, limit: int = 100) -> List[Dict]:
+    def get_unsummarized_messages(self, limit: int = 100, min_age_minutes: int = 0) -> List[Dict]:
         """
         Get messages that haven't been summarized yet.
 
         Returns oldest unsummarized messages up to the limit.
         Used by reflection daemon to identify what needs summarization.
+
+        Args:
+            limit: Maximum number of messages to return.
+            min_age_minutes: If > 0, skip messages newer than this many minutes.
+                Used by the summarizer to avoid compressing active conversations
+                (GH#260). Does NOT apply to get_conversation_context callers —
+                pass 0 there to retrieve all unsummarized turns regardless of age.
         """
+        from datetime import datetime, timezone, timedelta
+
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -471,23 +480,32 @@ class MessageSummariesLayer(PatternLayer):
                 cursor.execute("PRAGMA table_info(messages)")
                 columns = [col[1] for col in cursor.fetchall()]
 
+                recency_clause = ""
+                params: list = []
+                if min_age_minutes > 0:
+                    cutoff = (
+                        datetime.now(timezone.utc) - timedelta(minutes=min_age_minutes)
+                    ).strftime('%Y-%m-%d %H:%M:%S')
+                    recency_clause = "AND created_at < ?"
+                    params.append(cutoff)
+
                 if 'summary_id' not in columns:
                     # If no summary_id column, return oldest messages
-                    cursor.execute('''
+                    cursor.execute(f'''
                         SELECT id, content, author_name, channel, created_at, is_lyra
                         FROM messages
+                        WHERE 1=1 {recency_clause}
                         ORDER BY created_at ASC
                         LIMIT ?
-                    ''', (limit,))
+                    ''', (*params, limit))
                 else:
-                    # Get unsummarized messages
-                    cursor.execute('''
+                    cursor.execute(f'''
                         SELECT id, content, author_name, channel, created_at, is_lyra
                         FROM messages
-                        WHERE summary_id IS NULL
+                        WHERE summary_id IS NULL {recency_clause}
                         ORDER BY created_at ASC
                         LIMIT ?
-                    ''', (limit,))
+                    ''', (*params, limit))
 
                 results = []
                 for row in cursor.fetchall():

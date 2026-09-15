@@ -100,6 +100,7 @@ class SummarizeMessagesRequest(BaseModel):
     limit: int = 50
     summary_type: str = "work"
     target_unsummarized: int = 80
+    skip_recent_minutes: int = 60  # GH#260: skip messages newer than N min to protect active threads
     token: str = ""
 
 
@@ -2475,6 +2476,10 @@ async def summarize_messages(request: SummarizeMessagesRequest):
 
     Server drives the LLM internally. Returns a status object when done.
     Loops until backlog drops to target_unsummarized (default: 80).
+
+    skip_recent_minutes (default 60): messages newer than this are skipped so
+    active Haven/terminal threads aren't compressed mid-conversation (GH#260).
+    Pass 0 to disable the guard (e.g. for a forced catch-up).
     """
     auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "summarize_messages")
     if auth_error:
@@ -2493,7 +2498,12 @@ async def summarize_messages(request: SummarizeMessagesRequest):
         if remaining <= target:
             break
 
-        messages = message_summaries.get_unsummarized_messages(batch_limit)
+        # GH#260: pass recency guard so active conversations aren't compressed mid-thread.
+        # get_conversation_context callers intentionally pass min_age_minutes=0 (default)
+        # to retrieve all unsummarized turns regardless of age.
+        messages = message_summaries.get_unsummarized_messages(
+            batch_limit, min_age_minutes=request.skip_recent_minutes
+        )
         if not messages:
             break
 
