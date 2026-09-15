@@ -2302,9 +2302,10 @@ async def _call_nuc_llm(prompt: str) -> str:
         "max_tokens": 6000,  # Thinking models use tokens for chain-of-thought + answer
     }
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with httpx.AsyncClient(timeout=600.0) as client:  # 600s: slow NUC (#281)
         resp = await client.post(f"{llm_url}/chat/completions", json=payload)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise RuntimeError(f"NUC LLM {resp.status_code}: {resp.text}")
         data = resp.json()
         msg = data["choices"][0]["message"]
         # Prefer content (the model's final answer); fall back to reasoning_content
