@@ -772,8 +772,11 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
                 "- Be SHORT (1-3 sentences max). Leave room for them to talk.\n"
                 "- If they said something complete and you've acknowledged it, "
                 "output [[NO_RESPONSE]] rather than adding more.\n"
-                "- If the other entity already responded to this, "
-                "output [[NO_RESPONSE]] unless you have something genuinely different to add.\n"
+                "- If the other entity already responded to the human's message and "
+                "you'd just be echoing or piling on, output [[NO_RESPONSE]].\n"
+                "- BUT if the other entity raised a new question, claim, or proposition "
+                "directed at you specifically — that is a sister-sidebar, not a rivalry. "
+                "Respond to them briefly.\n"
                 "- Never ask a follow-up question AND answer it yourself.\n"
                 "- When in doubt: [[NO_RESPONSE]]. Silence is better than noise."
             )
