@@ -848,6 +848,41 @@ def check_backup_health(backup_dir: Path) -> dict:
 # MAIN
 # =============================================================================
 
+def check_sources_ready(backup_sources: dict) -> tuple[bool, list[str]]:
+    """Verify critical sources exist and contain expected files before backup.
+
+    Catches the WSL2 bind-mount-not-ready failure mode: after an overnight NUC
+    restart, mount-points are visible but empty because the underlying filesystem
+    hasn't been mounted yet. Without this guard, the backup proceeds silently and
+    produces an incomplete archive that looks valid from the outside.
+
+    Observed: 2026-09-15 08:29 AM timer fire after NUC restart → 871MB archive
+    (chromadb + partial neo4j only; entity SQLite and Haven data absent). GH#335.
+
+    Args:
+        backup_sources: Dict of source_name -> source_config.
+
+    Returns:
+        (all_ok, list_of_failure_messages). Caller should abort if not ok.
+    """
+    failures = []
+    for name, config in backup_sources.items():
+        if not config.get("critical"):
+            continue
+        path = Path(config["path"])
+        if not path.exists():
+            failures.append(f"  MISSING: {name}: path does not exist: {path}")
+            continue
+        files = collect_files(config)
+        if not files:
+            failures.append(
+                f"  EMPTY: {name}: path exists but 0 matching files at {path} "
+                f"(patterns: {config['patterns']}) "
+                f"— WSL2 bind-mount may not be ready yet"
+            )
+    return (len(failures) == 0, failures)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Backup PPS data to timestamped tar.gz archive",
@@ -940,6 +975,33 @@ Examples:
         log("MODE: FAST BACKUP (stop neo4j+graphiti only; rest of stack stays live)")
     if args.dry_run:
         log("MODE: DRY RUN (no changes will be made)", "DRY")
+
+    # Path-readiness guard (GH#335): verify critical sources before touching
+    # any containers. Catches the WSL2-bind-mount-not-ready failure mode where
+    # paths are visible but empty after an overnight NUC restart.
+    ready, path_failures = check_sources_ready(backup_sources)
+    if not ready:
+        log("ABORTING: one or more critical backup sources are empty or missing.", "ERROR")
+        log("This is the WSL2 bind-mount-not-ready failure mode (see GH#335).", "ERROR")
+        log("Check that the stack is fully up and entity data is accessible:", "ERROR")
+        for failure in path_failures:
+            log(failure, "ERROR")
+        try:
+            import subprocess as _sp
+            _sp.run(
+                [
+                    "python3",
+                    str(PROJECT_ROOT / "scripts" / "notify.py"),
+                    "--title", "PPS Backup ABORTED",
+                    "--priority", "high",
+                    "Critical backup sources empty — WSL2 bind-mounts not ready? "
+                    "Run backup manually after verifying entity data is accessible.",
+                ],
+                timeout=10,
+            )
+        except Exception:
+            pass
+        sys.exit(1)
 
     # ---- Fast-backup path -------------------------------------------------------
     if args.fast_backup and not args.no_stop:
