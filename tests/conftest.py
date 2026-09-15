@@ -153,7 +153,17 @@ async def tech_rag_test_instance(tmp_path, chroma_client):
 
     yield layer
 
-    # Cleanup handled by tmp_path and chroma_client fixtures
+    # Explicit teardown: delete the collection so the next test starts clean.
+    # chromadb's in-memory Client may share a global ephemeral store across
+    # fixture instances (depends on version), so we cannot rely on the client
+    # fixture alone to isolate state. Deleting by name is safe — TechRAGLayer
+    # uses a fixed collection name, so a dangling-collection leak will fail the
+    # next test's "should be empty" assertion.
+    try:
+        collection_name = getattr(layer, 'COLLECTION_NAME', None) or "tech_docs"
+        chroma_client.delete_collection(collection_name)
+    except Exception:
+        pass  # collection may already not exist; that's fine
 
 
 # TODO: Add fixtures for:

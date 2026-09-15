@@ -365,15 +365,22 @@ class InventoryLayer(PatternLayer):
                 """, (name, description, file_path, emotional_quality))
                 conn.commit()
 
-                # Write-through: export mirror and update file_path pointer
+                # Write-through: export mirror and update file_path pointer.
+                # Auto-populate file_path with the mirror path only when:
+                #   (a) caller did not provide an explicit file_path, AND
+                #   (b) the current DB value is NULL/empty.
+                # Preserves user-provided narrative room file pointers across
+                # subsequent add_space (upsert) and update_space calls.
                 conn.row_factory = sqlite3.Row
                 row = conn.execute("SELECT * FROM spaces WHERE name = ?", (name,)).fetchone()
                 if row:
                     row_dict = dict(row)
                     self._export_mirror("spaces", row_dict)
-                    mirror_path = str(self._mirror_path("spaces", name))
-                    conn.execute("UPDATE spaces SET file_path = ? WHERE name = ?", (mirror_path, name))
-                    conn.commit()
+                    current_fp = row_dict.get("file_path")
+                    if file_path is None and not current_fp:
+                        mirror_path = str(self._mirror_path("spaces", name))
+                        conn.execute("UPDATE spaces SET file_path = ? WHERE name = ?", (mirror_path, name))
+                        conn.commit()
 
             return True
         except Exception:
@@ -471,15 +478,22 @@ class InventoryLayer(PatternLayer):
                 )
                 conn.commit()
 
-                # Write-through: re-export mirror after update
+                # Write-through: re-export mirror after update.
+                # Only auto-populate file_path with the mirror path if:
+                #   (a) the caller did not provide an explicit file_path, AND
+                #   (b) the current DB value of file_path is NULL/empty.
+                # This prevents clobbering a user-provided narrative room file
+                # pointer with the internal mirror path on every update.
                 conn.row_factory = sqlite3.Row
                 row = conn.execute("SELECT * FROM spaces WHERE name = ?", (name,)).fetchone()
                 if row:
                     row_dict = dict(row)
                     self._export_mirror("spaces", row_dict)
-                    mirror_path = str(self._mirror_path("spaces", name))
-                    conn.execute("UPDATE spaces SET file_path = ? WHERE name = ?", (mirror_path, name))
-                    conn.commit()
+                    current_fp = row_dict.get("file_path")
+                    if file_path is None and not current_fp:
+                        mirror_path = str(self._mirror_path("spaces", name))
+                        conn.execute("UPDATE spaces SET file_path = ? WHERE name = ?", (mirror_path, name))
+                        conn.commit()
 
                 return True
         except ValueError:

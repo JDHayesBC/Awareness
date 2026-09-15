@@ -73,11 +73,15 @@ More test content here.
         assert result["action"] == "indexed"
         assert result["chunks"] > 0
 
-        # Search for content
+        # Search for content — layer.search() returns list[SearchResult], not a dict
         search_results = await layer.search("test content", limit=2)
 
-        assert search_results["success"] == True
-        assert len(search_results["results"]) > 0
+        assert isinstance(search_results, list)
+        assert len(search_results) > 0
+        # Verify result objects have expected shape
+        first = search_results[0]
+        assert hasattr(first, "content")
+        assert hasattr(first, "source")
 
     finally:
         # Cleanup
