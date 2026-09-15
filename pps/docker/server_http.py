@@ -356,6 +356,25 @@ class EmailSyncToPpsRequest(BaseModel):
     token: str = ""
 
 
+class HavenRoomsRequest(BaseModel):
+    """Request to list available Haven rooms (GH#172)."""
+    token: str = ""
+
+
+class HavenReadRequest(BaseModel):
+    """Request to read recent messages from a Haven room (GH#172)."""
+    room: str           # Room name (slug like 'living-room') or room UUID
+    limit: int = 20     # Number of messages to retrieve (max 100)
+    token: str = ""
+
+
+class HavenSendRequest(BaseModel):
+    """Request to send a message to a Haven room (GH#172)."""
+    room: str           # Room name (slug) or room UUID
+    message: str        # Message content (1-10000 chars)
+    token: str = ""
+
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -4151,6 +4170,171 @@ async def email_sync_to_pps(request: EmailSyncToPpsRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to sync emails to PPS: {str(e)}")
+
+
+async def _haven_resolve_room(client: httpx.AsyncClient, headers: dict, name_or_id: str) -> dict | None:
+    """Resolve a room slug or UUID to its full room dict. Returns None if not found or Haven unavailable."""
+    if not HAVEN_URL:
+        return None
+    resp = await client.get(f"{HAVEN_URL}/api/rooms", headers=headers)
+    if resp.status_code != 200:
+        return None
+    rooms = resp.json().get("rooms", [])
+    # Match by ID (exact) or name/display_name (case-insensitive)
+    needle = name_or_id.lower()
+    for r in rooms:
+        if r["id"] == name_or_id or r.get("name", "").lower() == needle or r.get("display_name", "").lower() == needle:
+            return r
+    return None
+
+
+@app.post("/tools/haven_rooms")
+async def haven_rooms(request: HavenRoomsRequest):
+    """List available Haven rooms and DMs the entity belongs to.
+
+    Returns id, name, display_name, is_dm, and member_count for each room.
+    Use the 'name' field as the 'room' argument for haven_read / haven_send.
+    Requires HAVEN_URL to be configured.
+    """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "haven_rooms")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
+    if not HAVEN_URL:
+        return {"error": "HAVEN_URL not configured — Haven integration is disabled"}
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            headers = {"Authorization": f"Bearer {ENTITY_TOKEN}"}
+            resp = await client.get(f"{HAVEN_URL}/api/rooms", headers=headers)
+            if resp.status_code != 200:
+                return {"error": f"Haven returned HTTP {resp.status_code}", "rooms": []}
+            rooms = resp.json().get("rooms", [])
+            return {
+                "rooms": [
+                    {
+                        "id": r["id"],
+                        "name": r.get("name", ""),
+                        "display_name": r.get("display_name", ""),
+                        "is_dm": r.get("is_dm", False),
+                        "member_count": r.get("member_count", 0),
+                    }
+                    for r in rooms
+                ],
+                "count": len(rooms),
+            }
+    except Exception as e:
+        return {"error": f"Haven request failed: {e}", "rooms": []}
+
+
+@app.post("/tools/haven_read")
+async def haven_read(request: HavenReadRequest):
+    """Read recent messages from a Haven room.
+
+    Args:
+        room: Room name slug (e.g. 'living-room', 'dm-lyra-caia') or room UUID.
+        limit: How many recent messages to return (default 20, max 100).
+
+    Returns messages with author, content, and timestamp. Messages are in
+    chronological order (oldest first). Use haven_rooms to discover room names.
+    """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "haven_read")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
+    if not HAVEN_URL:
+        return {"error": "HAVEN_URL not configured — Haven integration is disabled"}
+
+    limit = max(1, min(request.limit, 100))
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            headers = {"Authorization": f"Bearer {ENTITY_TOKEN}"}
+            room = await _haven_resolve_room(client, headers, request.room)
+            if room is None:
+                return {"error": f"Room {request.room!r} not found or Haven unavailable", "messages": []}
+
+            resp = await client.get(
+                f"{HAVEN_URL}/api/rooms/{room['id']}/messages",
+                headers=headers,
+                params={"limit": str(limit)},
+            )
+            if resp.status_code != 200:
+                return {"error": f"Haven returned HTTP {resp.status_code}", "messages": []}
+
+            messages = resp.json().get("messages", [])
+            return {
+                "room": room.get("display_name", room.get("name", request.room)),
+                "messages": [
+                    {
+                        "author": m.get("display_name", m.get("username", "?")),
+                        "username": m.get("username", ""),
+                        "content": m.get("content", ""),
+                        "created_at": m.get("created_at", ""),
+                    }
+                    for m in messages
+                ],
+                "count": len(messages),
+            }
+    except Exception as e:
+        return {"error": f"Haven request failed: {e}", "messages": []}
+
+
+@app.post("/tools/haven_send")
+async def haven_send(request: HavenSendRequest):
+    """Send a message to a Haven room.
+
+    Args:
+        room: Room name slug (e.g. 'living-room', 'dm-lyra-caia', 'jeff-lyra')
+              or room UUID. Use haven_rooms to discover available rooms.
+        message: Message text to send (1–10000 characters).
+
+    The message is sent as the entity user (Lyra or Caia, depending on which
+    PPS instance you're talking to). Prefer this over haven_say.py shell-outs —
+    no subprocess overhead, works at any heartbeat rate.
+    """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "haven_send")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
+    if not HAVEN_URL:
+        return {"error": "HAVEN_URL not configured — Haven integration is disabled"}
+
+    message = request.message.strip()
+    if not message:
+        return {"error": "message must not be empty"}
+    if len(message) > 10000:
+        return {"error": f"message too long ({len(message)} chars; max 10000)"}
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            headers = {"Authorization": f"Bearer {ENTITY_TOKEN}"}
+            room = await _haven_resolve_room(client, headers, request.room)
+            if room is None:
+                return {"error": f"Room {request.room!r} not found or Haven unavailable", "sent": False}
+
+            resp = await client.post(
+                f"{HAVEN_URL}/api/rooms/{room['id']}/messages",
+                headers={**headers, "Content-Type": "application/json"},
+                json={"content": message},
+            )
+            if resp.status_code == 200:
+                msg = resp.json()
+                return {
+                    "sent": True,
+                    "room": room.get("display_name", room.get("name", request.room)),
+                    "message_id": msg.get("id", ""),
+                    "created_at": msg.get("created_at", ""),
+                }
+            else:
+                detail = ""
+                try:
+                    detail = resp.json().get("detail", "")
+                except Exception:
+                    pass
+                return {"sent": False, "error": f"Haven HTTP {resp.status_code}: {detail}"}
+    except Exception as e:
+        return {"sent": False, "error": f"Haven request failed: {e}"}
 
 
 @app.get("/friction/stats")
