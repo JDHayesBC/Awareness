@@ -741,6 +741,50 @@ body::before {
     opacity: 0.6;
     margin-left: auto;
 }
+.user-item .user-display-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.rename-user-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.7rem;
+    padding: 0 2px;
+    opacity: 0;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+}
+.user-item:hover .rename-user-btn {
+    opacity: 0.7;
+}
+.rename-user-btn:hover {
+    opacity: 1 !important;
+}
+
+/* Rename button in chat header (#288) */
+.rename-room-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.85rem;
+    padding: 0 4px;
+    opacity: 0;
+    transition: opacity 0.15s;
+    line-height: 1;
+}
+.chat-header:hover .rename-room-btn,
+.rename-room-btn:focus {
+    opacity: 0.7;
+}
+.rename-room-btn:hover {
+    opacity: 1;
+}
 
 /* Mobile sidebar drawer controls (hamburger + backdrop) — hidden on desktop */
 .sidebar-toggle {

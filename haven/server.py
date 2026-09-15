@@ -34,8 +34,10 @@ from haven.models import (
     RoomListResponse,
     RoomResponse,
     SendMessageRequest,
+    SetNicknameRequest,
     SetPasswordRequest,
     TypingRequest,
+    UpdateRoomRequest,
     UserResponse,
 )
 
@@ -961,6 +963,75 @@ async def start_dm(request: Request, username: str):
 
     room = await db.find_or_create_dm(user_id, target["id"])
     return room
+
+
+# --- Nicknames (#289) ---
+
+@app.get("/api/nicknames")
+async def get_nicknames(request: Request):
+    """Return the current user's nickname map: {target_id: nickname}."""
+    user_id = await get_current_user_id(request, db)
+    nicknames = await db.get_nicknames(user_id)
+    return {"nicknames": nicknames}
+
+
+@app.put("/api/nicknames/{target_user_id}")
+async def set_nickname(request: Request, target_user_id: str, body: SetNicknameRequest):
+    """Set (or clear) a nickname for target_user_id as seen by the current user.
+
+    Empty/blank nickname deletes the entry.
+    """
+    user_id = await get_current_user_id(request, db)
+    target = await db.get_user(target_user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    await db.set_nickname(user_id, target_user_id, body.nickname)
+    return {"ok": True}
+
+
+@app.delete("/api/nicknames/{target_user_id}")
+async def delete_nickname(request: Request, target_user_id: str):
+    """Remove any nickname the current user has set for target_user_id."""
+    user_id = await get_current_user_id(request, db)
+    await db.delete_nickname(user_id, target_user_id)
+    return {"ok": True}
+
+
+# --- Room rename (#288) ---
+
+@app.patch("/api/rooms/{room_id}")
+async def update_room(room_id: str, request: Request, body: UpdateRoomRequest):
+    """Rename a shared room (updates display_name for all members).
+
+    DM renames should use PUT /api/nicknames/{target_user_id} instead.
+    Broadcasts a room_updated WS event so all members see the change live.
+    """
+    user_id = await get_current_user_id(request, db)
+
+    room = await db.get_room(room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    if not await db.is_room_member(room_id, user_id):
+        raise HTTPException(status_code=403, detail="Not a member of this room")
+
+    if room.get("is_dm"):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot rename a DM room globally. Use PUT /api/nicknames/{user_id} instead.",
+        )
+
+    await db.update_room_display_name(room_id, body.display_name)
+
+    # Broadcast so all connected members see the rename immediately
+    event = {
+        "type": "room_updated",
+        "room_id": room_id,
+        "display_name": body.display_name.strip(),
+    }
+    await manager.broadcast_to_room(room_id, event)
+
+    return {"ok": True, "room_id": room_id, "display_name": body.display_name.strip()}
 
 
 # --- Admin endpoints ---

@@ -16,6 +16,7 @@ const haven = (() => {
     let oldestMessageId = {};  // room_id -> oldest message id loaded
     let hasMore = {};  // room_id -> bool
     let unread = {};  // room_id -> count
+    let nicknames = {};  // target_id -> nickname string (#289)
     let pendingRoomId = null;  // deep-link target from a notification, applied once connected
     let lastActivity = Date.now();  // last real user interaction with this tab
     const IDLE_MS = 60000;  // visible-but-untouched this long => not actively "viewing"
@@ -24,6 +25,29 @@ const haven = (() => {
     const originalTitle = document.title;
 
     const $ = (id) => document.getElementById(id);
+
+    // --- Nickname helpers (#289) ---
+
+    // Return the viewer's nickname for a user, falling back to display_name.
+    function resolveDisplayName(user) {
+        return (user && nicknames[user.id]) ? nicknames[user.id] : (user ? user.display_name : '');
+    }
+
+    async function fetchNicknames() {
+        const token = getToken();
+        if (!token) return;
+        try {
+            const res = await fetch('/api/nicknames', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                nicknames = data.nicknames || {};
+            }
+        } catch (e) {
+            console.warn('[Haven] Could not fetch nicknames:', e);
+        }
+    }
 
     // --- Auth ---
 
@@ -300,6 +324,9 @@ const haven = (() => {
             case 'member_left':
                 onMemberLeft(data);
                 break;
+            case 'room_updated':
+                onRoomUpdated(data);
+                break;
         }
     }
 
@@ -309,6 +336,9 @@ const haven = (() => {
         users = data.users;
         // Seed per-room unread badges from the server (durable across reconnects).
         unread = data.unread || {};
+
+        // Load nicknames so resolveDisplayName works before first render.
+        fetchNicknames();
 
         $('login-screen').classList.add('hidden');
         $('chat-app').classList.remove('hidden');
@@ -483,7 +513,43 @@ const haven = (() => {
         }
     }
 
+    function onRoomUpdated(data) {
+        // Update rooms array and re-render header + sidebar
+        const room = rooms.find(r => r.id === data.room_id);
+        if (room) {
+            room.display_name = data.display_name;
+            renderRooms();
+        }
+        if (data.room_id === currentRoomId && room) {
+            $('room-name').textContent = room.is_dm ? room.display_name : `# ${room.display_name}`;
+        }
+    }
+
     // --- Rendering ---
+
+    // For a DM room, return the OTHER participant's user object (or null).
+    function dmOtherUser(room) {
+        if (!room.is_dm || !currentUser) return null;
+        // DM room name is dm-{user1}-{user2}; strip the "dm-" prefix and split by "-"
+        // But usernames can contain hyphens, so match by trying both orderings.
+        for (const u of users) {
+            if (u.id !== currentUser.id) {
+                const n1 = `dm-${currentUser.username}-${u.username}`;
+                const n2 = `dm-${u.username}-${currentUser.username}`;
+                if (room.name === n1 || room.name === n2) return u;
+            }
+        }
+        return null;
+    }
+
+    // Return display label for a room, applying nickname for DMs.
+    function roomDisplayLabel(room) {
+        if (room.is_dm) {
+            const other = dmOtherUser(room);
+            return other ? resolveDisplayName(other) : room.display_name;
+        }
+        return `# ${room.display_name}`;
+    }
 
     function renderRooms() {
         const roomList = $('room-list');
@@ -496,7 +562,7 @@ const haven = (() => {
             const el = document.createElement('div');
             el.className = 'room-item' + (r.id === currentRoomId ? ' active' : '');
 
-            const label = (r.is_dm ? '' : '# ') + r.display_name;
+            const label = roomDisplayLabel(r);
             const count = unread[r.id] || 0;
 
             if (count > 0 && r.id !== currentRoomId) {
@@ -534,16 +600,71 @@ const haven = (() => {
         const el = document.createElement('div');
         el.className = 'user-item';
         el.title = `Click to DM @${u.username}`;
+        const displayName = resolveDisplayName(u);
+        const renameBtn = (currentUser && u.id !== currentUser.id)
+            ? `<button class="rename-user-btn" title="Rename ${escapeHtml(u.username)}">✏️</button>`
+            : '';
         el.innerHTML = `
             <span class="status-dot ${u.online ? 'online' : 'offline'}"></span>
-            <span>${escapeHtml(u.display_name)}</span>
+            <span class="user-display-name">${escapeHtml(displayName)}</span>
             ${u.is_bot ? '<span class="bot-tag">entity</span>' : ''}
+            ${renameBtn}
         `;
-        // Click to start DM
+        // Click to start DM (on the name area, not the rename button)
         if (currentUser && u.id !== currentUser.id) {
-            el.addEventListener('click', () => startDM(u.username));
+            el.querySelector('.user-display-name').addEventListener('click', () => startDM(u.username));
+            el.querySelector('.status-dot').addEventListener('click', () => startDM(u.username));
+            const btn = el.querySelector('.rename-user-btn');
+            if (btn) {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    promptRenameUser(u);
+                });
+            }
         }
         return el;
+    }
+
+    async function promptRenameUser(u) {
+        const current = nicknames[u.id] || '';
+        const input = prompt(`Nickname for ${u.display_name} (@${u.username}):\n(leave blank to clear)`, current);
+        if (input === null) return;  // cancelled
+
+        const token = getToken();
+        try {
+            if (input.trim() === '') {
+                // Clear nickname
+                const res = await fetch(`/api/nicknames/${u.id}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                });
+                if (res.ok) {
+                    delete nicknames[u.id];
+                }
+            } else {
+                const res = await fetch(`/api/nicknames/${u.id}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ nickname: input.trim() }),
+                });
+                if (res.ok) {
+                    nicknames[u.id] = input.trim();
+                }
+            }
+            // Re-render user lists and sidebar (DM labels may have changed)
+            renderUsers();
+            renderRooms();
+            // Update header if current room is a DM with this user
+            if (currentRoomId) {
+                const room = rooms.find(r => r.id === currentRoomId);
+                if (room) $('room-name').textContent = roomDisplayLabel(room);
+            }
+        } catch (e) {
+            console.error('[Haven] rename user failed:', e);
+        }
     }
 
     function renderUsers() {
@@ -679,8 +800,12 @@ const haven = (() => {
         const isBot = users.some(u => u.username === msg.username && u.is_bot);
         const authorClass = isMe ? 'self' : (isBot ? 'entity' : 'human');
 
+        // Resolve display name using any nickname the current user has set
+        const msgUser = users.find(u => u.username === msg.username);
+        const resolvedAuthor = msgUser ? resolveDisplayName(msgUser) : msg.display_name;
+
         el.dataset.time = time;
-        el.dataset.author = msg.display_name;
+        el.dataset.author = resolvedAuthor;
         el.dataset.content = msg.content;
 
         // Caption: empty/whitespace + image present means the image IS the message.
@@ -694,7 +819,7 @@ const haven = (() => {
 
         el.innerHTML = `
             <span class="msg-time">${time}</span>
-            <span class="msg-author ${authorClass}">${escapeHtml(msg.display_name)}</span>
+            <span class="msg-author ${authorClass}">${escapeHtml(resolvedAuthor)}</span>
             ${captionHtml}
             ${imageHtml}
             <button class="copy-btn" title="Copy message" aria-label="Copy message">
@@ -804,9 +929,9 @@ const haven = (() => {
                 el.dataset.typingUser = name;
                 const isBot = users.some(u => u.username === name && u.is_bot);
                 const authorClass = isBot ? 'entity' : 'human';
-                // Find display name
+                // Find display name, applying nickname if set
                 const user = users.find(u => u.username === name);
-                const displayName = user ? user.display_name : name;
+                const displayName = user ? resolveDisplayName(user) : name;
 
                 el.innerHTML = `
                     <span class="msg-time"></span>
@@ -823,11 +948,84 @@ const haven = (() => {
 
     // --- Room switching ---
 
+    async function renameCurrentRoom() {
+        if (!currentRoomId) return;
+        const room = rooms.find(r => r.id === currentRoomId);
+        if (!room) return;
+        const token = getToken();
+
+        if (room.is_dm) {
+            // For DMs: set a nickname for the OTHER person
+            const other = dmOtherUser(room);
+            if (!other) return;
+            const current = nicknames[other.id] || '';
+            const input = prompt(`Nickname for ${other.display_name} (@${other.username}):\n(leave blank to clear)`, current);
+            if (input === null) return;
+
+            try {
+                if (input.trim() === '') {
+                    const res = await fetch(`/api/nicknames/${other.id}`, {
+                        method: 'DELETE',
+                        headers: { 'Authorization': `Bearer ${token}` },
+                    });
+                    if (res.ok) delete nicknames[other.id];
+                } else {
+                    const res = await fetch(`/api/nicknames/${other.id}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ nickname: input.trim() }),
+                    });
+                    if (res.ok) nicknames[other.id] = input.trim();
+                }
+                // Update header and re-render
+                $('room-name').textContent = roomDisplayLabel(room);
+                renderRooms();
+                renderUsers();
+            } catch (e) {
+                console.error('[Haven] DM rename failed:', e);
+            }
+        } else {
+            // For shared rooms: rename globally via PATCH
+            const input = prompt('New room name:', room.display_name);
+            if (input === null) return;
+            const trimmed = input.trim();
+            if (!trimmed) return;
+
+            try {
+                const res = await fetch(`/api/rooms/${currentRoomId}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ display_name: trimmed }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    alert(`Failed to rename: ${err.detail || res.status}`);
+                    return;
+                }
+                // Optimistic update (WS event also arrives for other members)
+                room.display_name = trimmed;
+                $('room-name').textContent = roomDisplayLabel(room);
+                renderRooms();
+            } catch (e) {
+                console.error('[Haven] room rename failed:', e);
+            }
+        }
+    }
+
     function selectRoom(roomId) {
         currentRoomId = roomId;
         saveCurrentRoomId(roomId);  // durable across reloads — see #318
         const room = rooms.find(r => r.id === roomId);
-        $('room-name').textContent = room ? (room.is_dm ? room.display_name : `# ${room.display_name}`) : '';
+        $('room-name').textContent = room ? roomDisplayLabel(room) : '';
+        // Show rename button whenever a room is selected
+        const renameBtn = $('rename-room-btn');
+        if (renameBtn) renameBtn.style.display = room ? '' : 'none';
         loadRoomMembers(roomId);  // #319: populate the "Current Room" panel
 
         // Clear unread for this room (locally + persist the read marker server-side)
@@ -1176,6 +1374,18 @@ const haven = (() => {
 
     // --- Export ---
 
+    function clearConversation() {
+        // Clear the rendered message list (UI only — server messages unchanged).
+        // User can reload older messages via the "Load older messages" button. (GH#263)
+        if (!currentRoomId) return;
+        const list = $('message-list');
+        if (list) list.innerHTML = '';
+        const loadMore = $('load-more');
+        if (loadMore) loadMore.classList.add('hidden');
+        // Reset the oldest-message cursor for this room so "load more" reloads from the live end
+        if (currentRoomId) delete oldestMessageId[currentRoomId];
+    }
+
     function exportConversation() {
         const room = rooms.find(r => r.id === currentRoomId);
         const roomLabel = room ? (room.is_dm ? room.display_name : `#${room.display_name}`) : 'Haven';
@@ -1420,7 +1630,7 @@ const haven = (() => {
 
     document.addEventListener('DOMContentLoaded', init);
 
-    return { loadMore, selectRoom, inviteToRoom, leaveRoom, exportConversation, enableNotifications, createRoom };
+    return { loadMore, selectRoom, inviteToRoom, leaveRoom, exportConversation, clearConversation, enableNotifications, createRoom, renameCurrentRoom };
 })();
 
 // --- PWA: register the (minimal, safe) service worker ---

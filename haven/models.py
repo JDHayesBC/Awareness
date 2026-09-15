@@ -34,6 +34,14 @@ class TypingRequest(BaseModel):
     username: str
 
 
+class SetNicknameRequest(BaseModel):
+    nickname: str = Field(default="", max_length=128)
+
+
+class UpdateRoomRequest(BaseModel):
+    display_name: str = Field(..., min_length=1, max_length=128)
+
+
 # --- Response Models ---
 
 class UserResponse(BaseModel):

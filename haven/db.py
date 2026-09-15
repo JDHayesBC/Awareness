@@ -58,6 +58,14 @@ CREATE TABLE IF NOT EXISTS room_reads (
     PRIMARY KEY (user_id, room_id)
 );
 
+CREATE TABLE IF NOT EXISTS user_nicknames (
+    viewer_id TEXT NOT NULL REFERENCES users(id),
+    target_id TEXT NOT NULL REFERENCES users(id),
+    nickname TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (viewer_id, target_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_room_time
     ON messages(room_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_users_token_hash
@@ -516,5 +524,49 @@ class HavenDB:
         """Delete a push subscription by endpoint (used to prune expired/gone subs)."""
         await self._db.execute(
             "DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,)
+        )
+        await self._db.commit()
+
+    # --- Nicknames (#289) ---
+
+    async def get_nicknames(self, viewer_id: str) -> dict[str, str]:
+        """Return {target_id: nickname} for all nicknames set by viewer_id."""
+        async with self._db.execute(
+            "SELECT target_id, nickname FROM user_nicknames WHERE viewer_id = ?",
+            (viewer_id,),
+        ) as cursor:
+            return {row["target_id"]: row["nickname"] for row in await cursor.fetchall()}
+
+    async def set_nickname(self, viewer_id: str, target_id: str, nickname: str) -> None:
+        """Upsert a nickname. If nickname is blank, delete the row instead."""
+        if not nickname.strip():
+            await self.delete_nickname(viewer_id, target_id)
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            """INSERT INTO user_nicknames (viewer_id, target_id, nickname, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(viewer_id, target_id) DO UPDATE SET
+                   nickname = excluded.nickname,
+                   updated_at = excluded.updated_at""",
+            (viewer_id, target_id, nickname.strip(), now),
+        )
+        await self._db.commit()
+
+    async def delete_nickname(self, viewer_id: str, target_id: str) -> None:
+        """Delete a nickname entry."""
+        await self._db.execute(
+            "DELETE FROM user_nicknames WHERE viewer_id = ? AND target_id = ?",
+            (viewer_id, target_id),
+        )
+        await self._db.commit()
+
+    # --- Room display name (#288) ---
+
+    async def update_room_display_name(self, room_id: str, display_name: str) -> None:
+        """Update the human-readable display_name for a room (slug unchanged)."""
+        await self._db.execute(
+            "UPDATE rooms SET display_name = ? WHERE id = ?",
+            (display_name.strip(), room_id),
         )
         await self._db.commit()
