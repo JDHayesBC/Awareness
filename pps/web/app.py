@@ -42,6 +42,43 @@ PPS_SERVER_PORT = int(os.getenv("PPS_SERVER_PORT", 8000))
 # Entity name for the mounted entity (Lyra by default)
 MOUNTED_ENTITY_NAME = os.getenv("ENTITY_NAME", ENTITY_PATH.name).lower()
 
+# Neo4j group_id for the mounted entity.  The Observatory container is pinned to
+# ENTITY_NAME=lyra + GRAPHITI_GROUP_ID=lyra_v2 to prevent $ENTITY_NAME leaking in,
+# so this must read from env, not just use MOUNTED_ENTITY_NAME.
+_MOUNTED_GROUP_ID: str = (
+    os.getenv("GRAPHITI_GROUP_ID")
+    or MOUNTED_ENTITY_NAME
+    or "default"
+)
+
+
+def _resolve_group_id(entity_name: str) -> str:
+    """Return the Neo4j group_id for *entity_name* (issue #272).
+
+    The Observatory always runs as one entity (currently lyra_v2) but may be asked
+    to display another entity's graph.  Without this helper every endpoint used the
+    process-level GRAPHITI_GROUP_ID regardless of which entity was being explored,
+    so Caia's graph page showed Lyra's data.
+
+    Resolution order:
+    1. ``ENTITY_<NAME>_GROUP_ID`` env var — explicit per-entity override.
+       docker-compose can set ``ENTITY_CAIA_GROUP_ID=caia`` etc.
+    2. ``_MOUNTED_GROUP_ID`` — if *entity_name* matches the mounted entity.
+    3. ``entity_name.lower()`` — Graphiti's default naming convention.
+    """
+    name_lower = (entity_name or "").lower()
+    # 1. Per-entity override: ENTITY_LYRA_GROUP_ID=lyra_v2
+    if name_lower:
+        override = os.getenv(f"ENTITY_{name_lower.upper()}_GROUP_ID")
+        if override:
+            return override
+    # 2. Mounted entity → use process-level GRAPHITI_GROUP_ID
+    if name_lower == MOUNTED_ENTITY_NAME or not name_lower:
+        return _MOUNTED_GROUP_ID
+    # 3. Default: entity name as group_id
+    return name_lower
+
+
 # Multi-entity configuration: maps entity name -> PPS server base URL
 # The mounted entity uses the standard PPS_SERVER_HOST/PORT env vars.
 # Additional entities are configured via ENTITY_<NAME>_PPS_URL env vars.
@@ -930,15 +967,8 @@ async def api_graph_explore(entity: str, depth: int = 2):
     start_time = time.time()
     depth = max(1, min(depth, 5))  # Cap to 1-5 for safety
     try:
-        # Resolve group_id (same logic as /api/graph/entities)
-        entity_name_env = os.getenv("ENTITY_NAME", "")
-        if entity_name_env:
-            default_group_id = entity_name_env.lower()
-        else:
-            entity_path_env = os.getenv("ENTITY_PATH", "")
-            from pathlib import Path as _Path
-            default_group_id = _Path(entity_path_env).name.lower() if entity_path_env else "default"
-        group_id = os.getenv("GRAPHITI_GROUP_ID", default_group_id)
+        # Resolve group_id — entity comes from URL path (issue #272)
+        group_id = _resolve_group_id(entity)
 
         nodes = {}
         edges = []
@@ -1168,15 +1198,8 @@ async def api_graph_entities(limit: int = 100):
         return found
 
     try:
-        # Resolve group_id
-        entity_name_env = os.getenv("ENTITY_NAME", "")
-        if entity_name_env:
-            default_group_id = entity_name_env.lower()
-        else:
-            entity_path = os.getenv("ENTITY_PATH", "")
-            from pathlib import Path
-            default_group_id = Path(entity_path).name.lower() if entity_path else "default"
-        group_id = os.getenv("GRAPHITI_GROUP_ID", default_group_id)
+        # Resolve group_id — no entity param, always use mounted entity (issue #272)
+        group_id = _MOUNTED_GROUP_ID
 
         # Query Neo4j directly for entities (works with both Graphiti and custom pipeline)
         neo4j_uri = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
@@ -1260,9 +1283,7 @@ async def api_graph_synthesize(request: Request):
     neo4j_uri = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
     neo4j_user = os.getenv("NEO4J_USER", "neo4j")
     neo4j_password = os.getenv("NEO4J_PASSWORD", "password123")
-    entity_name_env = os.getenv("ENTITY_NAME", "")
-    default_group_id = entity_name_env if entity_name_env else "default"
-    group_id = os.getenv("GRAPHITI_GROUP_ID", default_group_id)
+    group_id = _resolve_group_id(entity_name)  # issue #272
 
     from neo4j import GraphDatabase as _GraphDatabase
 
