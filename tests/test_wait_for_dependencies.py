@@ -8,6 +8,9 @@ Run with: python3 -m pytest tests/test_wait_for_dependencies.py -v
 import os
 import sys
 import socket
+import re
+import shutil
+import tempfile
 import unittest
 import urllib.error
 from unittest.mock import patch, MagicMock, call
@@ -42,18 +45,72 @@ def _extract_function(source: str, func_name: str) -> str:
     raise ValueError(f"Function {func_name!r} not found in source")
 
 
+class _FakeClock:
+    """A monotonic clock that yields a script, then HOLDS its last value.
+
+    The tests used `iter([...])` as time.monotonic's side_effect, which couples
+    each test to the exact number of monotonic() calls the implementation makes.
+    Adding one call inside wait_for_dependencies (the #330 evidence record) blew
+    three tests up with StopIteration -- a test failure that says nothing about
+    whether the behaviour is right. Holding the final value keeps the intended
+    scenario (time crosses the deadline and stays past it) while letting the
+    implementation call the clock as often as it needs to.
+    """
+
+    def __init__(self, *values):
+        self._values = list(values)
+        self._i = 0
+
+    def __call__(self):
+        if self._i < len(self._values):
+            v = self._values[self._i]
+            self._i += 1
+            return v
+        return self._values[-1]
+
+
+def _extract_constant(source: str, name: str):
+    """Read a module-level constant's *current* value out of the source.
+
+    Read rather than hardcoded on purpose: the point of TestDependencyTimeoutFloor
+    is that the real value stays above neo4j's start_period, and a copy of the
+    number in the test would drift away from the one that ships (#330, #327).
+    """
+    tree = ast.parse(source)
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == name:
+                    return eval(compile(ast.Expression(node.value), "<const>", "eval"),
+                                {"os": os, "int": int})
+    raise ValueError(f"constant {name!r} not found in source")
+
+
 def _load_function(func_name: str, globals_override: dict):
-    """Load a function from server_http.py into a fresh namespace."""
+    """Load a function from server_http.py into a fresh namespace.
+
+    The namespace must carry every module-level name the extracted function
+    actually references. It previously carried only os/sys, so when
+    wait_for_dependencies grew a call to _record_boot_wait (#330) all 14 tests
+    died on NameError -- including the pure URI-parsing ones, which touch none
+    of it. The suite went red while the shipped behaviour was correct and
+    verified live in the container: the harness broke, not the fix.
+
+    So _record_boot_wait is loaded for real rather than stubbed. A stub would
+    make the suite green again while leaving the helper untested, which is the
+    same defect one layer over -- a clean report produced by not looking.
+    """
     with open(_SOURCE_PATH) as f:
         source = f.read()
-    func_src = _extract_function(source, func_name)
-    # Provide the globals the function needs (os, sys already set at module level)
     ns = {
         "os": os,
         "sys": sys,
+        "DEFAULT_DEP_TIMEOUT": _extract_constant(source, "DEFAULT_DEP_TIMEOUT"),
     }
+    # Load the real helper first so the function under test calls the shipped code.
+    exec(compile(_extract_function(source, "_record_boot_wait"), _SOURCE_PATH, "exec"), ns)
     ns.update(globals_override)
-    exec(compile(func_src, _SOURCE_PATH, "exec"), ns)
+    exec(compile(_extract_function(source, func_name), _SOURCE_PATH, "exec"), ns)
     return ns[func_name]
 
 
@@ -107,7 +164,7 @@ class TestWaitForDependenciesNeo4jOnly(unittest.TestCase):
             # Use a timeout short enough that monotonic math triggers quickly.
             # We patch time.monotonic to control time.
             import time
-            times = iter([0.0, 0.0, 5.0])  # deadline=5, first check <5, second >5
+            times = _FakeClock(0.0, 0.0, 5.0)  # deadline=5; first check <5, then past it
             with patch("time.monotonic", side_effect=times):
                 self.fn(timeout=5, poll_interval=1)
 
@@ -125,7 +182,7 @@ class TestWaitForDependenciesNeo4jOnly(unittest.TestCase):
 
         with patch.dict(os.environ, {"NEO4J_URI": "bolt://neo4j:7687"}):
             import time
-            times = iter([0.0, 0.0, 1.0, 1.0, 2.0])
+            times = _FakeClock(0.0, 0.0, 1.0, 1.0, 2.0)
             with patch("time.monotonic", side_effect=times):
                 self.fn(timeout=60, poll_interval=1)
 
@@ -167,7 +224,7 @@ class TestWaitForDependenciesWithChroma(unittest.TestCase):
 
         with patch.dict(os.environ, {"NEO4J_URI": "bolt://neo4j:7687"}):
             import time
-            times = iter([0.0, 0.0, 5.0])
+            times = _FakeClock(0.0, 0.0, 5.0)
             with patch("time.monotonic", side_effect=times):
                 self.fn(timeout=5, poll_interval=1)
 
@@ -195,7 +252,7 @@ class TestWaitForDependenciesWithChroma(unittest.TestCase):
 
         with patch.dict(os.environ, {"NEO4J_URI": "bolt://neo4j:7687"}):
             import time
-            times = iter([0.0, 0.0, 5.0])
+            times = _FakeClock(0.0, 0.0, 5.0)
             with patch("time.monotonic", side_effect=times):
                 self.fn(timeout=5, poll_interval=1)
 
@@ -305,3 +362,102 @@ class TestChromaHeartbeatEndpoint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestDependencyTimeoutFloor(unittest.TestCase):
+    """#330: the wait ceiling must stay above neo4j's declared start_period.
+
+    The original bug was pure arithmetic and had no test: the wait was 60s while
+    docker-compose declared `start_period: 90s` for neo4j, so a cold boot was
+    guaranteed to lose the race and exit(1). Both numbers are read from their real
+    files here -- hardcoding either would let the test agree with itself while the
+    shipped values drift apart, which is the failure this whole class of guard exists
+    to prevent.
+    """
+
+    def _compose_start_period(self) -> int:
+        compose = os.path.join(os.path.dirname(_SOURCE_PATH), "docker-compose.yml")
+        with open(compose) as f:
+            lines = f.readlines()
+        in_neo4j = False
+        for line in lines:
+            if re.match(r"^  neo4j:\s*$", line):
+                in_neo4j = True
+                continue
+            if in_neo4j and re.match(r"^  \S", line):
+                break
+            if in_neo4j:
+                m = re.search(r"start_period:\s*(\d+)s", line)
+                if m:
+                    return int(m.group(1))
+        self.fail("could not find neo4j start_period in docker-compose.yml")
+
+    def test_default_timeout_exceeds_neo4j_start_period(self):
+        with open(_SOURCE_PATH) as f:
+            default = _extract_constant(f.read(), "DEFAULT_DEP_TIMEOUT")
+        start_period = self._compose_start_period()
+        self.assertGreater(
+            default, start_period,
+            f"dependency wait ({default}s) must exceed neo4j start_period "
+            f"({start_period}s) or a cold boot is arithmetically guaranteed to fail (#330)",
+        )
+
+    def test_env_override_is_honoured(self):
+        with open(_SOURCE_PATH) as f:
+            src = f.read()
+        with patch.dict(os.environ, {"PPS_DEP_TIMEOUT": "777"}):
+            self.assertEqual(_extract_constant(src, "DEFAULT_DEP_TIMEOUT"), 777)
+
+
+class TestBootWaitEvidence(unittest.TestCase):
+    """#330: the outcome must be recorded somewhere that survives a container recreate.
+
+    Container logs die with a recreate -- which is what manual recovery does -- so the
+    2026-09-14 failure left no trace and its cause had to be inferred from arithmetic.
+    That evidence gap is why "I wish I knew why that happened" had no answer.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.tmp, "data"), exist_ok=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _record(self):
+        with open(_SOURCE_PATH) as f:
+            src = f.read()
+        ns = {"os": os, "sys": sys}
+        exec(compile(_extract_function(src, "_record_boot_wait"), _SOURCE_PATH, "exec"), ns)
+        return ns["_record_boot_wait"]
+
+    def _log(self):
+        with open(os.path.join(self.tmp, "data", "boot_dependency_wait.log")) as f:
+            return f.read()
+
+    def test_records_ready_outcome(self):
+        with patch.dict(os.environ, {"CLAUDE_HOME": self.tmp, "ENTITY_NAME": "lyra"}):
+            self._record()("ready", 12.3, 300, None)
+        line = self._log()
+        self.assertIn("outcome=ready", line)
+        self.assertIn("entity=lyra", line)
+        self.assertIn("timeout=300s", line)
+
+    def test_records_timeout_outcome_with_unmet_deps(self):
+        with patch.dict(os.environ, {"CLAUDE_HOME": self.tmp, "ENTITY_NAME": "lyra"}):
+            self._record()("TIMEOUT", 300.0, 300, {"neo4j", "chromadb"})
+        line = self._log()
+        self.assertIn("outcome=TIMEOUT", line)
+        self.assertIn("neo4j", line)
+
+    def test_appends_rather_than_truncates(self):
+        with patch.dict(os.environ, {"CLAUDE_HOME": self.tmp, "ENTITY_NAME": "lyra"}):
+            rec = self._record()
+            rec("ready", 1.0, 300, None)
+            rec("ready", 2.0, 300, None)
+        self.assertEqual(len(self._log().strip().splitlines()), 2)
+
+    def test_unwritable_path_never_kills_startup(self):
+        """Evidence collection must not take down the service it observes."""
+        with patch.dict(os.environ, {"CLAUDE_HOME": "/nonexistent/wat", "ENTITY_NAME": "lyra"}):
+            self._record()("ready", 1.0, 300, None)  # must not raise
