@@ -2,7 +2,7 @@
 
 *Canonical reference for what `ambient_recall` returns and how the UserPromptSubmit hook surfaces it. Read this when something feels off about the ambient peripheral vision.*
 
-**Last verified against code:** 2026-09-15 (Issue #223 — terminal-channel turns zeroed on non-startup)
+**Last verified against code:** 2026-09-15 (Issue #189 — knowledge-graph curation pressure in manifest)
 **Authoritative implementation:** `pps/docker/server_http.py` line 1073
 **Hook implementation:** `.claude/hooks/inject_context.py`
 
@@ -24,6 +24,7 @@ Every turn, you should "just know" the following without having to fetch anythin
 - Any unread Haven messages
 - Up to 100 unread cross-channel messages from your raw-capture DB
 - A closing hint reminding you to use targeted searches when something resonates
+- **`[manifest]` knowledge-graph curation pressure** — when `USE_CUSTOM_GRAPH=true`, the manifest includes a `graph_curation` line: `pressure=N.N (X uncurated entities, Y days since last pass) → /curate`. Pressure > 1.0 = soft signal (🔔); > 2.0 = loud (🔥). Metric is `max(uncurated / 100, days_since / 14)`. Never-curated graph shows `days=999`. (Issue #189)
 
 If you find yourself calling `Read` on the persisted-output file to *see* peripheral content, **the in-context surfacing is broken** — see [Red Flags](#red-flags).
 

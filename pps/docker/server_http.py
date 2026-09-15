@@ -1481,6 +1481,16 @@ async def ambient_recall(request: AmbientRecallRequest):
     else:
         memory_note = "(healthy)"
 
+    # Get knowledge-graph curation pressure (Issue #189)
+    curation_pressure_data: "tuple[float, int, float] | None" = None
+    if USE_CUSTOM_GRAPH:
+        try:
+            graph_layer = layers[LayerType.RICH_TEXTURE]
+            if hasattr(graph_layer, "get_curation_pressure"):
+                curation_pressure_data = graph_layer.get_curation_pressure()
+        except Exception:
+            pass  # Non-critical; manifest just omits the line
+
     # Always fetch summaries + unsummarized turns so every ambient_recall call
     # grounds the entity in recent conversation. Limits scale by call type:
     #   startup → 2 summaries + 50 turns (full grounding for cold-start identity)
@@ -1908,6 +1918,24 @@ async def ambient_recall(request: AmbientRecallRequest):
                 f"- recent_turns: 0 loaded but {unsummarized_count} exist — "
                 f"call get_turns_since_summary to fetch."
             )
+
+    # knowledge-graph curation pressure (Issue #189) — only when Neo4j is active
+    if curation_pressure_data is not None:
+        pressure, uncurated, days_since = curation_pressure_data
+        if days_since >= 999.0:
+            days_str = "never curated"
+        else:
+            days_str = f"{days_since:.0f}d since last pass"
+        if pressure >= 2.0:
+            urgency = "🔥 "
+        elif pressure >= 1.0:
+            urgency = "🔔 "
+        else:
+            urgency = ""
+        manifest_lines.append(
+            f"- {urgency}graph_curation: pressure={pressure:.1f} "
+            f"({uncurated} uncurated entities, {days_str}) → `/curate`"
+        )
 
     # Only emit manifest block if it has actual layers (skip the bare header)
     if len(manifest_lines) > 1:

@@ -947,6 +947,63 @@ class CustomGraphLayer(PatternLayer):
         return self._resolver
 
     # ─────────────────────────────────────────
+    # Curation pressure (Issue #189)
+    # ─────────────────────────────────────────
+
+    def get_curation_pressure(self) -> "tuple[float, int, float] | None":
+        """
+        Compute curation pressure for the ambient manifest (Issue #189).
+
+        Returns ``(pressure, uncurated_count, days_since_last_curated)`` or
+        ``None`` if Neo4j is unavailable or the query fails.
+
+        Composite metric: ``max(uncurated_count / 100.0, days_since / 14.0)``
+
+        - **uncurated_count side**: raw backlog — 100 uncurated entities ≈ pressure 1.0
+        - **days_since side**: ambient drift — 14 days without a curation pass ≈ pressure 1.0
+
+        Pressure > 1.0 is a soft signal; > 2.0 is loud.
+        ``days_since`` is 999.0 when the graph has never been curated.
+        """
+        try:
+            driver = self._get_driver()
+        except Exception:
+            return None
+
+        cypher = """
+            MATCH (e:Entity {group_id: $gid})
+            RETURN
+                count(CASE WHEN e.curated_at IS NULL THEN 1 END) AS uncurated_count,
+                max(e.curated_at) AS last_curated
+        """
+        try:
+            records, _, _ = driver.execute_query(cypher, gid=self._group_id)
+            if not records:
+                return None
+            row = records[0].data()
+            uncurated_count = int(row.get("uncurated_count") or 0)
+            last_curated = row.get("last_curated")
+            if last_curated is not None:
+                try:
+                    from datetime import datetime as _dt, timezone as _tz
+                    if hasattr(last_curated, "to_native"):
+                        lc_dt = last_curated.to_native()
+                        if lc_dt.tzinfo is None:
+                            lc_dt = lc_dt.replace(tzinfo=_tz.utc)
+                    else:
+                        lc_dt = _dt.now(_tz.utc)
+                    days_since = (_dt.now(_tz.utc) - lc_dt).total_seconds() / 86400.0
+                except Exception:
+                    days_since = 0.0
+            else:
+                days_since = 999.0  # Graph has never been curated
+            pressure = max(uncurated_count / 100.0, days_since / 14.0)
+            return (pressure, uncurated_count, days_since)
+        except Exception as exc:
+            logger.debug("get_curation_pressure query failed: %s", exc)
+            return None
+
+    # ─────────────────────────────────────────
     # Schema / index management
     # ─────────────────────────────────────────
 
