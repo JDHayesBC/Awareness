@@ -264,6 +264,13 @@ class ClaudeInvoker:
         self._session_start_time: Optional[datetime] = None
         self._last_activity_time: Optional[datetime] = None
 
+        # Desync watchdog (issue #277): set when a query returns impossibly fast
+        # (< 0.5s), indicating the SDK stream returned pre-buffered content from a
+        # previous query rather than a fresh response.  needs_restart() returns True
+        # when this flag is set so the next check_and_restart_if_needed() call will
+        # rebuild the session before the response-one-behind problem propagates.
+        self._desync_suspected: bool = False
+
     def subprocess_env(self) -> dict[str, str]:
         """Extra environment for the Claude Code subprocess (merged over the
         daemon's own env by the SDK). Currently just CC_INVOKER_CHANNEL — see
@@ -438,6 +445,7 @@ class ClaudeInvoker:
         self._turn_count = 0
         self._session_start_time = datetime.now()
         self._last_activity_time = datetime.now()
+        self._desync_suspected = False  # Clear on fresh session
 
         # Configure options with inline MCP servers for portability
         options = ClaudeAgentOptions(
@@ -569,6 +577,10 @@ class ClaudeInvoker:
             logger.debug(f"Sending query: {prompt[:100]}... (+{prompt_tokens} tokens, counted={count_tokens})")
 
             try:
+                # Measure wall-clock time for desync watchdog (issue #277).
+                # Real Claude inference cannot complete in under ~0.5 s; anything
+                # faster means the SDK stream handed us pre-buffered content.
+                _stream_start = datetime.now()
                 await self._client.query(prompt)
 
                 # Collect response — use receive_messages() instead of receive_response()
@@ -642,6 +654,25 @@ class ClaudeInvoker:
 
                 logger.info(f"Response stream ended. Collected {text_block_count} text blocks, {tool_block_count} tool blocks from {msg_count} messages")
                 response = "".join(response_parts)
+
+                # Desync watchdog (issue #277): flag if response arrived impossibly fast.
+                # Claude inference always takes at least a few seconds; under 0.5s means
+                # the SDK's receive_messages() returned pre-buffered content from a prior
+                # query rather than a fresh response to *this* one.  We serve the response
+                # unchanged (dropping it would be worse) but set _desync_suspected so
+                # needs_restart() returns True → check_and_restart_if_needed() on the NEXT
+                # call will rebuild the session before the one-turn lag can cascade.
+                # First-turn exclusion: startup prompts on a freshly connected session can
+                # also be fast (empty/short responses), so only flag after turn 0.
+                _stream_elapsed = (datetime.now() - _stream_start).total_seconds()
+                if _stream_elapsed < 0.5 and self._turn_count > 0:
+                    logger.warning(
+                        f"STREAM DESYNC suspected (issue #277): turn #{self._turn_count + 1} "
+                        f"completed in {_stream_elapsed:.3f}s — pre-buffered SDK content. "
+                        f"Session will be restarted before next query. "
+                        f"Response preview: {response[:120]!r}"
+                    )
+                    self._desync_suspected = True
 
                 # Track response tokens and turn count
                 response_tokens = self.estimate_tokens(response)
@@ -861,7 +892,18 @@ class ClaudeInvoker:
             if mem_mb is not None and mem_mb >= self.max_memory_mb:
                 return True, f"memory_pressure ({mem_mb:.0f}/{self.max_memory_mb}MB)"
 
+        # Desync watchdog (issue #277): last query returned pre-buffered content
+        if self._desync_suspected:
+            return True, "stream_desync (previous query completed in <0.5s — pre-buffered content)"
+
         return False, ""
+
+    @property
+    def desync_suspected(self) -> bool:
+        """True if the last query returned suspiciously fast, suggesting the SDK
+        stream delivered pre-buffered content from a prior turn (issue #277).
+        Cleared automatically when the session is restarted via initialize()."""
+        return self._desync_suspected
 
     def approaching_restart(self, threshold: float = 0.8) -> tuple[bool, str]:
         """
