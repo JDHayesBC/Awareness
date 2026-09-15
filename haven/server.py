@@ -262,6 +262,10 @@ app.mount(
 )
 MAX_SHARE_IMAGE_BYTES = int(os.getenv("HAVEN_MAX_SHARE_IMAGE_BYTES", str(20 * 1024 * 1024)))
 ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+# Optional override for constructing absolute image URLs (issue #245).
+# Set to e.g. "https://haven.example.com" (no trailing slash).
+# When unset, the URL is derived from the incoming request's Host header.
+HAVEN_PUBLIC_URL: str = os.getenv("HAVEN_PUBLIC_URL", "").rstrip("/")
 
 
 # --- Health check ---
@@ -745,7 +749,12 @@ async def share_image(
     file_path = entity_dir / filename
     file_path.write_bytes(image_bytes)
 
-    image_url = f"/shared-images/{user['username']}/{filename}"
+    # Build absolute URL so clients on other machines can fetch the image (#245).
+    # Prefer the HAVEN_PUBLIC_URL env var; fall back to the request Host header.
+    _proto = request.headers.get("x-forwarded-proto", "http")
+    _host  = request.headers.get("host", "localhost")
+    _base  = HAVEN_PUBLIC_URL or f"{_proto}://{_host}"
+    image_url = f"{_base}/shared-images/{user['username']}/{filename}"
 
     # Caption may be empty — we still need a non-empty content for the schema,
     # so default to a single-character marker the renderer treats as image-only.
