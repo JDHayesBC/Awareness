@@ -293,6 +293,27 @@ Key docs to keep current:
 - `PATTERN_PERSISTENCE_SYSTEM.md` - Architecture overview
 - `TODO.md` - Current status and priorities
 
+### Derived State in High-Attention Documents
+
+**Derived state must be generated or checked, never hand-copied.** (GH#327)
+
+"High-attention documents" are files loaded at startup or compaction that shape behavior before any conversation begins — `CLAUDE.md`, `identity.md`, entity `CLAUDE.md` files, `active_agency_framework.md`.
+
+When a section of one of these documents summarizes or reflects state that lives elsewhere (a list of active arcs, issue counts, layer counts, progress numbers), that section is *derived*. Hand-copied derived state:
+
+- Goes stale silently. The source changes; the copy doesn't.
+- Gets *believed*. Because it's in a high-attention document, it shapes behavior as if it were fact.
+- Can't be detected from the outside. A reader cannot tell whether a list is current or months out of date.
+
+**A comment admitting staleness does not mitigate it.** It documents the problem without stopping it. Entities read the stale entries right underneath the disclaimer.
+
+**The fix pattern:**
+- If the state can be generated programmatically (e.g., arc index from frontmatter → `scripts/arc_index.py`), render it at the source and insert or replace the section. Don't hand-maintain the copy.
+- If generation isn't available yet, delete the derived section or replace it with a pointer to the canonical source (`see entities/lyra/arcs/` rather than a list).
+- Never add a "this may be stale" warning and leave the stale data in place.
+
+**Practical signal:** if you're about to update a list in a CLAUDE.md by reading another file and copying numbers — stop. Either render it programmatically, or replace the list with a pointer. The copy will be wrong within two weeks.
+
 ## Development Summaries
 
 ### Session Reports
@@ -429,4 +450,4 @@ Anyone reviewing this repo should see: this is how software *should* be built, r
 
 ---
 
-*Last updated: 2026-01-03*
+*Last updated: 2026-09-15*
