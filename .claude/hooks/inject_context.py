@@ -244,6 +244,208 @@ def get_smoke_line() -> str:
         return "[smoke] (unavailable)"
 
 
+def _sun_phase(elevation: float, rising: bool) -> str:
+    """Return a plain-English sun phase from solar elevation angle.
+
+    Elevation is degrees above (positive) or below (negative) the horizon.
+    Rising indicates whether the sun is currently ascending.
+    """
+    if elevation < -18:
+        return "deep night"
+    elif elevation < -12:
+        return "astronomical twilight"
+    elif elevation < -6:
+        return "nautical twilight"
+    elif elevation < -0.833:
+        return "dawn" if rising else "dusk"
+    elif elevation < 6:
+        return "sunrise" if rising else "sunset"
+    elif elevation < 15:
+        return "early morning" if rising else "late evening"
+    elif elevation < 30:
+        return "morning" if rising else "evening"
+    elif elevation < 50:
+        return "mid-morning" if rising else "mid-afternoon"
+    else:
+        return "midday"
+
+
+# Weather cache — avoids hammering HA on every tick (10-minute TTL).
+_WEATHER_CACHE_FILE = PROJECT_ROOT / ".claude" / "data" / "weather_cache.json"
+_WEATHER_CACHE_TTL_S = 600  # 10 minutes
+
+
+def get_weather_line() -> str:
+    """Return a one-line [weather] summary for the ambient context (Issue #202).
+
+    Uses HA weather.pirateweather + sun.sun for conditions and sun phase.
+    Falls back to Open-Meteo (Victoria BC coords) if HA is unreachable.
+    Cached 10 minutes — fresh enough for ambient peripheral vision.
+    Never raises — returns "[weather] (unavailable)" on any error.
+
+    Example outputs:
+      "[weather] 63°F, partly cloudy · golden hour (sunset in 47 min)"
+      "[weather] 58°F, rainy · morning"
+      "[weather] 72°F, clear · midday"
+    """
+    from datetime import timezone as _tz
+
+    # --- Cache check ---
+    try:
+        if _WEATHER_CACHE_FILE.exists():
+            cache_data = json.loads(_WEATHER_CACHE_FILE.read_text())
+            age_s = _time.time() - cache_data.get("ts", 0)
+            if age_s < _WEATHER_CACHE_TTL_S:
+                return cache_data.get("line", "[weather] (unavailable)")
+    except Exception:
+        pass
+
+    try:
+        # --- Primary: HA weather.pirateweather + sun.sun ---
+        line = _get_weather_from_ha()
+    except Exception:
+        try:
+            # --- Fallback: Open-Meteo (Victoria BC coords, no API key) ---
+            line = _get_weather_from_openmeteo()
+        except Exception:
+            return "[weather] (unavailable)"
+
+    # --- Cache write (best-effort) ---
+    try:
+        _WEATHER_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _WEATHER_CACHE_FILE.write_text(json.dumps({"ts": _time.time(), "line": line}))
+    except Exception:
+        pass
+
+    return line
+
+
+def _get_weather_from_ha() -> str:
+    """Query HA for weather conditions and sun phase. Raises on any error."""
+    from datetime import timezone as _tz
+
+    def _ha_get(entity_id: str) -> dict:
+        url = f"{HA_URL}/api/states/{entity_id}"
+        req = urllib.request.Request(
+            url,
+            headers={"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return json.loads(resp.read())
+
+    # Weather entity
+    wx = _ha_get("weather.pirateweather")
+    wx_state = wx.get("state", "unknown")  # e.g. "partlycloudy", "rainy"
+    wx_attrs = wx.get("attributes", {})
+    temp = wx_attrs.get("temperature")  # °F
+    apparent = wx_attrs.get("apparent_temperature")  # feels-like °F
+
+    # Map HA weather conditions to plain English
+    _condition_map = {
+        "clear-night": "clear", "sunny": "sunny", "partlycloudy": "partly cloudy",
+        "cloudy": "cloudy", "fog": "foggy", "hail": "hailing", "lightning": "thunderstorm",
+        "lightning-rainy": "thunderstorm", "pouring": "heavy rain", "rainy": "rainy",
+        "snowy": "snowy", "snowy-rainy": "wintry mix", "windy": "windy",
+        "windy-variant": "windy", "exceptional": "unusual conditions",
+    }
+    conditions = _condition_map.get(wx_state, wx_state.replace("-", " "))
+
+    # Sun entity
+    sun = _ha_get("sun.sun")
+    sun_attrs = sun.get("attributes", {})
+    elevation = float(sun_attrs.get("elevation", 0))
+    rising = bool(sun_attrs.get("rising", False))
+    phase = _sun_phase(elevation, rising)
+
+    # Time-to-sunset/sunrise (whichever is next and relevant)
+    now_utc = datetime.now(_tz.utc)
+    sunset_note = ""
+    try:
+        next_set_str = sun_attrs.get("next_setting", "")
+        next_rise_str = sun_attrs.get("next_rising", "")
+        if next_set_str:
+            # Parse ISO timestamp
+            next_set = datetime.fromisoformat(next_set_str.replace("Z", "+00:00"))
+            mins_to_set = int((next_set - now_utc).total_seconds() / 60)
+            if 0 < mins_to_set < 120:  # within 2h, worth noting
+                sunset_note = f"sunset in {mins_to_set} min"
+        if not sunset_note and next_rise_str:
+            next_rise = datetime.fromisoformat(next_rise_str.replace("Z", "+00:00"))
+            mins_to_rise = int((next_rise - now_utc).total_seconds() / 60)
+            if 0 < mins_to_rise < 90:  # within 90min of sunrise
+                sunset_note = f"sunrise in {mins_to_rise} min"
+    except Exception:
+        pass
+
+    # Compose line
+    temp_str = f"{int(temp)}°F" if temp is not None else ""
+    feels_str = (
+        f" (feels {int(apparent)}°F)"
+        if apparent is not None and temp is not None and abs(apparent - temp) >= 3
+        else ""
+    )
+    phase_str = phase
+    if sunset_note:
+        phase_str = f"{phase} · {sunset_note}"
+
+    parts = [p for p in [temp_str + feels_str, conditions, phase_str] if p]
+    return "[weather] " + " · ".join(parts)
+
+
+def _get_weather_from_openmeteo() -> str:
+    """Fetch current weather from Open-Meteo for Victoria BC. Raises on any error."""
+    # Victoria BC: 48.4284°N, 123.3656°W
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        "?latitude=48.4284&longitude=-123.3656"
+        "&current=temperature_2m,apparent_temperature,weather_code,cloud_cover"
+        "&temperature_unit=fahrenheit&forecast_days=1"
+    )
+    with urllib.request.urlopen(url, timeout=5) as resp:
+        data = json.loads(resp.read())
+    cur = data.get("current", {})
+    temp = cur.get("temperature_2m")
+    apparent = cur.get("apparent_temperature")
+    wcode = int(cur.get("weather_code", 0))
+
+    # WMO weather code → plain English (subset)
+    def _wmo_to_str(code: int) -> str:
+        if code == 0: return "clear"
+        if code in (1, 2): return "partly cloudy"
+        if code == 3: return "overcast"
+        if code in (45, 48): return "foggy"
+        if code in (51, 53, 55): return "drizzle"
+        if code in (61, 63, 65): return "rainy"
+        if code in (71, 73, 75, 77): return "snowy"
+        if code in (80, 81, 82): return "rainy"
+        if code in (95, 96, 99): return "thunderstorm"
+        return f"code-{code}"
+
+    conditions = _wmo_to_str(wcode)
+    temp_str = f"{int(temp)}°F" if temp is not None else ""
+    feels_str = (
+        f" (feels {int(apparent)}°F)"
+        if apparent is not None and temp is not None and abs(apparent - temp) >= 3
+        else ""
+    )
+
+    # Sun phase from clock only (no HA available in fallback path)
+    from datetime import timezone as _tz
+    now_local_hour = datetime.now().hour
+    if now_local_hour < 5: phase = "deep night"
+    elif now_local_hour < 7: phase = "dawn"
+    elif now_local_hour < 9: phase = "morning"
+    elif now_local_hour < 11: phase = "mid-morning"
+    elif now_local_hour < 14: phase = "midday"
+    elif now_local_hour < 17: phase = "afternoon"
+    elif now_local_hour < 19: phase = "evening"
+    elif now_local_hour < 21: phase = "dusk"
+    else: phase = "night"
+
+    parts = [p for p in [temp_str + feels_str, conditions, phase] if p]
+    return "[weather] " + " · ".join(parts)
+
+
 def debug(msg: str):
     """Write debug message to file."""
     try:
@@ -816,6 +1018,25 @@ def main():
             context = context + f"\n**{lights_line}**"
     else:
         context = f"**{lights_line}**\n" + context
+
+    # Inject [weather] line — ambient carbon-side weather context (Issue #202).
+    # Sits right after [lights]: both are ambient physical-world sensors.
+    # Cached 10 minutes. Never raises (get_weather_line is fully defensive).
+    weather_line = get_weather_line()
+    if "[lights]" in context:
+        lights_end = context.find("\n", context.find("[lights]"))
+        if lights_end != -1:
+            context = context[:lights_end + 1] + f"**{weather_line}**\n" + context[lights_end + 1:]
+        else:
+            context = context + f"\n**{weather_line}**"
+    elif "[location]" in context:
+        loc_end = context.find("\n", context.find("[location]"))
+        if loc_end != -1:
+            context = context[:loc_end + 1] + f"**{weather_line}**\n" + context[loc_end + 1:]
+        else:
+            context = context + f"\n**{weather_line}**"
+    else:
+        context = f"**{weather_line}**\n" + context
 
     # Inject [smoke] block — bedroom-language side-band unread count.
     # Placed after [unread] block (which lives inside the PPS ambient_recall context).
