@@ -409,6 +409,15 @@ Real thresholds, from `scripts/summarize_daemon.py:71,73`:
 `SUMMARIZE_THRESHOLD = 100` (fires above this), `TARGET_UNSUMMARIZED = 80` (drains to
 this). **Not 200.** A backlog of 94 is four turns from firing, not "comfortably fine."
 
+⚠️ **`summarize_daemon.py` is a legacy MISNOMER — the file name is not evidence.** It is
+the one-shot script the timer executes, not a daemon. The unit points at it twice
+(`~/.config/systemd/user/summarize.service:3` `Documentation=`, `:16` `ExecStart=`) and
+`:18` even says "daemon handles that itself" — so an agent who greps `daemon` (exactly
+what a confused agent greps) lands on a *filename*, and a filename feels more
+authoritative than prose. The wrong model has a durable home this document cannot evict.
+Trust `Type=oneshot` on `:8` and the timer, not the name. Rename tracked separately —
+**do not rename it mid-incident**; a half-landed rename is worse than the misnomer.
+
 ### What to do at what number
 
 | `unsummarized_count` | Meaning | Action |
