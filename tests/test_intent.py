@@ -255,3 +255,73 @@ def test_issue_exists_distinguishes_not_found_from_other_failures(monkeypatch):
     assert intent.issue_exists(999) is None
     monkeypatch.setattr(intent.subprocess, "run", lambda *a, **k: R(0, ""))
     assert intent.issue_exists(329) is True
+
+
+# --- delivery witness (2026-09-16) -------------------------------------------
+# A self-reported RELEASE is a receipt, not a witness. These pin the three-way
+# contract: the UNKNOWN cases must never collapse into NONE_OBSERVED.
+
+def test_delivery_observed_when_a_declared_file_changed(idir, tmp_path, monkeypatch):
+    target = tmp_path / "scripts" / "touched.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("before\n")
+    monkeypatch.setattr(intent, "_REPO_ROOT", tmp_path)
+
+    intent.claim(400, files=["scripts/touched.py"], holder=CAIA, intent_dir=idir)
+    target.write_text("after\n")  # mtime now newer than the claim
+    assert intent.delivery_observed(400, intent_dir=idir) is True
+
+    intent.release(400, holder=CAIA, intent_dir=idir)
+    assert "delivery: OBSERVED" in intent.intent_path_for(400, idir).read_text()
+
+
+def test_delivery_none_observed_when_declared_file_never_changed(idir, tmp_path, monkeypatch):
+    import os, time
+    target = tmp_path / "scripts" / "untouched.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("static\n")
+    os.utime(target, (time.time() - 3600, time.time() - 3600))  # older than the claim
+    monkeypatch.setattr(intent, "_REPO_ROOT", tmp_path)
+
+    intent.claim(401, files=["scripts/untouched.py"], holder=CAIA, intent_dir=idir)
+    assert intent.delivery_observed(401, intent_dir=idir) is False
+
+    intent.release(401, holder=CAIA, intent_dir=idir)
+    assert "delivery: NONE_OBSERVED" in intent.intent_path_for(401, idir).read_text()
+
+
+def test_delivery_unknown_when_no_files_were_declared(idir):
+    """Declaring nothing is unanswerable, NOT a failed delivery."""
+    intent.claim(402, work="thinking about it", holder=CAIA, intent_dir=idir)
+    assert intent.delivery_observed(402, intent_dir=idir) is None
+    intent.release(402, holder=CAIA, intent_dir=idir)
+    assert "delivery: UNKNOWN" in intent.intent_path_for(402, idir).read_text()
+
+
+def test_delivery_unknown_when_declared_file_cannot_be_located(idir, tmp_path, monkeypatch):
+    """A path we cannot resolve is unknown, not disproven — the same rule
+    issue_exists() follows when gh is offline."""
+    monkeypatch.setattr(intent, "_REPO_ROOT", tmp_path)
+    intent.claim(403, files=["nowhere/at/all.py"], holder=CAIA, intent_dir=idir)
+    assert intent.delivery_observed(403, intent_dir=idir) is None
+
+
+def test_delivery_witness_does_not_walk_the_tree(idir, tmp_path, monkeypatch):
+    """Regression: the first cut used _REPO_ROOT.glob('**/' + name), which walked
+    .git and vendored clones on every release and hung the suite. A bare basename
+    must answer UNKNOWN cheaply rather than go looking."""
+    deep = tmp_path / "a" / "b" / "c"
+    deep.mkdir(parents=True)
+    (deep / "buried.py").write_text("x\n")
+    monkeypatch.setattr(intent, "_REPO_ROOT", tmp_path)
+    intent.claim(404, files=["buried.py"], holder=CAIA, intent_dir=idir)
+    assert intent.delivery_observed(404, intent_dir=idir) is None
+
+
+def test_release_still_preserves_the_record_with_delivery(idir):
+    intent.claim(405, files=["scripts/x.py"], work="w", holder=CAIA, intent_dir=idir)
+    intent.release(405, holder=LYRA, intent_dir=idir)
+    txt = intent.intent_path_for(405, idir).read_text()
+    assert "status: RELEASED" in txt
+    assert "work: w" in txt          # tombstone, not delete
+    assert "delivery:" in txt

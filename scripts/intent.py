@@ -72,17 +72,22 @@ def _read(p: Path) -> dict | None:
         return None
 
 
-def _age_hours(fields: dict) -> float | None:
-    raw = (fields.get("since") or "").strip()
+def _parse_since(raw: str) -> datetime | None:
+    """Parse a claim's `since:` in any format we have ever written. None = unparsable."""
     for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M %Z", "%Y-%m-%d %H:%M"):
         try:
-            dt = datetime.strptime(raw, fmt)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return (datetime.now(timezone.utc) - dt).total_seconds() / 3600.0
+            dt = datetime.strptime((raw or "").strip(), fmt)
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
         except ValueError:
             continue
     return None
+
+
+def _age_hours(fields: dict) -> float | None:
+    dt = _parse_since(fields.get("since") or "")
+    if dt is None:
+        return None
+    return (datetime.now(timezone.utc) - dt).total_seconds() / 3600.0
 
 
 def _split_files(raw: str) -> list:
@@ -115,6 +120,56 @@ def claim(issue, files=None, work="", holder=None, intent_dir=None) -> dict:
     return {"path": p, "superseded": superseded}
 
 
+def delivery_observed(issue, intent_dir=None) -> bool | None:
+    """Did any file this claim DECLARED actually change since the claim was made?
+
+    Returns True / False / None, deliberately the same three-way contract as
+    ``issue_exists`` above — None means "could not find out", never "no".
+
+    Why this exists (2026-09-16). ``release()`` writes ``status: RELEASED`` from the
+    holder's own say-so and nothing ever looks. So the announce half is verified at
+    claim time (we check the issue number is real) while the settle half — the half
+    that tells a sibling "this is finished, stop waiting on it" — is pure self-report.
+    That asymmetry is backwards: the louder claim is the checked one.
+
+    This is NOT proof the work happened. Borrowing the distinction from Ashley's
+    evaluation plane (docs/architecture/Ashley_Evaluation_Qualification_Plane.md:356):
+    a *receipt* is what a path reports about itself; a *witness* independently observes
+    enough post-effect reality to support the claim. A self-reported RELEASE is a
+    receipt. An observed change to the declared files is a weak witness — it can be
+    fooled by an unrelated edit, and it says nothing about quality. It can only ever
+    falsify the emptiest case: released, and not one declared file was touched.
+
+    None is returned whenever the question is unanswerable rather than answered "no":
+    the claim declared no files, no timestamp, or the mtime could not be read. An
+    unverifiable settle must not be reported like a disproven one.
+    """
+    fields = _read(intent_path_for(issue, intent_dir or INTENT_DIR)) or {}
+    declared = _split_files(fields.get("files", ""))
+    if not declared:
+        return None  # nothing was promised in file terms — nothing to witness
+    since_dt = _parse_since(fields.get("since", ""))
+    if since_dt is None:
+        return None
+    since = since_dt.timestamp()
+    seen_any = False
+    for rel in declared:
+        # Repo-root-relative ONLY. Deliberately no recursive glob: a bare basename
+        # would make this walk the whole tree (.git, vendored clones) on every
+        # release, and a settle must never be the slow part of anything. A claim
+        # that declared a basename we cannot locate answers UNKNOWN, not "no" —
+        # which is also a quiet nudge to declare real paths at claim time.
+        cand = _REPO_ROOT / rel
+        try:
+            if cand.is_file():
+                seen_any = True
+                if cand.stat().st_mtime > since:
+                    return True
+        except OSError:
+            continue
+    return False if seen_any else None  # never found the file at all => unknown, not no
+
+
 def release(issue, holder=None, intent_dir=None) -> bool:
     p = intent_path_for(issue, intent_dir or INTENT_DIR)
     if not p.exists():
@@ -131,6 +186,11 @@ def release(issue, holder=None, intent_dir=None) -> bool:
         lines.append(f"files: {fields['files']}")
     if fields.get("work"):
         lines.append(f"work: {fields['work']}")
+    # Record what we could observe, not what was asserted. The tombstone is the
+    # thing a sibling reads later; a settle with no observed delivery should say so
+    # in the record rather than only in a warning nobody kept.
+    seen = delivery_observed(issue, intent_dir)
+    lines.append("delivery: " + {True: "OBSERVED", False: "NONE_OBSERVED", None: "UNKNOWN"}[seen])
     p.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return True
 
@@ -304,8 +364,16 @@ def _cmd_claim(a) -> int:
 
 
 def _cmd_release(a) -> int:
+    seen = delivery_observed(a.issue)
     ok = release(a.issue)
     print(f"released: #{str(a.issue).lstrip('#')}" if ok else f"no claim on #{a.issue}")
+    if ok and seen is False:
+        print("⚠ released, but none of the declared files changed since the claim.",
+              file=sys.stderr)
+        print("  Not an error and not blocked — intent never blocks. But a settle is a "
+              "promise to a sibling that this is done.", file=sys.stderr)
+        print("  If the work landed elsewhere, say so in the claim; if it did not land, "
+              "release is the wrong verb.", file=sys.stderr)
     return 0 if ok else 1
 
 
