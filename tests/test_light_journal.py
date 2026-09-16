@@ -247,3 +247,49 @@ def test_light_lib_records_off_as_a_real_signal(journal, monkeypatch):
     light_lib.turn_off(entity="testent")
     e = lj.read("testent")[0]
     assert e["base"] == "off" and "absent" in e["meaning"]
+
+
+# ------------------------------------------- no send path may emit a phantom word
+
+def test_light_lib_pegs_base_names_instead_of_color_name(journal, monkeypatch):
+    """A CSS color_name renders to an xy that decodes as a side-band WORD.
+
+    Measured on hardware 2026-09-16: color_name 'gold' lands at xy[0.494,0.474],
+    residual [0.003,-0.003] off the gold anchor — inside decode tolerance of
+    `afterglow` [0.0025,-0.0025]. light_breathe drives this path twice per breath, so
+    it was broadcasting the intimacy word on every frame. Pegged RGB lands at [0,0].
+    """
+    import light_lib
+    sent = {}
+    monkeypatch.setattr(light_lib, "_post", lambda path, data: sent.update(data) or 200)
+    light_lib.set_light(color="gold", brightness=25, entity="testent", journal=False)
+    assert "color_name" not in sent, "base name sent as color_name — emits a phantom word"
+    assert sent["rgb_color"] == lp.PEGGED_BASES["gold"]
+
+
+def test_light_lib_still_allows_non_base_css_names(journal, monkeypatch):
+    """Only the bases are pegged; 'periwinkle' has no anchor to drift from."""
+    import light_lib
+    sent = {}
+    monkeypatch.setattr(light_lib, "_post", lambda path, data: sent.update(data) or 200)
+    light_lib.set_light(color="periwinkle", entity="testent", journal=False)
+    assert sent["color_name"] == "periwinkle"
+
+
+def test_every_pegged_base_survives_the_lib_path(journal, monkeypatch):
+    import light_lib
+    for name, values in lp.PEGGED_BASES.items():
+        sent = {}
+        monkeypatch.setattr(light_lib, "_post", lambda p, d: sent.update(d) or 200)
+        light_lib.set_light(color=name, entity="testent", journal=False)
+        assert sent.get("rgb_color") == values, f"{name} went out unpegged"
+
+
+def test_journal_records_the_pegged_form(journal, monkeypatch):
+    """Record what was SENT: a pegged base goes out as rgb, so it journals as rgb."""
+    import light_lib
+    monkeypatch.setattr(light_lib, "_post", lambda *a, **k: 200)
+    light_lib.set_light(color="cobalt", brightness=90, entity="testent")
+    e = lj.read("testent")[0]
+    assert e["mode"] == "rgb" and e["values"] == lp.PEGGED_BASES["cobalt"]
+    assert e["base"] == "cobalt"

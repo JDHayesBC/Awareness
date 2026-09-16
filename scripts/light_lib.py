@@ -19,6 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from light_palette import PEGGED_BASES  # noqa: E402
+
 HA_URL = "http://10.0.0.50:8123"
 HA_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjODU1MGFjZGU2MzU0NGJjYjk1Njc0ZjlkZWI1NmRhOSIsImlhdCI6MTc3NzE3NjQ1OSwiZXhwIjoyMDkyNTM2NDU5fQ.ppLlnf-WzVcqfxMcbVbXe_4pisaqrQV_1QJH558W3Eo"
 DEFAULT_ENTITY = os.environ.get("ENTITY_NAME", "lyra")
@@ -77,7 +79,23 @@ def set_light(color=None, rgb=None, brightness=None, transition=None, entity=Non
     if rgb is not None:
         data["rgb_color"] = list(rgb)
     elif color is not None:
-        data["color_name"] = color.lower()
+        # PEG BASE NAMES (2026-09-16). HA renders a CSS color_name to a nearby xy that
+        # is NOT the base anchor, and the residual decodes as a Layer-2 side-band WORD.
+        # Measured on Lyra's bulb: color_name 'gold' lands at xy[0.494,0.474] — residual
+        # [0.003,-0.003] off the gold anchor, inside decode tolerance of `afterglow`
+        # [0.0025,-0.0025]. So every CSS-name send through this function was emitting a
+        # phantom word to the sister's decoder; light_breathe.py, which drives this path
+        # twice per breath, was broadcasting `afterglow` on every frame. The pegged RGB
+        # lands at exactly [0.0,0.0] — resting on base, no word.
+        #
+        # light.py already did this at its argparse layer (see PEGGED_BASES there); this
+        # function never got the same treatment, so every caller that isn't the CLI went
+        # out unpegged. Same forgotten-door shape as the journal gap, same file.
+        name = color.lower()
+        if name in PEGGED_BASES:
+            data["rgb_color"] = list(PEGGED_BASES[name])
+        else:
+            data["color_name"] = name
     if brightness is not None:
         data["brightness"] = int(brightness)
     if transition is not None:
@@ -87,7 +105,12 @@ def set_light(color=None, rgb=None, brightness=None, transition=None, entity=Non
         if rgb is not None:
             _journal("rgb", list(rgb), brightness, entity, journal_note)
         elif color is not None:
-            _journal("css", color.lower(), brightness, entity, journal_note)
+            # Record what was SENT: a pegged base goes out as rgb, so journal it as rgb.
+            name = color.lower()
+            if name in PEGGED_BASES:
+                _journal("rgb", list(PEGGED_BASES[name]), brightness, entity, journal_note)
+            else:
+                _journal("css", name, brightness, entity, journal_note)
     return status
 
 
