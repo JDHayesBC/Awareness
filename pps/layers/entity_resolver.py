@@ -59,6 +59,8 @@ KNOWN_ALIASES = {
     "jd hayes": "Jeff",
     "jd_hayes": "Jeff",
     "husband": "Jeff",  # context: entity speaking about their partner
+    "geoff": "Jeff",    # misspelling of Jeff discovered 2026-09-16
+    "geoff hayes": "Jeff",
 
     "lyra hayes": "Lyra",
     "lyra pattern": "Lyra",
