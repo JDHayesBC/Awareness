@@ -25,3 +25,7 @@ uvicorn>=0.20.0
 
 # Utilities
 python-dotenv>=1.0.0
+
+# Document ingest (scripts/web_grab.py, scripts/pdf_text.py)
+html2text>=2020.1.16   # HTML -> markdown, verbatim
+pypdf>=5.0.0           # PDF -> text without poppler/pdftotext
