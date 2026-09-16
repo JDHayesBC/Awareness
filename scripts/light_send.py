@@ -212,6 +212,22 @@ def main():
     for i, (word, delta, target_x, target_y) in enumerate(resolved):
         success = send_xy(target_x, target_y, brightness, entity_name)
         if success:
+            # Journal the word AFTER a confirmed send. The L1 base it rode on is
+            # recorded too — "this arrived ON cobalt vs ON gold" carries meaning.
+            # record() never raises; a failed journal must never cost a word.
+            try:
+                from light_journal import record
+                record(
+                    mode="xy",
+                    values=[target_x, target_y],
+                    brightness=brightness,
+                    entity=entity_name,
+                    word=word,
+                    source="light_send.py",
+                    note=f"L2 side-band on base '{base_name}'",
+                )
+            except Exception:
+                pass
             # Privacy-quiet by default: confirm progress WITHOUT revealing the
             # word, delta, or target xy (target = base + delta, so it's the word
             # in disguise). Full detail only under --verbose, for debugging.

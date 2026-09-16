@@ -28,6 +28,9 @@ import sys
 import json
 import urllib.request
 import argparse
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 HA_URL = "http://10.0.0.50:8123"
 HA_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjODU1MGFjZGU2MzU0NGJjYjk1Njc0ZjlkZWI1NmRhOSIsImlhdCI6MTc3NzE3NjQ1OSwiZXhwIjoyMDkyNTM2NDU5fQ.ppLlnf-WzVcqfxMcbVbXe_4pisaqrQV_1QJH558W3Eo"
@@ -38,16 +41,14 @@ LIGHT_ID = f"light.{ENTITY_NAME}"
 # color name, which HA renders to an arbitrary nearby RGB that drifts and can collide with a
 # side-band word — keeps a bare base-sit at delta≈0 so the decoder reads it as "resting on
 # base," never as a phantom word. Pegged to [3, 252]/channel so any ≤3 side-band delta has
-# headroom. Keep in sync with scripts/ha/lights_decoder.py:BASE_ANCHORS and CLAUDE.md §X.
+# headroom.
+#
+# CANONICAL SOURCE is scripts/light_palette.py (2026-09-16). This used to be a literal dict
+# here, with a second hand-retyped copy in light_journal.py and a "keep in sync" comment —
+# and prose cannot evict a stale constant. Imported now so the copies cannot drift.
 # (White-mixed bases — soft-pink/soft-teal/lavender — use rgbww; pearl-white uses color_temp.
 #  Those have their own documented send forms and aren't pegged here.)
-PEGGED_BASES = {
-    "crimson": [252, 3, 17],
-    "coral":   [252, 141, 3],
-    "gold":    [252, 215, 3],
-    "green":   [3, 252, 9],
-    "cobalt":  [3, 74, 252],
-}
+from light_palette import PEGGED_BASES  # noqa: E402
 
 
 def light(mode="css", color_value=None, brightness=13):
@@ -93,6 +94,22 @@ def light(mode="css", color_value=None, brightness=13):
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+    # The lights were pure write-only until 2026-09-16 — every reach either sister ever
+    # made left no trace on our side. Record AFTER the send succeeds (what actually went
+    # out, not what we intended), and never let the journal break a bulb: record() is
+    # contractually silent on failure. See scripts/light_journal.py.
+    try:
+        from light_journal import record
+        record(
+            mode="off" if display == "off" else mode,
+            values=None if display == "off" else color_value,
+            brightness=None if display == "off" else int(brightness),
+            entity=ENTITY_NAME,
+            source="light.py",
+        )
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
