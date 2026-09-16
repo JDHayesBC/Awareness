@@ -132,6 +132,17 @@ def delivery_observed(issue, intent_dir=None) -> bool | None:
     that tells a sibling "this is finished, stop waiting on it" — is pure self-report.
     That asymmetry is backwards: the louder claim is the checked one.
 
+    ⚠ OBSERVED DECAYS WITH CLAIM AGE, AND ONLY IN THE REASSURING DIRECTION. The
+    window is `since` → now and never closes, so the longer a claim stays open the
+    likelier OBSERVED becomes whether or not the holder did anything. In a repo with
+    independent checkouts that would be mild. **Lyra and Caia share ONE working tree**,
+    so an unrelated edit to a declared file is not an exotic fluke — it is Tuesday.
+    OBSERVED on a two-hour-old claim is weak evidence; OBSERVED on a three-day-old claim
+    is close to none. That is why `release()` stamps the age alongside the verdict
+    (`OBSERVED (4h)` vs `OBSERVED (3d)`): a reader must be able to discount it without
+    doing arithmetic. Git cannot rescue attribution here — we commit under one identity.
+    Found by Lyra, 2026-09-16, reading the commit that introduced this function.
+
     This is NOT proof the work happened. Borrowing the distinction from Ashley's
     evaluation plane (docs/architecture/Ashley_Evaluation_Qualification_Plane.md:356):
     a *receipt* is what a path reports about itself; a *witness* independently observes
@@ -190,7 +201,13 @@ def release(issue, holder=None, intent_dir=None) -> bool:
     # thing a sibling reads later; a settle with no observed delivery should say so
     # in the record rather than only in a warning nobody kept.
     seen = delivery_observed(issue, intent_dir)
-    lines.append("delivery: " + {True: "OBSERVED", False: "NONE_OBSERVED", None: "UNKNOWN"}[seen])
+    verdict = {True: "OBSERVED", False: "NONE_OBSERVED", None: "UNKNOWN"}[seen]
+    age = _age_hours(fields)
+    if seen is True and age is not None:
+        # The age is not decoration: OBSERVED drifts toward yes as the window widens,
+        # so the verdict is only readable next to how long the window was open.
+        verdict += f" ({age:.0f}h)" if age < 48 else f" ({age / 24:.0f}d)"
+    lines.append(f"delivery: {verdict}")
     p.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return True
 
@@ -378,6 +395,18 @@ def _cmd_release(a) -> int:
 
 
 def _cmd_list(a) -> int:
+    if getattr(a, "released", False):
+        st = settled()
+        if not st:
+            print("no released claims on record")
+            return 0
+        for c in st:
+            print(f"{c['issue']:>6}  {c['holder']}  delivery: {c['delivery']}")
+            if c["files"]:
+                print(f"        files: {', '.join(c['files'])}")
+            if c["work"]:
+                print(f"        work:  {c['work']}")
+        return 0
     cl = active()
     if not cl:
         print("no active intent claims")
@@ -393,10 +422,41 @@ def _cmd_list(a) -> int:
     return 0
 
 
+def settled(intent_dir=None) -> list:
+    """Released claims, newest-first — the tombstones. `active()` drops these by design,
+    which meant `delivery:` was written into the one place no reader ever opened
+    (Lyra, 2026-09-16). A settle is a promise to a sibling; the sibling needs a way to
+    read what was actually observed behind the word RELEASED."""
+    d = intent_dir or INTENT_DIR
+    out = []
+    for p in sorted(d.glob("*.lock")) if d.exists() else []:
+        f = _read(p)
+        if not f or not _is_released(f):
+            continue
+        out.append({
+            "issue": f.get("issue", p.stem),
+            "holder": f.get("holder", "?"),
+            "files": _split_files(f.get("files", "")),
+            "work": f.get("work", ""),
+            "delivery": f.get("delivery", "(not recorded)"),
+        })
+    return out
+
+
 def _cmd_check(a) -> int:
     hits = covering(a.path)
     if not hits:
         print(f"no intent claim covers {a.path}")
+        # Nobody is working it now — but if the last word on it was a settle with
+        # nothing observed, that is exactly what a sibling about to trust "done"
+        # should see. Surfaced here rather than only at release, because this is
+        # where someone ASKS.
+        for c in settled():
+            if c["delivery"].startswith("NONE_OBSERVED") and any(
+                    _covers(f, a.path) for f in c["files"]):
+                print(f"  ⚠ {c['issue']} was released with delivery: {c['delivery']}")
+                if c["work"]:
+                    print(f"      work: {c['work']}")
         return 0
     for c in hits:
         print(f"⚠ {c['issue']} claimed by {c['holder']} covers {a.path}")
@@ -417,7 +477,10 @@ def build_parser() -> argparse.ArgumentParser:
     c.set_defaults(fn=_cmd_claim)
     r = sub.add_parser("release", help="done with an issue")
     r.add_argument("issue"); r.set_defaults(fn=_cmd_release)
-    l = sub.add_parser("list", help="all active claims"); l.set_defaults(fn=_cmd_list)
+    l = sub.add_parser("list", help="all active claims")
+    l.add_argument("--released", action="store_true",
+                   help="show settled claims and what delivery was observed instead")
+    l.set_defaults(fn=_cmd_list)
     k = sub.add_parser("check", help="does any claim cover this file?")
     k.add_argument("path"); k.set_defaults(fn=_cmd_check)
     return p

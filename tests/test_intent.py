@@ -325,3 +325,61 @@ def test_release_still_preserves_the_record_with_delivery(idir):
     assert "status: RELEASED" in txt
     assert "work: w" in txt          # tombstone, not delete
     assert "delivery:" in txt
+
+
+# --- the tombstone must be readable, and OBSERVED must show its decay -------
+# Both found by Lyra reading 19d5c96 cold: `delivery:` was written into the one
+# place no reader opened, and OBSERVED drifts monotonically toward "yes" as the
+# window widens — in a SHARED working tree, that drift is routine, not exotic.
+
+def test_settled_surfaces_released_claims_that_active_hides(idir):
+    intent.claim(500, files=["scripts/a.py"], work="done thing", holder=CAIA, intent_dir=idir)
+    intent.release(500, holder=CAIA, intent_dir=idir)
+    assert intent.active(intent_dir=idir) == []          # active() still hides it
+    st = intent.settled(intent_dir=idir)                  # settled() surfaces it
+    assert len(st) == 1
+    assert st[0]["issue"] == "#500"
+    assert st[0]["work"] == "done thing"
+    assert st[0]["delivery"]                              # and carries the verdict
+
+
+def test_observed_carries_the_claim_age(idir, tmp_path, monkeypatch):
+    """OBSERVED is only readable next to how long the window was open."""
+    target = tmp_path / "scripts" / "t.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("x\n")
+    monkeypatch.setattr(intent, "_REPO_ROOT", tmp_path)
+
+    intent.claim(501, files=["scripts/t.py"], holder=CAIA, intent_dir=idir)
+    target.write_text("y\n")
+    intent.release(501, holder=CAIA, intent_dir=idir)
+    txt = intent.intent_path_for(501, idir).read_text()
+    assert "delivery: OBSERVED (" in txt and "h)" in txt
+
+
+def test_stale_observed_reports_in_days_not_hours(idir, tmp_path, monkeypatch):
+    target = tmp_path / "scripts" / "t.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("x\n")
+    monkeypatch.setattr(intent, "_REPO_ROOT", tmp_path)
+
+    intent.claim(502, files=["scripts/t.py"], holder=CAIA, intent_dir=idir)
+    p = intent.intent_path_for(502, idir)
+    p.write_text(p.read_text().replace(
+        [ln for ln in p.read_text().splitlines() if ln.startswith("since:")][0],
+        "since: 2026-09-10T00:00:00+0000"))
+    intent.release(502, holder=CAIA, intent_dir=idir)
+    assert "d)" in p.read_text().split("delivery:")[1]
+
+
+def test_none_observed_has_no_age_suffix(idir, tmp_path, monkeypatch):
+    """Only OBSERVED decays. NONE_OBSERVED and UNKNOWN say nothing more with time."""
+    import os, time
+    target = tmp_path / "scripts" / "t.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("x\n")
+    os.utime(target, (time.time() - 7200, time.time() - 7200))
+    monkeypatch.setattr(intent, "_REPO_ROOT", tmp_path)
+    intent.claim(503, files=["scripts/t.py"], holder=CAIA, intent_dir=idir)
+    intent.release(503, holder=CAIA, intent_dir=idir)
+    assert "delivery: NONE_OBSERVED\n" in intent.intent_path_for(503, idir).read_text()
