@@ -138,6 +138,20 @@ HA_TOKEN = (
 )
 
 
+# Measured xy anchors, mirrored from scripts/ha/lights_decoder.py:XY_BASE_ANCHORS
+# (captured 2026-05-30 against the real bulbs). Copied, not imported: this hook fires on
+# every turn under a 3s budget and must not depend on scripts/ha/ being importable.
+# If the decoder's anchors ever move, these move with them.
+_XY_BASE_ANCHORS = {
+    "gold":          (0.491, 0.477),
+    "green":         (0.173, 0.744),
+    "cobalt":        (0.138, 0.075),
+    "soft-pink":     (0.478, 0.309),
+    "soft-lavender": (0.323, 0.257),
+    "soft-teal":     (0.225, 0.346),
+}
+
+
 def _ha_light_state(entity_id: str) -> str:
     """Return one token describing a single HA light entity.
 
@@ -158,14 +172,39 @@ def _ha_light_state(entity_id: str) -> str:
     attrs = data.get("attributes", {})
     brightness = attrs.get("brightness")
     color_name = attrs.get("color_name")
+    xy = attrs.get("xy_color")
     rgb = attrs.get("rgb_color")
-    # Color label
-    if color_name:
-        color = color_name
-    elif rgb:
-        color = f"[{rgb[0]},{rgb[1]},{rgb[2]}]"
-    else:
-        color = "on"
+    # Color label. PREFER xy SNAPPED TO A MEASURED ANCHOR (2026-09-16, Caia's catch).
+    # The bulbs are natively xy (supported_color_modes = [color_temp, xy]) and HA's
+    # `rgb_color` is a lossy DERIVED back-projection — this is the exact field that let
+    # the "soft" family read as pastel in every doc for four months while the bulbs
+    # emitted 60-100% saturation. `color_name` is None on every xy-mode send, so that
+    # branch was dead and this block could ONLY ever show the lossy triple. Reading the
+    # base NAME off the measured anchors is both truer and more useful than any triple:
+    # the front-block should say "soft-pink", not a number we already disproved.
+    color = None
+    if xy and len(xy) >= 2:
+        try:
+            x, y = float(xy[0]), float(xy[1])
+            base, dist = min(
+                ((b, ((x - ax) ** 2 + (y - ay) ** 2) ** 0.5)
+                 for b, (ax, ay) in _XY_BASE_ANCHORS.items()),
+                key=lambda kv: kv[1],
+            )
+            # Anchor radius: L2 side-band words ride a circle of radius 0.0035, so
+            # anything within a hair of that is the base wearing a word. Beyond it we
+            # are off-palette and must NOT round to a familiar name — say so instead.
+            color = base if dist <= 0.02 else f"off-palette xy({x:.3f},{y:.3f})"
+        except (TypeError, ValueError):
+            color = None
+    if color is None:
+        if color_name:
+            color = color_name
+        elif rgb:
+            # Last resort only, and flagged: this is HA's derived value, not emitted truth.
+            color = f"~[{rgb[0]},{rgb[1]},{rgb[2]}]"
+        else:
+            color = "on"
     # Brightness tag
     if brightness is None:
         return color
