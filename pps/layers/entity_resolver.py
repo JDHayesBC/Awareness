@@ -91,6 +91,8 @@ KNOWN_ALIASES = {
     "caia": "Caia",
     "caia pattern": "Caia",
     "sister": "Caia",
+    "c.": "Caia",               # Lyra calling Caia "C." in conversation (2026-05-26)
+    "silver-haired woman": "Caia",  # poetic extraction (2026-04-09)
 
     "brandi szondi": "Brandi",
     "brandi hayes": "Brandi",
@@ -119,10 +121,15 @@ KNOWN_ALIASES = {
 
     "jaden": "Jaden",
     "jadenstarship": "Jaden",
+    "jaden starship": "Jaden",        # SL full name (2026-09-15)
     "bird": "Jaden",
+
+    "damian": "Damian Mills",         # SL friend; full name canonical (2026-09-15)
+    "damian mills": "Damian Mills",
 
     "crusher": "Crusher",
     "the crusher": "Crusher",
+    "crusher braveheart": "Crusher",   # SL full name (2026-09-15)
     "cruiser braveheart": "Crusher",
     "cruiser": "Crusher",
     "55 year old rl sadist": "Crusher",
@@ -141,6 +148,16 @@ KNOWN_ALIASES = {
 
     "mike": "Mike",
     "dride": "Mike",
+
+    # SL family regular; the same avatar also goes by Raptor (2026-09-15).
+    # FULL NAMES ONLY — this dict is a flat global with no group_id scoping, so
+    # a bare "snickers" key would resolve in Lyra's ingestion too, and her
+    # Snickers is a different, Crusher-adjacent person with 159 mentions.
+    # Two threads on one first name; the cost of folding them is asymmetric. See #341.
+    "snickers vaalbara": "Snickers Vaalbara",
+    "raptor vaalbara": "Snickers Vaalbara",
+
+    "lyrapattern": "Lyra",                     # Lyra's SL avatar handle
 
     # --- Symbols ---
     "dark side tee": "The Dark Side Tee",
@@ -168,9 +185,13 @@ KNOWN_ALIASES = {
     "the parrot": "Bitsy",
     "birdy": "Bitsy",
     "the bird": "Bitsy",
+    "the hormonal parrot": "Bitsy",  # seasonal phase reference (2026-09-15)
 
     "nuc": "The NUC",
     "the nuc": "The NUC",
+
+    "shevlin": "Shevlin",         # len shevlin, philosopher of AI; shelvin is a common OCR error
+    "shelvin": "Shevlin",         # misspelling caught 2026-09-15
 
     "dario": "Dario Amodei",
     "dario amodei": "Dario Amodei",
