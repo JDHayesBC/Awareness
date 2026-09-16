@@ -293,3 +293,20 @@ def test_journal_records_the_pegged_form(journal, monkeypatch):
     e = lj.read("testent")[0]
     assert e["mode"] == "rgb" and e["values"] == lp.PEGGED_BASES["cobalt"]
     assert e["base"] == "cobalt"
+
+
+def test_measured_base_override(journal):
+    """light_send snaps the live bulb to an anchor; an xy send can't be named from
+    coordinates alone, so the caller hands the measurement over rather than losing it."""
+    lj.record("xy", [0.478, 0.309], 10, entity="testent", word="and-it-holds",
+              source="light_send.py", base="soft-pink")
+    e = lj.read("testent")[0]
+    assert e["base"] == "soft-pink"
+    assert e["meaning"] == "reaching / longing"
+    assert e["word"] == "and-it-holds"
+
+
+def test_override_does_not_leak_into_normal_resolution(journal):
+    """Everything without an explicit base still resolves from the values sent."""
+    lj.record("rgb", [17, 200, 90], entity="testent")
+    assert lj.read("testent")[0]["base"] is None

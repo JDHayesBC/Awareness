@@ -130,7 +130,7 @@ def value_key(mode, values) -> tuple | None:
 
 def record(mode: str, values=None, brightness: int | None = None, *,
            entity: str | None = None, word: str | None = None,
-           source: str = "unknown", note: str = "") -> bool:
+           source: str = "unknown", note: str = "", base: str | None = None) -> bool:
     """Append one line to the journal. Returns True if written; NEVER raises.
 
     The caller is a light-send path. If anything here fails — unwritable disk, bad values,
@@ -138,7 +138,12 @@ def record(mode: str, values=None, brightness: int | None = None, *,
     """
     try:
         ent = entity or os.environ.get("ENTITY_NAME", "lyra")
-        base = resolve_base(mode, values)
+        # `base` may be passed by a caller that MEASURED it — light_send snaps the live
+        # bulb state to an anchor before computing its delta, so it knows the base for an
+        # xy send that resolve_base() cannot name from coordinates alone. That is a
+        # measurement being handed over, not an intention being asserted; everything else
+        # still resolves from the values actually sent.
+        base = base if base is not None else resolve_base(mode, values)
         now = datetime.now(timezone.utc)
         entry = {
             "ts": now.isoformat(),

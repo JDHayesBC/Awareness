@@ -224,6 +224,7 @@ def main():
                     entity=entity_name,
                     word=word,
                     source="light_send.py",
+                    base=base_name,          # snapped from live bulb state above
                     note=f"L2 side-band on base '{base_name}'",
                 )
             except Exception:
