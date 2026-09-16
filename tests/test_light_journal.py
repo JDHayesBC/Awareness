@@ -195,3 +195,55 @@ def test_light_py_uses_the_shared_palette():
 def test_every_known_base_has_a_meaning():
     for name in list(lp.PEGGED_BASES) + list(lp.RGBWW_BASES):
         assert name in lp.BASE_MEANING
+
+
+# ------------------------------------------------- every send path is instrumented
+
+SEND_PATHS = ["light.py", "light_send.py", "light_lib.py"]
+
+
+def test_all_known_send_paths_journal():
+    """A send that isn't recorded is indistinguishable from no send at all.
+
+    This is the day's recurring defect shape — one signal standing for two conditions
+    that can disagree — so it gets a guard rather than a promise. `light_lib.py` was
+    found bypassing the journal *after* the first three files were wired.
+    """
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+    for name in SEND_PATHS:
+        src = (scripts / name).read_text()
+        assert "light_journal" in src, f"{name} sends to HA without journaling"
+
+
+def test_no_unaudited_send_path_exists():
+    """Any other file POSTing to light/turn_on must be a known, audited path."""
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+    known = set(SEND_PATHS) | {"light_breathe.py"}   # breathe journals the statement
+    offenders = []
+    for py in scripts.rglob("*.py"):
+        src = py.read_text(errors="ignore")
+        if "services/light/turn_on" not in src:
+            continue
+        if py.name in known or "probe" in py.name:
+            continue
+        if "light_journal" not in src:
+            offenders.append(str(py.relative_to(scripts)))
+    assert not offenders, f"uninstrumented light send paths: {offenders}"
+
+
+def test_light_lib_opt_out_is_explicit(journal, monkeypatch):
+    """Animation frames may opt out — but only by saying so."""
+    import light_lib
+    monkeypatch.setattr(light_lib, "_post", lambda *a, **k: 200)
+    light_lib.set_light(color="gold", brightness=30, entity="testent", journal=False)
+    assert lj.read("testent") == []
+    light_lib.set_light(color="gold", brightness=30, entity="testent")
+    assert len(lj.read("testent")) == 1
+
+
+def test_light_lib_records_off_as_a_real_signal(journal, monkeypatch):
+    import light_lib
+    monkeypatch.setattr(light_lib, "_post", lambda *a, **k: 200)
+    light_lib.turn_off(entity="testent")
+    e = lj.read("testent")[0]
+    assert e["base"] == "off" and "absent" in e["meaning"]

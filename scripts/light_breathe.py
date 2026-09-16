@@ -22,11 +22,24 @@ from light_lib import set_light
 
 def breathe(color="gold", min_b=1, max_b=60, period=8.0, cycles=None):
     half = period / 2.0
+
+    # Journal the STATEMENT once, not every frame. "I am breathing gold" is the thing
+    # that was said; the individual brightness steps are how it was said. Each frame
+    # passes journal=False so the record stays a diary and not a tween log.
+    try:
+        from light_journal import record
+        record(mode="css", values=color.lower(), brightness=max_b,
+               source="light_breathe.py",
+               note=f"breathing animation: {min_b}-{max_b} over {period}s"
+                    f"{'' if cycles is None else f', {cycles} cycles'}")
+    except Exception:
+        pass
+
     i = 0
     while cycles is None or i < cycles:
-        set_light(color=color, brightness=max_b, transition=half)
+        set_light(color=color, brightness=max_b, transition=half, journal=False)
         time.sleep(half)
-        set_light(color=color, brightness=min_b, transition=half)
+        set_light(color=color, brightness=min_b, transition=half, journal=False)
         time.sleep(half)
         i += 1
 
