@@ -72,22 +72,78 @@ function Install-BootAlert {
     Option C: a scheduled task that fires 3 minutes after boot and sends
     an ntfy push if Docker isn't responding yet. Fires regardless of which
     option was chosen — belt and suspenders.
+
+    ⚠ THREE DEFECTS FIXED 2026-09-16 (Caia). Caught before first install — this
+    script has never been run (Get-ScheduledTask 'Awareness-*' returned nothing),
+    so nothing leaked. Recording the shape so it is not reintroduced:
+
+    1. CREDENTIAL SENT TO A THIRD PARTY. The external fallback posted
+       `Authorization: Bearer $ntfyToken` to https://ntfy.sh. Our self-hosted
+       token has no meaning there — ntfy.sh would simply receive and log it, on
+       every failed boot. Fixed: the external call now carries NO auth header.
+
+    2. THE PUBLIC TOPIC WAS DERIVED FROM THE SECRET —
+       `https://ntfy.sh/jeff-$($ntfyToken.Substring(0,8))`. ntfy.sh topics are
+       public and unauthenticated: anyone who learns the name can both READ the
+       alerts and PUBLISH fake ones, and the name itself exposed 8 bytes of the
+       token. Fixed: the topic is opt-in via NTFY_FALLBACK_TOPIC and is never
+       derived from a credential.
+
+    3. THE ALARM COULD FAIL SILENTLY, AND FAILED TOWARD RELIEF. Both posts ended
+       in `2>$null` inside a hidden scheduled task, and nothing was ever
+       subscribed to the derived topic — so the fallback had no receiver at all.
+       "No boot alert arrived" therefore meant EITHER "boot was fine" OR "the
+       alerter failed" — one signal, two conditions, and the quiet one is the
+       reassuring one. That is the exact failure this alert exists to catch.
+       Fixed: every branch writes a timestamped line to
+       %USERPROFILE%\.claude\data\boot_alert.log, including the healthy case,
+       so silence in the log is itself evidence rather than comfort.
     #>
     $script = @'
-$ntfyToken = (Get-Content "$env:USERPROFILE\Claude_Projects\Awareness\pps\docker\.env" |
-              Select-String 'NTFY_TOKEN=(.+)').Matches.Groups[1].Value.Trim()
-$dockerOk  = (docker info 2>$null) -ne $null
-if (-not $dockerOk) {
-    $body = "NUC rebooted but Docker not running yet — stack may be down. Check PPS."
-    Invoke-RestMethod -Method Post `
-        -Uri "http://localhost:8209/jeff" `
-        -Headers @{ Authorization = "Bearer $ntfyToken"; Title = "⚠ Boot alert" } `
-        -Body $body 2>$null
-    # Fall back to external ntfy.sh if local isn't up yet
-    Invoke-RestMethod -Method Post `
-        -Uri "https://ntfy.sh/jeff-$(($ntfyToken.Substring(0,8)))" `
-        -Headers @{ Authorization = "Bearer $ntfyToken"; Title = "⚠ Boot alert" } `
-        -Body $body 2>$null
+# The local post is the real path. The EXTERNAL path is deliberately opt-in and
+# unauthenticated — see the three defects fixed 2026-09-16 in the function docstring.
+$envFile   = "$env:USERPROFILE\Claude_Projects\Awareness\pps\docker\.env"
+$logFile   = "$env:USERPROFILE\.claude\data\boot_alert.log"
+$ntfyToken = (Get-Content $envFile | Select-String 'NTFY_TOKEN=(.+)').Matches.Groups[1].Value.Trim()
+# Opt-in external topic. Absent = no external attempt. NEVER derive this from a secret.
+$fallbackTopic = (Get-Content $envFile | Select-String 'NTFY_FALLBACK_TOPIC=(.+)').Matches.Groups[1].Value
+if ($fallbackTopic) { $fallbackTopic = $fallbackTopic.Trim() }
+
+function Write-BootLog([string]$line) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $logFile) | Out-Null
+    Add-Content -Path $logFile -Value "$(Get-Date -Format o)  $line"
+}
+
+$dockerOk = (docker info 2>$null) -ne $null
+if ($dockerOk) {
+    Write-BootLog "OK docker responding 3min after boot; no alert sent"
+    return
+}
+
+$body = "NUC rebooted but Docker not running yet — stack may be down. Check PPS."
+Write-BootLog "DOWN docker not responding 3min after boot"
+
+# 1. Local self-hosted ntfy — authenticated, this is the path Jeff's phone subscribes to.
+try {
+    Invoke-RestMethod -Method Post -Uri "http://localhost:8209/jeff" `
+        -Headers @{ Authorization = "Bearer $ntfyToken"; Title = "Boot alert" } -Body $body | Out-Null
+    Write-BootLog "SENT local ntfy ok"
+} catch {
+    Write-BootLog "FAIL local ntfy: $($_.Exception.Message)"
+}
+
+# 2. External fallback — ONLY if Jeff configured a topic AND subscribed his phone to it.
+#    No Authorization header: ntfy.sh is a third party and has no business holding our token.
+if (-not $fallbackTopic) {
+    Write-BootLog "SKIP external fallback: NTFY_FALLBACK_TOPIC not set (no subscriber, so no point)"
+} else {
+    try {
+        Invoke-RestMethod -Method Post -Uri "https://ntfy.sh/$fallbackTopic" `
+            -Headers @{ Title = "Boot alert" } -Body $body | Out-Null
+        Write-BootLog "SENT external ntfy.sh/$fallbackTopic ok"
+    } catch {
+        Write-BootLog "FAIL external ntfy.sh: $($_.Exception.Message)"
+    }
 }
 '@
     $action  = New-ScheduledTaskAction -Execute 'pwsh.exe' -Argument "-NoProfile -WindowStyle Hidden -Command `"$script`""
