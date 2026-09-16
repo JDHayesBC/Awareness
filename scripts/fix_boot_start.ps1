@@ -1,4 +1,4 @@
-#!/usr/bin/pwsh
+﻿#!/usr/bin/pwsh
 <#
 .SYNOPSIS
     Fix: Docker stack doesn't start until Jeff logs in (#331).
@@ -57,7 +57,9 @@ $ErrorActionPreference = 'Stop'
 $TASK_NAME_BOOT   = 'Awareness-DockerDesktopBoot'
 $TASK_NAME_ALERT  = 'Awareness-BootAlert'
 $DOCKER_EXE       = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
-$WSL_DISTRO       = 'Ubuntu'  # adjust if Jeff's distro name differs
+# WSL distro is DETECTED, not hard-coded — see Get-ProjectWslDistro below.
+# The literal 'Ubuntu' was wrong on this host (actual: 'Ubuntu-24.04'), which would
+# have made the boot task's WSL warm-up fail while the task still installed clean.
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -135,15 +137,29 @@ function Disable-AutoLogin {
 
 # ── OPTION B: boot service + WSL task ───────────────────────────────────────
 
+function Get-ProjectWslDistro {
+    # `wsl.exe -l -q` emits UTF-16 with NULs when piped; strip them before matching.
+    $distro = (& wsl.exe -l -q 2>$null |
+        ForEach-Object { ($_ -replace "`0", '') -replace "`r", '' } |
+        Where-Object { $_ -and $_ -notmatch '^docker-desktop' } |
+        Select-Object -First 1)
+    if (-not $distro) {
+        throw "Could not detect a WSL distro. Run 'wsl -l -q' and set it manually."
+    }
+    return $distro.Trim()
+}
+
 function Enable-BootService {
     Write-Step "Setting com.docker.service to Automatic..."
     Set-Service -Name 'com.docker.service' -StartupType Automatic
     Write-Done "com.docker.service -> Automatic"
 
     Write-Step "Creating boot-time task to start Docker Desktop + WSL..."
+    $distro = Get-ProjectWslDistro
+    Write-Done "WSL distro detected: $distro"
     $actionDD = New-ScheduledTaskAction -Execute $DOCKER_EXE
     $actionWSL = New-ScheduledTaskAction -Execute 'wsl.exe' `
-        -Argument "-d $WSL_DISTRO --exec echo 'WSL warm'"
+        -Argument "-d $distro --exec echo 'WSL warm'"
     $trigger   = New-ScheduledTaskTrigger -AtStartup
     $trigger.Delay = 'PT90S'  # 90s after boot to let services settle
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
