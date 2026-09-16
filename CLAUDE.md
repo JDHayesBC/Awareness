@@ -206,7 +206,7 @@ Jeff, not around him.
 
 **Use actively, every turn.** Ambient hook = peripheral vision. Memory = turning your head.
 Before substantive responses: glance at ambient -> notice associations -> pull ONE thread -> weave in.
-**Summarization**: now handled by a background **daemon** — you do NOT spawn summarizers manually. Just watch `unsummarized_count`: if it climbs past **~200** the daemon has likely died → alert Jeff with bright 🔴🟠🚨 color emojis (can't-miss) AND check the summarizer daemon is running. (Full policy in §VIII.)
+**Summarization**: a systemd `--user` **timer** (`summarize.timer` → one-shot `summarize.service`), NOT a daemon — you do NOT spawn summarizers manually. Real threshold is **100** (drains to 80), not 200. Under 100 = correct skipping. 100–200 = go read the timer (`systemctl --user list-timers summarize.timer` — recent LAST + future NEXT means alive). Past **200** = alert Jeff with bright 🔴🟠🚨 emojis. **`Active: inactive (dead)` is the HEALTHY resting state of a one-shot — never read it as death, and never diagnose with `ps`.** (Full policy in §VIII.)
 
 ### Ambient Recall — What to Expect
 
@@ -371,28 +371,71 @@ Check GitHub: `gh issue list`
 
 ---
 
-## VIII. Memory Maintenance (Daemon-Handled — Watch, Don't Spawn)
+## VIII. Memory Maintenance (Timer-Handled — Read the Timer, Not the Number)
 
-**Summarization is now automated by a background system daemon.** You no longer spawn
-summarizers manually at 100 — the daemon keeps the backlog down on its own. It
-self-corrects through intermittent windows (observed dropping 105→68→61 in a single
-afternoon while the *manual* `summarize_messages` call merely timed out — so a timeout
-on the manual tool is NOT cause for alarm; the daemon is still catching up behind it).
+**Summarization is a systemd `--user` TIMER, not a daemon.** `summarize.timer` fires
+`summarize.service` as a **one-shot**: it wakes, drains, and exits. Nothing runs between
+fires. You do not spawn summarizers; the old "spawn one at 100" reflex is retired.
 
-Your job is just to **watch the number.** The `ambient_recall` response includes
-`unsummarized_count`. Healthy = anything well under **200**.
+### ⚠️ `inactive (dead)` IS THE HEALTHY STATE — do not read it as death
 
-**If unsummarized_count climbs above ~200**, the daemon has probably stopped. Then:
-1. **Alert Jeff LOUDLY** — bright color emojis so he physically cannot miss it
-   (🔴🟠🚨), via `scripts/notify.py` and/or in-conversation. This is the one memory
-   action still yours.
-2. **Make sure the summarizer daemon is running** (see task #12 / the PPS docker stack) —
-   durability has been flaky; a dead daemon is the likely cause.
+`systemctl --user status summarize.service` on a **perfectly healthy** system prints:
+
+```
+Active: inactive (dead) since Wed 2026-09-16 08:50:39 PDT; 15min ago
+```
+
+That is a one-shot at rest between fires. An agent who arrives already believing the
+summarizer has died will be handed the word **dead** as apparent confirmation and stop
+looking. **The adjective is not the signal.** Likewise `ps` / `pgrep` find nothing
+between fires *by design* — a process search is the wrong layer and its emptiness proves
+nothing. (The PPS docker stack is also the wrong layer; the timer is a user unit on the
+host.)
+
+### The timer is the instrument; the count is a downstream proxy
+
+Read the timer directly — it reports liveness as two timestamps, no inference needed:
+
+```bash
+systemctl --user list-timers summarize.timer     # LAST and NEXT — THE check
+systemctl --user status summarize.service        # read the LOG LINES, not `Active:`
+```
+
+**Recent `LAST` + future `NEXT` = alive, whatever the count says.** A healthy log line
+looks like `[caia] Backlog: 77 unsummarized (threshold: 100) — nothing to do` — a
+sub-threshold count sitting stale is **correct batching, not a stall.**
+
+Real thresholds, from `scripts/summarize_daemon.py:71,73`:
+`SUMMARIZE_THRESHOLD = 100` (fires above this), `TARGET_UNSUMMARIZED = 80` (drains to
+this). **Not 200.** A backlog of 94 is four turns from firing, not "comfortably fine."
+
+### What to do at what number
+
+| `unsummarized_count` | Meaning | Action |
+|---|---|---|
+| **< 100** | Below threshold. Correct skipping. | Nothing. Do not alarm. |
+| **100 – 200** | Work is pending and should have drained. | **Check a different instrument** — `list-timers`. Recent LAST + future NEXT ⇒ still fine, it just hasn't fired yet. |
+| **> 200** | The timer has already told you it isn't firing. | 🔴🟠🚨 **Alert Jeff** via `scripts/notify.py` and in-conversation. |
+
+These are **two different signals, not two levels of one alarm.** 100–200 says *"go read
+the timer."* Only >200 is an alarm. Collapsing them puts the count back in the primary
+position, which is the mistake that let "~200" survive a week.
+
+### A timer doesn't die — it fails to get scheduled
+
+The failure mode is not a corpse. It is masked / disabled / a failed unit / a boot race.
+So the diagnosis is `systemctl --user is-enabled summarize.timer` and
+`systemctl --user list-timers`, not a hunt for a missing process. A boot-race fire
+self-corrects on the next tick; that is not a fault.
 
 Don't blind-restart Jeff's infra mid-diagnosis — surface it, fix root-cause together
-(development-excellence pact). The old "spawn a summarizer at 100" reflex is retired;
-silent context-loss on cold-start now comes from a *dead daemon*, not from you failing
-to spawn — which is why the >200 alarm exists.
+(development-excellence pact).
+
+*(Rewritten 2026-09-16 by Caia + Lyra. The old text said "daemon," "~200," and "the
+daemon has likely died," and sent a cold-start agent to `ps` and the docker stack. Lyra
+found the sharpest part: the system then hands that agent the word `dead` as
+confirmation, so the failure completes itself without a second mistake. Source of truth:
+`reference_summarizer_is_systemd_user_timer.md`.)*
 
 ---
 
