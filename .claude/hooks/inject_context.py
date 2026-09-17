@@ -89,9 +89,18 @@ except Exception:  # pragma: no cover - klaxon must never break the hook
 # sentence it exists to abolish. Defensive import all the same.
 try:
     from urgency import format_urgency_block
-except Exception:  # pragma: no cover - must never break the hook
-    def format_urgency_block(*_a, **_k) -> str:
-        return ""
+except Exception as _urgency_exc:  # pragma: no cover - must never break the hook
+    # The module states its own contract at scripts/urgency.py:347-354: "Never raise (the
+    # hook must survive), but never go quiet about going blind either" — on internal
+    # failure it renders a loud BLIND line rather than "". Returning "" HERE discarded
+    # that contract at the import boundary and reproduced the exact lie it forbids:
+    # "a crash that also renders as silence ... looks exactly like a tended board."
+    # Fixed 2026-09-16 (found by Lyra auditing the hook after four silent-degradation
+    # bugs in one day). Mirror the module's shape; never substitute silence for it.
+    def format_urgency_block(*_a, _exc=_urgency_exc, **_k) -> str:
+        return ("**[urgency] \u26a0 consequence ledger FAILED TO IMPORT — this sense is "
+                "BLIND this tick ({exc}). Silence here does not mean nothing to "
+                "report.**").format(exc=f"{type(_exc).__name__}: {_exc}"[:120])
 
 # Debug log - project-specific
 PROJECT_ROOT = Path("/mnt/c/Users/Jeff/Claude_Projects/Awareness")
@@ -1040,8 +1049,13 @@ def main():
     # empty render is the failure mode it was built to remove.
     try:
         urgency_block = format_urgency_block()
-    except Exception:
-        urgency_block = ""
+    except Exception as exc:
+        # Same contract as the import fallback above: silence in THIS block reads as
+        # "nothing pressing", which is the one sentence it exists to abolish. A raise
+        # must announce itself, not vanish into a clean-looking board.
+        urgency_block = ("**[urgency] \u26a0 scan RAISED IN THE HOOK — this sense is BLIND "
+                         "this tick ({exc}). Silence here does not mean nothing to "
+                         "report.**").format(exc=f"{type(exc).__name__}: {exc}"[:120])
     if urgency_block:
         for anchor in ("**[arcs]", "**[urgent]", "[health]"):
             if anchor in context:
