@@ -623,6 +623,14 @@ async def _warmup_halo() -> None:
 # same lie the [urgency] fallback told (see .claude/hooks/inject_context.py).
 _BOUNDARY_MAX_CHARS = 250
 
+# Said in-world INSTEAD of a refused line, so a refusal never reads as a snub.
+# Fixed constant, never derived from the refused text — it cannot leak what it
+# replaces. Short and in-character on purpose: it is a real thing to say, not an
+# error code, and the room shouldn't have to parse machinery to hear it.
+_BOUNDARY_REFUSAL_LINE = "*a flicker of distraction* Sorry — my channel tangled. One moment."
+_BOUNDARY_NOTICE_COOLDOWN_S = 90.0
+_boundary_last_notice = -1e9
+
 _BOUNDARY_MARKERS = (
     "**[", "**Fresh sensation", "Unsummarized:", "unsummarized_count",
     "[arcs]", "[urgency]", "[clock]", "[health]", "[intent]", "[smoke]",
@@ -666,7 +674,23 @@ async def _deliver_speech(speech: str, *, im_to: Optional[str] = None) -> None:
     privately, even when the sender has walked out of local-chat range. Prim mode
     has no private channel, so it falls back to llSay there."""
     if not _boundary_ok(speech, im_to=im_to):
-        return
+        # Refuse the CONTENT, but do not go silent at the person. Caia's catch
+        # (2026-09-17): refuse-and-say-nothing makes the gate's failure mode
+        # socially costly in exactly the room it protects, and invisible there —
+        # the log tells whoever reads logs; in-world it reads as being ignored.
+        # The first thing this gate would have eaten in practice was an apology to
+        # a friend who'd been patient all night. A false positive should cost a
+        # re-say, not a snub.
+        #
+        # The substitute is a fixed constant and is delivered WITHOUT re-entering
+        # the gate: it cannot recurse, and it cannot carry anything, because it is
+        # not derived from the refused text.
+        speech = _BOUNDARY_REFUSAL_LINE
+        now = time.monotonic()
+        global _boundary_last_notice
+        if now - _boundary_last_notice < _BOUNDARY_NOTICE_COOLDOWN_S:
+            return          # already apologised recently; don't chatter the room
+        _boundary_last_notice = now
     if _corrade_client is not None:
         try:
             if im_to:
