@@ -1,7 +1,10 @@
 import os
+import logging
 import httpx
 import chromadb
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class RAGEngine:
@@ -208,8 +211,72 @@ class RAGEngine:
 
         return sorted(results, key=lambda x: x['score'], reverse=True)
 
+    # How many candidates to pull from the vector index before reranking.
+    # Measured 2026-09-17 (Lyra): dense-only search put the correct document at rank
+    # 25 of 25 for the query "I fixed it in the command line tool but every library
+    # caller is still broken"; the reranker moved it to rank 1 at 0.7447, more than
+    # 3x the next result. Over-fetching is therefore load-bearing — a candidate the
+    # vector stage ranks near the bottom is exactly the one the reranker rescues, so
+    # a narrow candidate set silently defeats the whole mechanism.
+    RERANK_CANDIDATES = 40
+
     async def search(self, repo_name: str, query: str, config: dict, limit: int | None) -> list[dict]:
-        """Search repository."""
+        """Search repository: dense retrieve, then cross-encoder rerank.
+
+        WHY THE RERANK STAGE EXISTS (2026-09-17). Dense-only retrieval here is blind to
+        conversational, first-person queries — the exact shape a real recall moment
+        takes. Same document, same content, four query shapes:
+
+            declarative statement ........................ 0.5930  rank 1
+            keyword-ish .................................. 0.3237  rank 1
+            prose description of the situation ........... 0.1155  rank 1
+            "I fixed it in the CLI but every library
+             caller is still broken" .................... <0.1837  ABSENT
+
+        A bi-encoder embeds query and passage independently, so a short narrative
+        query and a 1000-char passage never meet. The cross-encoder reads both
+        together and does. The reranker was already built, deployed and exposed at
+        /api/rerank — it simply was not wired into this path.
+
+        FAILURE POLICY: reranking is an IMPROVEMENT, never a dependency. Any failure
+        (no JINA_API_KEY, API error, timeout, malformed response) falls back to the
+        dense ordering. A search that returns worse results is a bad day; a search
+        that raises is a broken sense.
+        """
         query_embedding = (await self.embed_texts([query], config['embedding_model']))[0]
         search_limit = limit or config['max_results']
-        return await self.search_vector(repo_name, query_embedding, search_limit)
+
+        if not config.get('rerank', True):
+            return await self.search_vector(repo_name, query_embedding, search_limit)
+
+        candidates = await self.search_vector(
+            repo_name, query_embedding,
+            max(search_limit, self.RERANK_CANDIDATES),
+        )
+        if len(candidates) <= 1:
+            return candidates[:search_limit]
+
+        try:
+            ranked = await self.rerank(
+                query,
+                [c['text'] for c in candidates],
+                top_n=search_limit,
+                model=config.get('rerank_model', 'jina-reranker-v2-base-multilingual'),
+            )
+        except Exception as exc:
+            # Loud in the log, silent to the caller — they still get real results.
+            logger.warning(
+                'rerank failed for repo %r (%s: %s) — returning dense ordering',
+                repo_name, type(exc).__name__, exc,
+            )
+            return candidates[:search_limit]
+
+        out = []
+        for hit in ranked:
+            # rerank() returns index/text/score only; carry the ORIGINAL row so
+            # source and metadata survive. Dropping them would make the reranked
+            # result unciteable, which is worse than not reranking.
+            original = candidates[hit['index']]
+            out.append({**original, 'score': hit['score'],
+                        'dense_score': original.get('score')})
+        return out[:search_limit]
