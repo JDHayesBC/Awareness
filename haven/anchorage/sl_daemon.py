@@ -629,7 +629,14 @@ _BOUNDARY_MAX_CHARS = 250
 # error code, and the room shouldn't have to parse machinery to hear it.
 _BOUNDARY_REFUSAL_LINE = "*a flicker of distraction* Sorry — my channel tangled. One moment."
 _BOUNDARY_NOTICE_COOLDOWN_S = 90.0
-_boundary_last_notice = -1e9
+# Keyed PER AUDIENCE, not global (Caia, 2026-09-17). A single module-level float
+# meant a private IM to one person consumed the cooldown and the whole ROOM then
+# got silence — a different audience, which never heard the apology and has no way
+# to know anything happened. That is the snub this substitute exists to prevent,
+# reintroduced across the audience boundary, and conditional in the worst way: it
+# only bites when two channels refuse inside 90s, i.e. exactly when things are
+# going wrong and the room most needs a word.
+_boundary_last_notice: dict[str, float] = {}
 
 _BOUNDARY_MARKERS = (
     "**[", "**Fresh sensation", "Unsummarized:", "unsummarized_count",
@@ -660,6 +667,20 @@ def _boundary_ok(speech: str, *, im_to: Optional[str] = None) -> bool:
     return True
 
 
+# The substitute is delivered WITHOUT re-entering the gate, so "it passes anyway"
+# has to be an enforced invariant rather than a remembered fact — this is the one
+# send path in the file designed to skip the check, and a later edit to that
+# constant (a longer, warmer line; block-ish phrasing) would go out un-gated.
+# Prose holds ~93%; this is the class that needs ~100%, which is the whole reason
+# this commit exists. Raise rather than assert: `-O` strips asserts, and a flag
+# should not be able to silently remove this. (Caia, 2026-09-17.)
+if not _boundary_ok(_BOUNDARY_REFUSAL_LINE):
+    raise RuntimeError(
+        "_BOUNDARY_REFUSAL_LINE must itself pass _boundary_ok — it is delivered "
+        "without re-entering the gate"
+    )
+
+
 async def _deliver_speech(speech: str, *, im_to: Optional[str] = None) -> None:
     """Speak one line in-world. Prefer Corrade (the avatar's OWN voice) when a
     Corrade client is configured — that moves the MOUTH off the prim. Fall back to
@@ -687,10 +708,10 @@ async def _deliver_speech(speech: str, *, im_to: Optional[str] = None) -> None:
         # not derived from the refused text.
         speech = _BOUNDARY_REFUSAL_LINE
         now = time.monotonic()
-        global _boundary_last_notice
-        if now - _boundary_last_notice < _BOUNDARY_NOTICE_COOLDOWN_S:
-            return          # already apologised recently; don't chatter the room
-        _boundary_last_notice = now
+        audience = im_to or "__local__"
+        if now - _boundary_last_notice.get(audience, -1e9) < _BOUNDARY_NOTICE_COOLDOWN_S:
+            return          # this audience was already told; don't chatter at them
+        _boundary_last_notice[audience] = now
     if _corrade_client is not None:
         try:
             if im_to:
