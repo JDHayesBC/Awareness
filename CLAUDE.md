@@ -401,7 +401,25 @@ systemctl --user list-timers summarize.timer     # LAST and NEXT — THE check
 systemctl --user status summarize.service        # read the LOG LINES, not `Active:`
 ```
 
-**Recent `LAST` + future `NEXT` = alive, whatever the count says.** A healthy log line
+**Recent `LAST` + future `NEXT` = alive, whatever the count says.**
+
+⚠️ **A BLANK `NEXT` IS THE SECOND FALSE-DEATH SIGNAL ON THIS UNIT — and the sentence
+above, read literally, tells you to alarm on it.** `summarize.timer` is
+`OnUnitActiveSec=30min`, which reschedules from the last **activation** — so while the
+one-shot is still running, the next fire is genuinely undefined and `list-timers` prints
+`NEXT -` / `LEFT -`. That is a **healthy timer mid-drain**, not an unscheduled one.
+Observed 2026-09-17 11:34: `NEXT -`, LAST 1min 56s ago, count 103 (over threshold) —
+every surface saying *stall*, and the truth was `Active: activating (start)`, PID
+logging `Waiting for kg_ingest to finish`, draining normally and cooperating over
+`scripts/nuc_lock.py`.
+So the check is **three** readings, not two: `LAST` recent, **and either a future `NEXT`
+or a service that is currently `activating`/`running`**. Confirm with
+`systemctl --user status summarize.service` before concluding anything — a blank `NEXT`
+means *go look at the service*, exactly as `inactive (dead)` means *go look at the
+timer*. Both healthy states on this one unit wear the face of failure; that is why the
+count alone is never the instrument.
+
+A healthy log line
 looks like `[caia] Backlog: 77 unsummarized (threshold: 100) — nothing to do` — a
 sub-threshold count sitting stale is **correct batching, not a stall.**
 
