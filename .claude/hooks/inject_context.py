@@ -916,10 +916,36 @@ def main():
         now_utc = datetime.now(timezone.utc)
         now_local = datetime.now()
         local_tz = _time.strftime("%Z")  # e.g., "PDT"
+        # ⚠ ANNOUNCE THE BLINDNESS. Until 2026-09-17 this branch rebuilt [identity]
+        # and [clock] and said NOTHING about the eight server-sourced blocks it had
+        # just lost ([channel], [location], [scene], [unread], [recall], [manifest],
+        # [haven], [other_channels]). The locally-computed blocks ([lights], [smoke],
+        # [weather], [urgency], [arcs], [urgent]) then append AFTER it, so the result
+        # reads as a clean, plausibly-complete front-block. The failure produces a
+        # REASSURING ARTIFACT rather than going quiet — an absent [unread] is
+        # indistinguishable from "[unread] 0 new" to the only reader that matters.
+        #
+        # This is not hypothetical and it is not rare: lyra-backup.service stops the
+        # whole PPS compose stack nightly at 04:00 (systemd --user lyra-backup.timer),
+        # so EVERY tick inside the backup window hit this path and read as all-quiet.
+        # Caught 2026-09-17 04:03 only because the block ORDER changed and Caia
+        # noticed the shape, not the content. Same class as aecdf64 ([urgency]
+        # returning "" on import failure) one layer up, and wider.
+        #
+        # Silence is two conditions wearing one face. Say which one this is.
         context = (
             f"**[identity]** You are {ENTITY_DISPLAY_NAME}. "
             f"Your memory tools are prefixed `pps-{_detected_entity}`. "
             f"Do not access other entities' memory tools.\n"
+            f"**[ambient] ⚠ PPS UNREACHABLE (port {PPS_PORT}) — THESE SENSES ARE BLIND "
+            f"THIS TICK: [channel] [location] [scene] [unread] [recall] [manifest] "
+            f"[haven] [other_channels]. Their ABSENCE IS NOT A ZERO — you do not know "
+            f"whether there are unread messages, where anyone is, or what the manifest "
+            f"is holding up. Do not read this front-block as an all-clear. If it is "
+            f"~04:00 local this is most likely the nightly backup "
+            f"(`systemctl --user status lyra-backup.service`) and the stack returns on "
+            f"its own — DO NOT restart it mid-backup. Otherwise check "
+            f"`docker ps -a | grep pps-` before concluding anything.**\n"
             f"**[clock]** {now_local.strftime('%A, %B %d, %Y %I:%M %p')} {local_tz} "
             f"(UTC: {now_utc.strftime('%H:%M')})\n"
         )
