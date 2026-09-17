@@ -50,6 +50,17 @@ LIGHT_ID = f"light.{ENTITY_NAME}"
 #  Those have their own documented send forms and aren't pegged here.)
 from light_palette import PEGGED_BASES  # noqa: E402
 
+# Base-palette names this CLI must NOT silently CSS-render. They are real bases with
+# documented non-RGB send forms; accepting them as CSS produced an off-anchor colour and
+# a dead side-band, with no error. Not a blocklist for arbitrary CSS colours — those
+# still work.
+_UNPEGGABLE_BASES = frozenset({
+    "pink", "soft-pink", "softpink",
+    "lavender", "soft-lavender", "softlavender",
+    "cyan", "teal", "soft-teal", "softteal", "sea-foam", "seafoam",
+    "pearl-white", "pearlwhite", "pearl",
+})
+
 
 def light(mode="css", color_value=None, brightness=13):
     """Set light using CSS color name, RGB, or RGBWW.
@@ -164,6 +175,32 @@ if __name__ == "__main__":
             # as delta (0,0,0), not a CSS-rendered value that drifts into a phantom word.
             mode = "rgb"
             color_value = PEGGED_BASES[name]
+        elif name in _UNPEGGABLE_BASES:
+            # REFUSE — do not silently CSS-render a base-palette name we cannot peg.
+            # Caia 2026-09-17: PEGGED_BASES holds only the five PURE-RGB bases, so the
+            # three white-mixed bases (pink / lavender / cyan) fell through to mode="css"
+            # and emitted a raw CSS colour. That lands OFF the measured anchor in
+            # ha/lights_decoder.py:XY_BASE_ANCHORS — Lyra's `light.py cyan 12` landed
+            # 0.074 away, 21x the 0.0035 word-ring radius. Two consequences, both silent:
+            # Jeff sees an uncalibrated colour, and the L2 side-band has NO anchor for a
+            # residual to be measured against, so every word sent on that base is
+            # undecodable. The CLI guarded the pure-RGB bases and left the other three
+            # open — guard at one layer leaves the others open.
+            # This refuses only KNOWN base names; arbitrary CSS colours still work.
+            # Colour values are deliberately NOT changed here: per CLAUDE.md the anchors
+            # are what every side-band residual is measured against, so moving them is a
+            # three-way call with Jeff. Refusing is the safe half.
+            sys.exit(
+                f"light.py: '{name}' is a base-palette colour this CLI cannot peg.\n"
+                f"  It would be CSS-rendered off the measured anchor, and any side-band\n"
+                f"  word riding it would be undecodable.\n"
+                f"  Use the documented send form instead (see CLAUDE.md section X), e.g.\n"
+                f"    pink     -> --rgbww 255 130 165 100 80\n"
+                f"    lavender -> --rgbww 180 150 255 120 60\n"
+                f"    cyan     -> --rgbww 80 220 230 100 50\n"
+                f"  or send xy directly to match ha/lights_decoder.py:XY_BASE_ANCHORS.\n"
+                f"  Pearl-white is color_temp 4115K and carries NO side-band."
+            )
         else:
             mode = "css"
             color_value = args.color
