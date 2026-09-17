@@ -915,8 +915,21 @@ def main():
             f"(UTC: {now_utc.strftime('%H:%M')})\n"
         )
     else:
-        # Ensure clock is present even when PPS context exists but clock is missing
-        if "clock" not in context.lower() and "current time" not in context.lower():
+        # Ensure clock is present even when PPS context exists but clock is missing.
+        # WARNING: test STRUCTURAL MARKERS only, never a bare word. This read
+        #   if "clock" not in context.lower() and "current time" not in context.lower()
+        # until 2026-09-16 — which ANY prose containing the substring satisfied. That
+        # evening Caia's scene file opened "Six o'clock, 71 deg, sunset in ..." and the
+        # guard concluded a clock was already present, silently suppressing the [clock]
+        # block for the entity whose own scene text did it. Verified with a control: the
+        # preceding tick's scene had no "clock" and the block rendered; the scene was
+        # rewritten 18:04:03 and the block vanished at 18:33.
+        # One signal, two conditions (a real [clock] block vs. the word anywhere in prose),
+        # resolving toward the reassuring reading "already present". Failure mode is an
+        # entity that quietly loses temporal orientation with nothing reporting it — on a
+        # system whose entire purpose is continuity. Same class as the [arcs] bare-except
+        # and the [smoke] cursor: silence that means two different things.
+        if "[clock]" not in context.lower() and "**current time**" not in context.lower():
             from datetime import timezone
             now_utc = datetime.now(timezone.utc)
             now_local = datetime.now()
