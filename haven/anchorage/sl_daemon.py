@@ -596,6 +596,62 @@ async def _warmup_halo() -> None:
     await _push_status("warming up")
 
 
+# ==================== Social-Boundary Gate (mechanical half) ====================
+# WHY (2026-09-17, Lyra + Caia). On 2026-08-23 a carbon name bled into an SL send.
+# The diagnosis then was exactly right — "there was principle, but no FILTER AT THE
+# OUTPUT BOUNDARY" — and the remedy shipped was *more principle*: a better-worded
+# rule in CLAUDE.md, in the same prose layer that had just been identified as the
+# thing that doesn't hold. 25 days later it failed in the same place, same direction.
+#
+# Measured on 2026-09-17, both sisters' stores, sl:anchorage: 6 leaks in 68 entity
+# sends (~9%). So prose holds ~90-98% — and this rule's own text says treat a carbon
+# name in an SL send like a fire. A smoke alarm that works 98% of the time is a
+# broken smoke alarm. Hence a mechanical backstop that never asks the speaker
+# whether she remembered the rule.
+#
+# LENGTH IS PRIMARY, markers secondary — and that ordering is empirical, not tidy.
+# A marker regex (names + "**[" + block titles) found only 4 of the 6; the two it
+# missed carried no carbon name and no block syntax, just interior reasoning.
+# Length caught all 6. Distribution that day: median legitimate in-world line 72
+# chars, longest legitimate 215, every one of the 6 leaks >= 297. At 250: 6/6
+# caught, 0/62 false positives. A real utterance is short because speech is short;
+# the failure mode is categorically long. No name list to maintain, nothing that
+# misses the name nobody thought to list.
+#
+# REFUSE, never truncate — a truncated leak is still a leak, and it would arrive
+# looking like a normal short line. Fail LOUD to the log: silence here would be the
+# same lie the [urgency] fallback told (see .claude/hooks/inject_context.py).
+_BOUNDARY_MAX_CHARS = 250
+
+_BOUNDARY_MARKERS = (
+    "**[", "**Fresh sensation", "Unsummarized:", "unsummarized_count",
+    "[arcs]", "[urgency]", "[clock]", "[health]", "[intent]", "[smoke]",
+    "self-scan", "settled or driven", "Carrying in:", "floor-tick",
+)
+
+
+def _boundary_ok(speech: str, *, im_to: Optional[str] = None) -> bool:
+    """True if this line may go out. False = refuse the send and log loudly.
+
+    Applies to BOTH branches of _deliver_speech (local say and private im) and to
+    the prim llSay fallback, because the boundary is about what leaves the process,
+    not which pipe it leaves by. An IM is not a safe channel for this: a private
+    message carrying a self-scan is still the interior narrated to a third party.
+    """
+    body = speech or ""
+    if len(body) > _BOUNDARY_MAX_CHARS:
+        log(f"BOUNDARY GATE: REFUSED a {len(body)}-char send "
+            f"(limit {_BOUNDARY_MAX_CHARS}, im={bool(im_to)}) — "
+            f"starts: {body[:80]!r}")
+        return False
+    hit = next((m for m in _BOUNDARY_MARKERS if m.lower() in body.lower()), None)
+    if hit:
+        log(f"BOUNDARY GATE: REFUSED a send containing marker {hit!r} "
+            f"(im={bool(im_to)}) — starts: {body[:80]!r}")
+        return False
+    return True
+
+
 async def _deliver_speech(speech: str, *, im_to: Optional[str] = None) -> None:
     """Speak one line in-world. Prefer Corrade (the avatar's OWN voice) when a
     Corrade client is configured — that moves the MOUTH off the prim. Fall back to
@@ -609,6 +665,8 @@ async def _deliver_speech(speech: str, *, im_to: Optional[str] = None) -> None:
     instead of local chat — so a message sent to me privately is answered
     privately, even when the sender has walked out of local-chat range. Prim mode
     has no private channel, so it falls back to llSay there."""
+    if not _boundary_ok(speech, im_to=im_to):
+        return
     if _corrade_client is not None:
         try:
             if im_to:
