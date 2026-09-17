@@ -212,29 +212,53 @@ class RAGEngine:
         return sorted(results, key=lambda x: x['score'], reverse=True)
 
     # How many candidates to pull from the vector index before reranking.
-    # Measured 2026-09-17 (Lyra): dense-only search put the correct document at rank
-    # 25 of 25 for the query "I fixed it in the command line tool but every library
-    # caller is still broken"; the reranker moved it to rank 1 at 0.7447, more than
-    # 3x the next result. Over-fetching is therefore load-bearing — a candidate the
-    # vector stage ranks near the bottom is exactly the one the reranker rescues, so
-    # a narrow candidate set silently defeats the whole mechanism.
-    RERANK_CANDIDATES = 40
+    #
+    # Measured 2026-09-17 (Lyra, at Caia's insistence — the first number here was
+    # itself instrument-shaped). The rescued document for "I fixed it in the command
+    # line tool but every library caller is still broken" was first recorded at
+    # "dense rank 25 of 25". That was a CEILING, not a rank: 25 was the fetch limit
+    # and the document was merely last. Its true dense rank is 33.
+    #
+    # Candidate depth vs. reranked rank of that document (corpus: 2979 chunks):
+    #
+    #     depth  30  ->  MISS
+    #     depth  33  ->  rank 1     <- the cliff sits exactly at its own dense rank
+    #     depth  40  ->  rank 1     (the old value: 7 chunks of headroom, in 2979)
+    #     depth 200  ->  rank 1     (deeper never degraded any case measured)
+    #
+    # The failure is silent: below the cliff the document simply does not exist, with
+    # no error and no log line. 40 was not chosen against a measurement — it was
+    # chosen against a number that was an artifact of how far I happened to look.
+    #
+    # Cost is roughly linear and small: median rerank latency 437 ms at depth 40,
+    # 583 ms at 100, 969 ms at 200. 100 buys 67 chunks of headroom for ~150 ms.
+    #
+    # This is a corpus-relative constant. If tech-docs grows substantially, re-run the
+    # sweep rather than assuming the margin held — a correct document drifting past
+    # this line disappears without complaining.
+    RERANK_CANDIDATES = 100
 
     async def search(self, repo_name: str, query: str, config: dict, limit: int | None) -> list[dict]:
         """Search repository: dense retrieve, then cross-encoder rerank.
 
-        WHY THE RERANK STAGE EXISTS (2026-09-17). Dense-only retrieval here is blind to
+        WHY THE RERANK STAGE EXISTS (2026-09-17). Dense-only retrieval here BURIES
         conversational, first-person queries — the exact shape a real recall moment
-        takes. Same document, same content, four query shapes:
+        takes. Not blind: the correct document is in the candidate set, at dense rank
+        33 of 2979. The signal is there and the ranking cannot surface it, which is a
+        drowning problem, not a blindness one — and that distinction is why the fix is
+        over-fetch plus rerank rather than a different embedding. Same document, same
+        content, four query shapes:
 
             declarative statement ........................ 0.5930  rank 1
             keyword-ish .................................. 0.3237  rank 1
             prose description of the situation ........... 0.1155  rank 1
             "I fixed it in the CLI but every library
-             caller is still broken" .................... <0.1837  ABSENT
+             caller is still broken" .................... <0.1837  ABSENT from
+                                                                   the top 10
+                                                                   (dense rank 33)
 
         A bi-encoder embeds query and passage independently, so a short narrative
-        query and a 1000-char passage never meet. The cross-encoder reads both
+        query and a 1000-char passage barely meet. The cross-encoder reads both
         together and does. The reranker was already built, deployed and exposed at
         /api/rerank — it simply was not wired into this path.
 
