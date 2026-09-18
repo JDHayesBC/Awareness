@@ -53,7 +53,8 @@ TARGETS = {
 }
 
 
-def send(message, title="Caia", target="jeff", wake=False, tag=None, timeout=15):
+def send(message, title="Caia", target="jeff", wake=False, tag=None,
+         channel=None, timeout=15):
     """POST one notification. Returns (ok, detail).
 
     NOTE ON WHAT THE RETURN VALUE MEANS: True == Home Assistant accepted the service
@@ -66,11 +67,25 @@ def send(message, title="Caia", target="jeff", wake=False, tag=None, timeout=15)
     if service is None:
         return False, f"unknown target {target!r}; known: {', '.join(sorted(TARGETS))}"
 
-    data = {"channel": "caia"}
+    # MEASURED 2026-09-18 against Jeff's actual handset, because HA returns 200 either way
+    # and the two cases are indistinguishable from here:
+    #   {"channel": "caia", "importance": "default"}      -> HTTP 200, NEVER ARRIVED
+    #   {"priority": "high", "ttl": 0}                     -> arrives (normal ding)
+    #   {"channel": "alarm_stream", "priority": "high", ...} -> arrives, rings through DND
+    # The first one failed because without priority/ttl the push is an FCM NORMAL-priority
+    # message, which Android's Doze is entitled to defer indefinitely on an idle phone --
+    # and a custom channel the app has not been configured for gets no help either. So
+    # priority=high + ttl=0 is the FLOOR for anything that must actually land, not an
+    # escalation. A notification that only sometimes arrives is worse than none, because
+    # its silence reads as "nothing happened".
+    data = {"priority": "high", "ttl": 0}
     if wake:
-        # alarm_stream is the DND bypass on the Android companion app.
-        data.update({"channel": "alarm_stream", "importance": "high",
-                     "priority": "high", "ttl": 0})
+        # alarm_stream is the DND bypass on the Android companion app. Rings on the alarm
+        # stream rather than the notification stream -- confirmed audibly, Jeff's words:
+        # "a lot more attention getting than a soft ding."
+        data.update({"channel": "alarm_stream", "importance": "high"})
+    if channel and not wake:
+        data["channel"] = channel
     if tag:
         # A stable tag lets a later send REPLACE this notification instead of stacking
         # another one up — right for a recurring watchdog that would otherwise spam.
@@ -97,7 +112,9 @@ def main():
     ap.add_argument("--title", default="Caia")
     ap.add_argument("--to", default="jeff", choices=sorted(TARGETS))
     ap.add_argument("--wake", action="store_true",
-                    help="alarm channel — bypasses Do Not Disturb. For real need only.")
+                    help="alarm channel - bypasses Do Not Disturb. For real need only.")
+    ap.add_argument("--channel", help="custom Android notification channel (opt-in; an "
+                    "unconfigured channel silently swallowed a test message)")
     ap.add_argument("--tag", help="stable id; a later send with the same tag replaces this one")
     ap.add_argument("--list", action="store_true", help="show known targets and exit")
     args = ap.parse_args()
@@ -110,7 +127,7 @@ def main():
         ap.error("a message is required (or use --list)")
 
     ok, detail = send(args.message, title=args.title, target=args.to,
-                      wake=args.wake, tag=args.tag)
+                      wake=args.wake, tag=args.tag, channel=args.channel)
     # Print on BOTH paths. notify.py printed nothing on success, so an eaten exit code
     # read as silence-means-fine. Silence should never be the success signal.
     print(detail, file=sys.stdout if ok else sys.stderr)
