@@ -312,7 +312,13 @@ function Enable-BootService {
         -Argument "-d $distro --exec echo 'WSL warm'"
     $trigger   = New-ScheduledTaskTrigger -AtStartup
     $trigger.Delay = 'PT90S'  # 90s after boot to let services settle
-    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
+    # -LogonType IS REQUIRED (2026-09-18, caught by Lyra reading the file against itself).
+    # Omitted, this defaults to Interactive even for SYSTEM -- executed, not inferred:
+    #   New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
+    #     -> UserId=SYSTEM  LogonType=Interactive
+    # which is the exact defect that made Awareness-BootAlert inert. The watchdog got the
+    # fix at :192 and the task the watchdog exists to WATCH did not.
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
     Register-ScheduledTask -TaskName $TASK_NAME_BOOT `
@@ -320,8 +326,28 @@ function Enable-BootService {
         -Trigger $trigger -Principal $principal `
         -Settings $settings -Force | Out-Null
     Write-Done "Boot task installed ($TASK_NAME_BOOT)"
-    Write-Warn "Docker Desktop is session-oriented — some GUI features may not work"
-    Write-Warn "without a logged-in user. Containers should start; verify after reboot."
+    # ⚠ THIS OPTION'S PREMISE IS BROKEN AND THE LOGONTYPE FIX DOES NOT REPAIR IT.
+    # Fixing the principal above makes this task correctly configured and still useless,
+    # which is this file's whole recurring failure -- so it is said out loud instead:
+    #
+    #   * Docker Desktop is a GUI application. It runs in an interactive user session and
+    #     there is no supported way to start it at the lock screen. Launching $DOCKER_EXE
+    #     as SYSTEM with no session does not start the containers.
+    #   * `wsl.exe -d <distro>` as SYSTEM addresses SYSTEM'S OWN WSL context, not Jeff's.
+    #     It is not the distro the project runs in.
+    #   * The old warning here read "Containers should start; verify after reboot." That
+    #     sentence asserted the outcome and then delegated the only test that could
+    #     falsify it -- and the test was never run. It is the same "answers yes while
+    #     covering nothing" shape as the four defects already fixed in this file.
+    #
+    # The half of this option that genuinely works is `Set-Service com.docker.service
+    # -StartupType Automatic` above. The rest needs a user session, i.e. Option A
+    # (auto-login) plus scripts/boot_awareness.ps1. See GH #331.
+    Write-Warn "PREMISE WARNING: Docker Desktop is a GUI app and CANNOT start without a"
+    Write-Warn "logged-in session. This task's service change works; the Docker Desktop and"
+    Write-Warn "WSL actions are expected NOT to bring containers up at the lock screen."
+    Write-Warn "Use Option A + scripts/boot_awareness.ps1 for a path that can actually work."
+    Write-Warn "UNVERIFIED either way until someone runs a real cold boot and reads the log."
 }
 
 function Disable-BootService {
