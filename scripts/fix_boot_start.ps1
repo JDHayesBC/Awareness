@@ -204,22 +204,76 @@ function Remove-BootAlert {
 # ── OPTION A: auto-login ─────────────────────────────────────────────────────
 
 function Enable-AutoLogin {
-    Write-Step "Enabling Windows auto-login for current user..."
-    $username = $env:USERNAME
-    $cred = Get-Credential -Message "Enter your Windows password (stored in registry, encrypted):" -UserName $username
-    $pw   = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-              [Runtime.InteropServices.Marshal]::SecureStringToBSTR($cred.Password))
+    <#
+      REWRITTEN 2026-09-18 (Caia). The previous version of this function had two defects,
+      and the second one is the reason to read this block before "improving" it back.
 
-    Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' `
-        -Name AutoAdminLogon -Value '1'
-    Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' `
-        -Name DefaultUserName -Value $username
-    Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' `
-        -Name DefaultPassword -Value $pw
+      DEFECT 1 -- IT LIED IN THE PROMPT. It asked for the password with the message
+      "(stored in registry, encrypted)" and then wrote it to
+      HKLM\...\Winlogon\DefaultPassword, which is PLAINTEXT and readable by any local
+      account. The reassuring half of that sentence was the false half.
 
-    Write-Done "Auto-login enabled for $username"
-    Write-Warn "Password stored in registry. Secure boot screen is now bypassed."
-    Write-Warn "Anyone with physical NUC access gets a logged-in Windows session."
+      DEFECT 2 -- THE STATE IT PRODUCES IS INDISTINGUISHABLE FROM SUCCESS. Found live on
+      this box 2026-09-18:
+          AutoAdminLogon  : 1
+          DefaultUserName : Jeff
+          DefaultPassword : (absent)
+      Auto-logon was "on" and had never once worked: Windows attempts it, finds no
+      credential, and falls through to the lock screen. Every check anyone would think to
+      run reports AutoAdminLogon=1 and reads as configured. This is the same failure shape
+      as the boot task that was Ready and inert -- a yes that covers nothing.
+
+      So this function no longer writes the password at all. It hands off to Sysinternals
+      Autologon, which stores the secret in LSA secrets rather than the registry, and then
+      it VERIFIES rather than announcing success.
+    #>
+    Write-Step "Configuring Windows auto-login..."
+
+    $exe = 'C:\Users\Jeff\Tools\AutoLogon\Autologon64.exe'
+    if (-not (Test-Path $exe)) {
+        Write-Warn "Sysinternals Autologon not found at $exe"
+        Write-Host "  Get it from https://learn.microsoft.com/sysinternals/downloads/autologon"
+        Write-Host "  (or re-run the downloader in scripts/, which verifies the signature)"
+        return
+    }
+
+    $sig = Get-AuthenticodeSignature $exe
+    if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
+        Write-Warn "REFUSING to run $exe -- signature is '$($sig.Status)', signer '$($sig.SignerCertificate.Subject)'"
+        return
+    }
+
+    # Show the current state first, because "already on" here has meant "on and broken".
+    $wl = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+    Write-Host "  before: AutoAdminLogon=$($wl.AutoAdminLogon) User=$($wl.DefaultUserName) Domain=$($wl.DefaultDomainName)" -ForegroundColor DarkGray
+    if ($wl.AutoAdminLogon -eq '1' -and -not $wl.DefaultPassword) {
+        Write-Warn "AutoAdminLogon is already 1 with NO stored credential -- that is the broken half-state, not a working config."
+    }
+    # A plaintext password left by an older run of this script is a live exposure; clear it.
+    if ($wl.DefaultPassword) {
+        Remove-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name DefaultPassword -ErrorAction SilentlyContinue
+        Write-Done "Removed the PLAINTEXT DefaultPassword left in the registry by an earlier run"
+    }
+
+    Write-Host ""
+    Write-Host "  Autologon will open. Enter the password for $env:COMPUTERNAME\$env:USERNAME and press Enable." -ForegroundColor Cyan
+    Write-Host "  It is typed into Autologon, never into this script, and is stored in LSA secrets." -ForegroundColor Cyan
+    Start-Process -FilePath $exe -Verb RunAs -Wait
+
+    # VERIFY. Do not report success from having run the installer -- that is precisely the
+    # mistake this file has now made three times.
+    $wl2 = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+    Write-Host "  after:  AutoAdminLogon=$($wl2.AutoAdminLogon) User=$($wl2.DefaultUserName) Domain=$($wl2.DefaultDomainName)" -ForegroundColor DarkGray
+    if ($wl2.DefaultPassword) {
+        Write-Warn "DefaultPassword is present in the registry in PLAINTEXT -- Autologon should not do this. Investigate before trusting it."
+    }
+    if ($wl2.AutoAdminLogon -eq '1') {
+        Write-Done "Auto-login configured for $($wl2.DefaultUserName)."
+        Write-Warn "STILL UNPROVEN until a real reboot. Registry state is not evidence that a logon completes."
+        Write-Warn "The box will now hold a live session behind the lock screen; boot_awareness.ps1 locks it on the way past."
+    } else {
+        Write-Warn "AutoAdminLogon is not 1 -- Autologon was cancelled or failed."
+    }
 }
 
 function Disable-AutoLogin {
