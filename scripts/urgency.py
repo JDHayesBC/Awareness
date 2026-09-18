@@ -330,6 +330,18 @@ def _reading_age_phrase(entry: dict, today: dt.date) -> str:
     to a reading taken a minute ago, and five consecutive ticks cited it without opening
     it. An unsourced entry already gets a warning here; a stale-sourced one got nothing —
     and stale-but-confident is the worse of the two, because it reads like diligence.
+
+    KNOWN LIMITATION, found at the first midnight this clause survived (2026-09-18
+    00:03) and deliberately NOT fixed in the same night: `evidence_at` is stored
+    date-only (`note`/`cite` write a date; only `noted_at` carries a time), so age is
+    counted in calendar days, not hours. That cuts both ways and one way is dangerous:
+    a reading taken at 23:00 renders "(read yesterday)" an hour later — harmlessly
+    conservative — but a reading taken at 00:30 renders NOTHING for the next ~23.5
+    hours. Entry #9's evidence went false in SIX hours, so the silent window is about
+    four times the size of the failure this clause exists to catch. The honest fix is a
+    full timestamp in `evidence_at` with a date-only fallback for legacy rows; it
+    touches note() and cite() and wants daylight, not a midnight impulse. Until then,
+    read a missing phrase as "cited sometime today", not as "just checked".
     """
     when = entry.get("evidence_at")
     if not when:
