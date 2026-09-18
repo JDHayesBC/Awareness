@@ -155,7 +155,20 @@ if (-not $fallbackTopic) {
     }
 }
 '@
-    $action  = New-ScheduledTaskAction -Execute 'pwsh.exe' -Argument "-NoProfile -WindowStyle Hidden -Command `"$script`""
+    # INTERPRETER MUST EXIST (2026-09-18, Caia). This hardcoded pwsh.exe, which is NOT
+    # installed on the NUC -- verified: no C:\Program Files\PowerShell\7\pwsh.exe, none
+    # anywhere under Program Files, no Store package. So the task registered clean, showed
+    # State=Ready, and would have fired at boot and done nothing. A watchdog that silently
+    # no-ops is worse than no watchdog: it answers the question 'are we covered?' with yes.
+    # The embedded script uses no PS7-only syntax (checked: no ternary, ??, && or -Parallel),
+    # so Windows PowerShell 5.1 runs it correctly. Prefer pwsh where it exists; fall back.
+    $pwshPath = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
+    if (-not $pwshPath -and (Test-Path 'C:\Program Files\PowerShell\7\pwsh.exe')) {
+        $pwshPath = 'C:\Program Files\PowerShell\7\pwsh.exe'
+    }
+    $interpreter = if ($pwshPath) { $pwshPath } else { 'powershell.exe' }
+    Write-Host "  interpreter: $interpreter" -ForegroundColor DarkGray
+    $action  = New-ScheduledTaskAction -Execute $interpreter -Argument "-NoProfile -WindowStyle Hidden -Command `"$script`""
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $trigger.Delay = 'PT3M'  # 3-minute delay after boot
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
