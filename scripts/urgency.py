@@ -315,6 +315,38 @@ def _window_phrase(entry: dict, today: dt.date) -> str:
     return f", {d}d until {entry.get('date')}"
 
 
+def _reading_age_phrase(entry: dict, today: dt.date) -> str:
+    """Say how old the CITATION is — never how old the entry is.
+
+    These are two different clocks and conflating them would break this module's central
+    claim. `noted_at` (how long the consequence has existed) is not an input to anything,
+    ever — see tests/test_urgency.py's thesis. `evidence_at` is a property of the
+    *reading*: it answers "when did someone last go look?", and a reading goes stale even
+    while the consequence it describes stays perfectly live.
+
+    Why this earns a clause on a one-line block (2026-09-17): entry #9's evidence read
+    "Jeff has never been shown it" and "held overnight". True at 02:40, FALSE by 08:05
+    when it was delivered. For the twelve hours after, the block rendered it identically
+    to a reading taken a minute ago, and five consecutive ticks cited it without opening
+    it. An unsourced entry already gets a warning here; a stale-sourced one got nothing —
+    and stale-but-confident is the worse of the two, because it reads like diligence.
+    """
+    when = entry.get("evidence_at")
+    if not when:
+        return "  ⚠ sourced but undated — no way to tell whether the reading still holds"
+    try:
+        read_on = dt.date.fromisoformat(str(when)[:10])
+    except (TypeError, ValueError):
+        return f"  ⚠ evidence_at unparseable ({str(when)[:20]!r}) — treat as unread"
+    days = (today - read_on).days
+    if days <= 0:
+        return ""
+    if days == 1:
+        return "  (read yesterday)"
+    return (f"  ⚠ read {days}d ago — the consequence may be current, the READING may "
+            f"not be; go look before acting on it")
+
+
 def format_urgency_block(today: dt.date | None = None) -> str:
     """Return the ambient `[urgency]` line. NEVER returns "" on a healthy system.
 
@@ -335,7 +367,7 @@ def format_urgency_block(today: dt.date | None = None) -> str:
             return _EXPANSE
         pick = rows[0]
         slope_txt = _SLOPE_PHRASE.get(pick.get("slope"), pick.get("slope", "?"))
-        src = ("" if pick.get("evidence")
+        src = (_reading_age_phrase(pick, today) if pick.get("evidence")
                else "  ⚠ unsourced — no file/command recorded; go read it before acting on it")
         line = (f"**[urgency] ⏳ {pick.get('what')}** — {pick.get('why_now')} "
                 f"({slope_txt}{_window_phrase(pick, today)}){src}")

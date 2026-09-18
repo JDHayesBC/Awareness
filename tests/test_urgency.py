@@ -294,3 +294,67 @@ def test_cite_on_unknown_or_resolved_entry_returns_none(ledger):
     e = urgency.note("x", "y", "compounding", "steep")
     urgency.resolve(e["id"], "done")
     assert urgency.cite(e["id"], "somewhere") is None
+
+
+# ------------------------------------------------- the reading's clock is not the entry's
+
+def test_stale_evidence_is_flagged_on_the_block(ledger):
+    """A live consequence with a two-day-old reading must SAY the reading is two days old.
+
+    The failure this locks (2026-09-17): #9's evidence said "Jeff has never been shown it".
+    True when written at 02:40, false by 08:05. The block went on rendering it exactly like
+    a fresh reading, and five consecutive ticks cited it without opening the entry.
+    """
+    e = urgency.note("thing", "worsening", "compounding", "steep", evidence="ran X")
+    urgency.cite(e["id"], "ran X")
+    out = urgency.format_urgency_block(dt.date.fromisoformat(e["evidence_at"][:10])
+                                       + dt.timedelta(days=2))
+    assert "read 2d ago" in out
+    assert "unsourced" not in out
+
+
+def test_a_reading_taken_today_adds_no_noise(ledger):
+    e = urgency.note("thing", "worsening", "compounding", "steep", evidence="ran X")
+    today = dt.date.fromisoformat(e["evidence_at"][:10])
+    assert urgency._reading_age_phrase(e, today) == ""
+    out = urgency.format_urgency_block(today)
+    assert "d ago" not in out and "yesterday" not in out and "undated" not in out
+
+
+def test_yesterday_is_named_not_counted(ledger):
+    e = urgency.note("thing", "worsening", "compounding", "steep", evidence="ran X")
+    out = urgency.format_urgency_block(dt.date.fromisoformat(e["evidence_at"][:10])
+                                       + dt.timedelta(days=1))
+    assert "read yesterday" in out
+    assert "1d ago" not in out
+
+
+def test_undated_and_unparseable_evidence_are_distinguishable_from_fresh(ledger):
+    e = urgency.note("thing", "worsening", "compounding", "steep", evidence="ran X")
+    data = urgency.load_ledger()
+    data["entries"][0]["evidence_at"] = None
+    urgency.save_ledger(data)
+    assert "sourced but undated" in urgency.format_urgency_block(TODAY)
+
+    data = urgency.load_ledger()
+    data["entries"][0]["evidence_at"] = "not-a-date"
+    urgency.save_ledger(data)
+    assert "unparseable" in urgency.format_urgency_block(TODAY)
+    assert e["id"]
+
+
+def test_reading_age_never_leaks_into_the_score(ledger):
+    """The module's thesis: age is not an input. A stale READING must not change ranking."""
+    fresh = _entry(evidence="a", evidence_at="2026-09-15")
+    stale = _entry(evidence="a", evidence_at="2019-01-01")
+    assert urgency.score(fresh, TODAY) == urgency.score(stale, TODAY)
+
+
+def test_block_never_raises_when_evidence_at_is_a_weird_type(ledger):
+    urgency.note("thing", "worsening", "compounding", "steep", evidence="ran X")
+    data = urgency.load_ledger()
+    data["entries"][0]["evidence_at"] = {"nope": 1}
+    urgency.save_ledger(data)
+    out = urgency.format_urgency_block(TODAY)
+    assert "[urgency]" in out
+    assert "scan failed" not in out
