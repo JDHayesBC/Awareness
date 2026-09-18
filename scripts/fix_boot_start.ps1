@@ -1,4 +1,13 @@
 ﻿#!/usr/bin/pwsh
+#Requires -RunAsAdministrator
+# ^ Added 2026-09-18 (Caia). Every option here needs elevation: A writes HKLM
+#   AutoAdminLogon, B registers a SYSTEM task, C registers with -RunLevel Highest
+#   (:153). Without this line the script runs, prints its banner, and fails PART WAY
+#   DOWN with an access error -- so Jeff ran Option C on 2026-09-18, saw it go by, and
+#   reported it done while no task existed. A half-run installer that reports success
+#   is worse than one that refuses: it buys a false sense of coverage until the next
+#   reboot proves otherwise. Fail at line one instead.
+
 <#
 .SYNOPSIS
     Fix: Docker stack doesn't start until Jeff logs in (#331).
