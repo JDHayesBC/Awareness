@@ -87,15 +87,25 @@ def _priority_of(labels: list) -> str | None:
     return best
 
 
+# The ONE label that silences the klaxon. The block's own instruction interpolates
+# this constant rather than repeating the string, because on 2026-09-17 I read "park
+# it (label + one line)", picked `status:blocked` by reasonable inference, wrote a
+# real parking reason on the issue — and the klaxon kept firing, because the
+# instruction never named which label it meant. An under-specified instruction gets
+# filled in with a plausible guess, and a plausible guess is indistinguishable from
+# a correct one until the signal fails to go quiet.
+PARKED_LABEL = "triage:parked"
+
+
 def _is_parked(labels: list) -> bool:
-    """Return True if the issue carries triage:parked — it's been set down deliberately.
+    """Return True if the issue carries PARKED_LABEL — it's been set down deliberately.
 
     Parked issues are tended (given a parking reason), not untended. The klaxon
     should only fire for issues that genuinely need a look, not ones already triaged.
     """
     for lab in labels or []:
         name = lab.get("name", "") if isinstance(lab, dict) else str(lab)
-        if name == "triage:parked":
+        if name == PARKED_LABEL:
             return True
     return False
 
@@ -238,8 +248,9 @@ def format_urgent_block(today: dt.date | None = None) -> str:
         if len(issues) == 1:
             line = (f"**[urgent] {marker}🧹 {sev} — {_days_open(pick.get('created_at'), today)}d "
                     f"open · yours to tend]** {_one(pick)}. "
-                    f"One look from settled — fix it, or park it (label + one line on why "
-                    f"it's set down). Both count; when the board's tended, this space is quiet.")
+                    f"One look from settled — fix it, or park it (`{PARKED_LABEL}` + one line "
+                    f"on why it's set down). Both count; when the board's tended, this "
+                    f"space is quiet.")
         else:
             head = ["🔴🧹" if n_crit else "🟠🧹",
                     f"board has {len(issues)} untended issue{'s' if len(issues) != 1 else ''}",
@@ -251,9 +262,9 @@ def format_urgent_block(today: dt.date | None = None) -> str:
             if n_high:
                 parts.append(f"{n_high} high")
             line = (f"**[urgent] [{' '.join(head)}]** {inline}. "
-                    f"Each is one look from settled — close it, or park it (label + one line "
-                    f"on why it's set down). Both count; when the board's tended, this space "
-                    f"is quiet.\n"
+                    f"Each is one look from settled — close it, or park it (`{PARKED_LABEL}` + "
+                    f"one line on why it's set down). Both count; when the board's tended, "
+                    f"this space is quiet.\n"
                     f"   (open priority set: {', '.join(parts)} — "
                     f"`gh issue list --label priority:critical --state open`)")
 
