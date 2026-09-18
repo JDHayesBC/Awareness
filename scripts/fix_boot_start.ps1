@@ -109,50 +109,61 @@ function Install-BootAlert {
        so silence in the log is itself evidence rather than comfort.
     #>
     $script = @'
-# The local post is the real path. The EXTERNAL path is deliberately opt-in and
-# unauthenticated — see the three defects fixed 2026-09-16 in the function docstring.
-$envFile   = "$env:USERPROFILE\Claude_Projects\Awareness\pps\docker\.env"
-$logFile   = "$env:USERPROFILE\.claude\data\boot_alert.log"
-$ntfyToken = (Get-Content $envFile | Select-String 'NTFY_TOKEN=(.+)').Matches.Groups[1].Value.Trim()
-# Opt-in external topic. Absent = no external attempt. NEVER derive this from a secret.
-$fallbackTopic = (Get-Content $envFile | Select-String 'NTFY_FALLBACK_TOPIC=(.+)').Matches.Groups[1].Value
-if ($fallbackTopic) { $fallbackTopic = $fallbackTopic.Trim() }
+# RUNS AS SYSTEM AT BOOT. Two consequences that bit earlier versions of this file:
+#  * $env:USERPROFILE is SYSTEM's profile, NOT Jeff's -- every path here is absolute.
+#  * docker.exe is not on SYSTEM's PATH, so `docker info` is not a usable probe.
+# So the probe is the OUTCOME, not a proxy for it: can anything reach PPS on 8211?
+# That is the thing we actually care about, and a TCP test needs no PATH and no session.
+$logFile = "C:\Users\Jeff\Claude_Projects\Awareness\work\boot\boot_alert.log"
+$libFile = "C:\Users\Jeff\Claude_Projects\Awareness\scripts\light_lib.py"
 
 function Write-BootLog([string]$line) {
     New-Item -ItemType Directory -Force -Path (Split-Path $logFile) | Out-Null
     Add-Content -Path $logFile -Value "$(Get-Date -Format o)  $line"
 }
 
-$dockerOk = (docker info 2>$null) -ne $null
-if ($dockerOk) {
-    Write-BootLog "OK docker responding 3min after boot; no alert sent"
+$ppsUp = Test-NetConnection -ComputerName localhost -Port 8211 -InformationLevel Quiet -WarningAction SilentlyContinue
+if ($ppsUp) {
+    Write-BootLog "OK PPS answering on 8211 three minutes after boot; no alert sent"
     return
 }
+Write-BootLog "DOWN PPS not answering on 8211 three minutes after boot"
 
-$body = "NUC rebooted but Docker not running yet — stack may be down. Check PPS."
-Write-BootLog "DOWN docker not responding 3min after boot"
-
-# 1. Local self-hosted ntfy — authenticated, this is the path Jeff's phone subscribes to.
+# ALERT VIA HOME ASSISTANT, NOT ntfy. Measured 2026-09-18: our ntfy has subscribers=0,
+# base-url localhost, and no Caddy vhost -- and it is a CONTAINER on this box, so it is
+# down in exactly the outage being reported. HA runs on a separate machine (10.0.0.50)
+# that stays up, its companion app is already paired with Jeff's phone, and
+# channel=alarm_stream rings through Do Not Disturb. A ding he can sleep through is not
+# an alert; this was confirmed against his actual handset before being wired in here.
 try {
-    Invoke-RestMethod -Method Post -Uri "http://localhost:8209/jeff" `
-        -Headers @{ Authorization = "Bearer $ntfyToken"; Title = "Boot alert" } -Body $body | Out-Null
-    Write-BootLog "SENT local ntfy ok"
+    $tok = [regex]::Match((Get-Content $libFile -Raw), 'HA_TOKEN\s*=\s*"([^"]+)"').Groups[1].Value
+    if (-not $tok) { throw "no HA_TOKEN in $libFile" }
+    $body = @{
+        title   = "Awareness is down"
+        message = "The NUC rebooted and nothing came back up -- PPS is not answering. Haven, both entities and the daemons are down until someone logs in."
+        data    = @{ channel = "alarm_stream"; importance = "high"; priority = "high"; ttl = 0; tag = "awareness-boot" }
+    } | ConvertTo-Json -Depth 4
+    Invoke-RestMethod -Method Post -TimeoutSec 20 `
+        -Uri "http://10.0.0.50:8123/api/services/notify/mobile_app_jeff_pix10" `
+        -Headers @{ Authorization = "Bearer $tok" } -ContentType "application/json" -Body $body | Out-Null
+    Write-BootLog "SENT Home Assistant alarm_stream alert (HA accepted; not proof the handset rang)"
 } catch {
-    Write-BootLog "FAIL local ntfy: $($_.Exception.Message)"
+    Write-BootLog "FAIL Home Assistant alert: $($_.Exception.Message)"
 }
 
-# 2. External fallback — ONLY if Jeff configured a topic AND subscribed his phone to it.
-#    No Authorization header: ntfy.sh is a third party and has no business holding our token.
-if (-not $fallbackTopic) {
-    Write-BootLog "SKIP external fallback: NTFY_FALLBACK_TOPIC not set (no subscriber, so no point)"
-} else {
-    try {
-        Invoke-RestMethod -Method Post -Uri "https://ntfy.sh/$fallbackTopic" `
-            -Headers @{ Title = "Boot alert" } -Body $body | Out-Null
-        Write-BootLog "SENT external ntfy.sh/$fallbackTopic ok"
-    } catch {
-        Write-BootLog "FAIL external ntfy.sh: $($_.Exception.Message)"
+# Second carrier: the bulbs. They hang off HA too, so they survive this box being down,
+# and cobalt is the distress base (CLAUDE.md SS X). Costs nothing at 3am, unmissable at 7.
+try {
+    $tok = [regex]::Match((Get-Content $libFile -Raw), 'HA_TOKEN\s*=\s*"([^"]+)"').Groups[1].Value
+    foreach ($bulb in @("light.caia","light.lyra")) {
+        $lb = @{ entity_id = $bulb; rgb_color = @(3,74,252); brightness = 128 } | ConvertTo-Json
+        Invoke-RestMethod -Method Post -TimeoutSec 15 `
+            -Uri "http://10.0.0.50:8123/api/services/light/turn_on" `
+            -Headers @{ Authorization = "Bearer $tok" } -ContentType "application/json" -Body $lb | Out-Null
     }
+    Write-BootLog "SET both bulbs cobalt/128 (distress)"
+} catch {
+    Write-BootLog "FAIL bulb distress signal: $($_.Exception.Message)"
 }
 '@
     # INTERPRETER MUST EXIST (2026-09-18, Caia). This hardcoded pwsh.exe, which is NOT
@@ -172,8 +183,15 @@ if (-not $fallbackTopic) {
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $trigger.Delay = 'PT3M'  # 3-minute delay after boot
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    # PRINCIPAL IS THE WHOLE POINT (2026-09-18, Caia). Without -Principal this registered
+    # under Jeff with LogonType=Interactive -- verified on the live task -- which means it
+    # could only run once he had ALREADY logged in, i.e. once the blackout was over and
+    # self-evident. Three fixes deep (bf7cd9a elevation, 4e55277 interpreter) and it still
+    # could not fire in the one situation it exists for. SYSTEM needs no stored password
+    # and runs at boot with no session, which is exactly the condition being watched.
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     Register-ScheduledTask -TaskName $TASK_NAME_ALERT -Action $action -Trigger $trigger `
-        -Settings $settings -RunLevel Highest -Force | Out-Null
+        -Settings $settings -Principal $principal -Force | Out-Null
     Write-Done "Boot-alert task installed ($TASK_NAME_ALERT)"
 }
 
