@@ -273,6 +273,45 @@ def cite(entry_id: int, evidence: str) -> dict | None:
     return None
 
 
+def amend(entry_id: int, what: str | None = None, why: str | None = None) -> dict | None:
+    """Correct the HEADLINE of an open entry — the half `cite` cannot reach.
+
+    `cite` grows the evidence; nothing could ever change `what` or `why_now`. So an entry
+    could be re-read, falsified in its source field, and still assert the dead claim on
+    the one line that actually gets rendered — and the rendered line is what gets acted
+    on. That is strictly worse than never having checked: the correction exists, is
+    reachable, and is invisible at the point of use.
+
+    `resolve` is not the escape hatch. Tombstoning a consequence that is still live, in
+    order to restate it, buys a clean headline by lying about whether the thing is over.
+    The ledger's meaning depends on resolved meaning resolved.
+
+    Nothing is destroyed: the superseded text is appended to `amendments` with the date,
+    so the shape of the error stays legible — same discipline as striking a falsified
+    line through rather than editing it away.
+    """
+    if what is None and why is None:
+        raise ValueError("give --what or --why (or both) — amend with neither is a no-op")
+    if what is not None and not what.strip():
+        raise ValueError("--what cannot be emptied; an entry with no headline is unreadable")
+    if why is not None and not why.strip():
+        raise ValueError("--why cannot be emptied; the why-now clause is the whole point")
+    data = load_ledger()
+    for e in data["entries"]:
+        if e.get("id") == entry_id and not e.get("resolved_at"):
+            prior = {"at": dt.date.today().isoformat()}
+            if what is not None:
+                prior["what"] = e["what"]
+                e["what"] = what.strip()
+            if why is not None:
+                prior["why_now"] = e["why_now"]
+                e["why_now"] = why.strip()
+            e.setdefault("amendments", []).append(prior)
+            save_ledger(data)
+            return e
+    return None
+
+
 def resolve(entry_id: int, note_text: str = "") -> dict | None:
     """Tombstone an entry — never delete. The what-was-pressing record is deliberate."""
     data = load_ledger()
@@ -441,6 +480,12 @@ def main() -> int:
     ct.add_argument("id", type=int)
     ct.add_argument("--evidence", required=True)
 
+    am = sub.add_parser("amend", help="correct the headline/why-now of an open entry "
+                                      "(keeps the superseded text)")
+    am.add_argument("id", type=int)
+    am.add_argument("--what", default=None)
+    am.add_argument("--why", default=None, help="the corrected why-now clause")
+
     r = sub.add_parser("resolve", help="tombstone an entry (never deletes)")
     r.add_argument("id", type=int)
     r.add_argument("--note", default="")
@@ -469,6 +514,19 @@ def main() -> int:
             print(f"no open entry #{args.id}", file=sys.stderr)
             return 1
         print(f"cited #{e['id']}: {e['evidence']} (read {e['evidence_at']})", file=sys.stderr)
+        return 0
+
+    if args.cmd == "amend":
+        try:
+            e = amend(args.id, args.what, args.why)
+        except ValueError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
+        if e is None:
+            print(f"no open entry #{args.id}", file=sys.stderr)
+            return 1
+        print(f"amended #{e['id']} ({len(e['amendments'])} amendment(s) on record, "
+              f"nothing overwritten)", file=sys.stderr)
         return 0
 
     if args.cmd == "resolve":
