@@ -3447,6 +3447,23 @@ async def get_turns_since_summary(request: GetTurnsSinceSummaryRequest):
 
 # === Message Summaries (3) ===
 
+def _utc(ts):
+    """Mark a stored timestamp as UTC for display.
+
+    Every timestamp in `messages` and `message_summaries` is UTC, but these
+    render sites used to emit it bare -- and a bare timestamp reads as local to
+    every human and model that sees it. On 2026-09-19 that cost us: a summary's
+    `time_span` (UTC) was compared against its `created_at` (read as local), the
+    two happened to differ by exactly the 7h PDT offset, and the mismatch
+    rendered as a self-consistent zero gap that looked like evidence. See #347.
+    Display only -- the stored columns are untouched.
+    """
+    if ts is None:
+        return None
+    ts = str(ts)
+    return ts if ts.endswith('Z') else ts + 'Z'
+
+
 @app.post("/tools/get_recent_summaries")
 async def get_recent_summaries(request: GetRecentSummariesRequest):
     """
@@ -3470,10 +3487,10 @@ async def get_recent_summaries(request: GetRecentSummariesRequest):
             {
                 "id": s['id'],
                 "message_count": s['message_count'],
-                "time_span": f"{s['time_span_start'][:16]} to {s['time_span_end'][:16]}",
+                "time_span": f"{_utc(s['time_span_start'][:16])} to {_utc(s['time_span_end'][:16])}",
                 "summary_text": s['summary_text'],
                 "channels": s.get('channels', []),
-                "created_at": s['created_at']
+                "created_at": _utc(s['created_at'])
             }
             for s in summaries
         ],
@@ -3531,7 +3548,7 @@ async def summary_stats(token: str = ""):
     stats = {
         "unsummarized_messages": unsummarized_count,
         "recent_summaries": len(recent_summaries),
-        "last_summary_date": recent_summaries[0]['created_at'] if recent_summaries else None,
+        "last_summary_date": _utc(recent_summaries[0]['created_at']) if recent_summaries else None,
         "needs_summarization": unsummarized_count >= SUMMARIZATION_THRESHOLD
     }
     

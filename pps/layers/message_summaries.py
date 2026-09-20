@@ -312,7 +312,7 @@ class MessageSummariesLayer(PatternLayer):
                             'summary_id': row['id'],
                             'message_count': row['message_count'],
                             'channels': channels,
-                            'time_span': f"{row['time_span_start']} to {row['time_span_end']}",
+                            'time_span': f"{row['time_span_start']}Z to {row['time_span_end']}Z",
                             'summary_type': row['summary_type'],
                             'start_msg_id': row['start_message_id'],
                             'end_msg_id': row['end_message_id']
