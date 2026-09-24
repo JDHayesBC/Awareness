@@ -357,8 +357,11 @@ def format_arc_block(entity: str | None = None, today: dt.date | None = None,
                 f"Next move: {_truncate(move, 110)}")
         extra = len(rows) - 1
         if extra > 0:
+            # NOT `--all`: that is the UNFILTERED view (includes published/dormant arcs)
+            # and is capped at --top 3, so it showed a different, shorter list than the
+            # "+N more" it was cited for. `--top` keeps the starving filter and fits them all.
             line += (f"\n   (+{extra} more moving arc(s) stale ≥{threshold_days}d — "
-                     f"`ENTITY_NAME={ent} python3 scripts/arc_scan.py --all`)")
+                     f"`ENTITY_NAME={ent} python3 scripts/arc_scan.py --top {len(rows)}`)")
         return line
     except Exception as exc:  # pragma: no cover - must never break the hook
         # Silence in this block means "nothing to report". A crash that also renders as
