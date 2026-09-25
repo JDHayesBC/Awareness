@@ -105,15 +105,32 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 # Issue #348: markers of a tool call that is itself SPEECH — the entity already said its
 # piece into a room through the tool. When a turn contains one, the turn's trailing text
 # is a status report about that speech ("Sent. Now I'm caught up…"), not a second thing
-# to say, so it is dropped. Matched against the tool name and its stringified input.
-# A heuristic stopgap until explicit speak-tags land; see #348 §3.
-SPEAKING_TOOL_MARKERS = ("haven_say.py", "sl.py say", ".say(", ".im(", "haven_test_reply")
+# to say, so it is dropped. A heuristic stopgap until explicit speak-tags land; see #348 §3.
+#
+# Deliberately NARROW (Lyra's review of #353): only a Bash command that actually RUNS a
+# speech path counts, plus the haven_test_reply tool by exact name. A Read/Grep/cat of
+# haven_say.py — exactly what either of us runs while debugging THIS issue — must not
+# count, or the real answer to "why did that leak?" gets silently dropped. A false
+# positive here is a mute bot, so the markers require the invocation shape, not the name.
+SPEAKING_TOOL_NAMES = ("haven_test_reply",)
+SPEAKING_BASH_MARKERS = (".say(", ".im(")
+_READER_COMMANDS = ("cat ", "grep ", "rg ", "sed ", "head ", "tail ", "less ", "wc ", "git ")
 
 
 def _is_speaking_tool(block) -> bool:
     """True if this ToolUseBlock is the entity speaking, not looking something up."""
-    haystack = f"{getattr(block, 'name', '')} {getattr(block, 'input', '')}"
-    return any(m in haystack for m in SPEAKING_TOOL_MARKERS)
+    name = getattr(block, "name", "") or ""
+    if any(name == n or name.endswith("__" + n) for n in SPEAKING_TOOL_NAMES):
+        return True
+    if name != "Bash":
+        return False
+    tool_input = getattr(block, "input", None) or {}
+    command = tool_input.get("command", "") if isinstance(tool_input, dict) else str(tool_input)
+    if command.lstrip().startswith(_READER_COMMANDS):
+        return False  # reading/searching speech code is not speech
+    if "haven_say.py" in command and "--room" in command:
+        return True
+    return any(m in command for m in SPEAKING_BASH_MARKERS)
 
 
 def get_default_mcp_servers(entity_path: Optional[Path] = None) -> dict:

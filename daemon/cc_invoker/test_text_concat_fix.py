@@ -326,6 +326,21 @@ async def test_348_lookup_then_answer_not_gagged():
     print("  PASSED")
 
 
+async def test_348_reading_speech_code_is_not_speech():
+    """Grep/Read/cat of haven_say.py (debugging THIS issue) must not mute the answer."""
+    print("TEST #348: reading the speech code is not speaking")
+    for tool in (
+        ToolUseBlock(id="tu_1", name="Grep", input={"pattern": "haven_say.py", "path": "."}),
+        ToolUseBlock(id="tu_1", name="Read", input={"file_path": "scripts/haven_say.py"}),
+        ToolUseBlock(id="tu_1", name="Bash", input={"command": "cat scripts/haven_say.py"}),
+        ToolUseBlock(id="tu_1", name="Bash", input={"command": "grep -n 'haven_say.py --room' CLAUDE.md"}),
+    ):
+        messages = [_msg(tool), _msg(TextBlock("It's the invoker join.")), make_result_message(num_turns=2)]
+        response = await make_invoker_with_messages(messages).query("why did it leak?")
+        assert response == "It's the invoker join.", f"{tool.name} {tool.input} muted the answer: {response!r}"
+    print("  PASSED")
+
+
 async def test_348_tool_free_turn_unchanged():
     """A tool-free turn in the split shape comes through exactly as before."""
     print("TEST #348: tool-free split-shape turn unchanged")
@@ -355,6 +370,7 @@ async def run_all_tests():
         test_348_split_shape_narration_tool_answer,
         test_348_spoke_via_tool_then_status_is_silent,
         test_348_lookup_then_answer_not_gagged,
+        test_348_reading_speech_code_is_not_speech,
         test_348_tool_free_turn_unchanged,
     ]
 
