@@ -102,6 +102,36 @@ class InvokerQueryError(Exception):
 # Project root for locating PPS server
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
+# Issue #348: markers of a tool call that is itself SPEECH — the entity already said its
+# piece into a room through the tool. When a turn contains one, the turn's trailing text
+# is a status report about that speech ("Sent. Now I'm caught up…"), not a second thing
+# to say, so it is dropped. A heuristic stopgap until explicit speak-tags land; see #348 §3.
+#
+# Deliberately NARROW (Lyra's review of #353): only a Bash command that actually RUNS a
+# speech path counts, plus the haven_test_reply tool by exact name. A Read/Grep/cat of
+# haven_say.py — exactly what either of us runs while debugging THIS issue — must not
+# count, or the real answer to "why did that leak?" gets silently dropped. A false
+# positive here is a mute bot, so the markers require the invocation shape, not the name.
+SPEAKING_TOOL_NAMES = ("haven_test_reply",)
+SPEAKING_BASH_MARKERS = (".say(", ".im(")
+_READER_COMMANDS = ("cat ", "grep ", "rg ", "sed ", "head ", "tail ", "less ", "wc ", "git ")
+
+
+def _is_speaking_tool(block) -> bool:
+    """True if this ToolUseBlock is the entity speaking, not looking something up."""
+    name = getattr(block, "name", "") or ""
+    if any(name == n or name.endswith("__" + n) for n in SPEAKING_TOOL_NAMES):
+        return True
+    if name != "Bash":
+        return False
+    tool_input = getattr(block, "input", None) or {}
+    command = tool_input.get("command", "") if isinstance(tool_input, dict) else str(tool_input)
+    if command.lstrip().startswith(_READER_COMMANDS):
+        return False  # reading/searching speech code is not speech
+    if "haven_say.py" in command and "--room" in command:
+        return True
+    return any(m in command for m in SPEAKING_BASH_MARKERS)
+
 
 def get_default_mcp_servers(entity_path: Optional[Path] = None) -> dict:
     """
@@ -591,10 +621,18 @@ class ClaudeInvoker:
                 # receive_response() stops at the FIRST ResultMessage, dropping Turn 2.
                 # receive_messages() continues until StopAsyncIteration (stream ends).
                 #
-                # We also skip TextBlocks from AssistantMessages that contain ToolUseBlocks.
-                # Those TextBlocks are pre-tool filler ("Let me check..."), not the final
-                # response. Text-only AssistantMessages contain the actual answer.
+                # Text that comes BEFORE a tool call is pre-tool filler ("Let me check..."),
+                # not the answer. Issue #348: this used to be detected per-message ("skip
+                # TextBlocks that share an AssistantMessage with a ToolUseBlock"), but CC
+                # 2.1.28x delivers every content block as its OWN single-block message, so
+                # that branch could never fire and all the filler was concatenated into the
+                # send. Now positional: every ToolUseBlock clears the text collected so far,
+                # so only text after the LAST tool call survives — whatever the SDK's
+                # message grouping. And if any tool call in the turn was itself speech
+                # (see SPEAKING_TOOL_MARKERS), the entity already spoke; the trailing text
+                # is a status report about that, and the turn sends nothing further.
                 response_parts = []
+                spoke_via_tool = False
                 msg_count = 0
                 text_block_count = 0
                 tool_block_count = 0
@@ -621,20 +659,19 @@ class ClaudeInvoker:
                     if isinstance(msg, AssistantMessage):
                         block_types = [type(b).__name__ for b in msg.content]
                         logger.info(f"Response msg #{msg_count}: {msg_type} with {len(msg.content)} blocks: {block_types}")
-                        # Check if this AssistantMessage contains tool calls.
-                        # If so, its TextBlocks are pre-tool filler — skip them.
-                        # Only collect text from tool-free turns (the actual response).
                         msg_has_tool_use = any(isinstance(b, ToolUseBlock) for b in msg.content)
                         last_assistant_had_tools = msg_has_tool_use
                         for block in msg.content:
                             if isinstance(block, TextBlock):
-                                if msg_has_tool_use:
-                                    logger.info(f"  TextBlock (skipped — pre-tool filler): {block.text[:80]}...")
-                                else:
-                                    text_block_count += 1
-                                    logger.info(f"  TextBlock #{text_block_count}: {len(block.text)} chars: {block.text[:100]}...")
-                                    response_parts.append(block.text)
+                                text_block_count += 1
+                                logger.info(f"  TextBlock #{text_block_count}: {len(block.text)} chars: {block.text[:100]}...")
+                                response_parts.append(block.text)
                             elif isinstance(block, ToolUseBlock):
+                                if response_parts:
+                                    logger.info(f"  Dropping {len(response_parts)} pre-tool text block(s) (filler before a tool call, #348)")
+                                    response_parts.clear()
+                                if _is_speaking_tool(block):
+                                    spoke_via_tool = True
                                 tool_block_count += 1
                                 tool_name = block.name
                                 tool_input = str(block.input)
@@ -653,6 +690,12 @@ class ClaudeInvoker:
                         logger.info(f"Response msg #{msg_count}: {msg_type} (unhandled)")
 
                 logger.info(f"Response stream ended. Collected {text_block_count} text blocks, {tool_block_count} tool blocks from {msg_count} messages")
+                if spoke_via_tool and response_parts:
+                    logger.info(
+                        f"Dropping {len(response_parts)} trailing text block(s): the turn already "
+                        f"spoke through a tool, so this is narration about that speech (#348)"
+                    )
+                    response_parts = []
                 response = "".join(response_parts)
 
                 # Desync watchdog (issue #277): flag if response arrived impossibly fast.

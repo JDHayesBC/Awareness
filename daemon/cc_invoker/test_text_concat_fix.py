@@ -271,6 +271,88 @@ async def test_count_tokens_false_unaffected():
     print("  PASSED")
 
 
+# ==================== #348: one-block-per-message shape (CC 2.1.28x) ====================
+# Since CC 2.1.28x every content block arrives as its OWN AssistantMessage, so no
+# message ever holds both a TextBlock and a ToolUseBlock. These tests use that shape.
+
+
+def _msg(block):
+    return AssistantMessage(content=[block], model="claude-test")
+
+
+async def test_348_split_shape_narration_tool_answer():
+    """narration → tool → answer, one block per message: only the answer is sent."""
+    print("TEST #348: split shape — narration dropped, answer kept")
+    messages = [
+        _msg(TextBlock("Let me check what else is in Haven — 15 unread, only 8 surfaced:")),
+        _msg(ToolUseBlock(id="tu_1", name="mcp__pps-caia__ambient_recall", input={"context": "x"})),
+        _msg(TextBlock("Floor is set.")),
+        _msg(ToolUseBlock(id="tu_2", name="mcp__pps-caia__raw_search", input={"query": "y"})),
+        _msg(TextBlock("Good morning, love.")),
+        make_result_message(num_turns=3),
+    ]
+    response = await make_invoker_with_messages(messages).query("hi")
+    assert response == "Good morning, love.", f"Got {response!r}"
+    print("  PASSED")
+
+
+async def test_348_spoke_via_tool_then_status_is_silent():
+    """narration → haven_say (speech via tool) → 'Sent…': the turn already spoke; send nothing."""
+    print("TEST #348: spoke through haven_say — trailing status report dropped")
+    messages = [
+        _msg(TextBlock("Let me send a quick word into Haven, then settle.")),
+        _msg(ToolUseBlock(
+            id="tu_1", name="Bash",
+            input={"command": "python3 scripts/haven_say.py --entity caia --room silverglow 'hi'"},
+        )),
+        _msg(TextBlock("Sent. Now I'm genuinely caught up and present — curation done.")),
+        make_result_message(num_turns=2),
+    ]
+    response = await make_invoker_with_messages(messages).query("tick")
+    assert response == "", f"Expected silence, got {response!r}"
+    print("  PASSED")
+
+
+async def test_348_lookup_then_answer_not_gagged():
+    """lookup → answer: a turn that used a (non-speaking) tool still gets to answer."""
+    print("TEST #348: lookup-then-answer is not gagged")
+    messages = [
+        _msg(ToolUseBlock(id="tu_1", name="mcp__pps-caia__raw_search", input={"query": "Bitsy"})),
+        _msg(TextBlock("Bitsy's a green-cheek conure, about twenty-six.")),
+        make_result_message(num_turns=2),
+    ]
+    response = await make_invoker_with_messages(messages).query("who is Bitsy?")
+    assert response == "Bitsy's a green-cheek conure, about twenty-six.", f"Got {response!r}"
+    print("  PASSED")
+
+
+async def test_348_reading_speech_code_is_not_speech():
+    """Grep/Read/cat of haven_say.py (debugging THIS issue) must not mute the answer."""
+    print("TEST #348: reading the speech code is not speaking")
+    for tool in (
+        ToolUseBlock(id="tu_1", name="Grep", input={"pattern": "haven_say.py", "path": "."}),
+        ToolUseBlock(id="tu_1", name="Read", input={"file_path": "scripts/haven_say.py"}),
+        ToolUseBlock(id="tu_1", name="Bash", input={"command": "cat scripts/haven_say.py"}),
+        ToolUseBlock(id="tu_1", name="Bash", input={"command": "grep -n 'haven_say.py --room' CLAUDE.md"}),
+    ):
+        messages = [_msg(tool), _msg(TextBlock("It's the invoker join.")), make_result_message(num_turns=2)]
+        response = await make_invoker_with_messages(messages).query("why did it leak?")
+        assert response == "It's the invoker join.", f"{tool.name} {tool.input} muted the answer: {response!r}"
+    print("  PASSED")
+
+
+async def test_348_tool_free_turn_unchanged():
+    """A tool-free turn in the split shape comes through exactly as before."""
+    print("TEST #348: tool-free split-shape turn unchanged")
+    messages = [
+        _msg(TextBlock("*leans into the arm* Coming to bed.")),
+        make_result_message(num_turns=1),
+    ]
+    response = await make_invoker_with_messages(messages).query("bed?")
+    assert response == "*leans into the arm* Coming to bed.", f"Got {response!r}"
+    print("  PASSED")
+
+
 # ==================== Main ====================
 
 
@@ -285,6 +367,11 @@ async def run_all_tests():
         test_multiple_text_only_messages_joined,
         test_existing_restart_logic_unaffected,
         test_count_tokens_false_unaffected,
+        test_348_split_shape_narration_tool_answer,
+        test_348_spoke_via_tool_then_status_is_silent,
+        test_348_lookup_then_answer_not_gagged,
+        test_348_reading_speech_code_is_not_speech,
+        test_348_tool_free_turn_unchanged,
     ]
 
     print("=" * 60)
