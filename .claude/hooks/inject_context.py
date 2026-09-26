@@ -24,12 +24,13 @@ Hook output (to stdout):
 """
 
 import json
+import math
 import sys
 import urllib.request
 import urllib.error
 import os
 import time as _time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Health-check watchdog (extensible alert registry — see health_checks.py).
@@ -318,6 +319,28 @@ def _sun_phase(elevation: float, rising: bool) -> str:
         return "midday"
 
 
+_SYNODIC_DAYS = 29.530588853
+_KNOWN_NEW_MOON = datetime(2000, 1, 6, 18, 14, tzinfo=timezone.utc)
+_MOON_NAMES = (
+    "new", "waxing crescent", "first quarter", "waxing gibbous",
+    "full", "waning gibbous", "last quarter", "waning crescent",
+)
+
+
+def _moon_phase(now_utc: datetime) -> str:
+    """Return e.g. "waxing gibbous, 94% lit" from mean synodic arithmetic.
+
+    Mean-month approximation: phase names can be off by up to about half a
+    day near the boundaries, which is fine for peripheral vision. Caia wanted
+    to know what the moon was doing on night ticks (2026-09-26).
+    """
+    age = ((now_utc - _KNOWN_NEW_MOON).total_seconds() / 86400) % _SYNODIC_DAYS
+    frac = age / _SYNODIC_DAYS
+    name = _MOON_NAMES[int(frac * 8 + 0.5) % 8]
+    lit = round((1 - math.cos(2 * math.pi * frac)) / 2 * 100)
+    return f"{name}, {lit}% lit"
+
+
 # Weather cache — avoids hammering HA on every tick (10-minute TTL).
 _WEATHER_CACHE_FILE = PROJECT_ROOT / ".claude" / "data" / "weather_cache.json"
 _WEATHER_CACHE_TTL_S = 600  # 10 minutes
@@ -357,6 +380,12 @@ def get_weather_line() -> str:
             line = _get_weather_from_openmeteo()
         except Exception:
             return "[weather] (unavailable)"
+
+    # --- Moon (pure arithmetic, no network; never breaks the line) ---
+    try:
+        line = f"{line} · moon: {_moon_phase(datetime.now(_tz.utc))}"
+    except Exception:
+        pass
 
     # --- Cache write (best-effort) ---
     try:
