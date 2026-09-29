@@ -1,0 +1,14 @@
+[Unit]
+Description=Fire backup-freshness.service daily at 09:00
+Requires=backup-freshness.service
+
+[Timer]
+# 09:00 is after every backup stage has run: daily 04:00; on Sundays break-glass +
+# R2 push at 03:13 and validate at 04:30. It's also a waking hour, so an alert gets seen.
+OnCalendar=*-*-* 09:00:00
+AccuracySec=5min
+Persistent=true
+Unit=backup-freshness.service
+
+[Install]
+WantedBy=timers.target
