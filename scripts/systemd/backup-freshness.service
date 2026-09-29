@@ -1,0 +1,22 @@
+[Unit]
+Description=Alert Jeff if any backup stage (local / validate / break-glass / off-site R2) has gone stale
+Documentation=file:///mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/backup_freshness.py
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+ExecStart=/usr/bin/python3 /mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/backup_freshness.py
+# Exit 1 = something is stale (the alert was already sent). Don't mark the unit failed for it.
+SuccessExitStatus=0 1
+MemoryMax=128M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=backup-freshness
+
+# Install (user units):
+#   cp scripts/systemd/backup-freshness.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now backup-freshness.timer

@@ -13,6 +13,12 @@ Environment="PYTHONUNBUFFERED=1"
 Environment="PYTHONDONTWRITEBYTECODE=1"
 
 ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python3 /mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/create_break_glass.py
+# Off-site leg: age-encrypt the zip just built and push it to R2, then round-trip
+# verify. Oneshot runs ExecStart lines in order and stops at the first failure,
+# so a failed build never pushes a stale zip. Until 2026-09-29 this line did not
+# exist: the push had only ever run once, by hand (09-11), and the cloud copy sat
+# 18 days stale with nothing watching it. backup_freshness.py is the watcher now.
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python3 /mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/push_break_glass.py
 
 SuccessExitStatus=0
 
