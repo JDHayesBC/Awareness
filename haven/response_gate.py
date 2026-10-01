@@ -6,10 +6,17 @@ Three-layer cascade (L0–L2), plus an optional Jev pre-filter (L_jev):
   Layer 1 (self-author): batch only contains this bot's own messages -> NO
   Layer 2 (9b classifier): ambiguous -> default-NO LLM call to LM Studio
 
-  Layer Jev (optional, GH #360): fast probability-based gate *before* Sonnet is invoked.
+  Layer Jev (optional, GH #360): fast multi-question gate *before* Sonnet is invoked.
   Runs independently via `layer_jev()` — call it from bot.py before starting the typing
-  indicator. If P(respond) < threshold (default 0.30), skip Sonnet entirely with no typing
-  indicator shown. Falls back to respond=True on any API error.
+  indicator. Asks Jev two questions in the same request (zero extra latency):
+    1. should_respond  — P(respond) < threshold  => skip
+    2. is_social_ritual — P(ritual) >= ritual_threshold => always-pass
+  Falls back to respond=True on any API error.
+
+  The ritual classifier replaces the earlier `layer0_ritual_greeting` regex bypass
+  (GH #360 follow-up): Jev's own semantic understanding of "goodnight / I love you /
+  how are you" is more robust than a keyword list.  `layer0_ritual_greeting` is
+  retained in this module for backward-compat / eval comparison only.
 
 Lives upstream of `invoker.query(prompt)` in `haven/bot.py`. The point: short-circuit
 before Opus is invoked. An LLM cannot refuse a call - once tokens are spent, they're spent.
@@ -45,6 +52,7 @@ LM_STUDIO_TIMEOUT = float(os.getenv("HAVEN_GATE_LM_TIMEOUT", "5.0"))
 JEV_URL = os.getenv("HAVEN_JEV_URL", "https://api.typesafe.ai/v1/systemone")
 JEV_DEFAULT_TURNS = int(os.getenv("HAVEN_JEV_TURNS", "10"))
 JEV_DEFAULT_THRESHOLD = float(os.getenv("HAVEN_JEV_THRESHOLD", "0.10"))
+JEV_DEFAULT_RITUAL_THRESHOLD = float(os.getenv("HAVEN_JEV_RITUAL_THRESHOLD", "0.70"))
 JEV_DEFAULT_TIMEOUT = float(os.getenv("HAVEN_JEV_TIMEOUT", "2.0"))
 
 # Validated default-NO classifier prompt. See #177 comment 3 for empirical results.
@@ -72,12 +80,19 @@ class GateDecision:
 
 @dataclass
 class JevDecision:
-    """Result of the Jev pre-filter (GH #360)."""
+    """Result of the Jev pre-filter (GH #360).
+
+    `respond` is the final verdict, incorporating both should_respond and is_social_ritual.
+    `p_respond` is P(should_respond=YES) from choice+confidence.
+    `p_ritual` is P(is_social_ritual=YES); None when the ritual question was not asked.
+    """
 
     respond: bool
-    p_respond: float  # P(should respond) from Jev distribution["YES"]
+    p_respond: float  # P(should respond) from choice+confidence
     reason: str
     elapsed_ms: float = 0.0
+    p_ritual: float | None = None      # P(is social ritual); None = not asked
+    is_social_ritual: bool | None = None  # ritual gate fired
 
 
 # ==================== Layer 0: Name mention ====================
@@ -251,13 +266,21 @@ async def layer_jev(
     api_key: str,
     turns: int = JEV_DEFAULT_TURNS,
     threshold: float = JEV_DEFAULT_THRESHOLD,
+    ritual_threshold: float = JEV_DEFAULT_RITUAL_THRESHOLD,
     timeout: float = JEV_DEFAULT_TIMEOUT,
     client: httpx.AsyncClient | None = None,
 ) -> JevDecision:
-    """Jev probability gate: should this entity respond?
+    """Jev multi-question gate: should this entity respond?
 
-    Sends the last `turns` messages to the TypeSafe Jev API and returns
-    P(should_respond). If P < `threshold`, `respond=False` (skip Sonnet).
+    Sends the last `turns` messages to the TypeSafe Jev API with two questions
+    in a single request (zero extra latency):
+
+      1. should_respond  — default-NO gate. If P < `threshold`, skip Sonnet.
+      2. is_social_ritual — always-pass override. If P >= `ritual_threshold`,
+         respond=True regardless of should_respond.  Replaces the
+         `layer0_ritual_greeting` regex bypass: Jev's semantic understanding
+         of "goodnight / I love you / how are you" is more robust than keyword
+         patterns (GH #360 follow-up).
 
     Falls back to respond=True on any network/API error — Jev unavailability
     must not block the entity's voice.
@@ -300,7 +323,26 @@ async def layer_jev(
                 ),
             },
             "options": ["YES", "NO"],
-        }
+        },
+        "is_social_ritual": {
+            "type": "choice",
+            "instructions": (
+                "Is the most recent message a household greeting, social ritual, "
+                "or affectionate expression that deserves a warm acknowledgment?"
+            ),
+            "criteria": {
+                "YES": (
+                    "The trigger is a greeting (good morning/afternoon/evening/night), "
+                    "farewell, 'I love you', 'love you', 'miss you', 'how are you', "
+                    "or similar household ritual or affectionate expression."
+                ),
+                "NO": (
+                    "The message is a question, statement, technical discussion, "
+                    "or other non-ritual content — not a greeting or social pleasantry."
+                ),
+            },
+            "options": ["YES", "NO"],
+        },
     }
 
     payload = {
@@ -332,31 +374,40 @@ async def layer_jev(
             )
 
         data = resp.json()
-        answer = data.get("answers", {}).get("should_respond", {})
-        choice = (answer.get("choice") or "?").strip().upper()
-        confidence = float(answer.get("confidence") or 0.5)
+        answers = data.get("answers", {})
 
         # NOTE: distribution["YES"] is always ~0.50 for binary YES/NO questions — a known
         # Jev quirk (#56 in work/jev-links/BRIEF.md). The real probability lives in
-        # choice + confidence: choice=YES/conf=0.8 means P(respond)=0.80,
-        # choice=NO/conf=0.8 means P(respond)=0.20. Map accordingly.
-        if choice == "YES":
-            p_respond = confidence
-        elif choice == "NO":
-            p_respond = 1.0 - confidence
-        else:
-            p_respond = 0.5  # unknown — cautious middle ground
+        # choice + confidence: choice=YES/conf=0.8 means P=0.80,
+        # choice=NO/conf=0.8 means P=0.20. Map accordingly.
+        def _extract_p(answer_key: str) -> float:
+            answer = answers.get(answer_key, {})
+            choice = (answer.get("choice") or "?").strip().upper()
+            confidence = float(answer.get("confidence") or 0.5)
+            if choice == "YES":
+                return confidence
+            elif choice == "NO":
+                return 1.0 - confidence
+            else:
+                return 0.5  # unknown — cautious middle ground
 
-        respond = p_respond >= threshold
+        p_respond = _extract_p("should_respond")
+        p_ritual = _extract_p("is_social_ritual")
+
+        ritual_fires = p_ritual >= ritual_threshold
+        respond = (p_respond >= threshold) or ritual_fires
         reason = (
-            f"P(YES)={p_respond:.2f} choice={choice} conf={confidence:.2f} "
-            f"threshold={threshold} turns={len(recent)}"
+            f"P(respond)={p_respond:.2f} P(ritual)={p_ritual:.2f} "
+            f"threshold={threshold} ritual_th={ritual_threshold} turns={len(recent)}"
+            + (" [ritual-pass]" if ritual_fires else "")
         )
         return JevDecision(
             respond=respond,
             p_respond=p_respond,
             reason=reason,
             elapsed_ms=(time.time() - t0) * 1000,
+            p_ritual=p_ritual,
+            is_social_ritual=ritual_fires,
         )
     finally:
         if owns_client:

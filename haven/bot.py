@@ -28,7 +28,7 @@ from pathlib import Path
 import httpx
 import websockets
 
-from haven.response_gate import JevDecision, layer0_name_mentioned, layer0_ritual_greeting, layer_jev
+from haven.response_gate import JevDecision, layer0_name_mentioned, layer_jev
 
 # Configure logging so invoker output is visible
 logging.basicConfig(
@@ -950,12 +950,12 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
             file=sys.stderr,
         )
 
-        # Jev pre-filter (GH #360): fast probability gate before Sonnet + typing indicator.
-        # Bypass conditions (always respond, skip Jev):
-        #   L0a — entity name in batch (direct address)
-        #   L0b — household greeting / ritual (Jev is structurally blind to these)
-        if JEV_ENABLED and JEV_API_KEY and not layer0_name_mentioned(ENTITY_NAME, messages) \
-                and not layer0_ritual_greeting(messages):
+        # Jev pre-filter (GH #360): fast multi-question gate before Sonnet + typing indicator.
+        # Bypass condition (skip Jev, always respond):
+        #   L0 — entity name appears in batch (direct address; never silence a name mention)
+        # Ritual/greeting detection is now handled inside layer_jev via the is_social_ritual
+        # question — no regex bypass needed here (GH #360 follow-up).
+        if JEV_ENABLED and JEV_API_KEY and not layer0_name_mentioned(ENTITY_NAME, messages):
             jev: JevDecision = await layer_jev(
                 ENTITY_NAME,
                 messages,

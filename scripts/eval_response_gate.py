@@ -3,8 +3,10 @@
 
 Sweeps Jev `turns` x `threshold`, and reports two columns per setting:
 
-  deployed  — L0 (name-mention, ritual greeting) first, as bot.py does; Jev only when L0 doesn't fire
-  jev-raw   — Jev alone, to show what it WOULD silence if L0 ever slipped
+  deployed  — L0 (name-mention) first; Jev multi-question gate otherwise.
+              Jev now asks TWO questions per request: should_respond + is_social_ritual.
+              Respond=True if: name-mention OR p_ritual >= ritual_threshold OR p_respond >= threshold.
+  jev-raw   — Jev alone, to show what it WOULD silence if name-mention ever slipped.
 
 The cost that matters is a false negative: a case labeled `respond` that the gate
 silences. Those are listed by id, loudest. `either` cases are never scored.
@@ -17,6 +19,7 @@ Guards (each one turns a broken gate into a perfect-looking score if it's missin
 Run with the PPS venv (needs httpx):
   pps/venv/bin/python3 scripts/eval_response_gate.py
   pps/venv/bin/python3 scripts/eval_response_gate.py --turns 5,10 --thresholds 0.2,0.3
+  pps/venv/bin/python3 scripts/eval_response_gate.py --ritual-threshold 0.5
 """
 
 import argparse
@@ -32,13 +35,11 @@ sys.path.insert(0, str(PROJECT_DIR))
 
 import httpx  # noqa: E402
 
-from haven.response_gate import layer0_name_mentioned, layer_jev  # noqa: E402
-
-try:  # L0b, added in bot.py alongside name-mention; mirror whatever production runs
-    from haven.response_gate import layer0_ritual_greeting  # noqa: E402
-except ImportError:
-    def layer0_ritual_greeting(messages):
-        return False
+from haven.response_gate import (  # noqa: E402
+    JEV_DEFAULT_RITUAL_THRESHOLD,
+    layer0_name_mentioned,
+    layer_jev,
+)
 
 SUITE = PROJECT_DIR / "haven" / "tests" / "fixtures" / "response_decision_suite.jsonl"
 KEY_FILE = PROJECT_DIR / "work" / "system-one-models" / "jev_api_key.txt"
@@ -55,32 +56,45 @@ def load_suite(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-async def score_case(case, key, turns, threshold, client, repeats=1):
+async def score_case(case, key, turns, threshold, client, repeats=1,
+                     ritual_threshold=JEV_DEFAULT_RITUAL_THRESHOLD):
     """Jev `repeats` times per case; the deployed column reuses it unless L0 fires.
 
     Jev is not deterministic — the same input can land on either side of a threshold
     (sl-010 measured 0.28..0.61 over 5 runs). One run per case understates that, so
     scoring uses the MINIMUM p seen: the worst case is the one where she goes silent.
+
+    With multi-question Jev (GH #360 follow-up), each call now returns both
+    `p_respond` and `p_ritual`.  The deployed verdict:
+      respond = l0_name OR p_ritual_min >= ritual_threshold OR p_respond_min >= threshold
     """
-    ps, ms, reasons, fallback = [], [], [], False
+    ps, p_rituals_all, ms, reasons, fallback = [], [], [], [], False
     for _ in range(repeats):
         d = await layer_jev(case["entity"], case["messages"], api_key=key,
-                            turns=turns, threshold=threshold, client=client)
+                            turns=turns, threshold=threshold,
+                            ritual_threshold=ritual_threshold, client=client)
         # "<jev ..." = disabled/error (fail-open). "choice=?" = Jev answered with neither
         # YES nor NO and layer_jev silently substituted p=0.5 — also not a real score.
         if d.reason.startswith("<jev") or "choice=?" in d.reason:
             fallback = True
         ps.append(d.p_respond)
+        p_rituals_all.append(d.p_ritual if d.p_ritual is not None else 0.0)
         ms.append(d.elapsed_ms or 0)
         reasons.append(d.reason)
-    l0 = (layer0_name_mentioned(case["entity"], case["messages"])
-          or layer0_ritual_greeting(case["messages"]))
+    l0 = layer0_name_mentioned(case["entity"], case["messages"])
     p = min(ps)
+    p_ritual_min = min(p_rituals_all)
+    ritual_fires = p_ritual_min >= ritual_threshold
     return {
         "id": case["id"], "expected": case["expected"], "ambiguity": case["ambiguity"],
-        "p": p, "p_max": max(ps), "ps": ps, "ms": statistics.median(ms), "ms_all": ms,
+        "p": p, "p_max": max(ps), "ps": ps,
+        "p_ritual": p_ritual_min, "p_ritual_max": max(p_rituals_all),
+        "p_rituals_all": p_rituals_all, "ritual_fires": ritual_fires,
+        "ms": statistics.median(ms), "ms_all": ms,
         "fallback": fallback, "reason": reasons[0],
-        "raw": p >= threshold, "deployed": True if l0 else p >= threshold, "l0": l0,
+        "raw": p >= threshold,
+        "deployed": True if l0 else (p >= threshold or ritual_fires),
+        "l0": l0,
     }
 
 
@@ -106,12 +120,14 @@ def tally(results, column):
 TIERS = ("low", "med", "high")
 
 
-def print_tiers(rows, th):
+def print_tiers(rows, th, ritual_th=JEV_DEFAULT_RITUAL_THRESHOLD):
     """FN/FP by ambiguity tier, two ways (deployed column only).
 
     guard    — scored on the MIN p across repeats: the worst case, a ceiling on misses.
     expected — per-run mean: production samples Jev once, so this is the miss rate
                people will actually live with.
+
+    With multi-question Jev, deployed = l0 OR p_ritual_run >= ritual_th OR p_run >= th.
 
     A miss on a `low` case is an alarm. Misses in `high` are the filter having teeth;
     the question there is what share, not whether any.
@@ -126,7 +142,9 @@ def print_tiers(rows, th):
         def run_rate(r, want_respond):
             if r["l0"]:
                 return 0.0 if want_respond else 1.0
-            said = [x >= th for x in r["ps"]]
+            ritual_per_run = r.get("p_rituals_all", [0.0] * len(r["ps"]))
+            said = [(x >= th or pr >= ritual_th)
+                    for x, pr in zip(r["ps"], ritual_per_run)]
             return sum((not s) if want_respond else s for s in said) / len(said)
 
         g_fn = sum(not r["deployed"] for r in resp)
@@ -144,6 +162,8 @@ async def main():
     ap.add_argument("--suite", type=Path, default=SUITE)
     ap.add_argument("--turns", default="3,5,10,20")
     ap.add_argument("--thresholds", default="0.1,0.2,0.3,0.4,0.5")
+    ap.add_argument("--ritual-threshold", type=float, default=JEV_DEFAULT_RITUAL_THRESHOLD,
+                    help=f"P(ritual) >= this -> always respond (default {JEV_DEFAULT_RITUAL_THRESHOLD})")
     ap.add_argument("--channel", help="only cases from this channel (haven, sl)")
     ap.add_argument("--repeats", type=int, default=3,
                     help="Jev calls per case; scoring uses the min p (default 3)")
@@ -161,27 +181,32 @@ async def main():
         cases = [c for c in cases if c["channel"] == args.channel]
     turns_list = [int(t) for t in args.turns.split(",")]
     thresholds = [float(t) for t in args.thresholds.split(",")]
+    ritual_th = args.ritual_threshold
 
     n_resp = sum(c["expected"] == "respond" for c in cases)
     n_sil = sum(c["expected"] == "silent" for c in cases)
     print(f"repeats per case: {args.repeats} (scored on min p)")
+    print(f"ritual_threshold: {ritual_th}  (P(ritual) >= this -> always respond)")
     print(f"suite: {len(cases)} cases ({n_resp} respond, {n_sil} silent, "
           f"{len(cases) - n_resp - n_sil} either)\n")
 
     all_rows = []
     async with httpx.AsyncClient() as client:
         for turns in turns_list:
-            # p_respond doesn't depend on the threshold, so query once per (case, turns)
-            base = [await score_case(c, key, turns, 1.0, client, args.repeats) for c in cases]
+            # p_respond and p_ritual don't depend on the threshold, so query once per (case, turns)
+            base = [await score_case(c, key, turns, 1.0, client, args.repeats,
+                                     ritual_threshold=ritual_th) for c in cases]
             ms = [m for r in base if not r["fallback"] for m in r["ms_all"]]
             n_fb = sum(r["fallback"] for r in base)
             lat = f"median {statistics.median(ms):.0f}ms max {max(ms):.0f}ms" if ms else "no successful calls"
-            print(f"== turns={turns}  latency {lat}  fallbacks {n_fb}/{len(base)}")
+            n_ritual = sum(r["ritual_fires"] for r in base if not r["fallback"])
+            print(f"== turns={turns}  latency {lat}  fallbacks {n_fb}/{len(base)}  ritual-gates={n_ritual}")
             if n_fb:
                 print("   ⚠ fallbacks are excluded from scoring; reasons:",
                       sorted({r['reason'] for r in base if r['fallback']}))
             for th in thresholds:
-                rows = [dict(r, raw=r["p"] >= th, deployed=True if r["l0"] else r["p"] >= th,
+                rows = [dict(r, raw=r["p"] >= th,
+                             deployed=True if r["l0"] else (r["p"] >= th or r["ritual_fires"]),
                              turns=turns, threshold=th) for r in base]
                 all_rows.extend(rows)
                 for col in ("deployed", "jev-raw"):
@@ -192,11 +217,18 @@ async def main():
                     if fn:
                         print(f"      🔴 silenced but should respond: {', '.join(fn)}")
                     if col == "deployed":
-                        flaky = [r["id"] for r in rows if not r["l0"] and r["p"] < th <= r["p_max"]]
+                        flaky = [r["id"] for r in rows
+                                 if not r["l0"] and not r["ritual_fires"]
+                                 and r["p"] < th <= r["p_max"]]
                         if flaky:
                             print(f"      ⚠ coin-flip at this threshold (runs straddle it): {', '.join(flaky)}")
-                        print_tiers(rows, th)
-            print("   p per case:", ", ".join(f"{r['id'].split('-',2)[0]}-{r['id'].split('-',2)[1]}={r['p']:.2f}" for r in base))
+                        print_tiers(rows, th, ritual_th)
+            ritual_hits = [r["id"] for r in base if r["ritual_fires"] and not r["l0"]]
+            if ritual_hits:
+                print(f"   ritual-gate fired (p_ritual >= {ritual_th}): {', '.join(ritual_hits)}")
+            print("   p/p_ritual per case:", ", ".join(
+                f"{r['id'].split('-',2)[0]}-{r['id'].split('-',2)[1]}="
+                f"{r['p']:.2f}/{r['p_ritual']:.2f}" for r in base))
             print()
 
     if args.json:
