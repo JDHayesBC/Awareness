@@ -963,7 +963,7 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
         #          decide whether a warm follow-up is warranted.
         # Ritual/greeting detection is handled INSIDE layer_jev via is_social_ritual question.
         _jev_bypass = layer0_name_mentioned(ENTITY_NAME, messages) or layer0_entity_spoke_last(
-            my_username, messages
+            my_username, messages, bot_usernames=known_bots
         )
         if JEV_ENABLED and JEV_API_KEY and not _jev_bypass:
             jev: JevDecision = await layer_jev(

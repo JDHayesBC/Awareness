@@ -155,7 +155,11 @@ def layer0_ritual_greeting(messages: list[dict]) -> bool:
     return False
 
 
-def layer0_entity_spoke_last(entity_username: str, messages: list[dict]) -> bool:
+def layer0_entity_spoke_last(
+    entity_username: str,
+    messages: list[dict],
+    bot_usernames: Iterable[str] = (),
+) -> bool:
     """True if the entity spoke just before the most recent human message.
 
     Handles the "Jeff says 'ok' after an entity statement" gap: Jev sees the 'ok' without
@@ -167,7 +171,13 @@ def layer0_entity_spoke_last(entity_username: str, messages: list[dict]) -> bool
     before it (walking backwards, skipping empties) is from `entity_username`.
 
     Both conditions must be met; entity-only or human-only batches are unaffected.
+
+    `bot_usernames`: every entity/bot account in the room (bot.py's `known_bots`).
+    A sister's reply is NOT a human acknowledgment: without this set, two entity bots
+    each see the other as "human spoke last" and their back-and-forth bypasses Jev
+    entirely (found by Caia's suite, home-009 / home-005).
     """
+    bots = set(bot_usernames) | {entity_username}
     non_empty = [
         msg for msg in messages if (msg.get("content", "") or "").strip()
     ]
@@ -175,7 +185,7 @@ def layer0_entity_spoke_last(entity_username: str, messages: list[dict]) -> bool
         return False
     last_msg = non_empty[-1]
     prev_msg = non_empty[-2]
-    last_is_human = (last_msg.get("username", "") or "") != entity_username
+    last_is_human = (last_msg.get("username", "") or "") not in bots
     prev_is_entity = (prev_msg.get("username", "") or "") == entity_username
     return last_is_human and prev_is_entity
 
