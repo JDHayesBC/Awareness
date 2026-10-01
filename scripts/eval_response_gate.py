@@ -38,6 +38,7 @@ import httpx  # noqa: E402
 from haven.response_gate import (  # noqa: E402
     JEV_DEFAULT_RITUAL_THRESHOLD,
     layer0_entity_spoke_last,
+    layer0_human_dm,
     layer0_name_mentioned,
     layer_jev,
 )
@@ -130,15 +131,9 @@ def build_question_preset(name: str, entity_name: str) -> dict | None:
 
 
 def human_dm(case) -> bool:
-    """L0c: a human wrote in a DM room (bot.py 7045ad2) — always addressed to us.
-
-    MIRROR of inline logic in bot.py, not an import: if that rule moves into
-    response_gate.py, import it here instead, or this tests a copy.
-    """
-    if case.get("room") != "dm" or not case["messages"]:
-        return False
-    last = case["messages"][-1].get("username", "") or ""
-    return last not in BOT_USERNAMES | {case["entity"]}
+    """L0c: a human wrote in a DM room — always addressed to us (production function)."""
+    return layer0_human_dm(case["entity"], case["messages"], case.get("room") == "dm",
+                           bot_usernames=BOT_USERNAMES)
 
 
 async def score_case(case, key, turns, threshold, client, repeats=1,
