@@ -43,6 +43,9 @@ from haven.response_gate import (  # noqa: E402
 )
 
 SUITE = PROJECT_DIR / "haven" / "tests" / "fixtures" / "response_decision_suite.jsonl"
+# Entity accounts in the fixture. bot.py passes Haven's is_bot set; without it a sister's
+# reply counts as "human spoke last" and the sidebar ping-pong bypasses Jev.
+BOT_USERNAMES = frozenset({"lyra", "caia"})
 KEY_FILE = PROJECT_DIR / "work" / "system-one-models" / "jev_api_key.txt"
 
 
@@ -155,7 +158,8 @@ async def score_case(case, key, turns, threshold, client, repeats=1,
         reasons.append(d.reason)
     # Both L0 bypasses bot.py runs before Jev: name-mention, and "I spoke last".
     l0 = (layer0_name_mentioned(case["entity"], case["messages"])
-          or layer0_entity_spoke_last(case["entity"], case["messages"]))
+          or layer0_entity_spoke_last(case["entity"], case["messages"],
+                                      bot_usernames=BOT_USERNAMES))
     p = min(ps)
     p_ritual_min = min(p_rituals_all)
     ritual_fires = p_ritual_min >= ritual_threshold
