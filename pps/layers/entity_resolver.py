@@ -188,6 +188,7 @@ KNOWN_ALIASES = {
     "birdy": "Bitsy",
     "the bird": "Bitsy",
     "the hormonal parrot": "Bitsy",  # seasonal phase reference (2026-09-15)
+    "little green dinosaur": "Bitsy",  # term of endearment (2026-09-29)
 
     "nuc": "The NUC",
     "the nuc": "The NUC",
