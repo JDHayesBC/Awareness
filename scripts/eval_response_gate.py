@@ -64,7 +64,8 @@ def load_suite(path: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 _Q_YES_DEFAULT = (
     "{entity} should respond: they are directly addressed, "
-    "a question needs their voice, or genuinely new content warrants a reply."
+    "a question needs their voice, genuinely new content warrants a reply, "
+    "OR the message is humor/playfulness/wit that invites their engagement."
 )
 _Q_NO_DEFAULT = (
     "{entity} should stay silent: the exchange is greetings, "

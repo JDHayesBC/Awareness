@@ -346,7 +346,8 @@ async def layer_jev(
         "criteria": {
             "YES": (
                 f"{entity_name} should respond: they are directly addressed, "
-                "a question needs their voice, or genuinely new content warrants a reply."
+                "a question needs their voice, genuinely new content warrants a reply, "
+                "OR the message is humor/playfulness/wit that invites their engagement."
             ),
             "NO": (
                 f"{entity_name} should stay silent: the exchange is greetings, "
