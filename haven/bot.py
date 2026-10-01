@@ -962,8 +962,14 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
         #          scores p≈0.05 because Jev can't see it's a reply TO us — Sonnet should
         #          decide whether a warm follow-up is warranted.
         # Ritual/greeting detection is handled INSIDE layer_jev via is_social_ritual question.
-        _jev_bypass = layer0_name_mentioned(ENTITY_NAME, messages) or layer0_entity_spoke_last(
-            my_username, messages, bot_usernames=known_bots
+        #   L0c — a human wrote in a DM: a 1:1 message is always addressed to us, and the
+        #          suite (#360) has no DM cases. Bot-to-bot DMs (sister room) still meet Jev.
+        _last_author = (messages[-1].get("username", "") if messages else "") or ""
+        _human_dm = room_id in dm_rooms and _last_author not in known_bots | {my_username}
+        _jev_bypass = (
+            _human_dm
+            or layer0_name_mentioned(ENTITY_NAME, messages)
+            or layer0_entity_spoke_last(my_username, messages, bot_usernames=known_bots)
         )
         if JEV_ENABLED and JEV_API_KEY and not _jev_bypass:
             jev: JevDecision = await layer_jev(
