@@ -129,6 +129,18 @@ def build_question_preset(name: str, entity_name: str) -> dict | None:
     raise ValueError(f"Unknown question preset: {name!r}. Known: default, humor, implicit, broad")
 
 
+def human_dm(case) -> bool:
+    """L0c: a human wrote in a DM room (bot.py 7045ad2) — always addressed to us.
+
+    MIRROR of inline logic in bot.py, not an import: if that rule moves into
+    response_gate.py, import it here instead, or this tests a copy.
+    """
+    if case.get("room") != "dm" or not case["messages"]:
+        return False
+    last = case["messages"][-1].get("username", "") or ""
+    return last not in BOT_USERNAMES | {case["entity"]}
+
+
 async def score_case(case, key, turns, threshold, client, repeats=1,
                      ritual_threshold=JEV_DEFAULT_RITUAL_THRESHOLD,
                      respond_question_override: dict | None = None):
@@ -157,7 +169,8 @@ async def score_case(case, key, turns, threshold, client, repeats=1,
         ms.append(d.elapsed_ms or 0)
         reasons.append(d.reason)
     # Both L0 bypasses bot.py runs before Jev: name-mention, and "I spoke last".
-    l0 = (layer0_name_mentioned(case["entity"], case["messages"])
+    l0 = (human_dm(case)
+          or layer0_name_mentioned(case["entity"], case["messages"])
           or layer0_entity_spoke_last(case["entity"], case["messages"],
                                       bot_usernames=BOT_USERNAMES))
     p = min(ps)
