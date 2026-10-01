@@ -1270,6 +1270,17 @@ async def list_tools() -> list[Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Forward all tool calls to the HTTP server."""
+    # Brain sessions (Haven bot, SL) export CC_INVOKER_CHANNEL, which this stdio child
+    # inherits. ambient_recall's schema has no channel/consumer_key, so their startup
+    # call reached the server as channel="terminal" with no consumer_key: tagged
+    # [channel] terminal AND advanced the shared "terminal" unread cursor (2026-10-01).
+    if name == "ambient_recall":
+        channel = os.environ.get("CC_INVOKER_CHANNEL", "").strip()
+        if channel:
+            entity = Path(os.environ.get("ENTITY_PATH", "")).name or "entity"
+            arguments = dict(arguments)
+            arguments.setdefault("channel", channel)
+            arguments.setdefault("consumer_key", f"{channel}-{entity}")
     # pps_regenerate_token uses a different endpoint path pattern
     return _forward(name, arguments)
 
