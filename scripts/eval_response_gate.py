@@ -37,6 +37,7 @@ import httpx  # noqa: E402
 
 from haven.response_gate import (  # noqa: E402
     JEV_DEFAULT_RITUAL_THRESHOLD,
+    layer0_entity_spoke_last,
     layer0_name_mentioned,
     layer_jev,
 )
@@ -152,7 +153,9 @@ async def score_case(case, key, turns, threshold, client, repeats=1,
         p_rituals_all.append(d.p_ritual if d.p_ritual is not None else 0.0)
         ms.append(d.elapsed_ms or 0)
         reasons.append(d.reason)
-    l0 = layer0_name_mentioned(case["entity"], case["messages"])
+    # Both L0 bypasses bot.py runs before Jev: name-mention, and "I spoke last".
+    l0 = (layer0_name_mentioned(case["entity"], case["messages"])
+          or layer0_entity_spoke_last(case["entity"], case["messages"]))
     p = min(ps)
     p_ritual_min = min(p_rituals_all)
     ritual_fires = p_ritual_min >= ritual_threshold
