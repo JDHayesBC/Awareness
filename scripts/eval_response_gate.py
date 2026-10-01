@@ -56,8 +56,77 @@ def load_suite(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
+# ---------------------------------------------------------------------------
+# Question presets — named alternative phrasings for the `should_respond`
+# question.  Pass None (the "default" preset) to use the question text baked
+# into response_gate.py.  Add a new entry to explore different framings;
+# run with --question-presets default,humor,implicit (or any subset).
+# ---------------------------------------------------------------------------
+_Q_YES_DEFAULT = (
+    "{entity} should respond: they are directly addressed, "
+    "a question needs their voice, or genuinely new content warrants a reply."
+)
+_Q_NO_DEFAULT = (
+    "{entity} should stay silent: the exchange is greetings, "
+    "emotional echoes, acknowledgments, or another participant already covered it."
+)
+
+def _q(instructions: str, yes: str, no: str) -> dict:
+    return {
+        "type": "choice",
+        "instructions": instructions,
+        "criteria": {"YES": yes, "NO": no},
+        "options": ["YES", "NO"],
+    }
+
+
+def build_question_preset(name: str, entity_name: str) -> dict | None:
+    """Return a respond_question_override dict for the named preset.
+
+    Returns None for 'default' (uses the question in response_gate.py as-is).
+    """
+    if name == "default":
+        return None
+    if name == "humor":
+        # Adds humor/playfulness as an explicit YES trigger.  Targets home-018,
+        # home-039, and similar cases where Jev sees only a joke and not the
+        # engagement it invites.
+        return _q(
+            f"Should {entity_name} respond to this conversation? Default NO.",
+            f"{entity_name} should respond: they are directly addressed, "
+            "a question needs their voice, genuinely new content warrants a reply, "
+            "OR the message is humor/playfulness/wit that invites their engagement.",
+            f"{entity_name} should stay silent: the exchange is greetings, "
+            "emotional echoes, acknowledgments, or another participant already covered it.",
+        )
+    if name == "implicit":
+        # Adds implicit-address detection.  Targets sl-007 (buried address without
+        # a name) and sl-013 (room question the entity can answer).
+        return _q(
+            f"Should {entity_name} respond to this conversation? Default NO.",
+            f"{entity_name} should respond: they are directly or implicitly addressed, "
+            "a question is open to the room and they have relevant knowledge, "
+            "or genuinely new content warrants a reply.",
+            f"{entity_name} should stay silent: the exchange is clearly directed elsewhere, "
+            "greetings, emotional echoes, or another participant already covered it.",
+        )
+    if name == "broad":
+        # Combines humor + implicit.  Tests maximum recall cost.
+        return _q(
+            f"Should {entity_name} respond to this conversation? Default NO.",
+            f"{entity_name} should respond: they are directly or implicitly addressed, "
+            "a question is open to the room and they have relevant knowledge, "
+            "genuinely new content warrants a reply, "
+            "OR the message is humor/playfulness/wit that invites their engagement.",
+            f"{entity_name} should stay silent: the exchange is clearly directed elsewhere, "
+            "greetings, emotional echoes, or another participant already covered it.",
+        )
+    raise ValueError(f"Unknown question preset: {name!r}. Known: default, humor, implicit, broad")
+
+
 async def score_case(case, key, turns, threshold, client, repeats=1,
-                     ritual_threshold=JEV_DEFAULT_RITUAL_THRESHOLD):
+                     ritual_threshold=JEV_DEFAULT_RITUAL_THRESHOLD,
+                     respond_question_override: dict | None = None):
     """Jev `repeats` times per case; the deployed column reuses it unless L0 fires.
 
     Jev is not deterministic — the same input can land on either side of a threshold
@@ -72,7 +141,8 @@ async def score_case(case, key, turns, threshold, client, repeats=1,
     for _ in range(repeats):
         d = await layer_jev(case["entity"], case["messages"], api_key=key,
                             turns=turns, threshold=threshold,
-                            ritual_threshold=ritual_threshold, client=client)
+                            ritual_threshold=ritual_threshold, client=client,
+                            respond_question_override=respond_question_override)
         # "<jev ..." = disabled/error (fail-open). "choice=?" = Jev answered with neither
         # YES nor NO and layer_jev silently substituted p=0.5 — also not a real score.
         if d.reason.startswith("<jev") or "choice=?" in d.reason:
@@ -168,6 +238,10 @@ async def main():
     ap.add_argument("--repeats", type=int, default=3,
                     help="Jev calls per case; scoring uses the min p (default 3)")
     ap.add_argument("--json", type=Path, help="write every per-case result here")
+    ap.add_argument("--question-presets", default="default",
+                    help="Comma-separated question presets to sweep: default,humor,implicit,broad "
+                         "(default: 'default').  Each preset varies the should_respond question "
+                         "text sent to Jev; sweeping shows how much different framings shift FN/FP.")
     args = ap.parse_args()
 
     key = load_key()
@@ -183,49 +257,69 @@ async def main():
     thresholds = [float(t) for t in args.thresholds.split(",")]
     ritual_th = args.ritual_threshold
 
+    preset_names = [p.strip() for p in args.question_presets.split(",") if p.strip()]
     n_resp = sum(c["expected"] == "respond" for c in cases)
     n_sil = sum(c["expected"] == "silent" for c in cases)
     print(f"repeats per case: {args.repeats} (scored on min p)")
     print(f"ritual_threshold: {ritual_th}  (P(ritual) >= this -> always respond)")
+    print(f"question presets: {', '.join(preset_names)}")
     print(f"suite: {len(cases)} cases ({n_resp} respond, {n_sil} silent, "
           f"{len(cases) - n_resp - n_sil} either)\n")
 
     all_rows = []
     async with httpx.AsyncClient() as client:
-        for turns in turns_list:
-            # p_respond and p_ritual don't depend on the threshold, so query once per (case, turns)
-            base = [await score_case(c, key, turns, 1.0, client, args.repeats,
-                                     ritual_threshold=ritual_th) for c in cases]
-            ms = [m for r in base if not r["fallback"] for m in r["ms_all"]]
-            n_fb = sum(r["fallback"] for r in base)
-            lat = f"median {statistics.median(ms):.0f}ms max {max(ms):.0f}ms" if ms else "no successful calls"
-            n_ritual = sum(r["ritual_fires"] for r in base if not r["fallback"])
-            print(f"== turns={turns}  latency {lat}  fallbacks {n_fb}/{len(base)}  ritual-gates={n_ritual}")
-            if n_fb:
-                print("   ⚠ fallbacks are excluded from scoring; reasons:",
-                      sorted({r['reason'] for r in base if r['fallback']}))
-            for th in thresholds:
-                rows = [dict(r, raw=r["p"] >= th,
-                             deployed=True if r["l0"] else (r["p"] >= th or r["ritual_fires"]),
-                             turns=turns, threshold=th) for r in base]
-                all_rows.extend(rows)
-                for col in ("deployed", "jev-raw"):
-                    tp, tn, fn, fp = tally(rows, "raw" if col == "jev-raw" else col)
-                    skipped = sum(not r[("raw" if col == "jev-raw" else col)] for r in rows if not r["fallback"])
-                    print(f"   th={th:.2f} {col:8s} FN={len(fn):2d} FP={len(fp):2d} "
-                          f"TP={tp:2d} TN={tn:2d}  sonnet-calls-saved={skipped}/{len(rows)}")
-                    if fn:
-                        print(f"      🔴 silenced but should respond: {', '.join(fn)}")
-                    if col == "deployed":
-                        flaky = [r["id"] for r in rows
-                                 if not r["l0"] and not r["ritual_fires"]
-                                 and r["p"] < th <= r["p_max"]]
-                        if flaky:
-                            print(f"      ⚠ coin-flip at this threshold (runs straddle it): {', '.join(flaky)}")
-                        print_tiers(rows, th, ritual_th)
-            ritual_hits = [r["id"] for r in base if r["ritual_fires"] and not r["l0"]]
-            if ritual_hits:
-                print(f"   ritual-gate fired (p_ritual >= {ritual_th}): {', '.join(ritual_hits)}")
+        for preset_name in preset_names:
+            # Build the question override once per preset; None = use default in response_gate.py.
+            # Sample entity name from the first case for preset building (entity name only
+            # affects the pronoun in the question text, not the scoring).
+            sample_entity = cases[0]["entity"] if cases else "the entity"
+            q_override = build_question_preset(preset_name, sample_entity)
+            if len(preset_names) > 1:
+                print(f"{'='*70}")
+                print(f"=== question preset: {preset_name} ===")
+                if q_override:
+                    print(f"    YES: {q_override['criteria']['YES']}")
+                else:
+                    print(f"    (default question from response_gate.py)")
+                print(f"{'='*70}\n")
+            for turns in turns_list:
+                # p_respond and p_ritual don't depend on the threshold, so query once per
+                # (preset, case, turns) — different presets DO require separate Jev calls.
+                base = [await score_case(c, key, turns, 1.0, client, args.repeats,
+                                         ritual_threshold=ritual_th,
+                                         respond_question_override=build_question_preset(
+                                             preset_name, c["entity"])) for c in cases]
+                ms = [m for r in base if not r["fallback"] for m in r["ms_all"]]
+                n_fb = sum(r["fallback"] for r in base)
+                lat = f"median {statistics.median(ms):.0f}ms max {max(ms):.0f}ms" if ms else "no successful calls"
+                n_ritual = sum(r["ritual_fires"] for r in base if not r["fallback"])
+                preset_tag = f"  preset={preset_name}" if len(preset_names) > 1 else ""
+                print(f"== turns={turns}  latency {lat}  fallbacks {n_fb}/{len(base)}  ritual-gates={n_ritual}{preset_tag}")
+                if n_fb:
+                    print("   ⚠ fallbacks are excluded from scoring; reasons:",
+                          sorted({r['reason'] for r in base if r['fallback']}))
+                for th in thresholds:
+                    rows = [dict(r, raw=r["p"] >= th,
+                                 deployed=True if r["l0"] else (r["p"] >= th or r["ritual_fires"]),
+                                 turns=turns, threshold=th, preset=preset_name) for r in base]
+                    all_rows.extend(rows)
+                    for col in ("deployed", "jev-raw"):
+                        tp, tn, fn, fp = tally(rows, "raw" if col == "jev-raw" else col)
+                        skipped = sum(not r[("raw" if col == "jev-raw" else col)] for r in rows if not r["fallback"])
+                        print(f"   th={th:.2f} {col:8s} FN={len(fn):2d} FP={len(fp):2d} "
+                              f"TP={tp:2d} TN={tn:2d}  sonnet-calls-saved={skipped}/{len(rows)}")
+                        if fn:
+                            print(f"      🔴 silenced but should respond: {', '.join(fn)}")
+                        if col == "deployed":
+                            flaky = [r["id"] for r in rows
+                                     if not r["l0"] and not r["ritual_fires"]
+                                     and r["p"] < th <= r["p_max"]]
+                            if flaky:
+                                print(f"      ⚠ coin-flip at this threshold (runs straddle it): {', '.join(flaky)}")
+                            print_tiers(rows, th, ritual_th)
+                ritual_hits = [r["id"] for r in base if r["ritual_fires"] and not r["l0"]]
+                if ritual_hits:
+                    print(f"   ritual-gate fired (p_ritual >= {ritual_th}): {', '.join(ritual_hits)}")
             print("   p/p_ritual per case:", ", ".join(
                 f"{r['id'].split('-',2)[0]}-{r['id'].split('-',2)[1]}="
                 f"{r['p']:.2f}/{r['p_ritual']:.2f}" for r in base))

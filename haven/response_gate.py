@@ -298,6 +298,7 @@ async def layer_jev(
     ritual_threshold: float = JEV_DEFAULT_RITUAL_THRESHOLD,
     timeout: float = JEV_DEFAULT_TIMEOUT,
     client: httpx.AsyncClient | None = None,
+    respond_question_override: dict | None = None,
 ) -> JevDecision:
     """Jev multi-question gate: should this entity respond?
 
@@ -305,6 +306,8 @@ async def layer_jev(
     in a single request (zero extra latency):
 
       1. should_respond  — default-NO gate. If P < `threshold`, skip Sonnet.
+         `respond_question_override` replaces the default should_respond question
+         dict entirely (use for eval sweeps of different question phrasings).
       2. is_social_ritual — always-pass override. If P >= `ritual_threshold`,
          respond=True regardless of should_respond.  Replaces the
          `layer0_ritual_greeting` regex bypass: Jev's semantic understanding
@@ -334,25 +337,26 @@ async def layer_jev(
     recent = messages[-turns:] if turns > 0 else messages
     state = _format_messages_for_classifier(recent)
 
-    questions: dict = {
-        "should_respond": {
-            "type": "choice",
-            "instructions": (
-                f"Should {entity_name} respond to this conversation? "
-                "Default NO: only YES if genuinely needed."
+    default_respond_question: dict = {
+        "type": "choice",
+        "instructions": (
+            f"Should {entity_name} respond to this conversation? "
+            "Default NO: only YES if genuinely needed."
+        ),
+        "criteria": {
+            "YES": (
+                f"{entity_name} should respond: they are directly addressed, "
+                "a question needs their voice, or genuinely new content warrants a reply."
             ),
-            "criteria": {
-                "YES": (
-                    f"{entity_name} should respond: they are directly addressed, "
-                    "a question needs their voice, or genuinely new content warrants a reply."
-                ),
-                "NO": (
-                    f"{entity_name} should stay silent: the exchange is greetings, "
-                    "emotional echoes, acknowledgments, or another participant already covered it."
-                ),
-            },
-            "options": ["YES", "NO"],
+            "NO": (
+                f"{entity_name} should stay silent: the exchange is greetings, "
+                "emotional echoes, acknowledgments, or another participant already covered it."
+            ),
         },
+        "options": ["YES", "NO"],
+    }
+    questions: dict = {
+        "should_respond": respond_question_override or default_respond_question,
         "is_social_ritual": {
             "type": "choice",
             "instructions": (
