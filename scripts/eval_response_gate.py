@@ -3,7 +3,7 @@
 
 Sweeps Jev `turns` x `threshold`, and reports two columns per setting:
 
-  deployed  — L0 name-mention first (as bot.py does), Jev only when L0 doesn't fire
+  deployed  — L0 (name-mention, ritual greeting) first, as bot.py does; Jev only when L0 doesn't fire
   jev-raw   — Jev alone, to show what it WOULD silence if L0 ever slipped
 
 The cost that matters is a false negative: a case labeled `respond` that the gate
@@ -33,6 +33,12 @@ sys.path.insert(0, str(PROJECT_DIR))
 import httpx  # noqa: E402
 
 from haven.response_gate import layer0_name_mentioned, layer_jev  # noqa: E402
+
+try:  # L0b, added in bot.py alongside name-mention; mirror whatever production runs
+    from haven.response_gate import layer0_ritual_greeting  # noqa: E402
+except ImportError:
+    def layer0_ritual_greeting(messages):
+        return False
 
 SUITE = PROJECT_DIR / "haven" / "tests" / "fixtures" / "response_decision_suite.jsonl"
 KEY_FILE = PROJECT_DIR / "work" / "system-one-models" / "jev_api_key.txt"
@@ -65,9 +71,10 @@ async def score_case(case, key, turns, threshold, client, repeats=1):
         if d.reason.startswith("<jev") or "choice=?" in d.reason:
             fallback = True
         ps.append(d.p_respond)
-        ms.append(d.elapsed_ms)
+        ms.append(d.elapsed_ms or 0)
         reasons.append(d.reason)
-    l0 = layer0_name_mentioned(case["entity"], case["messages"])
+    l0 = (layer0_name_mentioned(case["entity"], case["messages"])
+          or layer0_ritual_greeting(case["messages"]))
     p = min(ps)
     return {
         "id": case["id"], "expected": case["expected"], "ambiguity": case["ambiguity"],
@@ -94,6 +101,42 @@ def tally(results, column):
             else:
                 tn += 1
     return tp, tn, fn, fp
+
+
+TIERS = ("low", "med", "high")
+
+
+def print_tiers(rows, th):
+    """FN/FP by ambiguity tier, two ways (deployed column only).
+
+    guard    — scored on the MIN p across repeats: the worst case, a ceiling on misses.
+    expected — per-run mean: production samples Jev once, so this is the miss rate
+               people will actually live with.
+
+    A miss on a `low` case is an alarm. Misses in `high` are the filter having teeth;
+    the question there is what share, not whether any.
+    """
+    for tier in TIERS:
+        tr = [r for r in rows if r["ambiguity"] == tier and r["expected"] != "either" and not r["fallback"]]
+        resp = [r for r in tr if r["expected"] == "respond"]
+        sil = [r for r in tr if r["expected"] == "silent"]
+        if not tr:
+            continue
+
+        def run_rate(r, want_respond):
+            if r["l0"]:
+                return 0.0 if want_respond else 1.0
+            said = [x >= th for x in r["ps"]]
+            return sum((not s) if want_respond else s for s in said) / len(said)
+
+        g_fn = sum(not r["deployed"] for r in resp)
+        e_fn = sum(run_rate(r, True) for r in resp)
+        g_fp = sum(r["deployed"] for r in sil)
+        e_fp = sum(run_rate(r, False) for r in sil)
+        pct = lambda a, n: f"{100 * a / n:3.0f}%" if n else "  - "
+        print(f"      {tier:4s} miss guard {g_fn:2d}/{len(resp):<2d} {pct(g_fn, len(resp))} "
+              f"expected {e_fn:4.1f} {pct(e_fn, len(resp))} | "
+              f"nag guard {g_fp:2d}/{len(sil):<2d} expected {e_fp:4.1f} {pct(e_fp, len(sil))}")
 
 
 async def main():
@@ -152,6 +195,7 @@ async def main():
                         flaky = [r["id"] for r in rows if not r["l0"] and r["p"] < th <= r["p_max"]]
                         if flaky:
                             print(f"      ⚠ coin-flip at this threshold (runs straddle it): {', '.join(flaky)}")
+                        print_tiers(rows, th)
             print("   p per case:", ", ".join(f"{r['id'].split('-',2)[0]}-{r['id'].split('-',2)[1]}={r['p']:.2f}" for r in base))
             print()
 
