@@ -31,6 +31,7 @@ import websockets
 from haven.response_gate import (
     JevDecision,
     layer0_entity_spoke_last,
+    layer0_human_dm,
     layer0_name_mentioned,
     layer_jev,
 )
@@ -964,10 +965,8 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
         # Ritual/greeting detection is handled INSIDE layer_jev via is_social_ritual question.
         #   L0c — a human wrote in a DM: a 1:1 message is always addressed to us, and the
         #          suite (#360) has no DM cases. Bot-to-bot DMs (sister room) still meet Jev.
-        _last_author = (messages[-1].get("username", "") if messages else "") or ""
-        _human_dm = room_id in dm_rooms and _last_author not in known_bots | {my_username}
         _jev_bypass = (
-            _human_dm
+            layer0_human_dm(my_username, messages, room_id in dm_rooms, bot_usernames=known_bots)
             or layer0_name_mentioned(ENTITY_NAME, messages)
             or layer0_entity_spoke_last(my_username, messages, bot_usernames=known_bots)
         )

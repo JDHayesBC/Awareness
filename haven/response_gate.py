@@ -190,6 +190,25 @@ def layer0_entity_spoke_last(
     return last_is_human and prev_is_entity
 
 
+def layer0_human_dm(
+    entity_username: str,
+    messages: list[dict],
+    is_dm: bool,
+    bot_usernames: Iterable[str] = (),
+) -> bool:
+    """True if a human wrote the last message in a DM room.
+
+    A 1:1 message from a human is always addressed to us, and Jev isn't told the
+    room is 1:1, so a lone "hm" or an "ok" after a goodnight scores ~0.01-0.04
+    and would be silenced (#360 suite, dm-* cases). Bot-to-bot DMs (the sister
+    room) still meet Jev.
+    """
+    if not is_dm or not messages:
+        return False
+    last_author = (messages[-1].get("username", "") or "")
+    return last_author not in (set(bot_usernames) | {entity_username})
+
+
 # ==================== Layer 1: Self-author delta ====================
 
 
@@ -566,6 +585,7 @@ __all__ = [
     "evaluate",
     "evaluate_sync",
     "layer0_entity_spoke_last",
+    "layer0_human_dm",
     "layer0_name_mentioned",
     "layer0_ritual_greeting",
     "layer1_only_self",
