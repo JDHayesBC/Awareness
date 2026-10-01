@@ -686,10 +686,16 @@ def query_pps_ambient_recall(context: str, session_id: str) -> str:
         # Detect user's local timezone from where they hit [enter]
         user_tz = _time.strftime("%Z")  # e.g., "PDT", "PST", "EST"
 
+        # Brain-invoked sessions (Haven bot, SL) export CC_INVOKER_CHANNEL. Until
+        # 2026-10-01 this was hardcoded "terminal": the Haven session's hook ticks
+        # were told [channel] terminal (so Haven-me signed work "terminal-me"), and
+        # terminal turns were filtered OUT of its [other_channels] as "own channel".
+        channel = os.environ.get("CC_INVOKER_CHANNEL", "").strip() or "terminal"
+
         payload = json.dumps({
             "context": context,
             "token": ENTITY_TOKEN,
-            "channel": "terminal",
+            "channel": channel,
             "consumer_key": session_id,
             "user_timezone": user_tz
         }).encode("utf-8")

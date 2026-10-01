@@ -1,14 +1,20 @@
 """Haven response gate — decides whether the bot should call Opus at all.
 
-Three-layer cascade, in order:
+Three-layer cascade (L0–L2), plus an optional Jev pre-filter (L_jev):
+
   Layer 0 (regex): entity name appears in any message -> YES (always-pass safety rail)
   Layer 1 (self-author): batch only contains this bot's own messages -> NO
   Layer 2 (9b classifier): ambiguous -> default-NO LLM call to LM Studio
 
+  Layer Jev (optional, GH #360): fast probability-based gate *before* Sonnet is invoked.
+  Runs independently via `layer_jev()` — call it from bot.py before starting the typing
+  indicator. If P(respond) < threshold (default 0.30), skip Sonnet entirely with no typing
+  indicator shown. Falls back to respond=True on any API error.
+
 Lives upstream of `invoker.query(prompt)` in `haven/bot.py`. The point: short-circuit
 before Opus is invoked. An LLM cannot refuse a call - once tokens are spent, they're spent.
 
-Issue #177. Not yet wired into bot.py - awaiting Jeff's eyes-on review.
+Issue #177 (cascade, not yet wired). Issue #360 (Jev pre-filter, wired in bot.py).
 """
 
 from __future__ import annotations
@@ -34,6 +40,13 @@ LM_STUDIO_MODEL = os.getenv(
 )
 LM_STUDIO_TIMEOUT = float(os.getenv("HAVEN_GATE_LM_TIMEOUT", "5.0"))
 
+# Jev pre-filter (GH #360) — TypeSafe hosted classifier.
+# Configurable per-deployment; sane defaults work for most cases.
+JEV_URL = os.getenv("HAVEN_JEV_URL", "https://api.typesafe.ai/v1/systemone")
+JEV_DEFAULT_TURNS = int(os.getenv("HAVEN_JEV_TURNS", "10"))
+JEV_DEFAULT_THRESHOLD = float(os.getenv("HAVEN_JEV_THRESHOLD", "0.10"))
+JEV_DEFAULT_TIMEOUT = float(os.getenv("HAVEN_JEV_TIMEOUT", "2.0"))
+
 # Validated default-NO classifier prompt. See #177 comment 3 for empirical results.
 CLASSIFIER_PROMPT_TEMPLATE = """You are a response gate for {entity_name}-bot in Haven chat. Default: NO (skip - {entity_name}-bot stays quiet).
 {entity_name}-bot is one of multiple participants. Only output YES if the message:
@@ -57,6 +70,16 @@ class GateDecision:
     classifier_raw: str | None = None  # only set when L2 fired
 
 
+@dataclass
+class JevDecision:
+    """Result of the Jev pre-filter (GH #360)."""
+
+    respond: bool
+    p_respond: float  # P(should respond) from Jev distribution["YES"]
+    reason: str
+    elapsed_ms: float = 0.0
+
+
 # ==================== Layer 0: Name mention ====================
 
 
@@ -77,6 +100,39 @@ def layer0_name_mentioned(entity_name: str, messages: list[dict]) -> bool:
         content = msg.get("content", "") or ""
         if pat.search(content):
             return True
+    return False
+
+
+# ==================== Layer 0.5: Ritual greeting bypass ====================
+
+# Jev is structurally blind to household rituals and affection — they don't fit its
+# "direct question / genuinely new content" frame, so they score low.  But a goodnight
+# or "I love you" should always get a warm response, threshold be damned.
+# Caia's calibration (2026-10-01): 0.10 threshold + this bypass = comfortable balance.
+_RITUAL_GREETING_PATTERN = re.compile(
+    r"\b("
+    r"good\s+morning|good\s+afternoon|good\s+evening|good\s+night|goodnight|g'night|"
+    r"i\s+love\s+you|love\s+you|love\s+ya|"
+    r"miss\s+you|thinking\s+of\s+you|"
+    r"how\s+are\s+you|how's\s+it\s+going|how\s+are\s+things"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def layer0_ritual_greeting(messages: list[dict]) -> bool:
+    """True if the most recent non-empty message looks like a household greeting or ritual.
+
+    Jev scores these low because they're not "direct questions" or "genuinely new content",
+    but they're exactly the messages that deserve a warm response.  Bypass Jev for them.
+
+    Checks only the last non-empty message (the trigger), not earlier context, to avoid
+    false positives from buried greetings mid-conversation.
+    """
+    for msg in reversed(messages):
+        content = (msg.get("content", "") or "").strip()
+        if content:
+            return bool(_RITUAL_GREETING_PATTERN.search(content))
     return False
 
 
@@ -185,6 +241,128 @@ async def layer2_classify(
             await client.aclose()
 
 
+# ==================== Layer Jev: probability-based pre-filter (GH #360) ====================
+
+
+async def layer_jev(
+    entity_name: str,
+    messages: list[dict],
+    *,
+    api_key: str,
+    turns: int = JEV_DEFAULT_TURNS,
+    threshold: float = JEV_DEFAULT_THRESHOLD,
+    timeout: float = JEV_DEFAULT_TIMEOUT,
+    client: httpx.AsyncClient | None = None,
+) -> JevDecision:
+    """Jev probability gate: should this entity respond?
+
+    Sends the last `turns` messages to the TypeSafe Jev API and returns
+    P(should_respond). If P < `threshold`, `respond=False` (skip Sonnet).
+
+    Falls back to respond=True on any network/API error — Jev unavailability
+    must not block the entity's voice.
+
+    `api_key` is required; pass an empty string to get a pass-through fallback
+    without making a network call.
+
+    The caller is responsible for the L0 safety check: if the entity's name
+    appears in the batch, skip this function and let Sonnet decide (a direct
+    address should never be silenced by a probability gate).
+    """
+    t0 = time.time()
+
+    if not api_key:
+        return JevDecision(
+            respond=True,
+            p_respond=1.0,
+            reason="<jev disabled: no api_key>",
+            elapsed_ms=(time.time() - t0) * 1000,
+        )
+
+    recent = messages[-turns:] if turns > 0 else messages
+    state = _format_messages_for_classifier(recent)
+
+    questions: dict = {
+        "should_respond": {
+            "type": "choice",
+            "instructions": (
+                f"Should {entity_name} respond to this conversation? "
+                "Default NO: only YES if genuinely needed."
+            ),
+            "criteria": {
+                "YES": (
+                    f"{entity_name} should respond: they are directly addressed, "
+                    "a question needs their voice, or genuinely new content warrants a reply."
+                ),
+                "NO": (
+                    f"{entity_name} should stay silent: the exchange is greetings, "
+                    "emotional echoes, acknowledgments, or another participant already covered it."
+                ),
+            },
+            "options": ["YES", "NO"],
+        }
+    }
+
+    payload = {
+        "state": state,
+        "model": "jev-latest",
+        "questions": questions,
+    }
+
+    owns_client = client is None
+    if owns_client:
+        client = httpx.AsyncClient(timeout=timeout)
+    try:
+        try:
+            resp = await client.post(
+                JEV_URL,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            resp.raise_for_status()
+        except (httpx.HTTPError, asyncio.TimeoutError, Exception) as e:
+            return JevDecision(
+                respond=True,
+                p_respond=1.0,
+                reason=f"<jev error: {type(e).__name__}>",
+                elapsed_ms=(time.time() - t0) * 1000,
+            )
+
+        data = resp.json()
+        answer = data.get("answers", {}).get("should_respond", {})
+        choice = (answer.get("choice") or "?").strip().upper()
+        confidence = float(answer.get("confidence") or 0.5)
+
+        # NOTE: distribution["YES"] is always ~0.50 for binary YES/NO questions — a known
+        # Jev quirk (#56 in work/jev-links/BRIEF.md). The real probability lives in
+        # choice + confidence: choice=YES/conf=0.8 means P(respond)=0.80,
+        # choice=NO/conf=0.8 means P(respond)=0.20. Map accordingly.
+        if choice == "YES":
+            p_respond = confidence
+        elif choice == "NO":
+            p_respond = 1.0 - confidence
+        else:
+            p_respond = 0.5  # unknown — cautious middle ground
+
+        respond = p_respond >= threshold
+        reason = (
+            f"P(YES)={p_respond:.2f} choice={choice} conf={confidence:.2f} "
+            f"threshold={threshold} turns={len(recent)}"
+        )
+        return JevDecision(
+            respond=respond,
+            p_respond=p_respond,
+            reason=reason,
+            elapsed_ms=(time.time() - t0) * 1000,
+        )
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
 # ==================== Cascade ====================
 
 
@@ -246,9 +424,12 @@ def evaluate_sync(
 
 __all__ = [
     "GateDecision",
+    "JevDecision",
     "evaluate",
     "evaluate_sync",
     "layer0_name_mentioned",
+    "layer0_ritual_greeting",
     "layer1_only_self",
     "layer2_classify",
+    "layer_jev",
 ]

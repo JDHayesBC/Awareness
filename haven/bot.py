@@ -28,6 +28,8 @@ from pathlib import Path
 import httpx
 import websockets
 
+from haven.response_gate import JevDecision, layer0_name_mentioned, layer0_ritual_greeting, layer_jev
+
 # Configure logging so invoker output is visible
 logging.basicConfig(
     level=logging.INFO,
@@ -113,6 +115,21 @@ HUMAN_ACTIVE_THRESHOLD_SECONDS = float(os.getenv("HUMAN_ACTIVE_THRESHOLD_SECONDS
 # signal within this window, process immediately. If the human IS typing,
 # fall through to the normal typing-wait logic in _debounce_timer.
 BOT_MSG_TYPING_CHECK_SECONDS = float(os.getenv("BOT_MSG_TYPING_CHECK_SECONDS", "4.0"))
+
+# Jev pre-filter (GH #360) — fast probability gate before Sonnet is invoked.
+# If P(entity should respond) < JEV_THRESHOLD, skip Sonnet + typing indicator entirely.
+# Falls back to respond=True on any API error (Jev unavailability never silences the bot).
+# Set HAVEN_JEV_ENABLED=0 to disable while keeping the code in place.
+JEV_ENABLED = os.getenv("HAVEN_JEV_ENABLED", "1").lower() in ("1", "true", "yes")
+# API key: env var first, then well-known file, then disabled.
+JEV_API_KEY = os.getenv("HAVEN_JEV_API_KEY", "")
+if not JEV_API_KEY:
+    _jev_key_file = PROJECT_DIR / "work" / "system-one-models" / "jev_api_key.txt"
+    if _jev_key_file.exists():
+        JEV_API_KEY = _jev_key_file.read_text().strip()
+JEV_TURNS = int(os.getenv("HAVEN_JEV_TURNS", "10"))          # how many recent messages to score
+JEV_THRESHOLD = float(os.getenv("HAVEN_JEV_THRESHOLD", "0.10"))  # min P(respond) to proceed
+JEV_TIMEOUT = float(os.getenv("HAVEN_JEV_TIMEOUT", "2.0"))   # max seconds to wait for Jev
 
 
 # ==================== State ====================
@@ -932,6 +949,28 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
             f"msgs={len(messages)}, from={messages[-1].get('username', '?') if messages else '?'}",
             file=sys.stderr,
         )
+
+        # Jev pre-filter (GH #360): fast probability gate before Sonnet + typing indicator.
+        # Bypass conditions (always respond, skip Jev):
+        #   L0a — entity name in batch (direct address)
+        #   L0b — household greeting / ritual (Jev is structurally blind to these)
+        if JEV_ENABLED and JEV_API_KEY and not layer0_name_mentioned(ENTITY_NAME, messages) \
+                and not layer0_ritual_greeting(messages):
+            jev: JevDecision = await layer_jev(
+                ENTITY_NAME,
+                messages,
+                api_key=JEV_API_KEY,
+                turns=JEV_TURNS,
+                threshold=JEV_THRESHOLD,
+                timeout=JEV_TIMEOUT,
+            )
+            print(
+                f"[{ENTITY_NAME}] JEV: {jev.reason} ({jev.elapsed_ms:.0f}ms) -> "
+                f"{'RESPOND' if jev.respond else 'SKIP'}",
+                file=sys.stderr,
+            )
+            if not jev.respond:
+                return  # skip Sonnet + typing indicator entirely
 
         try:
             restarted = await invoker.check_and_restart_if_needed()
