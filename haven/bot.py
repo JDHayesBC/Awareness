@@ -28,7 +28,12 @@ from pathlib import Path
 import httpx
 import websockets
 
-from haven.response_gate import JevDecision, layer0_name_mentioned, layer_jev
+from haven.response_gate import (
+    JevDecision,
+    layer0_entity_spoke_last,
+    layer0_name_mentioned,
+    layer_jev,
+)
 
 # Configure logging so invoker output is visible
 logging.basicConfig(
@@ -951,11 +956,16 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
         )
 
         # Jev pre-filter (GH #360): fast multi-question gate before Sonnet + typing indicator.
-        # Bypass condition (skip Jev, always respond):
-        #   L0 — entity name appears in batch (direct address; never silence a name mention)
-        # Ritual/greeting detection is now handled inside layer_jev via the is_social_ritual
-        # question — no regex bypass needed here (GH #360 follow-up).
-        if JEV_ENABLED and JEV_API_KEY and not layer0_name_mentioned(ENTITY_NAME, messages):
+        # Bypass conditions (skip Jev, let Sonnet decide):
+        #   L0a — entity name appears in batch (direct address; never silence a name mention)
+        #   L0b — entity spoke immediately before the last human message; an ack like "ok"
+        #          scores p≈0.05 because Jev can't see it's a reply TO us — Sonnet should
+        #          decide whether a warm follow-up is warranted.
+        # Ritual/greeting detection is handled INSIDE layer_jev via is_social_ritual question.
+        _jev_bypass = layer0_name_mentioned(ENTITY_NAME, messages) or layer0_entity_spoke_last(
+            my_username, messages
+        )
+        if JEV_ENABLED and JEV_API_KEY and not _jev_bypass:
             jev: JevDecision = await layer_jev(
                 ENTITY_NAME,
                 messages,

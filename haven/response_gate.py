@@ -54,6 +54,10 @@ JEV_DEFAULT_TURNS = int(os.getenv("HAVEN_JEV_TURNS", "10"))
 JEV_DEFAULT_THRESHOLD = float(os.getenv("HAVEN_JEV_THRESHOLD", "0.10"))
 JEV_DEFAULT_RITUAL_THRESHOLD = float(os.getenv("HAVEN_JEV_RITUAL_THRESHOLD", "0.70"))
 JEV_DEFAULT_TIMEOUT = float(os.getenv("HAVEN_JEV_TIMEOUT", "2.0"))
+# Band re-sample: if P(respond) lands in [BAND_LOW, threshold), make one extra call
+# and take the higher of the two.  Hedges against Jev moodiness (sl-015 swings 0.03–0.99
+# on identical input).  Cost: ~100ms, only fires in the narrow volatile band.
+JEV_BAND_RESAMPLE_LOW = float(os.getenv("HAVEN_JEV_BAND_LOW", "0.05"))
 
 # Validated default-NO classifier prompt. See #177 comment 3 for empirical results.
 CLASSIFIER_PROMPT_TEMPLATE = """You are a response gate for {entity_name}-bot in Haven chat. Default: NO (skip - {entity_name}-bot stays quiet).
@@ -149,6 +153,31 @@ def layer0_ritual_greeting(messages: list[dict]) -> bool:
         if content:
             return bool(_RITUAL_GREETING_PATTERN.search(content))
     return False
+
+
+def layer0_entity_spoke_last(entity_username: str, messages: list[dict]) -> bool:
+    """True if the entity spoke just before the most recent human message.
+
+    Handles the "Jeff says 'ok' after an entity statement" gap: Jev sees the 'ok' without
+    knowing it's a reply TO the entity, so it scores ~0.05 (not a question, not new content).
+    But if the entity spoke in the turn immediately before, an acknowledgment deserves a
+    response — the human is reacting to us, not starting a new thread.
+
+    Rule: the last non-empty message is from a non-entity author AND the message immediately
+    before it (walking backwards, skipping empties) is from `entity_username`.
+
+    Both conditions must be met; entity-only or human-only batches are unaffected.
+    """
+    non_empty = [
+        msg for msg in messages if (msg.get("content", "") or "").strip()
+    ]
+    if len(non_empty) < 2:
+        return False
+    last_msg = non_empty[-1]
+    prev_msg = non_empty[-2]
+    last_is_human = (last_msg.get("username", "") or "") != entity_username
+    prev_is_entity = (prev_msg.get("username", "") or "") == entity_username
+    return last_is_human and prev_is_entity
 
 
 # ==================== Layer 1: Self-author delta ====================
@@ -394,12 +423,55 @@ async def layer_jev(
         p_respond = _extract_p("should_respond")
         p_ritual = _extract_p("is_social_ritual")
 
+        # Band re-sample: Jev is moody — identical inputs can score 0.03 or 0.99 on
+        # different calls (sl-015 from the eval corpus).  If p_respond lands in the narrow
+        # volatile band [BAND_LOW, threshold) AND ritual didn't already fire, make one
+        # additional call with the same payload and take the higher of the two scores.
+        # Cost: ~100ms, only fires when p_respond is already close to the threshold.
+        ritual_fires_initial = p_ritual >= ritual_threshold
+        resample_tag = ""
+        if (
+            JEV_BAND_RESAMPLE_LOW <= p_respond < threshold
+            and not ritual_fires_initial
+        ):
+            try:
+                resp2 = await client.post(
+                    JEV_URL,
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                resp2.raise_for_status()
+                answers2 = resp2.json().get("answers", {})
+
+                def _extract_p2(answer_key: str) -> float:
+                    answer = answers2.get(answer_key, {})
+                    choice = (answer.get("choice") or "?").strip().upper()
+                    confidence = float(answer.get("confidence") or 0.5)
+                    if choice == "YES":
+                        return confidence
+                    elif choice == "NO":
+                        return 1.0 - confidence
+                    return 0.5
+
+                p_respond2 = _extract_p2("should_respond")
+                if p_respond2 > p_respond:
+                    p_respond = p_respond2
+                    resample_tag = " [resampled-higher]"
+                else:
+                    resample_tag = " [resampled-kept-orig]"
+            except Exception:
+                resample_tag = " [resample-failed]"
+
         ritual_fires = p_ritual >= ritual_threshold
         respond = (p_respond >= threshold) or ritual_fires
         reason = (
             f"P(respond)={p_respond:.2f} P(ritual)={p_ritual:.2f} "
             f"threshold={threshold} ritual_th={ritual_threshold} turns={len(recent)}"
             + (" [ritual-pass]" if ritual_fires else "")
+            + resample_tag
         )
         return JevDecision(
             respond=respond,
@@ -478,6 +550,7 @@ __all__ = [
     "JevDecision",
     "evaluate",
     "evaluate_sync",
+    "layer0_entity_spoke_last",
     "layer0_name_mentioned",
     "layer0_ritual_greeting",
     "layer1_only_self",
