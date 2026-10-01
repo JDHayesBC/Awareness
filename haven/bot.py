@@ -148,6 +148,11 @@ active_rooms: dict[str, float] = {}  # room_id -> last_activity_timestamp
 ROOM_HISTORY_MAX = int(os.getenv("HAVEN_ROOM_HISTORY_MAX", "40"))
 room_history: dict[str, deque] = {}
 _room_history_seeded: set[str] = set()
+# Messages the Jev gate held back since our last turn in each room (#360). Shown to the
+# entity on its next passed turn, so "why didn't you answer?" gets the true reason
+# ("my filter skipped it") rather than a confabulated one (live, 2026-10-01 16:03).
+HELD_NOTE_MAX = 5
+held_by_jev: dict[str, deque] = {}
 dm_rooms: set[str] = set()  # room IDs that are DMs (always respond)
 responding_lock = asyncio.Lock()  # prevents concurrent responses
 
@@ -1022,7 +1027,25 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
                 file=sys.stderr,
             )
             if not jev.respond:
+                held = held_by_jev.setdefault(room_id, deque(maxlen=HELD_NOTE_MAX))
+                for m in messages:
+                    held.append((
+                        time.strftime("%H:%M"),
+                        m.get("display_name") or m.get("username", "?"),
+                        (m.get("content", "") or "").replace("\n", " ")[:80],
+                        jev.p_respond,
+                    ))
                 return  # skip Sonnet + typing indicator entirely
+
+        _held = held_by_jev.pop(room_id, None)
+        if _held:
+            prompt = (
+                "[Filtered before you saw them, by your Jev pre-filter. For honesty, NOT a "
+                "to-do; don't answer these late. If asked why you didn't reply, this is why: "
+                + "; ".join(f"{who} {t} '{txt}' p={p:.2f}" for t, who, txt, p in _held)
+                + "]\n"
+                + prompt
+            )
 
         try:
             restarted = await invoker.check_and_restart_if_needed()
