@@ -23,6 +23,7 @@ import logging
 import os
 import sys
 import time
+from collections import deque
 from pathlib import Path
 
 import httpx
@@ -141,6 +142,12 @@ JEV_TIMEOUT = float(os.getenv("HAVEN_JEV_TIMEOUT", "2.0"))   # max seconds to wa
 # ==================== State ====================
 
 active_rooms: dict[str, float] = {}  # room_id -> last_activity_timestamp
+# Rolling per-room history INCLUDING our own and other bots' messages (#360). The debounce
+# batch excludes our own posts, so the Jev gate and the spoke-last bypass need this to see
+# the conversation they're judging, not just the newest line.
+ROOM_HISTORY_MAX = int(os.getenv("HAVEN_ROOM_HISTORY_MAX", "40"))
+room_history: dict[str, deque] = {}
+_room_history_seeded: set[str] = set()
 dm_rooms: set[str] = set()  # room IDs that are DMs (always respond)
 responding_lock = asyncio.Lock()  # prevents concurrent responses
 
@@ -514,6 +521,29 @@ async def fetch_ambient_context() -> str:
 
 # ==================== Haven API ====================
 
+async def _seed_room_history(room_id: str) -> None:
+    """Once per room per process: load recent messages so the Jev gate has context
+    right after a restart, rather than starting from an empty history (#360)."""
+    if room_id in _room_history_seeded:
+        return
+    _room_history_seeded.add(room_id)
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{HAVEN_URL}/api/rooms/{room_id}/messages",
+                headers={"Authorization": f"Bearer {ENTITY_TOKEN}"},
+                params={"limit": ROOM_HISTORY_MAX},
+            )
+        if resp.status_code != 200:
+            return
+        fetched = [m for m in resp.json().get("messages", []) if (m.get("content") or "").strip()]
+        if fetched:
+            # Server history (oldest first) already includes anything we received live.
+            room_history[room_id] = deque(fetched, maxlen=ROOM_HISTORY_MAX)
+    except Exception as e:
+        print(f"[{ENTITY_NAME}] Room history seed failed for {room_id[:8]}: {e}", file=sys.stderr)
+
+
 async def send_message(room_id: str, content: str) -> bool:
     """Send a message to a Haven room via HTTP API."""
     try:
@@ -655,6 +685,8 @@ async def handle_message(data: dict) -> None:
 
     # Always track who's speaking (even messages we won't respond to)
     _track_author(room_id, username)
+    if (content or "").strip():
+        room_history.setdefault(room_id, deque(maxlen=ROOM_HISTORY_MAX)).append(data)
 
     if not should_respond(room_id, username, content):
         return
@@ -965,15 +997,20 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
         # Ritual/greeting detection is handled INSIDE layer_jev via is_social_ritual question.
         #   L0c — a human wrote in a DM: a 1:1 message is always addressed to us, and the
         #          suite (#360) has no DM cases. Bot-to-bot DMs (sister room) still meet Jev.
+        # Name-mention and human-DM judge the NEW messages (the batch), so an old name in
+        # history can't bypass. Spoke-last and Jev judge the CONVERSATION: room history incl.
+        # our own posts (batch alone has msgs=1 and never contains our last message).
+        await _seed_room_history(room_id)
+        _context = list(room_history.get(room_id, ())) or messages
         _jev_bypass = (
             layer0_human_dm(my_username, messages, room_id in dm_rooms, bot_usernames=known_bots)
             or layer0_name_mentioned(ENTITY_NAME, messages)
-            or layer0_entity_spoke_last(my_username, messages, bot_usernames=known_bots)
+            or layer0_entity_spoke_last(my_username, _context, bot_usernames=known_bots)
         )
         if JEV_ENABLED and JEV_API_KEY and not _jev_bypass:
             jev: JevDecision = await layer_jev(
                 ENTITY_NAME,
-                messages,
+                _context,
                 api_key=JEV_API_KEY,
                 turns=JEV_TURNS,
                 threshold=JEV_THRESHOLD,
