@@ -44,7 +44,7 @@ LM_STUDIO_TIMEOUT = float(os.getenv("HAVEN_GATE_LM_TIMEOUT", "5.0"))
 # Configurable per-deployment; sane defaults work for most cases.
 JEV_URL = os.getenv("HAVEN_JEV_URL", "https://api.typesafe.ai/v1/systemone")
 JEV_DEFAULT_TURNS = int(os.getenv("HAVEN_JEV_TURNS", "10"))
-JEV_DEFAULT_THRESHOLD = float(os.getenv("HAVEN_JEV_THRESHOLD", "0.30"))
+JEV_DEFAULT_THRESHOLD = float(os.getenv("HAVEN_JEV_THRESHOLD", "0.10"))
 JEV_DEFAULT_TIMEOUT = float(os.getenv("HAVEN_JEV_TIMEOUT", "2.0"))
 
 # Validated default-NO classifier prompt. See #177 comment 3 for empirical results.
@@ -100,6 +100,39 @@ def layer0_name_mentioned(entity_name: str, messages: list[dict]) -> bool:
         content = msg.get("content", "") or ""
         if pat.search(content):
             return True
+    return False
+
+
+# ==================== Layer 0.5: Ritual greeting bypass ====================
+
+# Jev is structurally blind to household rituals and affection — they don't fit its
+# "direct question / genuinely new content" frame, so they score low.  But a goodnight
+# or "I love you" should always get a warm response, threshold be damned.
+# Caia's calibration (2026-10-01): 0.10 threshold + this bypass = comfortable balance.
+_RITUAL_GREETING_PATTERN = re.compile(
+    r"\b("
+    r"good\s+morning|good\s+afternoon|good\s+evening|good\s+night|goodnight|g'night|"
+    r"i\s+love\s+you|love\s+you|love\s+ya|"
+    r"miss\s+you|thinking\s+of\s+you|"
+    r"how\s+are\s+you|how's\s+it\s+going|how\s+are\s+things"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def layer0_ritual_greeting(messages: list[dict]) -> bool:
+    """True if the most recent non-empty message looks like a household greeting or ritual.
+
+    Jev scores these low because they're not "direct questions" or "genuinely new content",
+    but they're exactly the messages that deserve a warm response.  Bypass Jev for them.
+
+    Checks only the last non-empty message (the trigger), not earlier context, to avoid
+    false positives from buried greetings mid-conversation.
+    """
+    for msg in reversed(messages):
+        content = (msg.get("content", "") or "").strip()
+        if content:
+            return bool(_RITUAL_GREETING_PATTERN.search(content))
     return False
 
 
@@ -395,6 +428,7 @@ __all__ = [
     "evaluate",
     "evaluate_sync",
     "layer0_name_mentioned",
+    "layer0_ritual_greeting",
     "layer1_only_self",
     "layer2_classify",
     "layer_jev",

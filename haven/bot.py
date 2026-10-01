@@ -28,7 +28,7 @@ from pathlib import Path
 import httpx
 import websockets
 
-from haven.response_gate import JevDecision, layer0_name_mentioned, layer_jev
+from haven.response_gate import JevDecision, layer0_name_mentioned, layer0_ritual_greeting, layer_jev
 
 # Configure logging so invoker output is visible
 logging.basicConfig(
@@ -128,7 +128,7 @@ if not JEV_API_KEY:
     if _jev_key_file.exists():
         JEV_API_KEY = _jev_key_file.read_text().strip()
 JEV_TURNS = int(os.getenv("HAVEN_JEV_TURNS", "10"))          # how many recent messages to score
-JEV_THRESHOLD = float(os.getenv("HAVEN_JEV_THRESHOLD", "0.30"))  # min P(respond) to proceed
+JEV_THRESHOLD = float(os.getenv("HAVEN_JEV_THRESHOLD", "0.10"))  # min P(respond) to proceed
 JEV_TIMEOUT = float(os.getenv("HAVEN_JEV_TIMEOUT", "2.0"))   # max seconds to wait for Jev
 
 
@@ -951,9 +951,11 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
         )
 
         # Jev pre-filter (GH #360): fast probability gate before Sonnet + typing indicator.
-        # Skip if entity name appears in the batch (L0 safety: direct address always responds).
-        # Falls back to respond=True on any Jev error.
-        if JEV_ENABLED and JEV_API_KEY and not layer0_name_mentioned(ENTITY_NAME, messages):
+        # Bypass conditions (always respond, skip Jev):
+        #   L0a — entity name in batch (direct address)
+        #   L0b — household greeting / ritual (Jev is structurally blind to these)
+        if JEV_ENABLED and JEV_API_KEY and not layer0_name_mentioned(ENTITY_NAME, messages) \
+                and not layer0_ritual_greeting(messages):
             jev: JevDecision = await layer_jev(
                 ENTITY_NAME,
                 messages,
