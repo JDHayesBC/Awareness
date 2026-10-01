@@ -130,6 +130,17 @@ def build_question_preset(name: str, entity_name: str) -> dict | None:
     raise ValueError(f"Unknown question preset: {name!r}. Known: default, humor, implicit, broad")
 
 
+def as_batch(case) -> list[dict]:
+    """What bot.py hands the gate today: the debounce batch, i.e. the messages after
+    my own last one (the bot drops its own messages). Not room history — so with this
+    shape layer0_entity_spoke_last has nothing to see and Jev scores one line.
+    """
+    msgs = case["messages"]
+    mine = [i for i, m in enumerate(msgs) if m.get("username") == case["entity"]]
+    tail = msgs[mine[-1] + 1:] if mine else msgs
+    return tail or msgs[-1:]
+
+
 def human_dm(case) -> bool:
     """L0c: a human wrote in a DM room — always addressed to us (production function)."""
     return layer0_human_dm(case["entity"], case["messages"], case.get("room") == "dm",
@@ -251,6 +262,9 @@ async def main():
     ap.add_argument("--ritual-threshold", type=float, default=JEV_DEFAULT_RITUAL_THRESHOLD,
                     help=f"P(ritual) >= this -> always respond (default {JEV_DEFAULT_RITUAL_THRESHOLD})")
     ap.add_argument("--channel", help="only cases from this channel (haven, sl)")
+    ap.add_argument("--shape", choices=("context", "batch"), default="context",
+                    help="context: every layer sees the case's full history. batch: only "
+                         "what bot.py passes today — messages after my own last one")
     ap.add_argument("--repeats", type=int, default=3,
                     help="Jev calls per case; scoring uses the min p (default 3)")
     ap.add_argument("--json", type=Path, help="write every per-case result here")
@@ -269,6 +283,8 @@ async def main():
     cases = load_suite(args.suite)
     if args.channel:
         cases = [c for c in cases if c["channel"] == args.channel]
+    if args.shape == "batch":
+        cases = [dict(c, messages=as_batch(c)) for c in cases]
     turns_list = [int(t) for t in args.turns.split(",")]
     thresholds = [float(t) for t in args.thresholds.split(",")]
     ritual_th = args.ritual_threshold
@@ -276,6 +292,7 @@ async def main():
     preset_names = [p.strip() for p in args.question_presets.split(",") if p.strip()]
     n_resp = sum(c["expected"] == "respond" for c in cases)
     n_sil = sum(c["expected"] == "silent" for c in cases)
+    print(f"shape: {args.shape}")
     print(f"repeats per case: {args.repeats} (scored on min p)")
     print(f"ritual_threshold: {ritual_th}  (P(ritual) >= this -> always respond)")
     print(f"question presets: {', '.join(preset_names)}")
