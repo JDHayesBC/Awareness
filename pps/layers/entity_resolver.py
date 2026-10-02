@@ -269,6 +269,18 @@ KNOWN_ALIASES = {
     "pps mcp server": "PPS",
     "mcp server": "PPS",
 
+    # The robot body (2026-10-02, Caia + Lyra): the product name, so the node
+    # survives sim -> hardware. NOT "g1-scale body" — that's a form-factor class.
+    "unitree g1": "Unitree G1",
+    "g1": "Unitree G1",
+    "g1 model": "Unitree G1",
+    "g1 robot model": "Unitree G1",
+    "g1 robot body": "Unitree G1",
+    "g1 humanoid": "Unitree G1",
+    "g1 body": "Unitree G1",
+    "the g1 body": "Unitree G1",
+    "the robot model": "Unitree G1",
+
     # --- Concepts ---
     "care-gravity": "Care-Gravity",
     "care gravity": "Care-Gravity",
