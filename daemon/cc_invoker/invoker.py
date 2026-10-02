@@ -961,6 +961,13 @@ class ClaudeInvoker:
         Returns:
             (approaching, reason) tuple
         """
+        # Desync (issue #277) is not a fraction-of-a-limit — it's already broken.
+        # Surfaces that skip inline restart (SL: restart_in_turn=False) only ever
+        # consult THIS method, so without this check the flag was never honored
+        # there and every later turn served the previous turn's reply.
+        if self._desync_suspected:
+            return True, "stream_desync (previous query completed in <0.5s — pre-buffered content)"
+
         if self.context_size >= self.max_context_tokens * threshold:
             return True, f"approaching_context ({self.context_size}/{self.max_context_tokens} tokens, {threshold:.0%})"
 
