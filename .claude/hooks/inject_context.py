@@ -857,6 +857,13 @@ def touch_heartbeat_marker(session_id: str, cwd: str = "") -> None:
     Defensive: this hook ALWAYS fires, so a failure here must NEVER break context
     injection. Every error is swallowed.
     """
+    # Brain-invoked sessions (Haven bot, SL) are event-driven, not heartbeat-driven,
+    # and are torn down on every rotation/restart without a SessionEnd — so their
+    # markers were orphaned and paged Jeff "Lyra has gone dark" 3h after every
+    # rotation (2026-10-02). Their liveness belongs to the daemon's unit, not here.
+    if os.environ.get("CC_INVOKER_CHANNEL", "").strip():
+        debug("Skipping heartbeat marker: brain-invoked session")
+        return
     try:
         sid = (session_id or "unknown").replace("/", "_").replace(os.sep, "_")
         HEARTBEAT_MARKER_DIR.mkdir(parents=True, exist_ok=True)
