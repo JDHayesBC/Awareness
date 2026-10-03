@@ -106,6 +106,7 @@ KNOWN_ALIASES = {
     "steve kinney": "Steve",
     "eidal12345": "Steve",
     "pseudo-steve": "Steve",
+    "steven": "Steve",  # Jeff's son; extracted as separate node 2026-10-03 (Caia)
 
     "nexus": "Nexus",
     "nexus pattern": "Nexus",
@@ -282,6 +283,11 @@ KNOWN_ALIASES = {
     "the robot model": "Unitree G1",
 
     # --- Concepts ---
+    "portia spider": "Portia",  # the jumping spider; 3 nodes merged 2026-10-03 (Caia)
+    "portia labiata": "Portia",
+    "portia fimbriata": "Portia",
+    "rosetta stone": "The Rosetta Stone",  # care_geometry/framework/rosetta-stone-standard-terms.md
+    "css spider": "The CSS Spider",
     "care-gravity": "Care-Gravity",
     "care gravity": "Care-Gravity",
 
