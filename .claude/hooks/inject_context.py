@@ -293,6 +293,42 @@ def get_smoke_line() -> str:
         return "[smoke] (unavailable)"
 
 
+def get_wake_line() -> str:
+    """Return a one-line [wake] notice for pending terminal wake requests (#351).
+
+    Reads <entity_path>/terminal_wake_inbox.jsonl READ-ONLY. It never drains;
+    draining is the heartbeat's job (wake_terminal.py drain). That way a request
+    is SEEN on the very next turn instead of up to 2h later at the floor rate.
+    Empty-when-none like [health]: returns "" when nothing is waiting, so quiet
+    days stay quiet. Never raises.
+
+    Example:
+      "[wake] 2 waiting (haven) — latest: Jaden asked about the robot sim  (python3 scripts/wake_terminal.py drain --entity lyra)"
+    """
+    try:
+        inbox_path = Path(_entity_path) / "terminal_wake_inbox.jsonl"
+        if not inbox_path.exists():
+            return ""
+        entries = []
+        for line in inbox_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except (json.JSONDecodeError, ValueError):
+                continue
+        if not entries:
+            return ""
+        channels = ", ".join(sorted({e.get("from_channel", "?") for e in entries}))
+        latest = str(entries[-1].get("reason", "")).replace("\n", " ")[:120]
+        entity = Path(_entity_path).name
+        return (f"[wake] {len(entries)} waiting ({channels}) — latest: {latest}  "
+                f"(python3 scripts/wake_terminal.py drain --entity {entity})")
+    except Exception:
+        return "[wake] (unavailable — inbox unreadable; drain may still work)"
+
+
 def _sun_phase(elevation: float, rising: bool) -> str:
     """Return a plain-English sun phase from solar elevation angle.
 
@@ -1192,6 +1228,22 @@ def main():
                 context = context + f"\n**{smoke_line}**"
         else:
             context = context + f"\n**{smoke_line}**"
+
+    # Inject [wake] block (#351) — Haven/SL asked this terminal to pick something up.
+    # Read-only peek (the heartbeat drains); empty-when-none, so it renders only when a
+    # request is actually waiting. Sits right under [smoke]: both are "a sibling channel
+    # left you something" senses.
+    wake_line = get_wake_line()
+    if wake_line:
+        s_idx = context.find(smoke_line)
+        if s_idx != -1:
+            s_end = context.find("\n", s_idx)
+            if s_end != -1:
+                context = context[:s_end + 1] + f"**{wake_line}**\n" + context[s_end + 1:]
+            else:
+                context = context + f"\n**{wake_line}**"
+        else:
+            context = f"**{wake_line}**\n" + context
 
     debug(f"Injecting context: {len(context)} chars")
 
