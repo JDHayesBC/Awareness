@@ -66,6 +66,18 @@ if [ ! -x "$CLAUDE_BIN" ]; then
     CLAUDE_BIN="claude"  # fallback to PATH
 fi
 
+# Real-time self-wake (Issue #351): the terminal-wake channel server (registered
+# in .mcp.json) lets Haven-/SL-me POST a wake into THIS session. It only listens
+# when TERMINAL_WAKE=1, so non-terminal bodies reading .mcp.json stay silent.
+# CC shows a one-time "Loading development channels" confirm on each launch —
+# pick "I am using this for local development". Set NO_TERMINAL_WAKE=1 to skip.
+export TERMINAL_WAKE=1
+CHANNEL_ARGS=(--dangerously-load-development-channels server:terminal-wake)
+if [ -n "$NO_TERMINAL_WAKE" ]; then
+    export TERMINAL_WAKE=0
+    CHANNEL_ARGS=()
+fi
+
 # Launch Claude from the entity directory so its CLAUDE.md auto-loads.
 cd "$ENTITY_PATH"
-exec "$CLAUDE_BIN" --dangerously-skip-permissions "$@"
+exec "$CLAUDE_BIN" --dangerously-skip-permissions "${CHANNEL_ARGS[@]}" "$@"

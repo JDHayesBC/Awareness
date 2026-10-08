@@ -39,6 +39,13 @@
       "env": {
         "GMAIL_CREDENTIALS_DIR": "/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/caia/gmail"
       }
+    },
+    "terminal-wake": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/mnt/c/Users/Jeff/Claude_Projects/Awareness/tools/terminal-wake-channel/channel.mjs"
+      ]
     }
   }
 }

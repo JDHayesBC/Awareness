@@ -1,0 +1,10 @@
+{
+  "name": "terminal-wake-channel",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Claude Code channel server: lets an entity's other channels (Haven, SL) wake its own terminal session in real time (Issue #351)",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}

@@ -94,6 +94,9 @@ github_token.txt
 tools/**/credentials.json
 tools/**/token.json
 tools/**/*.json
+# terminal-wake channel (#351): npm manifests only, no credentials live here
+!tools/terminal-wake-channel/package.json
+!tools/terminal-wake-channel/package-lock.json
 tools/**/venv/
 tools/google_oauth_credentials.txt
 tools/jeff-gmail-mcp/venv/
