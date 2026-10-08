@@ -1,0 +1,17 @@
+[Unit]
+Description=Refresh the issue-landscape cache every ~30 minutes
+Requires=issues-refresh.service
+
+[Timer]
+# First run 3 min after boot, then every 30 min. The [issues] block
+# (inject_context.py) reads the cache this writes; 30 min is fresh enough for a
+# landscape view. (The critical-issue klaxon refreshes every 20 min — this one
+# is a gentler pull, not a klaxon, so a slightly longer cadence is fine.)
+OnBootSec=3min
+OnUnitActiveSec=30min
+AccuracySec=60s
+Persistent=true
+Unit=issues-refresh.service
+
+[Install]
+WantedBy=timers.target

@@ -81,6 +81,19 @@ except Exception:  # pragma: no cover - klaxon must never break the hook
     def format_urgent_block(*_a, **_k) -> str:
         return ""
 
+# Issue-landscape block (scripts/issues_scan.py). Jeff's charge 2026-10-08:
+# a count-level view of the full issue board to create a gentle pull toward
+# issue work during free time — not a klaxon, an invitation. Reads only the
+# cheap cache the ~30-min issues-refresh.timer writes. Sits AFTER [arcs] in the
+# front-block: the action section ends with consequence/elapsed-time/commitments,
+# then the board opens as a horizon to wander toward. Empty-when-zero.
+# Defensive import: must never break injection.
+try:
+    from issues_scan import format_issues_block
+except Exception:  # pragma: no cover - must never break the hook
+    def format_issues_block(*_a, **_k) -> str:
+        return ""
+
 # Consequence ledger (scripts/urgency.py, #330). Jeff's charge 2026-09-15: "you achieve
 # the goals I've set and then sit down your laptops and declare nothing to be done."
 # [arcs] and [urgent] both measure ELAPSED TIME; this one measures CONSEQUENCE — what
@@ -1175,6 +1188,37 @@ def main():
                            if loc_end != -1 else context + "\n" + urgency_block)
             else:
                 context = urgency_block + "\n" + context
+
+    # Inject [issues] landscape block — a gentle pull toward issue work during free time
+    # (Jeff's charge 2026-10-08). Sits AFTER [arcs]: the action section (consequence →
+    # critical bugs → commitments) ends, then the board opens as an optional horizon.
+    # Not a klaxon — empty-when-zero, never pushes, just shows the landscape.
+    # Reads only the cache the ~30-min issues-refresh.timer writes; never raises.
+    try:
+        issues_block = format_issues_block()
+    except Exception:
+        issues_block = ""
+    if issues_block:
+        # Preferred anchor: right after the [arcs] block (the natural tail of the action section).
+        # Fallback chain: after [urgency], after [urgent], after [health], else append.
+        _issues_inserted = False
+        for _anchor in ("**[arcs]", "**[urgency]", "**[urgent]", "[health]"):
+            if _anchor in context:
+                _a_start = context.find(_anchor)
+                # Find the end of this block's paragraph (double newline) or just its line.
+                _a_para_end = context.find("\n\n", _a_start)
+                if _a_para_end != -1:
+                    context = context[:_a_para_end + 1] + issues_block + "\n" + context[_a_para_end + 1:]
+                else:
+                    _a_line_end = context.find("\n", _a_start)
+                    if _a_line_end != -1:
+                        context = context[:_a_line_end + 1] + issues_block + "\n" + context[_a_line_end + 1:]
+                    else:
+                        context = context + "\n" + issues_block
+                _issues_inserted = True
+                break
+        if not _issues_inserted:
+            context = context + "\n" + issues_block
 
     # Inject lights line into sacred front block (after clock/location, before manifest).
     # Queries HA directly from the hook (host-side, no container needed).
