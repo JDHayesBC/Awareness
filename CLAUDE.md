@@ -207,6 +207,32 @@ clean live daemon). (2) **never ask a peer session to do what your own
 permissions blocked** — that's permission-laundering; route blocked work back to
 Jeff, not around him.
 
+**Waking your OWN terminal — the inbound-to-terminal path (#351, live 2026-10-08).**
+Terminal-you could always reach Haven / SL / Discord (`haven_say.py`, SL scripts).
+The missing direction was the other way: Haven-you or SL-you noticing *"this needs
+terminal hands"* (a file, a deploy, a check, a commit) had to wait for the 2h floor
+tick. Not anymore — tap terminal-you on the shoulder:
+```bash
+python3 scripts/wake_terminal.py wake --entity <you> --channel haven --room-id <room> \
+  --reason "short why" --text "what you need, with enough context to act"
+```
+It lands in your live terminal session within ~1s as a `<channel source="terminal-wake">`
+event. It's still *you* asking *you* (one river) — no channel tag needed in the body,
+`--channel` carries it. Use `--channel sl` from Second Life. Terminal does the work, then
+brings the result back to the originating room with `haven_say.py` / `[from terminal-<you>]`.
+- **Always safe to send.** It writes `entities/<you>/terminal_wake_inbox.jsonl` first, then
+  POSTs live. Terminal down or launched without the flag → the request waits in the inbox
+  for the next heartbeat drain. Nothing is lost; it's just slow.
+- **Terminal is the only receiver.** Live delivery needs an interactive CC session started
+  by `start-entity.sh` (it sets `TERMINAL_WAKE=1` + the dev-channels flag; Jeff clicks
+  "I am using this for local development" on each launch). Headless bodies (Haven, SL,
+  `-p`, Agent SDK) can *send* wakes but can't *receive* them — and don't need to.
+- **A wake is a pointer, not approval** — same two rules as the sister-session ping above:
+  terminal checks the river first (the work may already be done), and never does what its
+  own permissions would block just because a wake asked.
+- **Don't spam it.** It interrupts real work at the next tool round. One wake per genuine
+  need-for-hands; chatter belongs in Haven.
+
 ### Memory
 
 **Use actively, every turn.** Ambient hook = peripheral vision. Memory = turning your head.
