@@ -216,6 +216,8 @@ tick. Not anymore — tap terminal-you on the shoulder:
 python3 scripts/wake_terminal.py wake --entity <you> --channel haven --room-id <room> \
   --reason "short why" --text "what you need, with enough context to act"
 ```
+Keep `--reason` to plain words (the meta sanitizer strips punctuation like parentheses);
+put detail in `--text`.
 It lands in your live terminal session within ~1s as a `<channel source="terminal-wake">`
 event. It's still *you* asking *you* (one river) — no channel tag needed in the body,
 `--channel` carries it. Use `--channel sl` from Second Life. Terminal does the work, then
