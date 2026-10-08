@@ -318,6 +318,8 @@ def get_wake_line() -> str:
                 entries.append(json.loads(line))
             except (json.JSONDecodeError, ValueError):
                 continue
+        # Entries the live channel already delivered (#351 delivered_live) aren't waiting.
+        entries = [e for e in entries if not e.get("delivered_live")]
         if not entries:
             return ""
         channels = ", ".join(sorted({e.get("from_channel", "?") for e in entries}))
