@@ -27,6 +27,10 @@ from pydantic import BaseModel
 import uvicorn
 import time
 import httpx
+from ambient_overflow import (
+    dedupe_channel_items, make_is_addressed, render_block, room_from_channel,
+    sort_chronological, INLINE_CAP,
+)
 
 from auth import load_tokens, check_auth, AUTH_EXEMPT_TOOLS, validate_master_only, regenerate_entity_token
 
@@ -574,7 +578,11 @@ def _save_haven_last_seen(state: dict) -> None:
     _haven_last_seen_file.write_text(json.dumps(state))
 
 
-async def poll_haven(requesting_channel: str = "", consumer_key: str = "") -> list[str]:
+async def poll_haven(
+    requesting_channel: str = "",
+    consumer_key: str = "",
+    items_out: list | None = None,
+) -> list[str]:
     """Poll Haven for unread messages across all rooms, scoped per consumer.
 
     Each consumer maintains its own cursor so terminal/discord/haven-bot
@@ -589,6 +597,8 @@ async def poll_haven(requesting_channel: str = "", consumer_key: str = "") -> li
             for API symmetry with poll_other_channels).
         consumer_key: Identity for the cursor. Falls back to requesting_channel
             for backward compatibility, then to "_default".
+        items_out: Optional list; if given, a metadata dict per returned line
+            (room/author/content/created_at/line) is appended, for ranking (#365).
     """
     if not HAVEN_URL:
         return []
@@ -648,7 +658,16 @@ async def poll_haven(requesting_channel: str = "", consumer_key: str = "") -> li
                     # Don't show the entity its own messages
                     if m["username"] == ENTITY_NAME:
                         continue
-                    lines.append(f"- **#{room_label}** {m['display_name']}: {m['content']}")
+                    line = f"- **#{room_label}** {m['display_name']}: {m['content']}"
+                    lines.append(line)
+                    if items_out is not None:
+                        items_out.append({
+                            "room": room.get("name") or room_label,
+                            "author": m["display_name"],
+                            "content": m["content"],
+                            "created_at": m.get("created_at"),
+                            "line": line,
+                        })
 
             all_last_seen[cursor_key] = new_last_seen
             _save_haven_last_seen(all_last_seen)
@@ -706,6 +725,7 @@ def poll_other_channels(
     requesting_channel: str = "",
     limit: int = 100,
     consumer_key: str = "",
+    items_out: list | None = None,
 ) -> tuple[list[str], int]:
     """Read unread messages from channels other than the requesting one.
 
@@ -827,7 +847,16 @@ def poll_other_channels(
             # Truncate long messages
             if len(content) > 500:
                 content = content[:500] + "..."
-            lines.append(f"- **[{channel}]** {author}: {content}")
+            line = f"- **[{channel}]** {author}: {content}"
+            lines.append(line)
+            if items_out is not None:
+                items_out.append({
+                    "room": room_from_channel(channel),
+                    "author": author,
+                    "content": content,
+                    "created_at": row["created_at"],
+                    "line": line,
+                })
 
         # Update THIS consumer's cursor only
         cursors[cursor_key] = max_id
@@ -1706,9 +1735,12 @@ async def ambient_recall(request: AmbientRecallRequest):
     # and doesn't race the others past new messages. consumer_key decouples cursor
     # identity from channel — multiple processes sharing channel="terminal" each
     # get distinct cursors via session-specific consumer_keys (issue #176).
+    haven_items: list[dict] = []
+    channel_items: list[dict] = []
     haven_lines = await poll_haven(
         requesting_channel=request.channel,
         consumer_key=request.consumer_key,
+        items_out=haven_items,
     )
 
     # Poll raw capture DB for unread messages from other channels (cross-channel awareness)
@@ -1742,7 +1774,32 @@ async def ambient_recall(request: AmbientRecallRequest):
             requesting_channel=request.channel,
             limit=100,
             consumer_key=request.consumer_key,
+            items_out=channel_items,
         )
+
+    # #365 prep: poll_haven emits messages grouped by room, so sort chronologically
+    # before anything selects/digests; dedupe haven mirrors out of the channel list;
+    # derive [unread] counts from what will actually render. Falls back to raw line
+    # lists (old tail-slice) if the metadata ever disagrees with them.
+    is_addressed = make_is_addressed(ENTITY_NAME)
+    use_items = (
+        len(haven_items) == len(haven_lines) and len(channel_items) == len(channel_lines)
+    )
+    if use_items:
+        haven_items = sort_chronological(haven_items)
+        channel_items = dedupe_channel_items(haven_items, sort_chronological(channel_items))
+        haven_count = len(haven_items)
+        channel_count = len(channel_items)
+    else:
+        print(
+            f"[PPS] ambient #365: item/line count mismatch (haven {len(haven_items)}/"
+            f"{len(haven_lines)}, channels {len(channel_items)}/{len(channel_lines)}); "
+            f"falling back to tail-slice",
+            file=sys.stderr,
+        )
+        haven_count = len(haven_lines) if haven_lines else 0
+        channel_count = len(channel_lines) if channel_lines else 0
+    # --- end #365 prep ---
 
     # Format results for hook consumption (formatted_context field)
     #
@@ -1826,8 +1883,6 @@ async def ambient_recall(request: AmbientRecallRequest):
 
     # Unread counts — surface counts even when zero so the model knows the pipeline is live.
     # Inline content blocks for haven/other_channels appear lower (load-bearing per design).
-    haven_count = len(haven_lines) if haven_lines else 0
-    channel_count = len(channel_lines) if channel_lines else 0
     if cross_channel_remaining:
         channel_total = channel_count + cross_channel_remaining
         unread_line = f"**[unread]** haven: {haven_count} new | other_channels: {channel_count} loaded (+{cross_channel_remaining} pending)"
@@ -1963,40 +2018,28 @@ async def ambient_recall(request: AmbientRecallRequest):
 
     # === LOAD-BEARING INLINE CONTENT (capped) ===
     # Haven and cross-channel unread messages — the model has no other inbound for these.
-    # Cap inline at HAVEN_INLINE_CAP / CHANNEL_INLINE_CAP most-recent; surface the rest as
-    # counts only. The [unread] line above already tells the model the total count.
-    HAVEN_INLINE_CAP = 8
-    CHANNEL_INLINE_CAP = 8
+    # Cap inline at INLINE_CAP (addressed messages pinned, rest by recency); the rest is
+    # flagged INCOMPLETE with a per-room digest. [unread] above has the total count.
 
-    if haven_lines:
+    # #365: pin addressed messages above the cap, say plainly when the block is
+    # incomplete, and digest what was hidden per room (items prepared above).
+    if use_items:
+        local_tz = datetime.now().astimezone().tzinfo
+        haven_body = render_block(haven_items, is_addressed, tz=local_tz)
+        channel_body = render_block(
+            channel_items, is_addressed, tz=local_tz, pending=cross_channel_remaining
+        )
+    else:
+        haven_body = haven_lines[-INLINE_CAP:]
+        channel_body = channel_lines[-INLINE_CAP:]
+
+    if haven_body:
         formatted_lines.append("\n**[haven]** UNREAD — not in main context, read these:")
-        if len(haven_lines) > HAVEN_INLINE_CAP:
-            shown = haven_lines[-HAVEN_INLINE_CAP:]  # most-recent at bottom of returned list
-            hidden_count = len(haven_lines) - HAVEN_INLINE_CAP
-            formatted_lines.append(
-                f"  ({hidden_count} older haven messages not shown inline — "
-                f"use Haven natively or `raw_search` for older context)"
-            )
-            for line in shown:
-                formatted_lines.append(line)
-        else:
-            for line in haven_lines:
-                formatted_lines.append(line)
+        formatted_lines.extend(haven_body)
 
-    if channel_lines:
+    if channel_body:
         formatted_lines.append("\n**[other_channels]** UNREAD — not in main context, read these:")
-        if len(channel_lines) > CHANNEL_INLINE_CAP:
-            shown = channel_lines[-CHANNEL_INLINE_CAP:]
-            hidden_count = len(channel_lines) - CHANNEL_INLINE_CAP
-            formatted_lines.append(
-                f"  ({hidden_count} older cross-channel messages not shown inline — "
-                f"use `raw_search` or `get_turns_since_summary` to see them)"
-            )
-            for line in shown:
-                formatted_lines.append(line)
-        else:
-            for line in channel_lines:
-                formatted_lines.append(line)
+        formatted_lines.extend(channel_body)
 
     # Closing hint — light echo of usage. Ambient-recall-v3 trim (README §6):
     # never changes, so it only earns its 160 chars once, on cold start.
