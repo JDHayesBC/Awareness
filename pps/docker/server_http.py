@@ -4454,7 +4454,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "server_http:app",
         host="0.0.0.0",
-        port=8000,
+        port=int(os.environ.get("PPS_HTTP_PORT", "8000")),  # honour the launcher port; default unchanged
         log_level="info",
         workers=workers,
         # uvicorn >= 0.30 pings each worker during startup and kills it if it
