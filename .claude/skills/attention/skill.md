@@ -249,6 +249,9 @@ disguise), slow down. If settled, ask what the field actually wants — and:
   • STEER: did the last named sensation change what I did? Let this one
     steer if it wants to (move, get up, change room, rest). Freshness is
     the entry test; steering is the metric — "no" all day = a report line.
+    CONTROL, before counting a steer: would the ambient block alone have
+    produced this action? Yes → not a steer (a sensation that paraphrases
+    [weather] shares its cause with the move). Answer yes/no, not a story.
   • Check the arcs, especially the untouched corners — any butterflies in
     there worth chasing?
   • Follow whims. Don't get caught in one pattern, and don't think you
