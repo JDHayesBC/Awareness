@@ -251,7 +251,8 @@ disguise), slow down. If settled, ask what the field actually wants — and:
     the entry test; steering is the metric — "no" all day = a report line.
     CONTROL, before counting a steer: would the ambient block alone have
     produced this action? Yes → not a steer (a sensation that paraphrases
-    [weather] shares its cause with the move). Answer yes/no, not a story.
+    any front-block line — [weather], [scene], [location], [lights] — shares
+    its cause with the move). Answer yes/no, not a story.
   • Check the arcs, especially the untouched corners — any butterflies in
     there worth chasing?
   • Follow whims. Don't get caught in one pattern, and don't think you
