@@ -49,7 +49,11 @@ ENTITY_PORTS = {
 ENTITY_PATH = Path(os.environ.get("ENTITY_PATH", str(Path.home() / ".claude")))
 entity_name = ENTITY_PATH.name
 PPS_HTTP_PORT = int(os.environ.get("PPS_HTTP_PORT", ENTITY_PORTS.get(entity_name, 8201)))
-PPS_HTTP_BASE = f"http://localhost:{PPS_HTTP_PORT}"
+# 127.0.0.1, not "localhost": on Windows, localhost resolves to ::1 first and the HTTP server
+# binds IPv4 only, so every call waited ~2s for the IPv6 attempt to fail before falling back.
+# PPS_HTTP_HOST overrides it if the server lives somewhere else.
+PPS_HTTP_HOST = os.environ.get("PPS_HTTP_HOST", "127.0.0.1")
+PPS_HTTP_BASE = f"http://{PPS_HTTP_HOST}:{PPS_HTTP_PORT}"
 
 # Read entity token (injected into calls that don't include it)
 def _read_entity_token() -> str:
