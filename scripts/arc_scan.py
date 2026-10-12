@@ -37,6 +37,7 @@ Usage:
     python3 scripts/arc_scan.py --top 1         # just the single most-starved arc
     python3 scripts/arc_scan.py --tick          # one-line pointer for a heartbeat prompt
     ENTITY_PATH=entities/caia python3 scripts/arc_scan.py
+    ARC_DIR=/path/to/arcs python3 scripts/arc_scan.py   # arcs kept outside entities/
 """
 
 from __future__ import annotations
@@ -82,9 +83,17 @@ def entity_arcs_dir() -> Path:
 
 
 def _resolve_arcs_dir(entity: str | None) -> Path:
-    """Resolve the arcs dir from an explicit entity name, else ENTITY_PATH/ENTITY_NAME."""
+    """Resolve the arcs dir from an explicit entity name, else ARC_DIR, else ENTITY_PATH/ENTITY_NAME.
+
+    ARC_DIR is the harness override: an entity whose arcs live outside this repo
+    (Dash keeps hers beside the rest of her runtime state, not under entities/) points
+    it straight at the directory. An explicit --entity still wins over it.
+    """
     if entity:
         return PROJECT_ROOT / "entities" / entity.strip().lower() / "arcs"
+    arc_dir = os.environ.get("ARC_DIR", "").strip()
+    if arc_dir:
+        return Path(arc_dir).expanduser()
     name = os.environ.get("ENTITY_NAME")
     if name:
         return PROJECT_ROOT / "entities" / name.strip().lower() / "arcs"
@@ -357,11 +366,14 @@ def format_arc_block(entity: str | None = None, today: dt.date | None = None,
                 f"Next move: {_truncate(move, 110)}")
         extra = len(rows) - 1
         if extra > 0:
+            env = (f"ARC_DIR={os.environ['ARC_DIR'].strip()}"
+                   if not entity and os.environ.get("ARC_DIR", "").strip()
+                   else f"ENTITY_NAME={ent}")
             # NOT `--all`: that is the UNFILTERED view (includes published/dormant arcs)
             # and is capped at --top 3, so it showed a different, shorter list than the
             # "+N more" it was cited for. `--top` keeps the starving filter and fits them all.
             line += (f"\n   (+{extra} more moving arc(s) stale ≥{threshold_days}d — "
-                     f"`ENTITY_NAME={ent} python3 scripts/arc_scan.py --top {len(rows)}`)")
+                     f"`{env} python3 scripts/arc_scan.py --top {len(rows)}`)")
         return line
     except Exception as exc:  # pragma: no cover - must never break the hook
         # Silence in this block means "nothing to report". A crash that also renders as
