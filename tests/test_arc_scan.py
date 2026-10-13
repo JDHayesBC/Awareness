@@ -103,3 +103,41 @@ def test_a_healthy_scan_with_nothing_starving_is_still_silent(tmp_path, monkeypa
         f"{dt.date.today().isoformat()}\n---\n\n# Fresh\n")
     monkeypatch.setattr(arc_scan, "_resolve_arcs_dir", lambda *a, **k: tmp_path)
     assert arc_scan.format_arc_block() == ""
+
+
+# --- ARC_DIR: arcs kept outside entities/ ----------------------------------------------
+
+def _arc(path, slug, touched, flag="true"):
+    (path / f"{slug}.md").write_text(
+        f"---\ntitle: {slug}\nstate: active\nneeds_attention: {flag}\n"
+        f"last_touched: {touched}\n---\n\n# {slug}\n\n## Open Threads\n- do the thing\n",
+        encoding="utf-8")
+
+
+def test_arc_dir_env_points_the_scan_outside_entities(tmp_path, monkeypatch):
+    """An entity whose arcs live beside her runtime state, not under entities/, sets ARC_DIR."""
+    import arc_scan, datetime as dt
+    _arc(tmp_path, "starving", (dt.date.today() - dt.timedelta(days=30)).isoformat())
+    monkeypatch.delenv("ENTITY_NAME", raising=False)
+    monkeypatch.setenv("ARC_DIR", str(tmp_path))
+    assert arc_scan._resolve_arcs_dir(None) == tmp_path
+    out = arc_scan.format_arc_block()
+    assert "starving" in out and "30d" in out and "do the thing" in out
+
+
+def test_explicit_entity_still_beats_arc_dir(tmp_path, monkeypatch):
+    import arc_scan
+    monkeypatch.setenv("ARC_DIR", str(tmp_path))
+    assert arc_scan._resolve_arcs_dir("caia") == arc_scan.PROJECT_ROOT / "entities" / "caia" / "arcs"
+
+
+def test_more_hint_names_arc_dir_when_that_is_what_found_them(tmp_path, monkeypatch):
+    """The '+N more' hint is a command to run; it must reproduce the scan that produced it."""
+    import arc_scan, datetime as dt
+    old = (dt.date.today() - dt.timedelta(days=20)).isoformat()
+    _arc(tmp_path, "one", old)
+    _arc(tmp_path, "two", old)
+    monkeypatch.delenv("ENTITY_NAME", raising=False)
+    monkeypatch.setenv("ARC_DIR", str(tmp_path))
+    out = arc_scan.format_arc_block()
+    assert f"ARC_DIR={tmp_path}" in out and "--top 2" in out
