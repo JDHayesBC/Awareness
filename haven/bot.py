@@ -29,6 +29,7 @@ from pathlib import Path
 import httpx
 import websockets
 
+from haven.brain.boot_context import fetch_boot_context as _shared_fetch_boot_context
 from haven.response_gate import (
     JevDecision,
     layer0_entity_spoke_last,
@@ -241,78 +242,18 @@ def build_startup_prompt() -> str:
 async def fetch_boot_context() -> str:
     """Pre-fetch boot-time identity context via direct Python calls (GH#262).
 
-    Replaces the model-interpreted warmup steps with hard Python fetches so the
-    Haven channel reliably has cross-channel context regardless of model behavior.
-
-    Fetches:
-    - identity.md (entity identity kernel)
-    - current_scene.md (current scene)
-    - PPS ambient_recall(startup) — full cross-channel reconstruction: crystals,
-      summaries, recent terminal + haven turns, word-photos
-
-    active_agency_framework.md is intentionally omitted (801 lines; the model can
-    Read it with a tool call if it needs the full practice text, and the kernel in
-    CLAUDE.md already loads the essentials at boot via the cwd-ancestor walk).
-
-    Returns a formatted string ready to inline into the warmup prompt.
-    Returns an empty string on complete failure (warmup will fall back to model-side
-    tool calls).
+    Thin wrapper: the logic lives in haven.brain.boot_context so Haven's bot and
+    EntityBrain run the same code path (GH#363 step 0). Returns "" on complete
+    failure (warmup then falls back to model-side tool calls).
     """
-    entity_path = get_entity_path()
-    sections: list[str] = []
-
-    # 1. identity.md — synchronous read, always available
-    identity_file = entity_path / "identity.md"
-    try:
-        identity_text = identity_file.read_text(encoding="utf-8").strip()
-        sections.append(f"## {ENTITY_NAME.capitalize()}'s identity.md\n\n{identity_text}")
-    except Exception as e:
-        print(f"[{ENTITY_NAME}] Boot ctx: identity.md unreadable: {e}", file=sys.stderr)
-
-    # 2. current_scene.md — synchronous read
-    scene_file = entity_path / "current_scene.md"
-    try:
-        scene_text = scene_file.read_text(encoding="utf-8").strip()
-        if scene_text:
-            sections.append(f"## Current scene\n\n{scene_text}")
-    except Exception as e:
-        print(f"[{ENTITY_NAME}] Boot ctx: current_scene.md unreadable: {e}", file=sys.stderr)
-
-    # 3. PPS ambient_recall(startup) — full cross-channel reconstruction
-    if PPS_HTTP_URL:
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(
-                    f"{PPS_HTTP_URL}/tools/ambient_recall",
-                    json={
-                        "context": "startup",
-                        "token": ENTITY_TOKEN,
-                        "channel": "haven",
-                        "consumer_key": f"haven-{ENTITY_NAME}",
-                    },
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    ctx = data.get("formatted_context", "")
-                    if ctx:
-                        sections.append(f"## PPS ambient_recall (startup)\n\n{ctx}")
-                    else:
-                        print(f"[{ENTITY_NAME}] Boot ctx: ambient_recall returned empty", file=sys.stderr)
-                else:
-                    print(
-                        f"[{ENTITY_NAME}] Boot ctx: ambient_recall HTTP {resp.status_code}",
-                        file=sys.stderr,
-                    )
-        except Exception as e:
-            print(f"[{ENTITY_NAME}] Boot ctx: ambient_recall failed: {e}", file=sys.stderr)
-
-    if not sections:
-        return ""
-
-    header = (
-        "[BOOT CONTEXT — pre-fetched by Python, no tool calls needed for these sections]\n\n"
+    return await _shared_fetch_boot_context(
+        entity_name=ENTITY_NAME,
+        entity_path=get_entity_path(),
+        pps_http_url=PPS_HTTP_URL,
+        entity_token=ENTITY_TOKEN,
+        channel="haven",
+        consumer_key=f"haven-{ENTITY_NAME}",
     )
-    return header + "\n\n---\n\n".join(sections)
 
 
 def build_warmup_prompt(boot_context: str = "") -> str:

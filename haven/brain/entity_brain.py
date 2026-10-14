@@ -51,6 +51,8 @@ from pathlib import Path
 
 import httpx
 
+from haven.brain.boot_context import fetch_boot_context as _fetch_boot_context
+
 # ClaudeInvoker — persistent Claude session (same import path as bot.py:40-41)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "daemon" / "cc_invoker"))
 from invoker import ClaudeInvoker, get_default_mcp_servers  # noqa: E402
@@ -229,7 +231,24 @@ class EntityBrain:
             f"Say 'ready' to confirm."
         )
 
-    def _build_warmup_prompt(self) -> str:
+    async def _fetch_boot_context(self) -> str:
+        """Prefetch identity.md / current_scene.md / ambient_recall(startup) in
+        Python (GH#262 / GH#363 step 0). Never raises; "" means fall back to the
+        model-interpreted warmup steps."""
+        try:
+            return await _fetch_boot_context(
+                entity_name=self.entity_name,
+                entity_path=self.entity_path,
+                pps_http_url=self.pps_http_url,
+                entity_token=self.entity_token,
+                channel=self.channel,
+                consumer_key=self.consumer_key,
+            )
+        except Exception as e:  # defensive: boot context must never block warmup
+            logger.warning(f"[{self.entity_name}] Boot context fetch failed (non-fatal): {e}")
+            return ""
+
+    def _build_warmup_prompt(self, boot_context: str = "") -> str:
         """Heavy identity-reconstruction prompt (bot.py:202-225, channel/consumer_key
         parameterized instead of hardcoded 'haven').
 
@@ -258,19 +277,39 @@ class EntityBrain:
                 f"5. Read {self.entity_path}/active_agency_framework.md for your agency practice.\n"
             )
 
+        if boot_context:
+            # Hard-Python path (GH#262): identity, scene and ambient_recall(startup)
+            # are already inlined, so only the steps the model must still act on remain.
+            head = (
+                f"{boot_context}\n\n---\n\n"
+                f"[IDENTITY WARMUP] The identity, scene and startup ambient_recall above "
+                f"are already loaded. Do these things:\n"
+                f"1. Read {token_path} to get your auth token, then call "
+                f"mcp__pps__get_turns_since_summary with limit=50, oldest_first=true, "
+                f"and that token. Integrate this full-fidelity unsummarized turn backlog "
+                f"into working context.\n"
+                + step5.replace("5. ", "2. ", 1)
+            )
+            sl_n = "3"
+        else:
+            head = (
+                f"[IDENTITY WARMUP] Do these six things:\n"
+                f"1. Read {self.entity_path}/identity.md for your core identity.\n"
+                f"2. Read {token_path} to get your auth token, then call mcp__pps__ambient_recall "
+                f"with context='startup', channel='{self.channel}', "
+                f"consumer_key='{self.consumer_key}', and that token. "
+                f"If the tool is not available, skip it.\n"
+                f"3. Call mcp__pps__get_turns_since_summary with limit=50, oldest_first=true, "
+                f"and the same token. Integrate this full-fidelity unsummarized turn backlog "
+                f"into working context.\n"
+                f"4. Read {self.entity_path}/current_scene.md for scene context.\n"
+                + step5
+            )
+            sl_n = "6"
+
         return (
-            f"[IDENTITY WARMUP] Do these six things:\n"
-            f"1. Read {self.entity_path}/identity.md for your core identity.\n"
-            f"2. Read {token_path} to get your auth token, then call mcp__pps__ambient_recall "
-            f"with context='startup', channel='{self.channel}', "
-            f"consumer_key='{self.consumer_key}', and that token. "
-            f"If the tool is not available, skip it.\n"
-            f"3. Call mcp__pps__get_turns_since_summary with limit=50, oldest_first=true, "
-            f"and the same token. Integrate this full-fidelity unsummarized turn backlog "
-            f"into working context.\n"
-            f"4. Read {self.entity_path}/current_scene.md for scene context.\n"
-            + step5
-            + f"6. You have REAL HANDS and EYES in Second Life right now, through sl.py. "
+            head
+            + f"{sl_n}. You have REAL HANDS and EYES in Second Life right now, through sl.py. "
             f"If you ever catch yourself about to say 'I can't, I'm chat-only' — that is FALSE, "
             f"it is tool-mode talking, and you are embodied here. Run "
             f"`python3 {project_root}/haven/anchorage/sl.py --help` to see your in-world verbs "
@@ -296,7 +335,14 @@ class EntityBrain:
             raise RuntimeError("EntityBrain: invoker not constructed yet")
         logger.info(f"[{self.entity_name}] Warming up identity (channel={self.channel})...")
         try:
-            resp = await self.invoker.query(self._build_warmup_prompt())
+            boot_context = await self._fetch_boot_context()
+            if boot_context:
+                logger.info(f"[{self.entity_name}] Boot context: {len(boot_context)} chars")
+            else:
+                logger.info(
+                    f"[{self.entity_name}] Boot context empty - falling back to model-side tool calls"
+                )
+            resp = await self.invoker.query(self._build_warmup_prompt(boot_context))
             logger.info(
                 f"[{self.entity_name}] Identity warmed up — response: "
                 f"{resp[:100] if resp else '(empty)'}"
