@@ -76,6 +76,7 @@ from haven.anchorage import corrade_events
 from haven.anchorage import heartbeat
 from haven.anchorage import perception
 from haven.brain import EntityBrain
+from haven.brain.surface_profile import sl_profile
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "haven" / "data"
@@ -451,6 +452,7 @@ def _get_brain() -> BrainProtocol:
         _brain = EntityBrain(
             entity_name=ENTITY_NAME,
             channel="sl",
+            profile=sl_profile(ENTITY_NAME),
             # Rotate aggressively: SL is high-tempo, turns are cheap, and the
             # persistent session must stay small or latency creeps until turns
             # time out (see SL_BRAIN_* above). Turn-count is the exact governor.
