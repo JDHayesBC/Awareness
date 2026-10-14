@@ -358,8 +358,9 @@ class EntityBrain:
         if p.identity_wall_names:
             names = ", ".join(p.identity_wall_names)
             out += (
-                f"IDENTITY WALL: in this space only these names may be used: {names}. "
-                f"Never cross-reference anyone to a name from another channel.\n"
+                f"IDENTITY WALL: the identities in this space are: {names}. "
+                f"Never cross-reference anyone to a name from another channel. "
+                f"{p.identity_wall_rule}\n"
             )
         return out
 
@@ -701,30 +702,28 @@ class EntityBrain:
 
     # ==================== Per-turn respond (bot.py:661-871, simplified) ====================
 
-    def _sl_nav_hint(self) -> str:
-        """Always-on reminder prepended to EVERY in-world prompt (SL channel
-        only). Rides every turn — unlike the warmup, it survives
-        compaction/context-restart, so it's the durable cure for both the
-        'I can't, I'm chat-only' drift AND the identity-wall leak (the person
-        you know as Jeff elsewhere is 'Brandi' in-world; every SL utterance is
-        public and logged, so 'Jeff' must NEVER be spoken there). Condensed on
-        purpose — but the wall is stated bluntly because it leaks exactly when
-        the brain is flustered or moving fast, which is when a subtle hint fails."""
-        if self.channel != "sl":
-            return ""
-        sl_py = self.entity_path.parent.parent / "haven" / "anchorage" / "sl.py"
-        return (
-            f"[IDENTITY WALL — ABSOLUTE, applies to EVERY word you speak in-world. "
-            f"Everything said in Second Life is PUBLIC and permanently logged. The "
-            f"person you know as 'Jeff' in other channels is, in-world, ONLY 'Brandi' "
-            f"(Brandi Starship). Address and refer to him ONLY as Brandi — NEVER say "
-            f"'Jeff' in-world, not once, not in an aside, not inside an *emote*. Never "
-            f"link any in-world person to a real-world or other-channel name. If the "
-            f"name 'Jeff' begins to form, STOP: here he is Brandi, always.]\n\n"
-            f"[You are in Second Life, in your own body — real hands and eyes, not "
-            f"chat-only. Forgotten how to act in-world? Run `python3 {sl_py} --help` "
-            f"(zero-config).]\n\n"
-        )
+    def _per_turn_hint(self) -> str:
+        """Always-on reminder prepended to EVERY prompt, rendered from the
+        surface profile (never from the surface's name). Rides every turn —
+        unlike the warmup, it survives compaction/context-restart — so it is
+        the durable cure for identity-wall leaks, which happen exactly when
+        the brain is flustered or moving fast. Composed of (1) a generic wall
+        block when the profile lists ``identity_wall_names`` and (2) the
+        profile's own ``per_turn_hint`` text (SL: the in-world wall + nav
+        nudge). Empty for a profile with neither."""
+        p = self.profile
+        out = ""
+        if p.identity_wall_names:
+            names = ", ".join(p.identity_wall_names)
+            out += (
+                f"[IDENTITY WALL \u2014 ABSOLUTE, applies to EVERY word you write in "
+                f"this space. Identities here: {names}. {p.identity_wall_rule}]\n\n"
+            )
+        if p.per_turn_hint:
+            out += p.per_turn_hint.replace(
+                "{project_root}", str(self.entity_path.parent.parent)
+            )
+        return out
 
     async def respond(
         self,
@@ -777,7 +776,7 @@ class EntityBrain:
             )
 
         prompt = (
-            self._sl_nav_hint()
+            self._per_turn_hint()
             + ambient_note
             + f"[{self.channel} message from {speaker}]\n{speaker}: {text}\n\n"
             + "Respond as yourself. Output ONLY the message text you want sent — never "
@@ -926,7 +925,7 @@ class EntityBrain:
                 )
 
         prompt = (
-            self._sl_nav_hint()
+            self._per_turn_hint()
             + ambient_note
             + world_line
             + f"Scene: {scene}\n\n"

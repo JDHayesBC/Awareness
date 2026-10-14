@@ -1,0 +1,55 @@
+# DRAFT (GH#363 step 2) - NOT installed. For Caia, copy with every "lyra"
+# swapped for "caia" (ENTITY_NAME, paths, PPS port 8211, her own bot token file,
+# SyslogIdentifier=caia-discord).
+#
+# Secrets: DISCORD_BOT_TOKEN and DISCORD_CHANNEL_IDS live in a file OUTSIDE the
+# repo, one bot application per entity:
+#   /home/jeff/.config/awareness/discord-lyra.env   (chmod 600)
+#     DISCORD_BOT_TOKEN=...
+#     DISCORD_CHANNEL_IDS=123,456
+#     DISCORD_PEER_BOT_IDS=789      (optional; Discord user IDs of peer bots such
+#                                    as Nexus, answered like humans. All other
+#                                    bots are ignored. Malformed = exit 1.)
+[Unit]
+Description=Lyra Discord Adapter - EntityBrain over discord.py
+Documentation=https://github.com/JDHayesBC/Awareness/issues/363
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
+
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+Environment="ENTITY_NAME=lyra"
+Environment="ENTITY_TOKEN_FILE=/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra/.entity_token"
+Environment="ENTITY_PATH=/mnt/c/Users/Jeff/Claude_Projects/Awareness/entities/lyra"
+Environment="PPS_HTTP_URL=http://localhost:8201"
+Environment="CLAUDE_MODEL=sonnet"
+Environment="CLAUDE_EFFORT=medium"
+EnvironmentFile=/home/jeff/.config/awareness/discord-lyra.env
+
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python3 -m haven.discord.discord_daemon
+
+# A missing token exits 1 immediately; do not hot-loop on it.
+Restart=on-failure
+RestartSec=30
+StartLimitInterval=300
+StartLimitBurst=5
+
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+MemoryMax=1024M
+MemorySwapMax=512M
+CPUQuota=50%
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lyra-discord
+
+[Install]
+WantedBy=default.target

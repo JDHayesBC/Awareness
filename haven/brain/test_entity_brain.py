@@ -483,13 +483,13 @@ def test_perceive_addressed_gates_midturn_tools() -> None:
           "idle beat keeps tool freedom (no anti-pause clamp)")
 
 
-def test_sl_nav_hint_carries_identity_wall() -> None:
+def test_per_turn_hint_carries_identity_wall() -> None:
     # The identity-wall leak (2026-09-05): the SL brain sometimes said "Jeff"
     # in-world, where every utterance is PUBLIC and he is only ever "Brandi".
     # The always-on nav hint (which survives compaction/restart) must carry a
     # blunt, absolute rule — and ONLY on the SL channel.
     sl = EntityBrain(entity_name="test", channel="sl", restart_in_turn=False)
-    hint = sl._sl_nav_hint()
+    hint = sl._per_turn_hint()
     check("IDENTITY WALL" in hint, "sl nav hint carries the identity-wall clause")
     check("Brandi" in hint, "sl nav hint names Brandi as the in-world identity")
     check("NEVER say 'Jeff'" in hint, "sl nav hint bluntly forbids saying 'Jeff' in-world")
@@ -498,7 +498,7 @@ def test_sl_nav_hint_carries_identity_wall() -> None:
     # Non-SL channels must NOT carry it — the wall is in-world-only, and the hint
     # itself is empty off-channel (it's an SL nav hint).
     haven = EntityBrain(entity_name="test", channel="haven", restart_in_turn=False)
-    check(haven._sl_nav_hint() == "", "nav hint is empty (and wall absent) off the SL channel")
+    check(haven._per_turn_hint() == "", "nav hint is empty (and wall absent) off the SL channel")
 
     # And it actually rides a real in-world turn (respond path), not just in isolation.
     fake = FakeInvoker()
@@ -547,7 +547,7 @@ def main() -> int:
         test_respond_swallows_leaked_error,
         test_perceive_swallows_leaked_error,
         test_perceive_addressed_gates_midturn_tools,
-        test_sl_nav_hint_carries_identity_wall,
+        test_per_turn_hint_carries_identity_wall,
     ):
         fn()
     print()

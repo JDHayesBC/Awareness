@@ -36,6 +36,39 @@ SL_EMBODIMENT_NOTE = (
     "the permission model — is in {project_root}/haven/anchorage/corrade.md."
 )
 
+# The Second Life per-turn hint, moved verbatim out of
+# EntityBrain._sl_nav_hint (GH#363 step 2). Rides EVERY turn (survives
+# compaction/restart): the blunt identity wall (the person known as 'Jeff'
+# elsewhere is only 'Brandi' in-world) plus the "you have hands" nudge.
+# ``{project_root}`` is substituted by the brain at render time.
+SL_PER_TURN_HINT = (
+    "[IDENTITY WALL \u2014 ABSOLUTE, applies to EVERY word you speak in-world. "
+    "Everything said in Second Life is PUBLIC and permanently logged. The "
+    "person you know as 'Jeff' in other channels is, in-world, ONLY 'Brandi' "
+    "(Brandi Starship). Address and refer to him ONLY as Brandi \u2014 NEVER say "
+    "'Jeff' in-world, not once, not in an aside, not inside an *emote*. Never "
+    "link any in-world person to a real-world or other-channel name. If the "
+    "name 'Jeff' begins to form, STOP: here he is Brandi, always.]\n\n"
+    "[You are in Second Life, in your own body \u2014 real hands and eyes, not "
+    "chat-only. Forgotten how to act in-world? Run "
+    "`python3 {project_root}/haven/anchorage/sl.py --help` "
+    "(zero-config).]\n\n"
+)
+
+DISCORD_OUTPUT_CONSTRAINTS = (
+    "Discord. Plain text with light markdown only (bold, italics, short code "
+    "spans; no headings or tables). Keep each reply under 2000 characters "
+    "(longer replies get split). Never write @everyone or @here, and do not "
+    "ping people with @mentions unless you must."
+)
+
+DISCORD_IDENTITY_WALL_RULE = (
+    "These Discord identities must NEVER be cross-referenced with any identity "
+    "from any other space: never connect them to 'Jeff', to a real-world name, "
+    "or to each other. Everything said here is semi-public and logged. If you "
+    "notice yourself about to link one of them to a name from elsewhere, STOP."
+)
+
 
 @dataclass(frozen=True)
 class SurfaceProfile:
@@ -50,6 +83,10 @@ class SurfaceProfile:
         one-line reminder. Never invented by the brain.
     embodiment_note: surface-specific "you have hands here" text; empty means
         the brain omits that warmup step entirely.
+    identity_wall_rule: optional extra text stating the identity-wall rule for
+        this space; rendered after the names in the warmup and every turn.
+    per_turn_hint: optional surface-specific text prepended to EVERY turn
+        (SL: the in-world wall + nav nudge). ``{project_root}`` is substituted.
     """
 
     label: str
@@ -58,6 +95,8 @@ class SurfaceProfile:
     audience_trust: str = TRUST_KNOWN_SPACE
     identity_wall_names: list[str] = field(default_factory=list)
     embodiment_note: str = ""
+    identity_wall_rule: str = ""
+    per_turn_hint: str = ""
 
     def __post_init__(self) -> None:
         if self.warmup_depth not in (WARMUP_FULL, WARMUP_CONDENSED):
@@ -78,6 +117,7 @@ def sl_profile(entity_name: str) -> SurfaceProfile:
         label="sl",
         warmup_depth=WARMUP_CONDENSED,
         embodiment_note=SL_EMBODIMENT_NOTE,
+        per_turn_hint=SL_PER_TURN_HINT,
     )
 
 
@@ -86,10 +126,30 @@ def haven_profile(entity_name: str) -> SurfaceProfile:
     return SurfaceProfile(label="haven", warmup_depth=WARMUP_FULL)
 
 
+def discord_profile(entity_name: str) -> SurfaceProfile:
+    """Discord: untrusted public space with a hard identity wall.
+
+    The wall names are the Discord-side identities that must never be linked to
+    any other-space identity. ``consumer_key`` stays ``discord-<entity>`` via
+    the brain's default, isolating the ambient cursor from haven/sl.
+    """
+    return SurfaceProfile(
+        label="discord",
+        warmup_depth=WARMUP_FULL,
+        output_constraints=DISCORD_OUTPUT_CONSTRAINTS,
+        audience_trust=TRUST_UNTRUSTED,
+        identity_wall_names=["snapplebc", "Snapple", "brandi"],
+        identity_wall_rule=DISCORD_IDENTITY_WALL_RULE,
+        embodiment_note="",
+    )
+
+
 def profile_for_channel(channel: str, entity_name: str) -> SurfaceProfile:
     """Back-compat default for callers that pass only ``channel``."""
     if channel == "sl":
         return sl_profile(entity_name)
     if channel == "haven":
         return haven_profile(entity_name)
+    if channel == "discord":
+        return discord_profile(entity_name)
     return SurfaceProfile(label=channel)
