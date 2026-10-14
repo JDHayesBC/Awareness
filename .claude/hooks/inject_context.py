@@ -448,6 +448,124 @@ def get_weather_line() -> str:
     return line
 
 
+_USAGE_CACHE_FILE = PROJECT_ROOT / ".claude" / "data" / "usage_cache.json"
+_USAGE_CACHE_TTL_S = 300  # 5 minutes
+_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+_USAGE_CREDS_FILE = Path.home() / ".claude" / ".credentials.json"
+
+
+def _fetch_usage() -> dict:
+    """GET the subscription usage JSON. Raises on any error.
+
+    The OAuth token is read fresh each call (Claude Code rotates it) and is
+    never logged, printed, or stored anywhere.
+    """
+    creds = json.loads(_USAGE_CREDS_FILE.read_text())
+    token = creds["claudeAiOauth"]["accessToken"]
+    req = urllib.request.Request(
+        _USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "anthropic-beta": "oauth-2025-04-20",
+            "User-Agent": "claude-code/2.1.143",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _usage_local_hhmm(iso: str | None) -> str | None:
+    """Convert an ISO UTC timestamp to host-local HH:MM."""
+    if not iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone().strftime("%H:%M")
+    except Exception:
+        return None
+
+
+def _format_usage_line(raw: dict) -> str:
+    """Build the one-line [usage] summary from the API response body."""
+    def seg(label: str, pct, resets_iso: str | None = None) -> str:
+        p = int(round(float(pct)))
+        text = f"{label} {p}%"
+        hhmm = _usage_local_hhmm(resets_iso)
+        if hhmm:
+            text += f" (resets {hhmm})"
+        return ("⚠ " + text) if p >= 80 else text
+
+    parts: list[str] = []
+    five = raw.get("five_hour") or {}
+    if five.get("utilization") is not None:
+        parts.append(seg("session", five["utilization"], five.get("resets_at")))
+    seven = raw.get("seven_day") or {}
+    if seven.get("utilization") is not None:
+        parts.append(seg("week", seven["utilization"]))
+
+    limits = raw.get("limits") or []
+    for lim in limits:
+        if lim.get("kind") == "weekly_scoped":
+            name = (((lim.get("scope") or {}).get("model") or {}).get("display_name"))
+            label = f"week/{name}" if name else "week/scoped"
+            if lim.get("percent") is not None:
+                parts.append(seg(label, lim["percent"], lim.get("resets_at")))
+
+    extra = raw.get("extra_usage") or {}
+    if extra.get("is_enabled"):
+        used = extra.get("used_credits", 0) or 0
+        cap = extra.get("monthly_limit")
+        cur = extra.get("currency") or ""
+        fmt = lambda v: f"{v:g}" if isinstance(v, (int, float)) else str(v)
+        parts.append(f"extra {fmt(used)}/{fmt(cap)} {cur}".strip())
+
+    # is_active alone means "this limit applies" (true on weekly_scoped at 55%,
+    # severity "normal"), so require a non-normal severity to call it throttled.
+    throttled = any(l.get("is_active") and (l.get("severity") or "normal") != "normal"
+                    for l in limits) or bool(extra.get("spend_limit_reached"))
+    line = "[usage] " + " · ".join(parts) if parts else "[usage] (no data)"
+    return ("🔴 " + line) if throttled else line
+
+
+def get_usage_line() -> str:
+    """Return a one-line [usage] subscription meter for the ambient context (#370).
+
+    Same lazy shared-cache shape as get_weather_line(): 5-minute TTL, filled by
+    whichever hook fires first. Never raises. On refresh failure keeps the last
+    cached line with " (stale <age>)"; with no cache returns "[usage] (unavailable)".
+    """
+    cached_line = None
+    cached_ts = 0.0
+    try:
+        if _USAGE_CACHE_FILE.exists():
+            cache_data = json.loads(_USAGE_CACHE_FILE.read_text())
+            cached_line = cache_data.get("line")
+            cached_ts = float(cache_data.get("ts", 0))
+            if cached_line and (_time.time() - cached_ts) < _USAGE_CACHE_TTL_S:
+                return cached_line
+    except Exception:
+        cached_line = None
+
+    try:
+        raw = _fetch_usage()
+        line = _format_usage_line(raw)
+    except Exception:
+        if cached_line:
+            age_s = max(0, _time.time() - cached_ts)
+            age = f"{int(age_s // 3600)}h" if age_s >= 3600 else f"{int(age_s // 60)}m"
+            return f"{cached_line} (stale {age})"
+        return "[usage] (unavailable)"
+
+    try:
+        _USAGE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _USAGE_CACHE_FILE.write_text(json.dumps({"ts": _time.time(), "line": line, "raw": raw}))
+    except Exception:
+        pass
+    return line
+
+
 def _get_weather_from_ha() -> str:
     """Query HA for weather conditions and sun phase. Raises on any error."""
     from datetime import timezone as _tz
@@ -1253,6 +1371,21 @@ def main():
             context = context + f"\n**{weather_line}**"
     else:
         context = f"**{weather_line}**\n" + context
+
+    # Inject [usage] line — subscription meter proprioception (#370).
+    # Sits right after [weather]; cached 5 minutes, never raises.
+    try:
+        usage_line = get_usage_line()
+    except Exception:
+        usage_line = "[usage] (unavailable)"
+    if "[weather]" in context:
+        wx_end = context.find("\n", context.find("[weather]"))
+        if wx_end != -1:
+            context = context[:wx_end + 1] + f"**{usage_line}**\n" + context[wx_end + 1:]
+        else:
+            context = context + f"\n**{usage_line}**"
+    else:
+        context = f"**{usage_line}**\n" + context
 
     # Inject [smoke] block — bedroom-language side-band unread count.
     # Placed after [unread] block (which lives inside the PPS ambient_recall context).
