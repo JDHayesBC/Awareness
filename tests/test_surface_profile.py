@@ -19,6 +19,7 @@ from haven.brain.surface_profile import (
     haven_profile,
     profile_for_channel,
     sl_profile,
+    voice_profile,
 )
 
 _CRITICAL = (
@@ -144,3 +145,17 @@ def test_sl_daemon_passes_sl_profile(monkeypatch):
     sd._get_brain()
     assert captured["profile"].label == "sl" and captured["profile"].warmup_depth == "condensed"
     monkeypatch.setattr(sd, "_brain", None)
+
+
+def test_voice_profile_fields_and_warmup_render():
+    p = voice_profile("caia")
+    assert (p.label, p.warmup_depth, p.audience_trust, p.embodiment_note) == (
+        "voice", "full", "known_space", "")
+    assert p.identity_wall_names == []
+    assert profile_for_channel("voice", "caia") == p
+    b = EntityBrain(entity_name="caia", entity_path=Path("/x/entities/caia"),
+                    entity_token="t", pps_http_url="http://pps", channel="voice", profile=p)
+    assert b.channel == "voice" and b.consumer_key == "voice-caia"
+    w = b._build_warmup_prompt("")
+    assert "spoken aloud" in w and "[[NO_RESPONSE]]" in w
+    assert "UNTRUSTED" not in w and "REAL HANDS" not in w

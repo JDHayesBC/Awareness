@@ -418,6 +418,22 @@ services:
       timeout: 5s
       retries: 3
 
+  # voice-proxy — LAN reachability for the host-side voice daemon (haven/voice).
+  # WSL2 is NAT'd, so a daemon bound in WSL is not on 10.0.0.120. Docker Desktop
+  # publishes 8222 on the Windows host AND inside WSL, so the daemon itself listens on 8223
+  # (VOICE_PORT in the systemd unit) and socat forwards 8222 -> host:8223.
+  voice-proxy:
+    image: alpine/socat
+    container_name: voice-proxy
+    restart: unless-stopped
+    ports:
+      - "8222:8222"
+    command: TCP-LISTEN:8222,fork,reuseaddr TCP:host.docker.internal:8223
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - default
+
   # Caddy — reverse proxy + automatic HTTPS (Let's Encrypt) for external house services.
   # Terminates TLS on the NUC via the tokenless HTTP/TLS-ALPN ACME challenge (grey-cloud DNS,
   # router forwards 443 → this host). Routes haven.jdhayes.net → haven:8000. Stock caddy:2 image

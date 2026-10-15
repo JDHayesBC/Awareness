@@ -69,6 +69,14 @@ DISCORD_IDENTITY_WALL_RULE = (
     "notice yourself about to link one of them to a name from elsewhere, STOP."
 )
 
+VOICE_OUTPUT_CONSTRAINTS = (
+    "Voice. Your reply is spoken aloud by a text-to-speech speaker in the house, "
+    "so write for the ear. Use 1-3 short sentences unless asked for more. Plain "
+    "prose only: no markdown, no emoji, no lists, no asterisk emotes, no URLs or "
+    "code. It is fine to say \"I don't know\". If there is genuinely nothing to "
+    "say, output the exact token [[NO_RESPONSE]] and nothing else."
+)
+
 
 @dataclass(frozen=True)
 class SurfaceProfile:
@@ -144,6 +152,22 @@ def discord_profile(entity_name: str) -> SurfaceProfile:
     )
 
 
+def voice_profile(entity_name: str) -> SurfaceProfile:
+    """Voice (HA Voice Preview Edition): Jeff's own living room, spoken output.
+
+    Known space, no identity wall, no embodiment note. ``consumer_key`` stays
+    ``voice-<entity>`` via the brain's default.
+    """
+    return SurfaceProfile(
+        label="voice",
+        warmup_depth=WARMUP_FULL,
+        output_constraints=VOICE_OUTPUT_CONSTRAINTS,
+        audience_trust=TRUST_KNOWN_SPACE,
+        identity_wall_names=[],
+        embodiment_note="",
+    )
+
+
 def profile_for_channel(channel: str, entity_name: str) -> SurfaceProfile:
     """Back-compat default for callers that pass only ``channel``."""
     if channel == "sl":
@@ -152,4 +176,6 @@ def profile_for_channel(channel: str, entity_name: str) -> SurfaceProfile:
         return haven_profile(entity_name)
     if channel == "discord":
         return discord_profile(entity_name)
+    if channel == "voice":
+        return voice_profile(entity_name)
     return SurfaceProfile(label=channel)
