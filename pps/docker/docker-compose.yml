@@ -434,6 +434,29 @@ services:
     networks:
       - default
 
+  # VoiceStudio — local TTS / voice cloning / voice design (OpenAI-compatible audio API + web UI).
+  # CPU build: the host GPU is an AMD Radeon 8060S and the WSL2 ROCm path is documented as
+  # unverified, so we run the default (CUDA) image on CPU. Web UI + API on http://10.0.0.120:3900
+  # (Docker Desktop publishes on the Windows host and in WSL). The UI asks for the admin key
+  # (VOICESTUDIO_API_KEY in .env) once and keeps a browser session. OMNIVOICE_DATA_DIR pins the
+  # SQLite DB + model weights into the one named volume (default would be /root/.omnivoice, unmounted).
+  # Docs: https://voicestudio.sh/docs · https://github.com/debpalash/VoiceStudio/blob/main/docs/install/docker.md
+  voicestudio:
+    image: ghcr.io/debpalash/voicestudio:latest
+    container_name: voicestudio
+    restart: unless-stopped
+    ports:
+      - "3900:3900"
+    environment:
+      OMNIVOICE_API_KEY: ${VOICESTUDIO_API_KEY}
+      OMNIVOICE_DATA_DIR: /app/omnivoice_data
+      OMNIVOICE_ANALYTICS_DISABLED: "1"
+    volumes:
+      - voicestudio_data:/app/omnivoice_data
+    shm_size: "2g"
+    networks:
+      - default
+
   # Caddy — reverse proxy + automatic HTTPS (Let's Encrypt) for external house services.
   # Terminates TLS on the NUC via the tokenless HTTP/TLS-ALPN ACME challenge (grey-cloud DNS,
   # router forwards 443 → this host). Routes haven.jdhayes.net → haven:8000. Stock caddy:2 image
@@ -527,6 +550,8 @@ services:
 volumes:
   litellm_pg_data:
     name: litellm_pg_data
+  voicestudio_data:
+    name: voicestudio_data
 
 networks:
   default:
