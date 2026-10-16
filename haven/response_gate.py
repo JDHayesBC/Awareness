@@ -89,6 +89,12 @@ class JevDecision:
     `respond` is the final verdict, incorporating both should_respond and is_social_ritual.
     `p_respond` is P(should_respond=YES) from choice+confidence.
     `p_ritual` is P(is_social_ritual=YES); None when the ritual question was not asked.
+
+    Entity routing (set when `other_entity_name` is passed to `layer_jev`):
+    `p_addressed_to_me`    P(message directly addresses this entity)
+    `p_addressed_to_other` P(message directly addresses the other entity)
+    `addressed_to_me`      True if p_addressed_to_me >= address_threshold
+    `addressed_to_other`   True if p_addressed_to_other >= address_threshold
     """
 
     respond: bool
@@ -97,6 +103,10 @@ class JevDecision:
     elapsed_ms: float = 0.0
     p_ritual: float | None = None      # P(is social ritual); None = not asked
     is_social_ritual: bool | None = None  # ritual gate fired
+    p_addressed_to_me: float | None = None
+    p_addressed_to_other: float | None = None
+    addressed_to_me: bool | None = None
+    addressed_to_other: bool | None = None
 
 
 # ==================== Layer 0: Name mention ====================
@@ -328,11 +338,13 @@ async def layer_jev(
     timeout: float = JEV_DEFAULT_TIMEOUT,
     client: httpx.AsyncClient | None = None,
     respond_question_override: dict | None = None,
+    other_entity_name: str | None = None,
+    address_threshold: float = 0.65,
 ) -> JevDecision:
     """Jev multi-question gate: should this entity respond?
 
-    Sends the last `turns` messages to the TypeSafe Jev API with two questions
-    in a single request (zero extra latency):
+    Sends the last `turns` messages to the TypeSafe Jev API with two (or four)
+    questions in a single request (zero extra latency):
 
       1. should_respond  — default-NO gate. If P < `threshold`, skip Sonnet.
          `respond_question_override` replaces the default should_respond question
@@ -342,6 +354,17 @@ async def layer_jev(
          `layer0_ritual_greeting` regex bypass: Jev's semantic understanding
          of "goodnight / I love you / how are you" is more robust than keyword
          patterns (GH #360 follow-up).
+      3. is_addressed_to_me  (only when `other_entity_name` is set) — routing
+         question: is the message directly speaking TO this entity?
+      4. is_addressed_to_other (only when `other_entity_name` is set) — routing
+         question: is the message directly speaking TO the other entity?
+
+    Entity routing (when `other_entity_name` is provided):
+    - If clearly addressed to other only (p_other >= address_threshold and
+      p_me < address_threshold) → respond=False (route silences this entity)
+    - If clearly addressed to me (p_me >= address_threshold) → respond=True
+      (override the should_respond threshold; direct address always gets a reply)
+    - Otherwise → normal should_respond + ritual logic applies
 
     Falls back to respond=True on any network/API error — Jev unavailability
     must not block the entity's voice.
@@ -407,6 +430,50 @@ async def layer_jev(
             "options": ["YES", "NO"],
         },
     }
+
+    # Entity routing questions — added when the caller knows about a sibling entity.
+    # Two questions let each entity's bot independently determine whether the message
+    # was directed at it, the other entity, both, or neither.
+    if other_entity_name:
+        questions["is_addressed_to_me"] = {
+            "type": "choice",
+            "instructions": (
+                f"Is the most recent message directly addressed TO {entity_name} specifically? "
+                f"(Not just mentioning {entity_name}, but speaking TO them or asking THEM.)"
+            ),
+            "criteria": {
+                "YES": (
+                    f"The message starts with '{entity_name},' / '{entity_name}?' / "
+                    f"'{entity_name}:' or otherwise directly speaks to {entity_name} — "
+                    f"a question or request aimed at {entity_name} personally."
+                ),
+                "NO": (
+                    f"The message only mentions {entity_name} in passing (e.g., 'Lyra said...', "
+                    f"'ask Lyra about...'), is addressed to {other_entity_name} instead, "
+                    f"or is addressed to no one in particular."
+                ),
+            },
+            "options": ["YES", "NO"],
+        }
+        questions["is_addressed_to_other"] = {
+            "type": "choice",
+            "instructions": (
+                f"Is the most recent message directly addressed TO {other_entity_name} specifically? "
+                f"(Not just mentioning {other_entity_name}, but speaking TO them or asking THEM.)"
+            ),
+            "criteria": {
+                "YES": (
+                    f"The message starts with '{other_entity_name},' / '{other_entity_name}?' / "
+                    f"'{other_entity_name}:' or otherwise directly speaks to {other_entity_name} — "
+                    f"a question or request aimed at {other_entity_name} personally."
+                ),
+                "NO": (
+                    f"The message only mentions {other_entity_name} in passing, is addressed to "
+                    f"{entity_name} instead, or is addressed to no one in particular."
+                ),
+            },
+            "options": ["YES", "NO"],
+        }
 
     payload = {
         "state": state,
@@ -500,6 +567,59 @@ async def layer_jev(
                 resample_tag = " [resample-failed]"
 
         ritual_fires = p_ritual >= ritual_threshold
+
+        # Entity routing: if we asked the addressing questions, apply routing overrides
+        # before falling through to the general should_respond / ritual logic.
+        p_addressed_to_me = None
+        p_addressed_to_other = None
+        addressed_to_me = None
+        addressed_to_other = None
+
+        if other_entity_name:
+            p_addressed_to_me = _extract_p("is_addressed_to_me")
+            p_addressed_to_other = _extract_p("is_addressed_to_other")
+            addressed_to_me = p_addressed_to_me >= address_threshold
+            addressed_to_other = p_addressed_to_other >= address_threshold
+
+            # Suppress: message is clearly for the other entity, not for me.
+            if addressed_to_other and not addressed_to_me:
+                return JevDecision(
+                    respond=False,
+                    p_respond=p_respond,
+                    reason=(
+                        f"routed to {other_entity_name} "
+                        f"(p_other={p_addressed_to_other:.2f} >= {address_threshold}), "
+                        f"not to {entity_name} (p_me={p_addressed_to_me:.2f})"
+                    ),
+                    elapsed_ms=(time.time() - t0) * 1000,
+                    p_ritual=p_ritual,
+                    is_social_ritual=ritual_fires,
+                    p_addressed_to_me=p_addressed_to_me,
+                    p_addressed_to_other=p_addressed_to_other,
+                    addressed_to_me=False,
+                    addressed_to_other=True,
+                )
+
+            # Force respond: message is directly addressed to me.
+            if addressed_to_me:
+                both_tag = f", also to {other_entity_name}" if addressed_to_other else ""
+                return JevDecision(
+                    respond=True,
+                    p_respond=p_respond,
+                    reason=(
+                        f"addressed to {entity_name} "
+                        f"(p_me={p_addressed_to_me:.2f} >= {address_threshold}){both_tag}"
+                    ),
+                    elapsed_ms=(time.time() - t0) * 1000,
+                    p_ritual=p_ritual,
+                    is_social_ritual=ritual_fires,
+                    p_addressed_to_me=p_addressed_to_me,
+                    p_addressed_to_other=p_addressed_to_other,
+                    addressed_to_me=True,
+                    addressed_to_other=addressed_to_other,
+                )
+            # Neither clearly addressed — fall through to should_respond + ritual logic.
+
         respond = (p_respond >= threshold) or ritual_fires
         reason = (
             f"P(respond)={p_respond:.2f} P(ritual)={p_ritual:.2f} "
@@ -507,6 +627,10 @@ async def layer_jev(
             + (" [ritual-pass]" if ritual_fires else "")
             + resample_tag
         )
+        if other_entity_name and p_addressed_to_me is not None:
+            reason += (
+                f" P(me)={p_addressed_to_me:.2f} P(other)={p_addressed_to_other:.2f}"
+            )
         return JevDecision(
             respond=respond,
             p_respond=p_respond,
@@ -514,6 +638,10 @@ async def layer_jev(
             elapsed_ms=(time.time() - t0) * 1000,
             p_ritual=p_ritual,
             is_social_ritual=ritual_fires,
+            p_addressed_to_me=p_addressed_to_me,
+            p_addressed_to_other=p_addressed_to_other,
+            addressed_to_me=addressed_to_me,
+            addressed_to_other=addressed_to_other,
         )
     finally:
         if owns_client:

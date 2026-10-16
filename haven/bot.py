@@ -138,6 +138,10 @@ if not JEV_API_KEY:
 JEV_TURNS = int(os.getenv("HAVEN_JEV_TURNS", "10"))          # how many recent messages to score
 JEV_THRESHOLD = float(os.getenv("HAVEN_JEV_THRESHOLD", "0.10"))  # min P(respond) to proceed
 JEV_TIMEOUT = float(os.getenv("HAVEN_JEV_TIMEOUT", "2.0"))   # max seconds to wait for Jev
+# Entity routing: when both entity names appear in a message, JEV's routing questions
+# decide who should respond rather than the regex name-mention bypass.
+# Set to the sibling entity's display name, e.g. "Caia" when running as Lyra.
+JEV_OTHER_ENTITY = os.getenv("HAVEN_JEV_OTHER_ENTITY", "")  # e.g. "Caia" for Lyra's bot
 
 
 # ==================== State ====================
@@ -948,7 +952,15 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
         # our own posts (batch alone has msgs=1 and never contains our last message).
         await _seed_room_history(room_id)
         _context = list(room_history.get(room_id, ())) or messages
-        _jev_bypass = (
+        # When both entity names appear, let JEV's routing questions decide rather than
+        # the coarse regex bypass (which can't distinguish "addressed to" from "mentioned
+        # about"). Only inhibits the name-mention bypass; DM and spoke-last still fire.
+        _both_names_in_batch = bool(
+            JEV_OTHER_ENTITY
+            and layer0_name_mentioned(ENTITY_NAME, messages)
+            and layer0_name_mentioned(JEV_OTHER_ENTITY, messages)
+        )
+        _jev_bypass = not _both_names_in_batch and (
             layer0_human_dm(my_username, messages, room_id in dm_rooms, bot_usernames=known_bots)
             or layer0_name_mentioned(ENTITY_NAME, messages)
             or layer0_entity_spoke_last(my_username, _context, bot_usernames=known_bots)
@@ -961,6 +973,7 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
                 turns=JEV_TURNS,
                 threshold=JEV_THRESHOLD,
                 timeout=JEV_TIMEOUT,
+                other_entity_name=JEV_OTHER_ENTITY or None,
             )
             print(
                 f"[{ENTITY_NAME}] JEV: {jev.reason} ({jev.elapsed_ms:.0f}ms) -> "

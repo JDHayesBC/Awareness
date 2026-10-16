@@ -29,6 +29,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -93,6 +94,30 @@ def extract_user_text(messages: list[dict[str, Any]]) -> str:
     return ""
 
 
+def _detect_addressed_entity(text: str, names: list[str]) -> str | None:
+    """Return the entity name if the utterance opens with that name, else None.
+
+    Handles common voice patterns:
+      "Lyra, what do you know about..."
+      "Caia can you help me..."
+      "Hey Lyra, ..."
+
+    The name must appear within the first few words (up to 4 tokens), optionally
+    preceded by "hey" / "ok" / "okay", and followed by punctuation or space.
+    Returns the first matching entity name (case-insensitive) or None.
+    """
+    # normalise: strip leading filler words the STT often prepends
+    _FILLER = re.compile(r"^(hey|ok|okay|hi|so|well)\s+", re.IGNORECASE)
+    stripped = _FILLER.sub("", text.strip())
+    first_chunk = stripped.split()[:4]  # first 4 tokens at most
+    first_text = " ".join(first_chunk).lower()
+    for name in names:
+        # name appears at the start, followed by punctuation or space or end
+        if re.match(rf'^{re.escape(name.lower())}\b', first_text):
+            return name
+    return None
+
+
 def _error(status: int, message: str, etype: str, code: str | None = None) -> JSONResponse:
     return JSONResponse(
         {"error": {"message": message, "type": etype, "param": None, "code": code}},
@@ -106,12 +131,19 @@ def _sse(obj: dict[str, Any]) -> str:
 
 def create_app(*, fake_brain: bool = False, entities: list[str] | None = None,
                speaker: str | None = None, api_key: str | None = None,
-               capture: bool | None = None) -> FastAPI:
+               capture: bool | None = None, router: bool | None = None,
+               router_default: str | None = None) -> FastAPI:
     names = entities or [e.strip().lower() for e in
                          os.getenv("VOICE_ENTITIES", "caia,lyra").split(",") if e.strip()]
     speaker = speaker or os.getenv("VOICE_SPEAKER", "Jeff")
     api_key = api_key if api_key is not None else (os.getenv("VOICE_API_KEY") or None)
     capture = capture if capture is not None else os.getenv("VOICE_CAPTURE", "1") != "0"
+    # "router" model: HA points at model="router", daemon detects who's being addressed
+    # and routes to the right entity. Falls back to router_default when undecidable.
+    # Disable with VOICE_ROUTER=0 (or router=False in tests).
+    router_enabled = router if router is not None else os.getenv("VOICE_ROUTER", "1") != "0"
+    router_default_name = (router_default or os.getenv("VOICE_DEFAULT_ENTITY") or
+                           (names[0] if names else "lyra"))
     created = int(time.time())
     brains: dict[str, Any] = {}
     locks: dict[str, asyncio.Lock] = {}
@@ -147,17 +179,20 @@ def create_app(*, fake_brain: bool = False, entities: list[str] | None = None,
     async def health() -> dict[str, Any]:
         return {"ok": True, "entities": names, "warm": dict(warm)}
 
+    def _all_model_ids() -> list[str]:
+        return names + (["router"] if router_enabled else [])
+
     @app.get("/v1/models")
     async def list_models(request: Request):
         if (denied := _check_auth(request)):
             return denied
-        return {"object": "list", "data": [_model_obj(n) for n in names]}
+        return {"object": "list", "data": [_model_obj(n) for n in _all_model_ids()]}
 
     @app.get("/v1/models/{model_id}")
     async def get_model(model_id: str, request: Request):
         if (denied := _check_auth(request)):
             return denied
-        if model_id not in names:
+        if model_id not in _all_model_ids():
             return _error(404, f"The model '{model_id}' does not exist.",
                           "invalid_request_error", "model_not_found")
         return _model_obj(model_id)
@@ -171,10 +206,24 @@ def create_app(*, fake_brain: bool = False, entities: list[str] | None = None,
         except Exception:
             return _error(400, "Request body must be JSON.", "invalid_request_error")
         model = body.get("model")
-        if model not in names:
+        if model not in _all_model_ids():
             return _error(404, f"The model '{model}' does not exist.",
                           "invalid_request_error", "model_not_found")
         text = extract_user_text(body.get("messages") or [])
+
+        # Router model: detect which entity is addressed and delegate to them.
+        if router_enabled and model == "router":
+            addressed = _detect_addressed_entity(text, names)
+            routed_to = addressed or router_default_name
+            log(
+                f"router: {text[:50]!r} -> addressed={addressed or 'none'}, "
+                f"routed to '{routed_to}'"
+            )
+            if routed_to not in names:
+                return _error(503, f"Default entity '{routed_to}' not configured.",
+                              "server_error")
+            model = routed_to
+
         brain = brains.get(model)
         if brain is None:
             return _error(503, f"Entity '{model}' is not warmed up.", "server_error")

@@ -20,6 +20,9 @@ Environment="CLAUDE_MODEL=sonnet"
 Environment="CLAUDE_EFFORT=medium"
 Environment="DEBOUNCE_JITTER_SECONDS=3"
 Environment="ALWAYS_RESPOND=1"
+# Entity routing: when both names appear in a message, JEV's routing questions
+# decide who answers rather than both bots bypassing via L0 name-mention.
+Environment="HAVEN_JEV_OTHER_ENTITY=Lyra"
 Environment="PROJECT_DIR=/mnt/c/Users/Jeff/Claude_Projects/Awareness"
 
 ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python3 -m haven.bot
