@@ -30,6 +30,13 @@ import httpx
 import websockets
 
 from haven.brain.boot_context import fetch_boot_context as _shared_fetch_boot_context
+from haven.redact import (
+    allowed_humans,
+    get_known_secrets,
+    is_private_human_dm,
+    redact_for_room,
+    resolve_redact_mode,
+)
 from haven.response_gate import (
     JevDecision,
     layer0_entity_spoke_last,
@@ -494,10 +501,43 @@ async def _seed_room_history(room_id: str) -> None:
         print(f"[{ENTITY_NAME}] Room history seed failed for {room_id[:8]}: {e}", file=sys.stderr)
 
 
+async def _room_is_private_human_dm(client: httpx.AsyncClient, room_id: str) -> bool:
+    """Positively establish a private human DM; any doubt -> False (shared)."""
+    if room_id not in dm_rooms:
+        return False
+    try:
+        resp = await client.get(
+            f"{HAVEN_URL}/api/rooms/{room_id}/members",
+            headers={"Authorization": f"Bearer {ENTITY_TOKEN}"},
+        )
+        if resp.status_code != 200:
+            return False
+        members = resp.json().get("members", [])
+    except Exception:
+        return False
+    return is_private_human_dm(
+        {"is_dm": True}, members, my_username, known_bots, allowed=allowed_humans()
+    )
+
+
 async def send_message(room_id: str, content: str) -> bool:
-    """Send a message to a Haven room via HTTP API."""
+    """Send a message to a Haven room via HTTP API (outgoing credentials redacted, GH #372)."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
+            mode = resolve_redact_mode()
+            if mode != "off" and content:
+                private = mode == "strict" and await _room_is_private_human_dm(client, room_id)
+                result = redact_for_room(
+                    content, is_private_human_dm=private or mode == "log",
+                    known=get_known_secrets(),
+                )
+                for h in result.hits:
+                    print(
+                        f"[{ENTITY_NAME}] REDACT room={room_id} kind={h.kind} "
+                        f"len={h.length} allowed={private or mode == 'log'}",
+                        file=sys.stderr,
+                    )
+                content = result.text
             resp = await client.post(
                 f"{HAVEN_URL}/api/rooms/{room_id}/messages",
                 headers={

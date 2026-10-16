@@ -47,6 +47,7 @@ from typing import Any, Optional, Protocol
 
 from haven.brain import EntityBrain
 from haven.brain.surface_profile import discord_profile
+from haven.redact import get_known_secrets, redact_for_room, resolve_redact_mode
 
 DISCORD_MESSAGE_LIMIT = 2000
 
@@ -304,6 +305,16 @@ class DiscordAdapter:
             return await self.brain.respond(speaker, text, is_dm=is_dm, addressed=addressed)
 
     async def send_reply(self, channel: Any, text: str) -> None:
+        # Discord channels are never private-human DMs for redaction purposes (GH #372).
+        mode = resolve_redact_mode()
+        if mode != "off" and text:
+            result = redact_for_room(
+                text, is_private_human_dm=(mode == "log"), known=get_known_secrets()
+            )
+            for h in result.hits:
+                log(f"REDACT room={getattr(channel, 'id', '?')} kind={h.kind} "
+                    f"len={h.length} allowed={mode == 'log'}")
+            text = result.text
         for chunk in split_message(text):
             try:
                 await channel.send(chunk)
