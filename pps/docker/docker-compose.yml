@@ -453,6 +453,10 @@ services:
       OMNIVOICE_ANALYTICS_DISABLED: "1"
     volumes:
       - voicestudio_data:/app/omnivoice_data
+      # /root/.cache (HF hub, audioseal, Whisper CT2) is NOT under OMNIVOICE_DATA_DIR; without this
+      # volume every recreate re-downloads and the first synth blows the 60 s openai_tts timeout
+      # (seen 2026-10-15 after the key rotation). Added 2026-10-15; takes effect on next recreate.
+      - voicestudio_cache:/root/.cache
     shm_size: "2g"
     networks:
       - default
@@ -552,6 +556,7 @@ volumes:
     name: litellm_pg_data
   voicestudio_data:
     name: voicestudio_data
+  voicestudio_cache:
 
 networks:
   default:
