@@ -61,6 +61,7 @@ KNOWN_ALIASES = {
     "husband": "Jeff",  # context: entity speaking about their partner
     "geoff": "Jeff",    # misspelling of Jeff discovered 2026-09-16
     "fabel": "Fable",   # misspelling seen 2026-10-14 (Caia curation)
+    "home assistance voice": "Voice PE",   # misspelling seen 2026-10-15 ingest (Caia curation 10-16)
     "geoff hayes": "Jeff",
 
     "lyra hayes": "Lyra",
