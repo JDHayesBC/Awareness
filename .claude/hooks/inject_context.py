@@ -230,10 +230,19 @@ def _ha_light_state(entity_id: str) -> str:
             color = "on"
     # Brightness tag
     if brightness is None:
-        return color
-    b = int(brightness)
-    tag = "soft" if b < 80 else ("mid" if b <= 180 else "BRIGHT")
-    return f"{color} ({tag}, {b})"
+        label = color
+    else:
+        b = int(brightness)
+        tag = "soft" if b < 80 else ("mid" if b <= 180 else "BRIGHT")
+        label = f"{color} ({tag}, {b})"
+    # Active effect. The heartbeat watchdog (scripts/heartbeat_watchdog.py) sets the
+    # bulb to the Zigbee `colorloop` at max when a session goes dark (Jeff, 2026-10-17:
+    # "I don't want to miss that... ever"). A waking entity must be able to SEE that it
+    # was flagged, so surface it loudly here; the floor tick clears it and tells Jeff.
+    effect = attrs.get("effect")
+    if effect and effect != "off":
+        label = f"DISCO:{effect} {label}"
+    return label
 
 
 def get_lights_line() -> str:

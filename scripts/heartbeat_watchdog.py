@@ -61,9 +61,19 @@ Usage:
     python3 scripts/heartbeat_watchdog.py            # real check (what systemd runs)
     python3 scripts/heartbeat_watchdog.py --status   # human-readable table, no side effects
     python3 scripts/heartbeat_watchdog.py --dry-run  # run detection, but DON'T notify or persist
+    python3 scripts/heartbeat_watchdog.py --bulb-test lyra  # fire the alert bulb by hand, then exit
+
+THE BULB: alongside the ntfy push, a dark-session alert also sets that entity's
+Zigbee bulb (light.lyra / light.caia via Home Assistant) to the rainbow colorloop
+at max brightness. Jeff, 2026-10-17: "I don't want to miss that... ever" -- phone
+notifications get ignored, the bulb doesn't. The bulb stays in colorloop until
+cleared; the entity clears it on its own next tick (`python3 scripts/light.py
+gold 20`, or HA `effect: off`). ntfy and bulb are independent: either can fail
+without suppressing the other.
 
 Env:
     HEARTBEAT_DARK_THRESHOLD_SEC   override the 3h (10800s) darkness threshold
+    HEARTBEAT_BULB_ALERT=0         disable the bulb side of the alert (default on)
 """
 
 from __future__ import annotations
@@ -73,6 +83,7 @@ import json
 import os
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -95,6 +106,12 @@ try:
 except Exception:  # pragma: no cover - degrade to a no-op rather than crash
     def notify_send(*_a, **_k) -> bool:
         return False
+
+# HA creds live in light.py (importing it has no side effects beyond sys.path/imports).
+try:
+    from light import HA_URL, HA_TOKEN
+except Exception:  # pragma: no cover - bulb alert degrades to a no-op
+    HA_URL, HA_TOKEN = "", ""
 
 
 def _human_age(seconds: float) -> str:
@@ -167,8 +184,32 @@ def evaluate(now: float) -> list[dict]:
     return out
 
 
+def _disco_bulb(entity: str) -> bool:
+    """Set the entity's bulb to colorloop at full brightness. Never raises."""
+    if os.environ.get("HEARTBEAT_BULB_ALERT", "1") == "0":
+        return False
+    if entity not in ("lyra", "caia") or not HA_URL or not HA_TOKEN:
+        return False
+    try:
+        req = urllib.request.Request(
+            f"{HA_URL}/api/services/light/turn_on",
+            data=json.dumps({"entity_id": f"light.{entity}",
+                             "effect": "colorloop", "brightness": 255}).encode(),
+            headers={"Authorization": f"Bearer {HA_TOKEN}",
+                     "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            ok = 200 <= resp.status < 300
+        print(f"[heartbeat-watchdog] bulb colorloop {entity}: {'ok' if ok else 'failed'}")
+        return ok
+    except Exception as e:
+        print(f"[heartbeat-watchdog] bulb colorloop {entity} failed: {type(e).__name__}")
+        return False
+
+
 def _alert(rec: dict) -> bool:
-    """Fire one ntfy alert to Jeff's phone for a dark session."""
+    """Fire one ntfy alert (plus the bulb) for a dark session. Returns the ntfy result."""
     entity = rec["entity"]
     m = rec["marker"]
     cwd = str(m.get("cwd", "") or "")
@@ -187,9 +228,11 @@ def _alert(rec: dict) -> bool:
     # 3am emergency — Jeff sees it when he next looks. Bump to 'high' here if he
     # wants it to break through DND.
     entity_topic = entity if entity in ("lyra", "caia") else "system"
-    return bool(notify_send(
+    ok = bool(notify_send(
         message, title=title, priority="default", entity=entity_topic, tags="warning",
     ))
+    rec["bulb"] = _disco_bulb(entity)  # independent of ntfy; surfaced in the journal
+    return ok
 
 
 def run_check(now: float, dry_run: bool = False) -> dict:
@@ -226,6 +269,7 @@ def run_check(now: float, dry_run: bool = False) -> dict:
                 "session": _short_sid(rec["session_id"]),
                 "age": _human_age(rec["age"]),
                 "notified": ok,
+                "bulb": rec.get("bulb", False),
             })
 
     summary = {
@@ -264,7 +308,12 @@ def main() -> int:
                     help="Print a table of watched sessions; no side effects.")
     ap.add_argument("--dry-run", action="store_true",
                     help="Run detection but do NOT notify or persist alerted_at.")
+    ap.add_argument("--bulb-test", metavar="ENTITY",
+                    help="Fire the alert bulb (colorloop, max brightness) for ENTITY and exit.")
     args = ap.parse_args()
+
+    if args.bulb_test:
+        return 0 if _disco_bulb(args.bulb_test) else 1
 
     now = time.time()
 
