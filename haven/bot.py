@@ -1114,6 +1114,21 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
 
 # ==================== WebSocket Connection ====================
 
+async def answer_ping(ws) -> None:
+    """Answer the server's app-level liveness ping with a bare pong.
+
+    haven/server.py sends {"type": "ping"} every 30s and reaps any connection with
+    no inbound in FOREGROUND_TTL (65s). Until 2026-10-17 the bot never answered, so
+    a quiet bot was reaped and reconnected every ~95s (#374). A bare pong is proof of
+    life only; it deliberately carries no "active" flag — a bot is not a viewer and
+    must not suppress push notifications to humans.
+    """
+    try:
+        await ws.send(json.dumps({"type": "pong"}))
+    except Exception as e:  # never let a pong failure kill the event loop
+        print(f"[{ENTITY_NAME}] pong failed: {type(e).__name__}", file=sys.stderr)
+
+
 async def connect() -> None:
     """Connect to Haven WebSocket and listen for messages."""
     global my_user_id, my_username, invoker, ws_conn
@@ -1153,6 +1168,9 @@ async def connect() -> None:
                             f"bots: {known_bots or 'none'}",
                             file=sys.stderr,
                         )
+
+                    elif event_type == "ping":
+                        await answer_ping(ws)
 
                     elif event_type == "message":
                         asyncio.create_task(handle_message(data))
