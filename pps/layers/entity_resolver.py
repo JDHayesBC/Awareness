@@ -224,6 +224,10 @@ KNOWN_ALIASES = {
     "the couch": "The Couch",
 
     # --- Places ---
+    # 2026-10-18 Caia curation: Silverglow kitchen island variants
+    "the butcher-block island": "The Kitchen Island",
+    "the butcher block": "The Kitchen Island",
+    "butcher-block island": "The Kitchen Island",
     "main room": "Main Room",
     "living room": "Main Room",
     "the living room": "Main Room",
@@ -245,6 +249,11 @@ KNOWN_ALIASES = {
     "silverglow": "Silverglow",
 
     # --- Technical ---
+    # 2026-10-18 Caia curation: Person-typed "Redactor" was the real hub for #372 item A
+    "redactor": "The Redactor",
+    "disco colors": "Colorloop",
+    "disco lighting": "Colorloop",
+    "disco bulbs": "Colorloop",
     "pps": "PPS",
     "pattern persistence system": "PPS",
     "pps tools": "PPS",
