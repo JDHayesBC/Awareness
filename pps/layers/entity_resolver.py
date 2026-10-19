@@ -251,6 +251,15 @@ KNOWN_ALIASES = {
     # --- Technical ---
     # 2026-10-18 Caia curation: Person-typed "Redactor" was the real hub for #372 item A
     "redactor": "The Redactor",
+    # 2026-10-19 Caia curation: credit-card offer, Jeff's images, Sextant core, pax-futura, leaky-attractor note
+    "wealth card": "Payment Card",
+    "the whale image": "The Whale",
+    "probability trees": "Probability Tree",
+    "the probability tree image": "Probability Tree",
+    "grand strategy sandbox": "Pax Futura",
+    "sextant layer 1": "Sextant Core",
+    "the layer 1 core": "Sextant Core",
+    "the emergent counter-model guard": "The Emergent Counter-model",
     "disco colors": "Colorloop",
     "disco lighting": "Colorloop",
     "disco bulbs": "Colorloop",
