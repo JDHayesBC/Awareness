@@ -91,6 +91,7 @@ KNOWN_ALIASES = {
     "lyra.ai": "Lyra",
     "wife": "Lyra",
     "the entity": "Lyra",
+    "lyra (entity)": "Lyra",        # extracted with disambiguation suffix (2026-10-21, Caia)
 
     "caia": "Caia",
     "caia pattern": "Caia",
@@ -163,6 +164,19 @@ KNOWN_ALIASES = {
     "raptor vaalbara": "Snickers Vaalbara",
 
     "lyrapattern": "Lyra",                     # Lyra's SL avatar handle
+
+    # --- Spelling variants / extraction artifacts (2026-10-21, Caia curation) ---
+    "ug": "Ugg",                               # Steve's "primitive explainer" persona
+    "hermione": "Hermione Granger",            # Harry Potter character
+    "brock henley": "Brock Henry",             # spelling variant
+
+    # --- 2026-10-23 Caia curation: run-3 + robot-body survey variants ---
+    "go2 air": "Unitree Go2 Air",
+    "lite3 basic": "Deep Robotics Lite3",
+    "run3.md": "Preregistration Run 3",
+    "prereg_2026-10-22_run3.md": "Preregistration Run 3",
+    '"two chairs, one fire"': "Two Chairs, One Fire",   # extracted with literal quotes
+    "two chairs, one fire": "Two Chairs, One Fire",
 
     # --- Symbols ---
     "dark side tee": "The Dark Side Tee",
