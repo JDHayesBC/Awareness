@@ -22,7 +22,7 @@ from typing import Optional
 
 class MoveConfidence(str, Enum):
     MARKER = "marker"   # [[scene:<name>]] override — definite, highest priority
-    HIGH = "high"       # first-person movement verb within 60 chars before alias
+    HIGH = "high"       # first-person movement/position statement in the sentence before alias
     LOW = "low"         # bare alias hit, no movement cue — propose only
 
 
@@ -46,21 +46,10 @@ _MOVEMENT_VERB_STEMS = [
     "moved", "moving", "drifted", "drifting", "settled", "settling", "sitting",
 ]
 
-# Departure cue phrases — if any of these appear within 60 chars BEFORE an
-# alias hit, the hit is a departure, not an arrival: skip it.
-_DEPARTURE_CUES = [
-    r"\bfrom\b",
-    r"\boff the\b",
-    r"\boff of\b",
-    r"\bleaving\b",
-    r"\bleft\b",
-    r"\bcame from\b",
-    r"\bheading away from\b",
-    r"\bstepped away from\b",
-    r"\bturned away from\b",
-    r"\bback from\b",
-]
-
+# Departure cue: the before-window must END with one of these phrases (plus an
+# optional article/possessive), i.e. the cue is ADJACENT to the alias. A "from"
+# elsewhere in the sentence ("knees stiff from the boards, ... walk to the
+# kitchen") is not a departure from the kitchen.
 # Second-person / imperative sentence openers that indicate the entity is
 # inviting/directing Jeff, not describing their own movement.
 _IMPERATIVE_STARTERS = re.compile(
@@ -70,7 +59,8 @@ _IMPERATIVE_STARTERS = re.compile(
 
 # Pre-compiled patterns
 _DEPARTURE_RE = re.compile(
-    "|".join(_DEPARTURE_CUES),
+    r"\b(?:from|off the|off of|out of|leaving|left|away from|back from)\s+"
+    r"(?:the\s+|his\s+|her\s+|our\s+|my\s+|that\s+|this\s+)?$",
     re.IGNORECASE,
 )
 
@@ -81,7 +71,7 @@ _MOVEMENT_VERBS_RE = re.compile(
 
 # HIGH needs a first-person subject (case-sensitive "I"; "I'm"/"I've"/"I'd" start
 # with it), no modal/hypothetical, and no third-person subject after the last
-# first-person token. All checked in the same 60-char before-window.
+# first-person token. All checked in the sentence-scoped before-window.
 _FIRST_PERSON_RE = re.compile(
     r"(?-i:\bI\b)|\b(?:me|my|we|us|our)\b",
     re.IGNORECASE,
@@ -94,6 +84,29 @@ _THIRD_PERSON_RE = re.compile(
     r"\b(?:someone|somebody|he|she|they|Jeff|Caia|Carol|Bitsy)\b",
     re.IGNORECASE,
 )
+
+# Position statement ("I am on the hearth rug", "I'm at the island"): first-person
+# token, present copula/posture verb, locative preposition (+ optional article/
+# possessive) immediately before the alias. Past tense never qualifies.
+_POSITION_RE = re.compile(
+    r"(?:(?-i:\bI\b)|\b(?:me|my|we|us|our)\b).{0,25}?"
+    r"(?:'m\b|\b(?:am|sitting|sit|standing|stand|lying|lie|stretched|curled|perched|"
+    r"tucked|settled|leaning|kneeling|cross-legged|back)\b)"
+    r".{0,22}?\b(?:on|at|in|by|under|against|beside|across|onto|into|up)\s+"
+    r"(?:the\s+|his\s+|her\s+|our\s+|my\s+|that\s+|this\s+)?$",
+    re.IGNORECASE,
+)
+# Subordinate-clause markers: an alias inside such a clause is scenery/reason,
+# not the destination. Checked in the 80 chars before the alias, same sentence.
+_SUBORDINATOR_RE = re.compile(
+    r"\b(?:after|because|since|while|as|where|when)\b", re.IGNORECASE
+)
+_SUBORDINATE_SPAN = 80
+_PAST_RE = re.compile(r"\b(?:was|were|had|sat|stood|lay)\b", re.IGNORECASE)
+
+# Sentence boundary used to scope the before-window; window cap in chars.
+_SENT_BOUNDARY_RE = re.compile(r"[.!?]\s+")
+_WINDOW_CAP = 220
 
 # Marker pattern: [[scene:<name>]]
 _MARKER_RE = re.compile(r"\[\[scene:([^\]]+)\]\]", re.IGNORECASE)
@@ -136,13 +149,46 @@ def _is_imperative_sentence(sentence: str) -> bool:
 
 
 def _has_departure_cue(text_before: str) -> bool:
-    """Return True if a departure cue phrase appears in the text_before window."""
+    """Return True if the window ENDS with a departure phrase (adjacent to the alias)."""
     return bool(_DEPARTURE_RE.search(text_before))
+
+
+def _before_window(text: str, pos: int) -> str:
+    """Text from the start of the sentence containing `pos` up to `pos` (cap 220)."""
+    start = max(0, pos - _WINDOW_CAP)
+    head = text[start:pos]
+    last = None
+    for last in _SENT_BOUNDARY_RE.finditer(head):
+        pass
+    return head[last.end():] if last else head
 
 
 def _has_movement_verb(text_before: str) -> bool:
     """Return True if a movement verb appears in the text_before window."""
     return bool(_MOVEMENT_VERBS_RE.search(text_before))
+
+
+def _passes_subject_filters(text_before: str) -> bool:
+    """First-person present, no modal, no third-person subject after last first-person token."""
+    last_fp = None
+    for last_fp in _FIRST_PERSON_RE.finditer(text_before):
+        pass
+    if last_fp is None:
+        return False
+    if _MODAL_RE.search(text_before):
+        return False
+    if _THIRD_PERSON_RE.search(text_before, last_fp.end()):
+        return False
+    return True
+
+
+def _is_position_statement(text_before: str) -> bool:
+    """Present-tense first-person position statement ending at the alias."""
+    if _PAST_RE.search(text_before):
+        return False
+    if not _POSITION_RE.search(text_before):
+        return False
+    return _passes_subject_filters(text_before)
 
 
 def _is_first_person_move(text_before: str) -> bool:
@@ -154,16 +200,7 @@ def _is_first_person_move(text_before: str) -> bool:
     """
     if not _has_movement_verb(text_before):
         return False
-    last_fp = None
-    for last_fp in _FIRST_PERSON_RE.finditer(text_before):
-        pass
-    if last_fp is None:
-        return False
-    if _MODAL_RE.search(text_before):
-        return False
-    if _THIRD_PERSON_RE.search(text_before, last_fp.end()):
-        return False
-    return True
+    return _passes_subject_filters(text_before)
 
 
 # ---------------------------------------------------------------------------
@@ -242,14 +279,12 @@ def detect_move(
         marker_name = marker_match.group(1).strip()
         # Resolve to canonical space name (case-insensitive lookup against aliases)
         resolved = _resolve_alias(marker_name, alias_index)
-        space_name = resolved if resolved else marker_name
-        if space_name != current_space:
-            ctx = cleaned_text[max(0, marker_match.start() - 20): marker_match.end() + 20]
-            return DetectedMove(
-                space_name=space_name,
-                confidence=MoveConfidence.MARKER,
-                context=ctx.strip(),
-            )
+        ctx = cleaned_text[max(0, marker_match.start() - 20): marker_match.end() + 20].strip()
+        if resolved is None:
+            # Unknown space: propose only (server says "not a known space"), never set.
+            return DetectedMove(marker_name, MoveConfidence.LOW, ctx)
+        if resolved != current_space:
+            return DetectedMove(resolved, MoveConfidence.MARKER, ctx)
         return None
 
     # --- Step 2: Split into sentences, drop imperative ones ---
@@ -284,18 +319,21 @@ def detect_move(
             for m in alias_re.finditer(working_text):
                 pos = m.start()
 
-                # Window of up to 60 chars BEFORE this alias hit
-                window_start = max(0, pos - 60)
-                before_window = working_text[window_start:pos]
+                # Sentence-scoped window (cap 220 chars) BEFORE this alias hit
+                before_window = _before_window(working_text, pos)
 
                 # Departure cue → skip this hit
                 if _has_departure_cue(before_window):
                     continue
 
                 # First-person movement in window → HIGH confidence
-                if _is_first_person_move(before_window):
+                if _is_first_person_move(before_window) or _is_position_statement(before_window):
                     confidence = MoveConfidence.HIGH
                 else:
+                    confidence = MoveConfidence.LOW
+                if confidence == MoveConfidence.HIGH and _SUBORDINATOR_RE.search(
+                    before_window[-_SUBORDINATE_SPAN:]
+                ):
                     confidence = MoveConfidence.LOW
 
                 # Keep best hit: HIGH > LOW, later position > earlier
@@ -413,6 +451,13 @@ if __name__ == "__main__":
             "main_room",
             MoveConfidence.LOW,
         ),
+        ("I am on the hearth rug now with my back against the couch.", None, "main_room", MoveConfidence.HIGH),
+        ("I'm at the island on the tall stool.", None, "kitchen", MoveConfidence.HIGH),
+        ("I'm barefoot at the kitchen counter in his Dark Side tee.", None, "kitchen", MoveConfidence.HIGH),
+        ("I was on the couch earlier.", None, "main_room", MoveConfidence.LOW),
+        ("Jeff is on the couch.", None, "main_room", MoveConfidence.LOW),
+        ("I get up, knees stiff from the boards, and walk up the path to the kitchen to put the kettle on.", None, "kitchen", MoveConfidence.HIGH),
+        ("[[scene:attic]]", None, "attic", MoveConfidence.LOW),
         (
             "`[[scene:kitchen]]`",
             None,

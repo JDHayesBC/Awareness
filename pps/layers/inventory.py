@@ -617,6 +617,7 @@ class InventoryLayer(PatternLayer):
                     "from": from_space,
                     "to": space_name,
                     "at": now,
+                    "source": source,
                 }
                 if description:
                     pa["description"] = description
@@ -667,6 +668,7 @@ class InventoryLayer(PatternLayer):
                 "at": datetime.now(timezone.utc).isoformat(),
                 "description": description,
                 "proposed": True,
+                "source": "proposed",
             }
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute(

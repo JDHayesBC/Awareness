@@ -1889,7 +1889,7 @@ async def ambient_recall(request: AmbientRecallRequest):
                 to_space = pa.get("to") or current_space or "unknown"
                 desc = pa.get("description") or ""
                 at_time = pa.get("at", "")
-                _source = presence.get("source", "detected")
+                _source = pa.get("source") or presence.get("source", "detected")
                 proposed = pa.get("proposed", False) or (_source == "proposed")
 
                 label = "moved?" if proposed else "moved"
@@ -2393,6 +2393,9 @@ async def store_message(request: StoreMessageRequest):
             elif move and move.confidence == MoveConfidence.LOW:
                 space_row = next((s for s in spaces if s["name"] == move.space_name), None)
                 desc = (space_row or {}).get("description") or ""
+                if space_row is None:
+                    # Unknown space (e.g. unresolved [[scene:...]] marker): propose only
+                    desc = "not a known space"
                 await inventory.propose_presence(
                     move.space_name, current_space, desc
                 )
