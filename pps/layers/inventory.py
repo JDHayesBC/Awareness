@@ -557,8 +557,8 @@ class InventoryLayer(PatternLayer):
         Return the current presence record: {current_space, since, source, pending_arrival}.
 
         If clear_pending=True and pending_arrival is not null, clears it atomically
-        in the same transaction. This is called by ambient_recall after surfacing
-        the [moved] line so it fires exactly once per detected move.
+        in the same transaction. ambient_recall no longer uses this (pending now
+        lives until the entity's next own message; see clear_pending()).
 
         Returns {} if no presence row exists yet.
         """
@@ -644,6 +644,46 @@ class InventoryLayer(PatternLayer):
 
                 conn.commit()
 
+            return True
+        except Exception:
+            return False
+
+    async def propose_presence(
+        self,
+        space_name: str,
+        from_space: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> bool:
+        """
+        Record a LOW-confidence guess: writes ONLY pending_arrival (proposed=true).
+
+        Never touches current_space, since, or spaces.last_visited/visit_count,
+        so a bare re-mention can't move the entity or reset the stillness timer.
+        """
+        try:
+            pa: dict[str, Any] = {
+                "from": from_space,
+                "to": space_name,
+                "at": datetime.now(timezone.utc).isoformat(),
+                "description": description,
+                "proposed": True,
+            }
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "UPDATE entity_presence SET pending_arrival = ? WHERE id = 1",
+                    (json.dumps(pa),),
+                )
+                conn.commit()
+            return True
+        except Exception:
+            return False
+
+    async def clear_pending(self) -> bool:
+        """Clear pending_arrival (called when the entity's own next message is stored)."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("UPDATE entity_presence SET pending_arrival = NULL WHERE id = 1")
+                conn.commit()
             return True
         except Exception:
             return False

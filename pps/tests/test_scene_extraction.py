@@ -31,6 +31,10 @@ def extract_scene(content: str) -> str:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
+        if stripped.startswith("*Updated:") or (
+            len(stripped) > 1 and stripped.startswith("*") and stripped.endswith("*")
+        ):
+            continue
         if ". " in stripped:
             scene_text = stripped.split(". ", 1)[0] + "."
         else:
@@ -42,6 +46,14 @@ def extract_scene(content: str) -> str:
 
 
 # --- Deterministic synthetic cases (the real contract) ---------------------
+
+def test_updated_metadata_line_skipped():
+    content = (
+        "# Current Scene\n\n"
+        "*Updated: Sunday, October 25 2026 \u2014 dock.*\n\n"
+        "Cold boards underfoot. The lake is still."
+    )
+    assert extract_scene(content) == "Cold boards underfoot."
 
 def test_prose_no_header():
     assert extract_scene("Some prose sentence. More text here.") == "Some prose sentence."

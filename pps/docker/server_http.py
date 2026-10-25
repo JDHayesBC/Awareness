@@ -1858,11 +1858,13 @@ async def ambient_recall(request: AmbientRecallRequest):
                 stripped = line.strip()
                 if not stripped or stripped.startswith("#"):
                     continue
-                # Handle metadata-prefixed lines (Issue #268): "*Updated: DATE — location. prose.*"
-                if stripped.startswith("*") and "—" in stripped:
-                    after_dash = stripped.split("—", 1)[1].strip().rstrip("*").strip()
-                    if after_dash:
-                        stripped = after_dash
+                # Skip metadata lines ("*Updated: DATE — location.*" or any line
+                # wholly wrapped in asterisks): current_space already carries the
+                # location, so surfacing it again yields "[scene] dock · dock."
+                if stripped.startswith("*Updated:") or (
+                    len(stripped) > 1 and stripped.startswith("*") and stripped.endswith("*")
+                ):
+                    continue
                 if ". " in stripped:
                     snippet = stripped.split(". ", 1)[0] + "."
                 else:
@@ -1875,11 +1877,11 @@ async def ambient_recall(request: AmbientRecallRequest):
         return ""
 
     try:
-        presence = await inventory.get_presence(clear_pending=True)
+        presence = await inventory.get_presence(clear_pending=False)
         current_space = presence.get("current_space")
         pending_raw = presence.get("pending_arrival")
 
-        # [moved] / [moved?] line — fires once per detected move, then clears
+        # [moved] / [moved?] line — shown on every read until the entity's next own message clears it
         if pending_raw:
             try:
                 pa = json.loads(pending_raw) if isinstance(pending_raw, str) else pending_raw
@@ -2374,6 +2376,9 @@ async def store_message(request: StoreMessageRequest):
     if request.is_lyra:
         try:
             from layers.space_detector import build_alias_index, detect_move, MoveConfidence
+            # Entity's own message supersedes any earlier pending arrival; clear
+            # BEFORE detecting so a move in this same message can set a fresh one.
+            await inventory.clear_pending()
             presence = await inventory.get_presence()
             current_space = presence.get("current_space")
             spaces = await inventory.get_spaces_with_aliases()
@@ -2388,8 +2393,8 @@ async def store_message(request: StoreMessageRequest):
             elif move and move.confidence == MoveConfidence.LOW:
                 space_row = next((s for s in spaces if s["name"] == move.space_name), None)
                 desc = (space_row or {}).get("description") or ""
-                await inventory.set_presence(
-                    move.space_name, "proposed", current_space, desc
+                await inventory.propose_presence(
+                    move.space_name, current_space, desc
                 )
         except Exception:
             pass  # scene-sense is advisory; never break store_message

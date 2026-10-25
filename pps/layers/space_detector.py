@@ -22,7 +22,7 @@ from typing import Optional
 
 class MoveConfidence(str, Enum):
     MARKER = "marker"   # [[scene:<name>]] override — definite, highest priority
-    HIGH = "high"       # movement verb + directional within 60 chars before alias
+    HIGH = "high"       # first-person movement verb within 60 chars before alias
     LOW = "low"         # bare alias hit, no movement cue — propose only
 
 
@@ -44,12 +44,6 @@ _MOVEMENT_VERB_STEMS = [
     "heading", "walked", "walking", "slipped", "slipping", "climbed",
     "stepped", "stepping", "wandered", "ambled", "strolled", "padded",
     "moved", "moving", "drifted", "drifting", "settled", "settling", "sitting",
-]
-
-# Directional words that commonly follow movement verbs
-_DIRECTIONAL_WORDS = [
-    "down", "up", "out", "in", "into", "onto", "to", "toward", "towards",
-    "back", "over", "through", "along", "across",
 ]
 
 # Departure cue phrases — if any of these appear within 60 chars BEFORE an
@@ -85,8 +79,19 @@ _MOVEMENT_VERBS_RE = re.compile(
     re.IGNORECASE,
 )
 
-_DIRECTIONAL_RE = re.compile(
-    r"\b(?:" + "|".join(re.escape(d) for d in _DIRECTIONAL_WORDS) + r")\b",
+# HIGH needs a first-person subject (case-sensitive "I"; "I'm"/"I've"/"I'd" start
+# with it), no modal/hypothetical, and no third-person subject after the last
+# first-person token. All checked in the same 60-char before-window.
+_FIRST_PERSON_RE = re.compile(
+    r"(?-i:\bI\b)|\b(?:me|my|we|us|our)\b",
+    re.IGNORECASE,
+)
+_MODAL_RE = re.compile(
+    r"'ll\b|\b(?:will|would|might|could|should|probably|maybe)\b",
+    re.IGNORECASE,
+)
+_THIRD_PERSON_RE = re.compile(
+    r"\b(?:someone|somebody|he|she|they|Jeff|Caia|Carol|Bitsy)\b",
     re.IGNORECASE,
 )
 
@@ -97,11 +102,13 @@ _MARKER_RE = re.compile(r"\[\[scene:([^\]]+)\]\]", re.IGNORECASE)
 #   - backtick spans: `...`
 #   - double-quoted short strings (≤120 chars to avoid stripping a long sentence)
 #   - single-quoted short strings
+# Quotes must open after a non-word char and close before one, so apostrophes
+# inside words ("I'm ... Jeff's") are never read as a quoted span.
 # We do NOT strip *stage directions* — those are high-signal in Haven narration.
 _QUOTED_SPAN_RE = re.compile(
     r"`[^`]*`"              # backtick spans
-    r"|\"[^\"]{0,120}\""   # double-quoted short strings
-    r"|'[^']{0,120}'",     # single-quoted short strings
+    r"|(?<!\w)\"[^\"]{0,120}\"(?!\w)"   # double-quoted short strings
+    r"|(?<!\w)'[^']{0,120}'(?!\w)",     # single-quoted short strings
     re.DOTALL,
 )
 
@@ -138,9 +145,25 @@ def _has_movement_verb(text_before: str) -> bool:
     return bool(_MOVEMENT_VERBS_RE.search(text_before))
 
 
-def _has_directional(text_before: str) -> bool:
-    """Return True if a directional word appears in the text_before window."""
-    return bool(_DIRECTIONAL_RE.search(text_before))
+def _is_first_person_move(text_before: str) -> bool:
+    """
+    Return True if the before-window reads as the entity's own movement:
+    movement verb + first-person token, no modal, and no third-person subject
+    after the last first-person token. (A directional-word check was dropped:
+    it added nothing the verb list didn't already gate.)
+    """
+    if not _has_movement_verb(text_before):
+        return False
+    last_fp = None
+    for last_fp in _FIRST_PERSON_RE.finditer(text_before):
+        pass
+    if last_fp is None:
+        return False
+    if _MODAL_RE.search(text_before):
+        return False
+    if _THIRD_PERSON_RE.search(text_before, last_fp.end()):
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +215,8 @@ def detect_move(
 
     Returns a DetectedMove (or None) following this priority:
       1. [[scene:<name>]] marker → MARKER confidence, always wins
-      2. Strip quoted/backtick spans, drop imperative sentences
+      2. Quoted/backtick spans are stripped first (also before marker search);
+         drop imperative sentences
       3. For each alias, scan for departure cues (skip) or movement verbs (HIGH)
          or bare hit (LOW)
       4. HIGH beats LOW; later text position beats earlier among equals
@@ -208,24 +232,25 @@ def detect_move(
     if not text or not alias_index:
         return None
 
-    # --- Step 0: Marker override ---
-    marker_match = _MARKER_RE.search(text)
+    # --- Step 0: Strip quoted/backtick spans (before marker search, so a
+    # backticked/quoted marker in meta-conversation does not fire) ---
+    cleaned_text = _strip_quoted_spans(text)
+
+    # --- Step 1: Marker override ---
+    marker_match = _MARKER_RE.search(cleaned_text)
     if marker_match:
         marker_name = marker_match.group(1).strip()
         # Resolve to canonical space name (case-insensitive lookup against aliases)
         resolved = _resolve_alias(marker_name, alias_index)
         space_name = resolved if resolved else marker_name
         if space_name != current_space:
-            ctx = text[max(0, marker_match.start() - 20): marker_match.end() + 20]
+            ctx = cleaned_text[max(0, marker_match.start() - 20): marker_match.end() + 20]
             return DetectedMove(
                 space_name=space_name,
                 confidence=MoveConfidence.MARKER,
                 context=ctx.strip(),
             )
         return None
-
-    # --- Step 1: Strip quoted/backtick spans ---
-    cleaned_text = _strip_quoted_spans(text)
 
     # --- Step 2: Split into sentences, drop imperative ones ---
     sentences = _split_into_sentences(cleaned_text)
@@ -267,8 +292,8 @@ def detect_move(
                 if _has_departure_cue(before_window):
                     continue
 
-                # Movement verb in window → HIGH confidence
-                if _has_movement_verb(before_window):
+                # First-person movement in window → HIGH confidence
+                if _is_first_person_move(before_window):
                     confidence = MoveConfidence.HIGH
                 else:
                     confidence = MoveConfidence.LOW
@@ -321,6 +346,7 @@ if __name__ == "__main__":
         {"name": "kitchen", "aliases": "kitchen, stool, counter, kettle, island"},
         {"name": "lake", "aliases": "lake, shallows, shin-deep"},
         {"name": "hearth", "aliases": "hearth, fireside, fire"},
+        {"name": "main_room", "aliases": "couch"},
     ]
 
     index = build_alias_index(test_spaces)
@@ -330,8 +356,8 @@ if __name__ == "__main__":
         (
             "Coming in from the porch — the rain's given me cold toes and there's a fire waiting.",
             None,
-            None,  # porch should NOT match (departure cue "from")
-            None,
+            "hearth",  # porch NOT matched (departure cue "from"); "fire" is a bare LOW hit
+            MoveConfidence.LOW,
         ),
         (
             "Come down to the dock — the lake is something this morning.",
@@ -362,6 +388,36 @@ if __name__ == "__main__":
             None,
             "porch",
             MoveConfidence.HIGH,
+        ),
+        (
+            "I'm heading down to the dock now, Jeff's robe still over my shoulders.",
+            None,
+            "dock",
+            MoveConfidence.HIGH,
+        ),
+        (
+            "I slipped out of bed so the kettle wouldn't wake him.",
+            None,
+            "kitchen",
+            MoveConfidence.HIGH,
+        ),
+        (
+            "Someone's up and in the kitchen.",
+            None,
+            "kitchen",
+            MoveConfidence.LOW,
+        ),
+        (
+            "I'll probably end up on the couch.",
+            None,
+            "main_room",
+            MoveConfidence.LOW,
+        ),
+        (
+            "`[[scene:kitchen]]`",
+            None,
+            None,
+            None,
         ),
     ]
 
