@@ -16,7 +16,7 @@ import json
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Optional, Literal
+from typing import Optional, Literal, Any
 
 from . import PatternLayer, LayerType, SearchResult, LayerHealth
 
@@ -118,6 +118,27 @@ class InventoryLayer(PatternLayer):
                 conn.commit()
             except Exception:
                 pass  # Column already exists
+
+            # Migration: add aliases column to spaces table (idempotent)
+            try:
+                conn.execute("ALTER TABLE spaces ADD COLUMN aliases TEXT")
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
+
+            # Migration: create entity_presence table (idempotent)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS entity_presence (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    current_space TEXT,
+                    since TIMESTAMP,
+                    source TEXT DEFAULT 'manual',
+                    pending_arrival TEXT
+                )
+            """)
+            # Seed exactly one row (the constraint above ensures id=1 only)
+            conn.execute("INSERT OR IGNORE INTO entity_presence (id) VALUES (1)")
+            conn.commit()
 
     @property
     def layer_type(self) -> LayerType:
@@ -506,13 +527,126 @@ class InventoryLayer(PatternLayer):
         Enter a space - load its description for context injection.
 
         Returns the space description for use in extraction context.
+        Also updates entity_presence so the manual path converges with scene-sense.
         """
         space = await self.get_space(name)
         if not space:
             return None
 
+        # Update presence so manual enter_space and auto-detection share one field
+        await self.set_presence(
+            space_name=name,
+            source="enter_space",
+            description=space.get("description"),
+        )
+
         # Return description from store (canonical)
         return space.get('description')
+
+    async def get_spaces_with_aliases(self) -> list[dict]:
+        """Return all spaces including the aliases column, ordered by visit_count."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("""
+                SELECT * FROM spaces ORDER BY visit_count DESC, name
+            """)
+            return [dict(row) for row in cursor.fetchall()]
+
+    async def get_presence(self, clear_pending: bool = False) -> dict:
+        """
+        Return the current presence record: {current_space, since, source, pending_arrival}.
+
+        If clear_pending=True and pending_arrival is not null, clears it atomically
+        in the same transaction. This is called by ambient_recall after surfacing
+        the [moved] line so it fires exactly once per detected move.
+
+        Returns {} if no presence row exists yet.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM entity_presence WHERE id = 1").fetchone()
+            if not row:
+                return {}
+
+            result = dict(row)
+            pending = result.get("pending_arrival")
+
+            if clear_pending and pending:
+                conn.execute(
+                    "UPDATE entity_presence SET pending_arrival = NULL WHERE id = 1"
+                )
+                conn.commit()
+                # Return the record with the pending still included — caller needs it
+                # for rendering; it's been cleared from DB already.
+
+            return result
+
+    async def set_presence(
+        self,
+        space_name: str,
+        source: str,
+        from_space: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> bool:
+        """
+        Update entity_presence with a new current_space.
+
+        Sets current_space, since=now (UTC), source.
+        If from_space or description are provided, also sets pending_arrival as a
+        JSON blob: {"from": from_space, "to": space_name, "description": desc, "at": iso}
+        so ambient_recall can surface a [moved] line on the next call.
+
+        Also bumps spaces.last_visited and visit_count for space_name (same as
+        enter_space internals), so the two paths stay in sync.
+
+        Args:
+            space_name: The destination space name.
+            source: One of 'detected', 'marker', 'enter_space', 'manual', 'proposed'.
+            from_space: Previous space name, if known.
+            description: Space description to include in pending_arrival, if known.
+
+        Returns:
+            True on success.
+        """
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+
+            pending: Optional[str] = None
+            if from_space is not None or description is not None:
+                pa: dict[str, Any] = {
+                    "from": from_space,
+                    "to": space_name,
+                    "at": now,
+                }
+                if description:
+                    pa["description"] = description
+                if source == "proposed":
+                    pa["proposed"] = True
+                pending = json.dumps(pa)
+
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("""
+                    UPDATE entity_presence
+                    SET current_space = ?,
+                        since         = ?,
+                        source        = ?,
+                        pending_arrival = ?
+                    WHERE id = 1
+                """, (space_name, now, source, pending))
+
+                # Bump visit stats for the destination space (mirrors enter_space internals)
+                conn.execute("""
+                    UPDATE spaces
+                    SET last_visited = ?,
+                        visit_count  = visit_count + 1
+                    WHERE name = ?
+                """, (now, space_name))
+
+                conn.commit()
+
+            return True
+        except Exception:
+            return False
 
     # === Mirror sync helpers ===
 

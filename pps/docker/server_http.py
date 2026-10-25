@@ -1846,40 +1846,104 @@ async def ambient_recall(request: AmbientRecallRequest):
     except Exception:
         pass  # location pipeline is optional; never break ambient_recall on its absence
 
-    # Current scene (Issue #256) — surface narrative location from current_scene.md
+    # Current scene (Issue #256) + scene-sense location awareness
+    # Attempts to surface current_space from inventory presence table, plus any
+    # pending [moved] notification from scene-sense detection.  Falls back to the
+    # old current_scene.md-only behaviour on any failure so this is never load-bearing.
+    def _extract_scene_snippet(scene_file_path):
+        """Extract the first prose sentence from current_scene.md (≤200 chars)."""
+        try:
+            raw = scene_file_path.read_text(encoding="utf-8")
+            for line in raw.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                # Handle metadata-prefixed lines (Issue #268): "*Updated: DATE — location. prose.*"
+                if stripped.startswith("*") and "—" in stripped:
+                    after_dash = stripped.split("—", 1)[1].strip().rstrip("*").strip()
+                    if after_dash:
+                        stripped = after_dash
+                if ". " in stripped:
+                    snippet = stripped.split(". ", 1)[0] + "."
+                else:
+                    snippet = stripped
+                if len(snippet) > 200:
+                    snippet = snippet[:200] + "…"
+                return snippet
+        except Exception:
+            pass
+        return ""
+
     try:
-        scene_file = ENTITY_PATH / "current_scene.md"
-        scene_text = scene_file.read_text(encoding="utf-8")
+        presence = await inventory.get_presence(clear_pending=True)
+        current_space = presence.get("current_space")
+        pending_raw = presence.get("pending_arrival")
 
-        # Skip leading blank lines and markdown headers
-        for line in scene_text.splitlines():
-            stripped = line.strip()
-            # Skip blank lines and headers
-            if not stripped or stripped.startswith("#"):
-                continue
-            # Handle metadata-prefixed lines (Issue #268): "*Updated: DATE — location. prose.*"
-            # Strip the "*Updated: ...*" wrapper and use the clause after the em-dash.
-            if stripped.startswith("*") and "—" in stripped:
-                after_dash = stripped.split("—", 1)[1].strip().rstrip("*").strip()
-                if after_dash:
-                    stripped = after_dash
-            # Found first prose line — extract up to first ". " or take whole line
-            if ". " in stripped:
-                scene_text = stripped.split(". ", 1)[0] + "."
-            else:
-                scene_text = stripped
-            # Truncate to 200 chars if needed
-            if len(scene_text) > 200:
-                scene_text = scene_text[:200] + "…"
-            break
-        else:
-            # No prose found (file is all headers/blank)
-            scene_text = ""
+        # [moved] / [moved?] line — fires once per detected move, then clears
+        if pending_raw:
+            try:
+                pa = json.loads(pending_raw) if isinstance(pending_raw, str) else pending_raw
+                from_space = pa.get("from") or "unknown"
+                to_space = pa.get("to") or current_space or "unknown"
+                desc = pa.get("description") or ""
+                at_time = pa.get("at", "")
+                _source = presence.get("source", "detected")
+                proposed = pa.get("proposed", False) or (_source == "proposed")
 
-        if scene_text:
-            formatted_lines.append(f"**[scene]** {scene_text}")
+                label = "moved?" if proposed else "moved"
+                at_clip = at_time[:16] if at_time else "now"
+                if desc:
+                    desc_clip = desc[:600] + ("…" if len(desc) > 600 else "")
+                    moved_line = (
+                        f"**[{label}]** {from_space} → {to_space} "
+                        f"({at_clip}, {_source}) · {desc_clip}"
+                    )
+                else:
+                    moved_line = (
+                        f"**[{label}]** {from_space} → {to_space} "
+                        f"({at_clip}, {_source})"
+                    )
+                formatted_lines.append(moved_line)
+            except Exception:
+                pass  # malformed pending_arrival — skip the [moved] line silently
+
+        # [scene] line — now prefixed with current_space name when known
+        scene_snippet = _extract_scene_snippet(ENTITY_PATH / "current_scene.md")
+        if current_space and scene_snippet:
+            formatted_lines.append(f"**[scene]** {current_space} · {scene_snippet}")
+        elif current_space:
+            formatted_lines.append(f"**[scene]** {current_space}")
+        elif scene_snippet:
+            formatted_lines.append(f"**[scene]** {scene_snippet}")
+
     except Exception:
-        pass  # scene file is optional; never break ambient_recall on its absence
+        # Fall back to old scene-only logic if presence lookup fails
+        try:
+            scene_file = ENTITY_PATH / "current_scene.md"
+            scene_text = scene_file.read_text(encoding="utf-8")
+
+            for line in scene_text.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if stripped.startswith("*") and "—" in stripped:
+                    after_dash = stripped.split("—", 1)[1].strip().rstrip("*").strip()
+                    if after_dash:
+                        stripped = after_dash
+                if ". " in stripped:
+                    scene_text = stripped.split(". ", 1)[0] + "."
+                else:
+                    scene_text = stripped
+                if len(scene_text) > 200:
+                    scene_text = scene_text[:200] + "…"
+                break
+            else:
+                scene_text = ""
+
+            if scene_text:
+                formatted_lines.append(f"**[scene]** {scene_text}")
+        except Exception:
+            pass  # scene file is optional; never break ambient_recall on its absence
 
     # Unread counts — surface counts even when zero so the model knows the pipeline is live.
     # Inline content blocks for haven/other_channels appear lower (load-bearing per design).
@@ -2305,6 +2369,30 @@ async def store_message(request: StoreMessageRequest):
 
     if not success:
         raise HTTPException(status_code=500, detail="Failed to store message")
+
+    # Scene-sense: detect location from entity's own message (never breaks store on failure)
+    if request.is_lyra:
+        try:
+            from layers.space_detector import build_alias_index, detect_move, MoveConfidence
+            presence = await inventory.get_presence()
+            current_space = presence.get("current_space")
+            spaces = await inventory.get_spaces_with_aliases()
+            alias_index = build_alias_index(spaces)
+            move = detect_move(request.content, alias_index, current_space)
+            if move and move.confidence in (MoveConfidence.MARKER, MoveConfidence.HIGH):
+                space_row = next((s for s in spaces if s["name"] == move.space_name), None)
+                desc = (space_row or {}).get("description") or ""
+                await inventory.set_presence(
+                    move.space_name, move.confidence.value, current_space, desc
+                )
+            elif move and move.confidence == MoveConfidence.LOW:
+                space_row = next((s for s in spaces if s["name"] == move.space_name), None)
+                desc = (space_row or {}).get("description") or ""
+                await inventory.set_presence(
+                    move.space_name, "proposed", current_space, desc
+                )
+        except Exception:
+            pass  # scene-sense is advisory; never break store_message
 
     return {
         "success": True,
