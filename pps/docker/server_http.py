@@ -16,7 +16,7 @@ import os
 import re
 import sys
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -157,6 +157,12 @@ class IngestBatchRequest(BaseModel):
 class EnterSpaceRequest(BaseModel):
     """Request to enter a space and load its context."""
     space_name: str       # Name of the space to enter
+    ack_only: bool = False  # True: record delivery (ack_space) only; no move, no visit bump
+    token: str = ""
+
+
+class GetPresenceRequest(BaseModel):
+    """Request for the current presence record (scene-sense, #378)."""
     token: str = ""
 
 
@@ -1881,7 +1887,34 @@ async def ambient_recall(request: AmbientRecallRequest):
         current_space = presence.get("current_space")
         pending_raw = presence.get("pending_arrival")
 
-        # [moved] / [moved?] line — shown on every read until the entity's next own message clears it
+        # [moved] / [moved?] line. A proposed ([moved?]) pending lives one turn
+        # (cleared on the entity's next own message). A real [moved] pending lives
+        # until the chain completes: enter_space(to) delivered (ack_space) AND
+        # current_scene.md rewritten since the move. Completion is judged here.
+        owed_tail = ""
+        if pending_raw:
+            try:
+                pa = json.loads(pending_raw) if isinstance(pending_raw, str) else pending_raw
+                _src0 = pa.get("source") or presence.get("source", "detected")
+                _is_proposed = pa.get("proposed", False) or (_src0 == "proposed")
+                if not _is_proposed:
+                    _chain = await inventory.chain_status(ENTITY_PATH / "current_scene.md")
+                    _ack_ok = _chain["ack_ok"]
+                    _scene_ok = _chain["scene_ok"]
+                    if _ack_ok and _scene_ok:
+                        await inventory.clear_pending()
+                        pending_raw = None
+                    else:
+                        _to0 = pa.get("to") or current_space or "unknown"
+                        _owed = []
+                        if not _ack_ok:
+                            _owed.append(f"enter_space({_to0})")
+                        if not _scene_ok:
+                            _owed.append("rewrite current_scene.md")
+                        owed_tail = " · \u27f6 still owed: " + " + ".join(_owed)
+            except Exception:
+                pass  # completion check is advisory; fall through to plain render
+
         if pending_raw:
             try:
                 pa = json.loads(pending_raw) if isinstance(pending_raw, str) else pending_raw
@@ -1905,7 +1938,7 @@ async def ambient_recall(request: AmbientRecallRequest):
                         f"**[{label}]** {from_space} → {to_space} "
                         f"({at_clip}, {_source})"
                     )
-                formatted_lines.append(moved_line)
+                formatted_lines.append(moved_line + (owed_tail if not proposed else ""))
             except Exception:
                 pass  # malformed pending_arrival — skip the [moved] line silently
 
@@ -2376,9 +2409,11 @@ async def store_message(request: StoreMessageRequest):
     if request.is_lyra:
         try:
             from layers.space_detector import build_alias_index, detect_move, MoveConfidence
-            # Entity's own message supersedes any earlier pending arrival; clear
-            # BEFORE detecting so a move in this same message can set a fresh one.
-            await inventory.clear_pending()
+            # Entity's own message supersedes an earlier PROPOSAL only; a real
+            # [moved] pending survives until the enter_space + scene-rewrite chain
+            # completes (judged in ambient_recall). Clear BEFORE detecting so a
+            # move in this same message can set a fresh one.
+            await inventory.clear_pending(only_proposed=True)
             presence = await inventory.get_presence()
             current_space = presence.get("current_space")
             spaces = await inventory.get_spaces_with_aliases()
@@ -3162,7 +3197,7 @@ async def enter_space(request: EnterSpaceRequest):
     if not request.space_name:
         raise HTTPException(status_code=400, detail="space_name is required")
 
-    description = await inventory.enter_space(request.space_name)
+    description = await inventory.enter_space(request.space_name, ack_only=request.ack_only)
 
     if description is None:
         # Space not found - return helpful message
@@ -3179,6 +3214,36 @@ async def enter_space(request: EnterSpaceRequest):
         "success": True,
         "space_name": request.space_name,
         "description": description
+    }
+
+
+@app.post("/tools/get_presence")
+async def get_presence_endpoint(request: GetPresenceRequest):
+    """
+    Return the current presence record plus current_scene.md mtime (UTC ISO).
+
+    Fields: current_space, since, source, ack_space, pending_arrival, scene_mtime.
+    Used by the SessionStart/PreCompact hooks (#378 pass 3).
+    """
+    auth_error = check_auth(request.token, ENTITY_TOKEN, MASTER_TOKEN, ENTITY_NAME, "get_presence")
+    if auth_error:
+        return JSONResponse(status_code=403, content={"error": auth_error})
+
+    presence = await inventory.get_presence(clear_pending=False)
+    scene_mtime = None
+    try:
+        scene_mtime = datetime.fromtimestamp(
+            (ENTITY_PATH / "current_scene.md").stat().st_mtime, tz=timezone.utc
+        ).isoformat()
+    except Exception:
+        pass
+    return {
+        "current_space": presence.get("current_space"),
+        "since": presence.get("since"),
+        "source": presence.get("source"),
+        "ack_space": presence.get("ack_space"),
+        "pending_arrival": presence.get("pending_arrival"),
+        "scene_mtime": scene_mtime,
     }
 
 

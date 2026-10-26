@@ -59,7 +59,7 @@ _IMPERATIVE_STARTERS = re.compile(
 
 # Pre-compiled patterns
 _DEPARTURE_RE = re.compile(
-    r"\b(?:from|off the|off of|out of|leaving|left|away from|back from)\s+"
+    r"\b(?:from|off the|off of|off|out of|leaving|left|away from|back from)\s+"
     r"(?:the\s+|his\s+|her\s+|our\s+|my\s+|that\s+|this\s+)?$",
     re.IGNORECASE,
 )
@@ -103,6 +103,14 @@ _SUBORDINATOR_RE = re.compile(
 )
 _SUBORDINATE_SPAN = 80
 _PAST_RE = re.compile(r"\b(?:was|were|had|sat|stood|lay)\b", re.IGNORECASE)
+
+# Reported speech: an alias after said/wrote/... in the same sentence is quoted
+# content, not the entity's own position. HIGH -> LOW. Module constant so either
+# river can switch it off while measuring (#378 pass 3, item 5).
+REPORTED_SPEECH_DEMOTE = True
+_REPORTED_SPEECH_RE = re.compile(
+    r"\b(?:said|says|wrote|asked|told|quoted)\b", re.IGNORECASE
+)
 
 # Sentence boundary used to scope the before-window; window cap in chars.
 _SENT_BOUNDARY_RE = re.compile(r"[.!?]\s+")
@@ -207,37 +215,55 @@ def _is_first_person_move(text_before: str) -> bool:
 # Public API
 # ---------------------------------------------------------------------------
 
-def build_alias_index(spaces: list[dict]) -> dict[str, list[str]]:
+class AliasIndex(dict):
+    """dict[space_name, aliases] that also carries `houses` {space_name: house|None}.
+
+    Subclasses dict so every caller that treats the index as a plain mapping
+    keeps working; detect_move reads `.houses` when present.
+    """
+
+    houses: dict[str, Optional[str]]
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.houses = {}
+
+
+def build_alias_index(spaces: list[dict]) -> AliasIndex:
     """
     Build a mapping of {space_name: [alias1, alias2, ...]} from a list of space dicts.
 
-    The space name itself is always included as an alias.
     The `aliases` field in each dict is a comma-separated string (may be None/empty).
-
-    Args:
-        spaces: List of dicts with at least a `name` key and optional `aliases` key.
+    When it is non-empty the row is *curated*: the bare space name is NOT an alias
+    (owners trim aliases deliberately; a name like "lake" is too generic).
+    When it is empty the name itself is the only alias, so uncurated rows keep
+    working.  An optional `house` field (nullable) is carried on `.houses`.
 
     Returns:
-        Dict mapping space_name -> sorted list of unique aliases (longest first,
-        so more specific aliases match before shorter ones during scanning).
+        AliasIndex mapping space_name -> aliases (longest first, so more specific
+        aliases match before shorter ones during scanning).
     """
-    index: dict[str, list[str]] = {}
+    index = AliasIndex()
 
     for space in spaces:
-        name = space.get("name", "").strip()
+        name = (space.get("name") or "").strip()
         if not name:
             continue
 
         aliases_raw = space.get("aliases") or ""
         parts = [p.strip() for p in aliases_raw.split(",") if p.strip()]
 
-        # The name itself is always an alias
-        all_aliases = list(dict.fromkeys([name] + parts))  # deduplicate, preserve order
+        if parts:
+            all_aliases = list(dict.fromkeys(parts))
+        else:
+            all_aliases = [name]
 
         # Sort longest first so "back deck" matches before "deck"
         all_aliases.sort(key=len, reverse=True)
 
         index[name] = all_aliases
+        house = (space.get("house") or "").strip() or None
+        index.houses[name] = house
 
     return index
 
@@ -297,65 +323,103 @@ def detect_move(
     # in the rejoined text so "later in the text" comparisons work correctly.
     working_text = " ".join(filtered_sentences)
 
-    # --- Step 3: Scan for alias hits ---
+    # --- Step 3: Collect alias hits across ALL spaces (including current) ---
+    # Overlaps resolve longest-wins by masking consumed spans, THEN hits that
+    # belong to current_space are dropped. Doing the drop first (the old
+    # per-space `continue`) left nested shorter aliases ("bedroom" inside
+    # "Silverglow bedroom") free to invent a move.
+    hits: list[tuple[str, int, int]] = []  # (space_name, start, end)
+    for space_name, aliases in alias_index.items():
+        for alias in aliases:
+            try:
+                alias_re = re.compile(r"\b" + re.escape(alias) + r"\b", re.IGNORECASE)
+            except re.error:
+                continue
+            for m in alias_re.finditer(working_text):
+                hits.append((space_name, m.start(), m.end()))
+
+    # Longest span first (ties: earliest, then index order via stable sort)
+    hits.sort(key=lambda h: (-(h[2] - h[1]), h[1]))
+    taken: list[tuple[int, int]] = []
+    accepted: list[tuple[str, int, int]] = []
+    for space_name, start, end in hits:
+        if any(start < t_end and end > t_start for t_start, t_end in taken):
+            continue
+        taken.append((start, end))
+        accepted.append((space_name, start, end))
+    accepted.sort(key=lambda h: h[1])  # text order: later position wins among equals
+
+    houses = getattr(alias_index, "houses", {}) or {}
+    current_house = houses.get(current_space) if current_space else None
+
     best: Optional[DetectedMove] = None
     best_pos = -1
 
-    for space_name, aliases in alias_index.items():
+    for space_name, start, end in accepted:
         # Skip current space — we're looking for a *change*
         if space_name == current_space:
             continue
 
-        for alias in aliases:
-            # Word-boundary, case-insensitive search
-            try:
-                alias_re = re.compile(
-                    r"\b" + re.escape(alias) + r"\b",
-                    re.IGNORECASE,
-                )
-            except re.error:
-                continue
+        pos = start
 
-            for m in alias_re.finditer(working_text):
-                pos = m.start()
+        # Sentence-scoped window (cap 220 chars) BEFORE this alias hit
+        before_window = _before_window(working_text, pos)
 
-                # Sentence-scoped window (cap 220 chars) BEFORE this alias hit
-                before_window = _before_window(working_text, pos)
+        # Departure cue → skip this hit
+        if _has_departure_cue(before_window):
+            continue
 
-                # Departure cue → skip this hit
-                if _has_departure_cue(before_window):
-                    continue
+        # First-person movement in window → HIGH confidence
+        if _is_first_person_move(before_window) or _is_position_statement(before_window):
+            confidence = MoveConfidence.HIGH
+        else:
+            confidence = MoveConfidence.LOW
+        if confidence == MoveConfidence.HIGH and _SUBORDINATOR_RE.search(
+            before_window[-_SUBORDINATE_SPAN:]
+        ):
+            confidence = MoveConfidence.LOW
 
-                # First-person movement in window → HIGH confidence
-                if _is_first_person_move(before_window) or _is_position_statement(before_window):
-                    confidence = MoveConfidence.HIGH
-                else:
-                    confidence = MoveConfidence.LOW
-                if confidence == MoveConfidence.HIGH and _SUBORDINATOR_RE.search(
-                    before_window[-_SUBORDINATE_SPAN:]
+        # Reported speech: alias after said/wrote/... in this sentence is quoted
+        if (
+            REPORTED_SPEECH_DEMOTE
+            and confidence == MoveConfidence.HIGH
+            and _REPORTED_SPEECH_RE.search(before_window)
+        ):
+            confidence = MoveConfidence.LOW
+
+        # House scoping: a hit in a different (known) house than the current one is
+        # demoted to a proposal unless the sentence names the target's house.
+        # NULL house on either side = unknown, never demotes.
+        if confidence == MoveConfidence.HIGH and current_house:
+            target_house = houses.get(space_name)
+            if target_house and target_house.lower() != current_house.lower():
+                sent_start = pos - len(before_window)
+                tail = _SENT_BOUNDARY_RE.search(working_text, end)
+                sent_end = tail.start() if tail else len(working_text)
+                sentence = working_text[sent_start:sent_end]
+                if not re.search(
+                    r"\b" + re.escape(target_house) + r"\b", sentence, re.IGNORECASE
                 ):
                     confidence = MoveConfidence.LOW
 
-                # Keep best hit: HIGH > LOW, later position > earlier
-                ctx_start = max(0, pos - 30)
-                ctx_end = min(len(working_text), m.end() + 40)
-                ctx = working_text[ctx_start:ctx_end].strip()
+        # Keep best hit: HIGH > LOW, later position > earlier
+        ctx_start = max(0, pos - 30)
+        ctx_end = min(len(working_text), end + 40)
+        ctx = working_text[ctx_start:ctx_end].strip()
 
-                if best is None:
-                    best = DetectedMove(space_name, confidence, ctx)
-                    best_pos = pos
-                else:
-                    # HIGH confidence beats LOW regardless of position
-                    if confidence == MoveConfidence.HIGH and best.confidence == MoveConfidence.LOW:
-                        best = DetectedMove(space_name, confidence, ctx)
-                        best_pos = pos
-                    # Among equals: later position wins (narration moves forward)
-                    elif confidence == best.confidence and pos > best_pos:
-                        best = DetectedMove(space_name, confidence, ctx)
-                        best_pos = pos
-                    # LOW never replaces HIGH
-                    elif confidence == MoveConfidence.LOW and best.confidence == MoveConfidence.HIGH:
-                        pass
+        if best is None:
+            best = DetectedMove(space_name, confidence, ctx)
+            best_pos = pos
+        else:
+            # HIGH confidence beats LOW regardless of position
+            if confidence == MoveConfidence.HIGH and best.confidence == MoveConfidence.LOW:
+                best = DetectedMove(space_name, confidence, ctx)
+                best_pos = pos
+            # Among equals: later position wins (narration moves forward)
+            elif confidence == best.confidence and pos > best_pos:
+                best = DetectedMove(space_name, confidence, ctx)
+                best_pos = pos
+            # LOW never replaces HIGH
 
     return best
 
@@ -363,11 +427,12 @@ def detect_move(
 def _resolve_alias(alias: str, alias_index: dict[str, list[str]]) -> Optional[str]:
     """
     Find which space_name an alias string belongs to.
-    Case-insensitive. Returns space_name or None.
+    Case-insensitive; the canonical space name always resolves (marker use).
+    Returns space_name or None.
     """
     alias_lower = alias.lower()
     for space_name, aliases in alias_index.items():
-        if any(a.lower() == alias_lower for a in aliases):
+        if space_name.lower() == alias_lower or any(a.lower() == alias_lower for a in aliases):
             return space_name
     return None
 

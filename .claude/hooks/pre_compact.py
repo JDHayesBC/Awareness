@@ -48,6 +48,7 @@ PPS_PORT = int(os.environ.get("PPS_PORT", str(_ENTITY_PORTS.get(_detected_entity
 
 # PPS HTTP API
 PPS_CRYSTALS_URL = f"http://localhost:{PPS_PORT}/tools/get_crystals"
+PPS_PRESENCE_URL = f"http://localhost:{PPS_PORT}/tools/get_presence"
 
 # Entity token
 ENTITY_TOKEN = ""
@@ -94,6 +95,31 @@ def get_latest_crystal() -> str:
     except Exception as e:
         debug(f"Crystal fetch error: {e}")
         return ""
+
+
+def get_presence_snapshot() -> dict:
+    """Best-effort: where was the entity at compaction (current_space + ack_space).
+
+    The compacting summary carries current_space by name; the SessionStart hook
+    re-fetches the description. This puts the same record on disk (#378 pass 3).
+    """
+    try:
+        payload = json.dumps({"token": ENTITY_TOKEN}).encode("utf-8")
+        req = urllib.request.Request(
+            PPS_PRESENCE_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            return {
+                "current_space": data.get("current_space"),
+                "ack_space": data.get("ack_space"),
+            }
+    except Exception as e:
+        debug(f"Presence fetch error: {e}")
+        return {}
 
 
 def get_for_jeff_summary() -> str:
@@ -150,6 +176,7 @@ def capture_state(compact_type: str, session_id: str) -> dict:
     for_jeff_summary = get_for_jeff_summary()
     recent_commits = get_recent_git_log()
     open_issues = get_open_issues_hint()
+    presence = get_presence_snapshot()
 
     state = {
         "captured_at": timestamp,
@@ -158,6 +185,8 @@ def capture_state(compact_type: str, session_id: str) -> dict:
         "crystal_snippet": crystal_snippet[:300] if crystal_snippet else "",
         "recent_commits": recent_commits,
         "open_issues": open_issues,
+        "current_space": presence.get("current_space"),
+        "ack_space": presence.get("ack_space"),
         "for_jeff_snippet": for_jeff_summary[:800] if for_jeff_summary else "",
         "recovery_hint": "Read FOR_JEFF_TODAY.md and run ambient_recall('startup') to restore context"
     }

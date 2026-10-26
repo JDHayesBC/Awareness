@@ -15,7 +15,7 @@ import os
 import json
 import sqlite3
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Literal, Any
 
 from . import PatternLayer, LayerType, SearchResult, LayerHealth
@@ -126,6 +126,14 @@ class InventoryLayer(PatternLayer):
             except Exception:
                 pass  # Column already exists
 
+            # Migration: add house column to spaces table (idempotent). Nullable;
+            # owners curate rows themselves. NULL = unknown house (#378 pass 3).
+            try:
+                conn.execute("ALTER TABLE spaces ADD COLUMN house TEXT")
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
+
             # Migration: create entity_presence table (idempotent)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS entity_presence (
@@ -139,6 +147,14 @@ class InventoryLayer(PatternLayer):
             # Seed exactly one row (the constraint above ensures id=1 only)
             conn.execute("INSERT OR IGNORE INTO entity_presence (id) VALUES (1)")
             conn.commit()
+
+            # Migration: ack_space = the space whose FULL description was last
+            # delivered via enter_space (#378 pass 3). Set ONLY by enter_space.
+            try:
+                conn.execute("ALTER TABLE entity_presence ADD COLUMN ack_space TEXT")
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
 
     @property
     def layer_type(self) -> LayerType:
@@ -407,8 +423,8 @@ class InventoryLayer(PatternLayer):
         except Exception:
             return False
 
-    async def get_space(self, name: str) -> Optional[dict]:
-        """Get a space by name."""
+    async def get_space(self, name: str, bump: bool = True) -> Optional[dict]:
+        """Get a space by name. bump=False skips the visit-stat update."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
@@ -418,12 +434,13 @@ class InventoryLayer(PatternLayer):
             row = cursor.fetchone()
             if row:
                 # Update visit tracking
-                conn.execute("""
-                    UPDATE spaces
-                    SET last_visited = CURRENT_TIMESTAMP, visit_count = visit_count + 1
-                    WHERE name = ?
-                """, (name,))
-                conn.commit()
+                if bump:
+                    conn.execute("""
+                        UPDATE spaces
+                        SET last_visited = CURRENT_TIMESTAMP, visit_count = visit_count + 1
+                        WHERE name = ?
+                    """, (name,))
+                    conn.commit()
 
                 result = dict(row)
 
@@ -522,25 +539,47 @@ class InventoryLayer(PatternLayer):
         except Exception:
             return False
 
-    async def enter_space(self, name: str) -> Optional[str]:
+    async def enter_space(self, name: str, ack_only: bool = False) -> Optional[str]:
         """
         Enter a space - load its description for context injection.
 
-        Returns the space description for use in extraction context.
-        Also updates entity_presence so the manual path converges with scene-sense.
+        Returns the space description (canonical, from the store).
+
+        Presence semantics (#378 pass 3):
+          - Sets ack_space = name: the FULL description has now been delivered.
+          - Writes NO pending_arrival (completing the chain must not re-flag).
+          - Moving to a different room: current_space/since/source updated, visit
+            stats bumped, any stale pending cleared (latest move wins).
+          - Re-entering the room already current: no visit bump, since untouched,
+            pending untouched (an ack is not a move).
+          - ack_only=True: only ack_space changes (post-compaction re-fetch).
         """
-        space = await self.get_space(name)
+        current = (await self.get_presence()).get("current_space")
+        is_same = (current == name)
+        bump = not (ack_only or is_same)
+
+        space = await self.get_space(name, bump=bump)
         if not space:
             return None
 
-        # Update presence so manual enter_space and auto-detection share one field
-        await self.set_presence(
-            space_name=name,
-            source="enter_space",
-            description=space.get("description"),
-        )
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            if ack_only or is_same:
+                conn.execute(
+                    "UPDATE entity_presence SET ack_space = ? WHERE id = 1", (name,)
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE entity_presence
+                    SET current_space = ?, since = ?, source = 'enter_space',
+                        ack_space = ?, pending_arrival = NULL
+                    WHERE id = 1
+                    """,
+                    (name, now, name),
+                )
+            conn.commit()
 
-        # Return description from store (canonical)
         return space.get('description')
 
     async def get_spaces_with_aliases(self) -> list[dict]:
@@ -609,6 +648,19 @@ class InventoryLayer(PatternLayer):
             True on success.
         """
         try:
+            # Same-space guard: a detected/marker/high "move" into the room already
+            # current is not a move. Drop only a proposed pending (e.g. a marker
+            # written to dismiss a wrong [moved?]); leave since/source/ack_space/
+            # visit_count and any real pending untouched.
+            if source not in ("enter_space", "manual"):
+                with sqlite3.connect(self.db_path) as conn:
+                    row = conn.execute(
+                        "SELECT current_space FROM entity_presence WHERE id = 1"
+                    ).fetchone()
+                if row and row[0] == space_name:
+                    await self.clear_pending(only_proposed=True)
+                    return True
+
             now = datetime.now(timezone.utc).isoformat()
 
             pending: Optional[str] = None
@@ -671,6 +723,17 @@ class InventoryLayer(PatternLayer):
                 "source": "proposed",
             }
             with sqlite3.connect(self.db_path) as conn:
+                # Never overwrite an unresolved REAL pending: the chain gate
+                # would silently vanish when a LOW fires mid-chain.
+                row = conn.execute(
+                    "SELECT pending_arrival FROM entity_presence WHERE id = 1"
+                ).fetchone()
+                if row and row[0]:
+                    try:
+                        if not json.loads(row[0]).get("proposed"):
+                            return True  # proposal dropped, real pending kept
+                    except Exception:
+                        pass  # malformed pending: fall through and replace
                 conn.execute(
                     "UPDATE entity_presence SET pending_arrival = ? WHERE id = 1",
                     (json.dumps(pa),),
@@ -680,15 +743,59 @@ class InventoryLayer(PatternLayer):
         except Exception:
             return False
 
-    async def clear_pending(self) -> bool:
-        """Clear pending_arrival (called when the entity's own next message is stored)."""
+    async def clear_pending(self, only_proposed: bool = False) -> bool:
+        """
+        Clear pending_arrival.
+
+        only_proposed=True clears just a LOW `[moved?]` proposal; a real `[moved]`
+        pending survives until the enter_space + scene-rewrite chain completes.
+        """
         try:
             with sqlite3.connect(self.db_path) as conn:
+                if only_proposed:
+                    row = conn.execute(
+                        "SELECT pending_arrival FROM entity_presence WHERE id = 1"
+                    ).fetchone()
+                    raw = row[0] if row else None
+                    if not raw:
+                        return True
+                    try:
+                        proposed = bool(json.loads(raw).get("proposed"))
+                    except Exception:
+                        proposed = True  # malformed pending: safe to drop
+                    if not proposed:
+                        return True
                 conn.execute("UPDATE entity_presence SET pending_arrival = NULL WHERE id = 1")
                 conn.commit()
             return True
         except Exception:
             return False
+
+    async def chain_status(self, scene_path: Path) -> dict:
+        """
+        Judge the [moved] chain from what the server actually delivered:
+          ack_ok   -- ack_space == current_space (enter_space delivered the room)
+          scene_ok -- scene file mtime (UTC) >= presence.since (portrait rewritten)
+          complete -- both.
+        `since` is an ISO UTC string; naive values are treated as UTC.
+        """
+        presence = await self.get_presence()
+        current = presence.get("current_space")
+        ack_ok = bool(current) and presence.get("ack_space") == current
+        scene_ok = False
+        try:
+            since = presence.get("since")
+            if since:
+                since_dt = datetime.fromisoformat(str(since).replace("Z", "+00:00"))
+                if since_dt.tzinfo is None:
+                    since_dt = since_dt.replace(tzinfo=timezone.utc)
+                mtime = datetime.fromtimestamp(Path(scene_path).stat().st_mtime, tz=timezone.utc)
+                # 2s slack: WSL wall clock steps backwards ~1s; `since` is
+                # container UTC vs a drvfs mtime.
+                scene_ok = mtime >= since_dt - timedelta(seconds=2)
+        except Exception:
+            scene_ok = False
+        return {"ack_ok": ack_ok, "scene_ok": scene_ok, "complete": ack_ok and scene_ok}
 
     # === Mirror sync helpers ===
 

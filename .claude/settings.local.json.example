@@ -75,6 +75,18 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact|resume|startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${PROJECT_ROOT}/pps/venv/bin/python ${PROJECT_ROOT}/.claude/hooks/session_start_scene.py",
+            "timeout": 15000
+          }
+        ]
+      }
     ]
   }
 }

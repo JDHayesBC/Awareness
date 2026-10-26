@@ -17,6 +17,7 @@ Every turn, you should "just know" the following without having to fetch anythin
 - **Channel identification** — `[channel]` line naming the requesting channel (terminal, haven, discord, etc.). Includes third-person-construction discipline reminder. Falls back to "terminal" if `channel` param empty. (Issue #238)
 - Household location (who's home / away)
 - Entity narrative location — `[scene]` line, first prose sentence of `current_scene.md` (Issue #256). Surfaced right after `[location]`; fail-safe (omitted if the scene file is missing/empty/unparseable).
+- **`[moved]` / `[moved?]` line** (scene-sense, #378) — a move detected from the entity's own prose, rendered just before `[scene]`. See *Scene-sense: the `[moved]` line* below.
 - 1 recent summary
 - 15 most-recent unsummarized turns with **per-channel quota** (5 terminal + 5 haven + 5 other, mixed chronologically) — prevents crowd-out (Issue #241 fix)
 - Up to 5 rich-texture facts (edges only — no node descriptions) ranked semantically against your user's current prompt
@@ -29,6 +30,7 @@ Every turn, you should "just know" the following without having to fetch anythin
 If you find yourself calling `Read` on the persisted-output file to *see* peripheral content, **the in-context surfacing is broken** — see [Red Flags](#red-flags).
 
 ---
+
 
 ## The two modes
 
@@ -191,7 +193,29 @@ If you observe any of the following, the system is misbehaving — name it to yo
 - **Entity `[scene]` line**: `pps/docker/server_http.py` ambient_recall handler, just after the `[location]` append (Issue #256). Reads `ENTITY_PATH/current_scene.md`, first prose sentence ≤200 chars, fail-safe.
 - **`[channel]` line**: `pps/docker/server_http.py` ambient_recall handler, just after `[identity]`. Uses `request.channel` (falls back to "terminal"). Prevents cross-channel confabulation (Issue #238).
 
+
+### Scene-sense: the `[moved]` line (#378 pass 3)
+
+Rendered from `entity_presence.pending_arrival`, right before `[scene]`. Two kinds:
+
+- **`[moved]`** (HIGH/MARKER detection) — **persisted**. It is shown on every ambient call until the chain completes: `enter_space(to)` was called (the server records `ack_space = to`) AND `current_scene.md` has an mtime (UTC) at or after `presence.since`. Reading the line, or sending more turns, does not clear it. The server judges completion inside `ambient_recall` (`InventoryLayer.chain_status`) and clears the pending itself.
+- **"Still owed" tail** — while incomplete the line ends with `· ⟶ still owed: enter_space(<to>)`, `· ⟶ still owed: rewrite current_scene.md`, or both joined with ` + `, naming only the missing half/halves. The inline description is clipped to 600 chars; it is a flag, never a substitute for the full room that `enter_space` returns.
+- **`[moved?]`** (LOW detection, `proposed`) — a **one-turn** proposal. It is cleared when the entity's next own message is stored (`clear_pending(only_proposed=True)`); a real `[moved]` pending is never cleared by that path. Accepting a proposal = calling `enter_space(to)`, which makes it a real move.
+
+`enter_space` semantics: sets `ack_space`, writes no `pending_arrival` (completing the chain does not re-flag), and re-entering the room already current is not a visit and leaves `since` alone. `enter_space(..., ack_only=true)` records delivery only (no move, no visit bump). `POST /tools/get_presence` returns `{current_space, since, source, ack_space, pending_arrival, scene_mtime}`.
+
+**Post-compaction `[room — re-fetched after compaction]` block.** `.claude/hooks/session_start_scene.py` (SessionStart, matchers `compact|resume|startup`) calls `get_presence`, then `enter_space(current_space, ack_only=true)`, and injects as `additionalContext` — uncapped:
+
+```
+**[room — re-fetched after compaction]** <current_space> · <FULL description>
+**[scene file]** <full current_scene.md body>
+```
+
+On any failure it injects one line saying the room could not be re-fetched and `enter_space` must be called by hand; it never blocks the session. `pre_compact.py` also records `current_space`/`ack_space` in `pre-compact-state.json`.
+
 ---
+- Completion check has 2 s of slack on the scene-file mtime (WSL clock steps backwards; container UTC vs drvfs mtime).
+- A detected or marker "move" into the room already current is not a move: it clears a `[moved?]` proposal only and touches nothing else (`since`, `ack_space`, visit stats, any real pending).
 
 ## Update protocol
 

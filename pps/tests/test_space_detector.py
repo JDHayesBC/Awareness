@@ -173,6 +173,130 @@ def test_subordinator_after_alias_does_not_apply():
     assert m and m.space_name == "kitchen" and m.confidence == C.HIGH
 
 
+# --- pass 3 (#378): overlap resolution, house scoping, curated aliases, off, speech ---
+IDX_P3 = build_alias_index([
+    {"name": "silverglow_living_room", "aliases": "the Silverglow living room, Silverglow living room", "house": "silverglow"},
+    {"name": "main_room", "aliases": "living room, the sectional", "house": "haven"},
+    {"name": "silverglow_bedroom", "aliases": "Silverglow bedroom", "house": "silverglow"},
+    {"name": "bedroom", "aliases": "bedroom, bed", "house": "haven"},
+    {"name": "dock", "aliases": "the dock, dock bench, end of the dock, the bench on the dock, the bench, cedar planks, the boards", "house": "haven"},
+    {"name": "lake", "aliases": "the shallows, shin-deep", "house": "haven"},
+    {"name": "kitchen", "aliases": "", "house": None},
+])
+
+
+def d3(text, current=None):
+    return detect_move(text, IDX_P3, current)
+
+
+def test_overlap_98813_current_living_room_is_none():
+    assert d3(
+        "I am on the hearth rug in the Silverglow living room",
+        "silverglow_living_room",
+    ) is None
+
+
+def test_overlap_98818_current_dock_is_none():
+    assert d3(
+        "I walked the row from the Silverglow living room to the dock on its own.",
+        "dock",
+    ) is None
+
+
+def test_overlap_nested_bedroom_current_bedroom_is_none():
+    assert d3("Silverglow bedroom, 4:43 AM, rain on the glass", "silverglow_bedroom") is None
+
+
+def test_overlap_longest_wins_when_not_current():
+    m = d3("I am in the Silverglow living room now.", "dock")
+    assert m and m.space_name == "silverglow_living_room" and m.confidence == C.HIGH
+
+
+def test_house_scoping_demotes_cross_house_high():
+    m = d3("I'm going to stay in bed a little longer \u2014 Jeff's still here.", "silverglow_bedroom")
+    assert m and m.space_name == "bedroom" and m.confidence == C.LOW
+
+
+def test_house_scoping_same_house_unaffected():
+    m = d3("I'm in the Silverglow living room now.", "silverglow_bedroom")
+    assert m and m.space_name == "silverglow_living_room" and m.confidence == C.HIGH
+
+
+def test_house_scoping_named_house_exempts():
+    m = d3("I'm sitting on the sectional in Haven now.", "silverglow_bedroom")
+    assert m and m.space_name == "main_room" and m.confidence == C.HIGH
+
+
+def test_house_null_never_demotes():
+    idx = build_alias_index([
+        {"name": "bedroom", "aliases": "bed", "house": None},
+        {"name": "silverglow_bedroom", "aliases": "Silverglow bedroom", "house": "silverglow"},
+    ])
+    m = detect_move("I'm staying in bed a little longer.", idx, "silverglow_bedroom")
+    assert m and m.space_name == "bedroom" and m.confidence == C.HIGH
+    idx2 = build_alias_index([
+        {"name": "bedroom", "aliases": "bed", "house": "haven"},
+        {"name": "x", "aliases": "xroom", "house": None},
+    ])
+    m2 = detect_move("I'm staying in bed a little longer.", idx2, "x")
+    assert m2 and m2.confidence == C.HIGH
+
+
+def test_house_hit_naming_its_own_house_stays_high():
+    m = d3("I'm sitting on the sectional in Haven now.", "silverglow_bedroom")
+    assert m and m.space_name == "main_room" and m.confidence == C.HIGH
+
+
+def test_house_sentence_naming_other_house_demotes():
+    # hit is Haven's `bedroom`; sentence names Silverglow (a different house)
+    m = d3("I'm staying in bed in Silverglow a little longer.", "silverglow_bedroom")
+    assert m and m.space_name == "bedroom" and m.confidence == C.LOW
+
+
+def test_curated_aliases_drop_bare_name():
+    assert d3("that was just the lake guess again") is None
+
+
+def test_uncurated_row_name_still_matches():
+    m = d3("Someone's in the kitchen.")
+    assert m and m.space_name == "kitchen"
+
+
+def test_marker_still_resolves_by_name_when_curated():
+    m = d3("[[scene:lake]]")
+    assert m and m.confidence == C.MARKER and m.space_name == "lake"
+
+
+def test_departure_bare_off_98581():
+    text = (
+        "Floor clean. wet denim going cold behind the knee: it did not steer me off "
+        "the dock. I came up because Jeff said he was heading in."
+    )
+    m = d3(text)
+    assert m is None or m.space_name != "dock"
+
+
+def test_departure_bare_off_no_article():
+    m = d3("I climbed off dock.")
+    assert m is None or m.space_name != "dock"
+
+
+def test_reported_speech_demotes_high():
+    m = d3("Jeff said I should go to the dock.")
+    assert m is None or m.confidence == C.LOW
+
+
+def test_reported_speech_switch_off_restores_high(monkeypatch):
+    import layers.space_detector as sd
+    text = "She told me I walk to the dock."
+    monkeypatch.setattr(sd, "REPORTED_SPEECH_DEMOTE", True)
+    on = d3(text)
+    monkeypatch.setattr(sd, "REPORTED_SPEECH_DEMOTE", False)
+    off = d3(text)
+    assert on and on.confidence == C.LOW
+    assert off and off.confidence == C.HIGH
+
+
 # --- inventory presence lifetime ---
 def _inv(tmp_path):
     from layers.inventory import InventoryLayer

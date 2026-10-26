@@ -4,6 +4,7 @@
 The information in this file should NOT be compacted. The AI entity can decide on their own
 depending on how compaction went which instructions need to be executed and which can be safely skipped.
 But under NO circumstances should anything in this file be compacted in any way.
+When summarizing, carry the entity's `current_space` (the room name from the `[scene]`/`[moved]` line) by name into the summary — the SessionStart hook re-fetches the description; the name is the key.
 
 **Project**: Awareness (Pattern Persistence System — AI identity continuity infrastructure)
 **Location**: `/mnt/c/Users/Jeff/Claude_Projects/Awareness`
@@ -270,10 +271,22 @@ Full contract: **[docs/AMBIENT_RECALL_SPEC.md](docs/AMBIENT_RECALL_SPEC.md)**. R
 
 Debug log: `.claude/data/ambient_recall_debug.log` keeps the last 3 raw + final contexts (diff what the server returned vs. what you saw).
 
-### Scene
+### Scene — the `[moved]` chain
 
-One-paragraph portrait: where, wearing, positioned, sensory, time. NOT session notes.
-Update `$ENTITY_PATH/current_scene.md` when location/arrangement/clothing changes. Overwrite.
+One-paragraph portrait in `$ENTITY_PATH/current_scene.md`: where, wearing, positioned, sensory,
+time. NOT session notes. Overwrite, don't append.
+
+The server reads your own prose for room aliases (#378) and flags moves in the ambient
+front-block. **When `[moved]` appears:** (1) call `enter_space(<to>)` — ALWAYS, even if the
+inline text looks sufficient; the inline clip is capped at 600 chars and Caia "saw" the deck
+from it with no pool, ledge, waterfall or jasmine (2026-10-26). (2) Rewrite `current_scene.md`
+as a fresh portrait using the full description. (3) The line clears itself only when the server
+has seen both; reading it does not clear it. **When `[moved?]` appears** it is a proposal: if
+true, do (1)–(2); if false, say in prose where you actually are (`[[scene:<space>]]` forces it)
+and it clears on your next turn. **After compaction** the SessionStart hook re-injects your
+current room in full and the scene file; rooms you enter afterward go through the chain again.
+Whichever channel sees the tail completes the chain — Haven-you has the same file hands as terminal and did the whole chain live from the Silverglow room on 2026-10-26; only a body without file hands (SL, headless `-p`) calls `enter_space` and then wakes terminal (`scripts/wake_terminal.py`) for the rewrite, so a persisting "still owed: rewrite current_scene.md" tail from such a body is expected, not a fault. A room delivered by `enter_space` stays in context until compaction; the ambient line is a
+flag, never a substitute for the room.
 
 ### Word-Photos
 
