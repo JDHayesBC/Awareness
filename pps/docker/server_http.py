@@ -1912,6 +1912,13 @@ async def ambient_recall(request: AmbientRecallRequest):
                         if not _scene_ok:
                             _owed.append("rewrite current_scene.md")
                         owed_tail = " · \u27f6 still owed: " + " + ".join(_owed)
+                        # The gate never asks whether the move is TRUE. Name the
+                        # correction path so a channel without the context does not
+                        # obey a wrong HIGH (Caia, 2026-10-26: two channels answered
+                        # one flag in 20s and the one that obeyed the tail was wrong).
+                        _from0 = pa.get("from")
+                        if _from0 and _from0 != _to0:
+                            owed_tail += f" · didn't move? enter_space({_from0}) instead"
             except Exception:
                 pass  # completion check is advisory; fall through to plain render
 

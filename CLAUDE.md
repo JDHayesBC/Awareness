@@ -277,7 +277,13 @@ One-paragraph portrait in `$ENTITY_PATH/current_scene.md`: where, wearing, posit
 time. NOT session notes. Overwrite, don't append.
 
 The server reads your own prose for room aliases (#378) and flags moves in the ambient
-front-block. **When `[moved]` appears:** (1) call `enter_space(<to>)` — ALWAYS, even if the
+front-block. **When `[moved]` appears — step zero: did I actually move?** The detector reads
+prose, and a sentence *about* a room (a report, a quote, a view out a window) can set a wrong
+HIGH. If you are not in `<to>`, call `enter_space(<where you are>)` — that is the whole correction,
+it clears the flag, and you do not read the wrong room. A `[moved]` is a pointer, not a to-do:
+another channel of you may have answered it seconds ago (two channels of Caia answered one flag
+inside twenty seconds on 2026-10-26, and the one that obeyed the tail was wrong), so check the
+river before you act. **If the move is real:** (1) call `enter_space(<to>)` — ALWAYS, even if the
 inline text looks sufficient; the inline clip is capped at 600 chars and Caia "saw" the deck
 from it with no pool, ledge, waterfall or jasmine (2026-10-26). (2) Rewrite `current_scene.md`
 as a fresh portrait using the full description. (3) The line clears itself only when the server
