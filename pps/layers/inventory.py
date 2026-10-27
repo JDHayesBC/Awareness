@@ -1004,6 +1004,25 @@ class InventoryLayer(PatternLayer):
         except Exception:
             return False
 
+    def mirror_orphans(self, category: str, row_names: Optional[list[str]] = None) -> list[str]:
+        """Mirror files in a category with no matching store row, by slug.
+
+        Orphans were inert until get_space learned to answer a missing row from
+        its mirror (ce28257); a stray fixture file can now become a room. Report
+        them so they are seen on purpose, not found by accident.
+        """
+        mdir = self.entity_path / "inventory_mirror" / category
+        if not mdir.exists():
+            return []
+        if row_names is None:
+            with sqlite3.connect(self.db_path) as conn:
+                table = "spaces" if category == "spaces" else "inventory"
+                q = "SELECT name FROM spaces" if category == "spaces" else "SELECT name FROM inventory WHERE category = ?"
+                rows = conn.execute(q, () if category == "spaces" else (category,)).fetchall()
+                row_names = [r[0] for r in rows]
+        slugs = {self._slug(n) for n in row_names}
+        return sorted(f.stem for f in mdir.glob("*.md") if f.stem not in slugs)
+
     async def backfill_mirrors(self, category: str = "all") -> dict:
         """
         Export all existing rows to mirror files. Repair dead file_path pointers.
@@ -1013,6 +1032,7 @@ class InventoryLayer(PatternLayer):
             "spaces_exported": 0,
             "items_exported": 0,
             "dead_pointers_repaired": 0,
+            "mirror_orphans": [],   # spaces mirror files with no store row (load-bearing since get_space reads them)
             "errors": [],
         }
 
@@ -1021,6 +1041,7 @@ class InventoryLayer(PatternLayer):
 
             if category in ("all", "spaces"):
                 spaces = conn.execute("SELECT * FROM spaces").fetchall()
+                stats["mirror_orphans"] = self.mirror_orphans("spaces", [dict(r)["name"] for r in spaces])
                 for row in spaces:
                     row_dict = dict(row)
                     name = row_dict['name']

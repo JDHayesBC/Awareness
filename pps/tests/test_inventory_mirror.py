@@ -86,3 +86,15 @@ def test_get_space_missing_row_reads_mirror_without_creating_row(inv):
     assert got["aliases"] == "loft" and got["house"] == "cedar"
     assert _row(inv, "attic") is None
     assert run(inv.get_space("nonexistent")) is None
+
+
+@pytest.mark.asyncio
+async def test_backfill_reports_mirror_orphans(tmp_path):
+    """A spaces mirror file with no store row is reported, not silently load-bearing."""
+    layer = InventoryLayer(db_path=tmp_path / "inv.db", entity_path=tmp_path)
+    await layer.add_space("hearth", description="real room")
+    stray = tmp_path / "inventory_mirror" / "spaces" / "attic.md"
+    stray.write_text("---\nname: attic\ncategory: spaces\n---\n\nfixture\n")
+    stats = await layer.backfill_mirrors("spaces")
+    assert stats["mirror_orphans"] == ["attic"]
+    assert layer.mirror_orphans("spaces") == ["attic"]

@@ -300,7 +300,7 @@ def test_reported_speech_switch_off_restores_high(monkeypatch):
 # --- inventory presence lifetime ---
 def _inv(tmp_path):
     from layers.inventory import InventoryLayer
-    inv = InventoryLayer(db_path=tmp_path / "inv.db")
+    inv = InventoryLayer(db_path=tmp_path / "inv.db", entity_path=tmp_path)
     return inv
 
 
