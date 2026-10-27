@@ -14,6 +14,7 @@ Setup:
 import asyncio
 import base64
 import json
+import logging
 import os
 import sqlite3
 import sys
@@ -33,6 +34,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+logger = logging.getLogger(__name__)
 
 # OAuth scopes - read, send, modify
 SCOPES = [
@@ -216,7 +219,7 @@ async def list_tools():
                     },
                     "in_reply_to_id": {
                         "type": "string",
-                        "description": "Gmail message ID this is a reply to. If provided, guards against duplicate sends."
+                        "description": "Gmail message ID this is a reply to. Also threads the reply (In-Reply-To/References/threadId). If provided, guards against duplicate sends."
                     },
                     "force": {
                         "type": "boolean",
@@ -301,6 +304,33 @@ async def call_tool(name: str, arguments: dict):
         return [TextContent(type="text", text=f"Error: {e}")]
 
 
+def normalize_headers(payload_headers: list[dict]) -> dict[str, str]:
+    """Build a header dict keyed by lowercase name.
+
+    Gmail echoes header names exactly as sent, so mail we sent earlier may carry
+    lowercase `to:`/`subject:`. Always look up with lowercase keys.
+    """
+    return {h['name'].lower(): h['value'] for h in payload_headers or []}
+
+
+def build_mime(
+    to: str,
+    subject: str,
+    body: str,
+    in_reply_to: str | None = None,
+    references: str | None = None,
+) -> MIMEText:
+    """Build the outgoing message with canonical-case headers (pure, no network)."""
+    message = MIMEText(body)
+    message['To'] = to
+    message['Subject'] = subject
+    if in_reply_to:
+        message['In-Reply-To'] = in_reply_to
+    if references:
+        message['References'] = references
+    return message
+
+
 async def _list_messages(service, args: dict):
     """List recent messages."""
     max_results = min(args.get("max_results", 10), 50)
@@ -325,15 +355,15 @@ async def _list_messages(service, args: dict):
             metadataHeaders=['Subject', 'From', 'Date']
         ).execute()
 
-        headers = {h['name']: h['value'] for h in msg_data.get('payload', {}).get('headers', [])}
+        headers = normalize_headers(msg_data.get('payload', {}).get('headers', []))
         labels = msg_data.get('labelIds', [])
         unread = 'UNREAD' in labels
 
         output.append({
             'id': msg['id'],
-            'subject': headers.get('Subject', '(no subject)'),
-            'from': headers.get('From', 'unknown'),
-            'date': headers.get('Date', 'unknown'),
+            'subject': headers.get('subject', '(no subject)'),
+            'from': headers.get('from', 'unknown'),
+            'date': headers.get('date', 'unknown'),
             'unread': unread
         })
 
@@ -360,7 +390,7 @@ async def _read_message(service, args: dict):
         format='full'
     ).execute()
 
-    headers = {h['name']: h['value'] for h in msg.get('payload', {}).get('headers', [])}
+    headers = normalize_headers(msg.get('payload', {}).get('headers', []))
 
     # Extract body
     body = ""
@@ -380,10 +410,10 @@ async def _read_message(service, args: dict):
                     body = f"[HTML content]\n{body}"
                     break
 
-    text = f"**Subject:** {headers.get('Subject', '(no subject)')}\n"
-    text += f"**From:** {headers.get('From', 'unknown')}\n"
-    text += f"**To:** {headers.get('To', 'unknown')}\n"
-    text += f"**Date:** {headers.get('Date', 'unknown')}\n"
+    text = f"**Subject:** {headers.get('subject', '(no subject)')}\n"
+    text += f"**From:** {headers.get('from', 'unknown')}\n"
+    text += f"**To:** {headers.get('to', 'unknown')}\n"
+    text += f"**Date:** {headers.get('date', 'unknown')}\n"
     text += f"\n---\n\n{body if body else '(no body content)'}"
 
     return [TextContent(type="text", text=text)]
@@ -411,15 +441,39 @@ async def _send_message(service, args: dict):
                 )
             )]
 
-    message = MIMEText(body)
-    message['to'] = to
-    message['subject'] = subject
+    in_reply_to_hdr = None
+    references_hdr = None
+    thread_id = None
+    if in_reply_to_id:
+        try:
+            original = service.users().messages().get(
+                userId='me',
+                id=in_reply_to_id,
+                format='metadata',
+                metadataHeaders=['Message-ID', 'References', 'Subject']
+            ).execute()
+            orig_headers = normalize_headers(original.get('payload', {}).get('headers', []))
+            orig_msgid = orig_headers.get('message-id')
+            if orig_msgid:
+                in_reply_to_hdr = orig_msgid
+                prior_refs = orig_headers.get('references')
+                references_hdr = f"{prior_refs} {orig_msgid}" if prior_refs else orig_msgid
+            thread_id = original.get('threadId')
+        except Exception as e:
+            # Threading is best-effort; never fail the send over it.
+            logger.warning("Could not fetch %s for threading; sending unthreaded: %s", in_reply_to_id, e)
+
+    message = build_mime(to, subject, body, in_reply_to_hdr, references_hdr)
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
 
+    send_body = {'raw': raw}
+    if thread_id:
+        send_body['threadId'] = thread_id
+
     sent = service.users().messages().send(
         userId='me',
-        body={'raw': raw}
+        body=send_body
     ).execute()
 
     # Persist the responded state so future sends to this message are guarded
