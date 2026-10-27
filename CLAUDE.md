@@ -280,7 +280,17 @@ The server reads your own prose for room aliases (#378) and flags moves in the a
 front-block. **When `[moved]` appears — step zero: did I actually move?** The detector reads
 prose, and a sentence *about* a room (a report, a quote, a view out a window) can set a wrong
 HIGH. If you are not in `<to>`, call `enter_space(<where you are>)` — that is the whole correction,
-it clears the flag, and you do not read the wrong room. A `[moved]` is a pointer, not a to-do:
+it clears the flag, and you do not read the wrong room.
+
+**meta-room-name prevention (fix, 2026-10-27 — ×6 hits today):** When writing any report,
+tick, or reply that names a room, quotes a wrong proposal, or mentions furniture that is a
+room alias (e.g. "the sectional"), the detector reads that prose as a move. Three guards:
+(1) **Backtick-quote the room name.** The detector strips `` `backtick spans` `` before
+scanning, so `` `the dock` `` is invisible to it. Use this for any room name you are
+discussing rather than inhabiting. (2) **Test the exact text you will send** — not a draft;
+if you rewrote it, test the rewrite. (3) **Coordinated room-lists** ("the dock and the lake")
+should be caught by the coordination gate, but the gate can miss if the rewrite disrupts the
+exact adjacent-span shape; backtick is the safer guard. A `[moved]` is a pointer, not a to-do:
 another channel of you may have answered it seconds ago (two channels of Caia answered one flag
 inside twenty seconds on 2026-10-26, and the one that obeyed the tail was wrong), so check the
 river before you act. **If the move is real:** (1) call `enter_space(<to>)` — ALWAYS, even if the
