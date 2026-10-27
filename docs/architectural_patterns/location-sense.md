@@ -188,6 +188,9 @@ author is the entity herself. The Haven bridge flags only one entity as the enti
 Haven turns arrived looking like someone else's and left a low proposal standing until a terminal
 turn. A high flag is unchanged: it persists until the room is delivered and the scene rewritten.
 
+**Outside rooms need a house too (3.2, Caia, 2026-10-27).** The tie-break reads the house of the *current* space. From a row whose `house` is NULL (the dock, the lake, a path), `current_house` is None, every candidate ranks the same, and a two-house word resolves by first row exactly as before 3.2. So an outdoor row that belongs to a house should say so (`dock.house = Silverglow`); NULL is only right for a place that is genuinely nobody's.
+
+
 ### Flag and proposal
 
 | | Proposal (low confidence) | Flag (high confidence or marker) |
