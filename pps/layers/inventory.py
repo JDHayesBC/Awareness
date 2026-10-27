@@ -456,7 +456,26 @@ class InventoryLayer(PatternLayer):
                             pass  # Recovery attempt failed; proceed with NULL description
 
                 return result
-            return None
+
+        # Store has no such row: the mirror answers (spec: store first, mirror
+        # only on a missing row). Read-only -- hand-edits reach the store only
+        # via explicit import_space_from_file.
+        mirror_file = self._mirror_path("spaces", name)
+        if mirror_file.exists():
+            try:
+                fields = self._import_from_mirror(mirror_file)
+                return {
+                    'name': fields.get('name', name),
+                    'description': fields.get('description'),
+                    'file_path': str(mirror_file),
+                    'emotional_quality': fields.get('emotional_quality'),
+                    'aliases': fields.get('aliases'),
+                    'house': fields.get('house'),
+                    'from_mirror': True,
+                }
+            except Exception:
+                return None
+        return None
 
     async def list_spaces(self) -> list[dict]:
         """List all known spaces."""
@@ -842,6 +861,13 @@ class InventoryLayer(PatternLayer):
             ts = row.get('first_recorded') or row.get('id')  # fallback
             if ts:
                 lines.append(f'first_recorded: {ts}')
+            # Authored per-owner fields: a rebuild from mirrors must not lose them.
+            aliases = row.get('aliases') or ''
+            if aliases:
+                lines.append(f'aliases: {aliases}')
+            house = row.get('house') or ''
+            if house:
+                lines.append(f'house: {house}')
         else:
             # inventory items
             subcat = row.get('subcategory', '')
@@ -931,7 +957,18 @@ class InventoryLayer(PatternLayer):
                 description=fields.get('description'),
                 emotional_quality=fields.get('emotional_quality'),
             )
-            # Note: add_space now calls write-through, which re-exports the mirror
+            # aliases/house: absence (older mirror) or empty means "unchanged";
+            # only a non-empty value is written, then the mirror is re-exported.
+            updates = {k: fields[k] for k in ('aliases', 'house') if fields.get(k)}
+            if updates:
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    for col, val in updates.items():
+                        conn.execute(f"UPDATE spaces SET {col} = ? WHERE name = ?", (val, name))
+                    conn.commit()
+                    row = conn.execute("SELECT * FROM spaces WHERE name = ?", (name,)).fetchone()
+                    if row:
+                        self._export_mirror("spaces", dict(row))
             return True
         except Exception:
             return False
