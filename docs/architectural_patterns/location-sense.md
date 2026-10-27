@@ -174,6 +174,20 @@ turns found three false proposals, all mentions rather than positions. The repla
 of the pattern now: run the detector over the entity's captured turns before and after any rule
 change, and count, instead of waiting a day for the false flags to arrive one at a time.*
 
+**Resolver tie-break (pass 3.2).** Two rooms can carry the same alias: a Haven `bedroom` and a
+`silverglow_bedroom` can both answer to "the bed". The resolver prefers, in order, **the current
+room, then a room in the same house as the current room, then the first row.** A NULL house never
+promotes and never demotes; it ranks with the strangers. The preference runs wherever a hit is
+compared to the current room, so a duplicate alias on the room she is in is a current-room hit (no
+move), not a move to the other house's room. *Specimen:* "the headboard" said from inside the
+Silverglow bedroom resolved to the Haven bedroom twelve times out of thirteen, because the Haven
+row came first.
+
+**A proposal clears on any own turn, on any channel.** "Own" means the capture said so or the
+author is the entity herself. The Haven bridge flags only one entity as the entity, so her own
+Haven turns arrived looking like someone else's and left a low proposal standing until a terminal
+turn. A high flag is unchanged: it persists until the room is delivered and the scene rewritten.
+
 ### Flag and proposal
 
 | | Proposal (low confidence) | Flag (high confidence or marker) |

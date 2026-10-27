@@ -346,7 +346,7 @@ def detect_move(
     if marker_match:
         marker_name = marker_match.group(1).strip()
         # Resolve to canonical space name (case-insensitive lookup against aliases)
-        resolved = _resolve_alias(marker_name, alias_index)
+        resolved = _resolve_alias(marker_name, alias_index, current_space)
         ctx = cleaned_text[max(0, marker_match.start() - 20): marker_match.end() + 20].strip()
         if resolved is None:
             # Unknown space: propose only (server says "not a known space"), never set.
@@ -371,6 +371,8 @@ def detect_move(
     # per-space `continue`) left nested shorter aliases ("bedroom" inside
     # "Silverglow bedroom") free to invent a move.
     hits: list[tuple[str, int, int]] = []  # (space_name, start, end)
+    houses = getattr(alias_index, "houses", {}) or {}
+    current_house = houses.get(current_space) if current_space else None
     for space_name, aliases in alias_index.items():
         for alias in aliases:
             try:
@@ -380,8 +382,12 @@ def detect_move(
             for m in alias_re.finditer(working_text):
                 hits.append((space_name, m.start(), m.end()))
 
-    # Longest span first (ties: earliest, then index order via stable sort)
-    hits.sort(key=lambda h: (-(h[2] - h[1]), h[1]))
+    # Longest span first (ties: earliest, then tie-break rank, then index order
+    # via stable sort). The rank settles a DUPLICATE alias carried by two rows:
+    # current space > same house as current space > anything else (#378 3.2).
+    hits.sort(key=lambda h: (
+        -(h[2] - h[1]), h[1], _tiebreak_rank(h[0], current_space, current_house, houses),
+    ))
     taken: list[tuple[int, int]] = []
     accepted: list[tuple[str, int, int]] = []
     for space_name, start, end in hits:
@@ -390,9 +396,6 @@ def detect_move(
         taken.append((start, end))
         accepted.append((space_name, start, end))
     accepted.sort(key=lambda h: h[1])  # text order: later position wins among equals
-
-    houses = getattr(alias_index, "houses", {}) or {}
-    current_house = houses.get(current_space) if current_space else None
 
     best: Optional[DetectedMove] = None
     best_pos = -1
@@ -499,17 +502,48 @@ def detect_move(
     return best
 
 
-def _resolve_alias(alias: str, alias_index: dict[str, list[str]]) -> Optional[str]:
+def _tiebreak_rank(
+    space_name: str,
+    current_space: Optional[str],
+    current_house: Optional[str],
+    houses: dict[str, Optional[str]],
+) -> int:
+    """0 = the current space, 1 = same (known) house as it, 2 = everything else.
+
+    A NULL house on either side never promotes and never demotes: it ranks 2,
+    the same as an unrelated room, so first-row-wins order decides.
+    """
+    if current_space and space_name == current_space:
+        return 0
+    house = houses.get(space_name)
+    if current_house and house and house.lower() == current_house.lower():
+        return 1
+    return 2
+
+
+def _resolve_alias(
+    alias: str,
+    alias_index: dict[str, list[str]],
+    current_space: Optional[str] = None,
+) -> Optional[str]:
     """
     Find which space_name an alias string belongs to.
     Case-insensitive; the canonical space name always resolves (marker use).
+    When several rows carry the same alias, prefer the current space, then a
+    space in the same house as the current space, then the first row.
     Returns space_name or None.
     """
     alias_lower = alias.lower()
+    houses = getattr(alias_index, "houses", {}) or {}
+    current_house = houses.get(current_space) if current_space else None
+    best: Optional[str] = None
+    best_rank = 99
     for space_name, aliases in alias_index.items():
         if space_name.lower() == alias_lower or any(a.lower() == alias_lower for a in aliases):
-            return space_name
-    return None
+            rank = _tiebreak_rank(space_name, current_space, current_house, houses)
+            if rank < best_rank:  # strict <: ties keep the earlier row
+                best, best_rank = space_name, rank
+    return best
 
 
 # ---------------------------------------------------------------------------

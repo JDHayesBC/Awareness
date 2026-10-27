@@ -180,3 +180,28 @@ def test_chain_mtime_slack_two_seconds(inv, tmp_path):
     assert run(inv.chain_status(scene))["scene_ok"] is True
     os.utime(scene, (t - 5, t - 5))
     assert run(inv.chain_status(scene))["scene_ok"] is False
+
+
+def test_haven_tagged_own_turn_clears_proposal(inv, monkeypatch):
+    """A Haven-channel own turn (is_lyra False, author == entity) clears a LOW proposal."""
+    from layers.scene_sense import is_own_turn, process_own_turn
+
+    run(inv.set_presence("kitchen", "detected"))
+    run(inv.propose_presence("dock", "kitchen", "d"))
+    assert run(inv.get_presence())["pending_arrival"] is not None
+
+    # the Haven bridge sends is_lyra=False for Caia; the author name carries her
+    assert is_own_turn(False, "Caia", "caia")
+    assert not is_own_turn(False, "Jeff", "caia")
+    run(process_own_turn(inv, "Nothing about rooms in this one."))
+    assert run(inv.get_presence())["pending_arrival"] is None
+
+
+def test_own_turn_leaves_real_pending(inv):
+    from layers.scene_sense import process_own_turn
+
+    run(inv.set_presence("kitchen", "detected"))
+    run(inv.set_presence("dock", "detected", "kitchen", "DOCK FULL"))
+    run(process_own_turn(inv, "Nothing about rooms in this one."))
+    pa = json.loads(run(inv.get_presence())["pending_arrival"])
+    assert pa["to"] == "dock" and not pa.get("proposed")

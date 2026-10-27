@@ -2412,35 +2412,13 @@ async def store_message(request: StoreMessageRequest):
     if not success:
         raise HTTPException(status_code=500, detail="Failed to store message")
 
-    # Scene-sense: detect location from entity's own message (never breaks store on failure)
-    if request.is_lyra:
+    # Scene-sense: detect location from entity's own message (never breaks store on failure).
+    # "Own" = is_lyra OR author_name == this entity: the Haven bridge only flags
+    # is_lyra for lyra, so Caia's Haven turns would otherwise never clear a proposal.
+    from layers.scene_sense import is_own_turn, process_own_turn
+    if is_own_turn(request.is_lyra, request.author_name, ENTITY_NAME):
         try:
-            from layers.space_detector import build_alias_index, detect_move, MoveConfidence
-            # Entity's own message supersedes an earlier PROPOSAL only; a real
-            # [moved] pending survives until the enter_space + scene-rewrite chain
-            # completes (judged in ambient_recall). Clear BEFORE detecting so a
-            # move in this same message can set a fresh one.
-            await inventory.clear_pending(only_proposed=True)
-            presence = await inventory.get_presence()
-            current_space = presence.get("current_space")
-            spaces = await inventory.get_spaces_with_aliases()
-            alias_index = build_alias_index(spaces)
-            move = detect_move(request.content, alias_index, current_space)
-            if move and move.confidence in (MoveConfidence.MARKER, MoveConfidence.HIGH):
-                space_row = next((s for s in spaces if s["name"] == move.space_name), None)
-                desc = (space_row or {}).get("description") or ""
-                await inventory.set_presence(
-                    move.space_name, move.confidence.value, current_space, desc
-                )
-            elif move and move.confidence == MoveConfidence.LOW:
-                space_row = next((s for s in spaces if s["name"] == move.space_name), None)
-                desc = (space_row or {}).get("description") or ""
-                if space_row is None:
-                    # Unknown space (e.g. unresolved [[scene:...]] marker): propose only
-                    desc = "not a known space"
-                await inventory.propose_presence(
-                    move.space_name, current_space, desc
-                )
+            await process_own_turn(inventory, request.content)
         except Exception:
             pass  # scene-sense is advisory; never break store_message
 

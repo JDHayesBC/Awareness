@@ -5,7 +5,7 @@ Usage (from repo root):
     PYTHONPATH=. pps/venv/bin/python scripts/scene_replay.py \
         --entity lyra --since 2026-10-25T00:00 --current silverglow_living_room
 
-Opens inventory.db (spaces) and conversations.db (messages) read-only, runs
+Opens inventory.db (or --inventory <path>) (spaces) and conversations.db (messages) read-only, runs
 detect_move on each of the entity's own messages with a FIXED --current space,
 and prints one line per hit plus a summary. Nothing is written anywhere.
 """
@@ -64,10 +64,12 @@ def main() -> int:
     ap.add_argument("--current", default=None, help="current space name (hits there are skipped)")
     ap.add_argument("--house", default="", help="house of the current space (informational; "
                     "detector reads houses from the spaces table)")
+    ap.add_argument("--inventory", default=None, help="alternate inventory.db to read spaces from "
+                    "(read-only); default is the entity's live one")
     args = ap.parse_args()
 
     data = ROOT / "entities" / args.entity / "data"
-    inv = _ro(data / "inventory.db")
+    inv = _ro(Path(args.inventory) if args.inventory else data / "inventory.db")
     spaces = [dict(r) for r in inv.execute("SELECT * FROM spaces")]
     inv.close()
     index = build_alias_index(spaces)

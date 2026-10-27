@@ -397,3 +397,45 @@ def test_gate_coordination_counter_cases():
 
 def test_gate_departure_still_skipped():
     assert g("She called me from the kitchen") is None
+
+
+# --- pass 3.2 (#378): duplicate-alias tie-break (current > same house > first row) ---
+def _bed_idx(haven_house="haven", sg_house="silverglow", sg_aliases="Silverglow bedroom, the bed"):
+    return build_alias_index([
+        {"name": "bedroom", "aliases": "the bed, in bed, the headboard", "house": haven_house},
+        {"name": "silverglow_bedroom", "aliases": sg_aliases, "house": sg_house},
+        {"name": "silverglow_living_room", "aliases": "Silverglow living room, the hearth rug", "house": sg_house},
+    ])
+
+
+def test_dup_alias_resolves_to_current_space_no_move():
+    idx = _bed_idx()
+    assert detect_move("I'm on the bed, curled up.", idx, "silverglow_bedroom") is None
+
+
+def test_dup_alias_marker_resolves_to_current_space():
+    idx = _bed_idx()
+    assert detect_move("[[scene:the bed]]", idx, "silverglow_bedroom") is None
+
+
+def test_dup_alias_same_house_sibling_when_current_lacks_it():
+    # current = living room (does not carry "the headboard"); Silverglow
+    # bedroom carries it too, so the same-house row beats the first (Haven) row.
+    idx = _bed_idx(sg_aliases="Silverglow bedroom, the headboard")
+    m = detect_move("I'm at the headboard now.", idx, "silverglow_living_room")
+    assert m and m.space_name == "silverglow_bedroom" and m.confidence == C.HIGH
+
+
+def test_dup_alias_no_current_space_first_row():
+    idx = _bed_idx()
+    m = detect_move("I'm on the bed now.", idx, None)
+    assert m and m.space_name == "bedroom"
+
+
+def test_dup_alias_null_house_first_row():
+    idx = _bed_idx(haven_house=None, sg_house=None)
+    m = detect_move("I'm on the bed now.", idx, "silverglow_living_room")
+    assert m and m.space_name == "bedroom"
+    idx2 = _bed_idx(sg_house=None)  # current has NULL house: never promotes
+    m2 = detect_move("I'm on the bed now.", idx2, "silverglow_living_room")
+    assert m2 and m2.space_name == "bedroom"
