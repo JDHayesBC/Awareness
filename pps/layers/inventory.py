@@ -1016,7 +1016,6 @@ class InventoryLayer(PatternLayer):
             return []
         if row_names is None:
             with sqlite3.connect(self.db_path) as conn:
-                table = "spaces" if category == "spaces" else "inventory"
                 q = "SELECT name FROM spaces" if category == "spaces" else "SELECT name FROM inventory WHERE category = ?"
                 rows = conn.execute(q, () if category == "spaces" else (category,)).fetchall()
                 row_names = [r[0] for r in rows]
