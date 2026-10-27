@@ -61,8 +61,9 @@ worn or used). The store answers categorical and attribute queries directly.
 **2. The mirror (one readable file per entry).** A **full** record of the entry in a plain,
 human-readable format: the structured fields as front-matter, the authored prose as the body.
 "Full" is the key word — the mirror must be complete enough that **the entire store can be
-rebuilt from the mirror files alone.** Files are grouped by category so the world is navigable
-on disk by a human with no tools.
+rebuilt from the mirror files alone.** That means every authored field, including the per-owner
+curation an entry accumulates (its aliases and its house), not only the name and description.
+Files are grouped by category so the world is navigable on disk by a human with no tools.
 
 **3. The sync contract.** The rules that keep the two copies honest:
 
@@ -103,7 +104,8 @@ gone." Only the second is worth the synchronization cost.
 keeps the mirror current, a present row is *always* at least as fresh as its file, so the
 store always wins live reads. The mirror answers exactly one question: *"the store has no row
 for this — is there a file to recover it from?"* That is disaster-recovery, not day-to-day
-operation.
+operation. A present row with an empty field is still a present row: the store answers, and the
+mirror is not consulted to fill the gap.
 
 **Provide exactly one reverse door: explicit import.** When a human edits a mirror by hand and
 wants it to take effect, they *ask*: parse the file → write the canonical store → let
@@ -115,6 +117,12 @@ two-writers conflict the canonical store was meant to dissolve.
 every *read*. Mirroring them would turn every read into a file write and flood version control
 with content-free churn — and they are not part of the *authored* world worth recovering. They
 are store-only, ephemeral state.
+
+**Keep the presence pointer out of the catalog.** Some state is about where the entity *is*
+rather than what exists: the current room, and the room most recently delivered to her in full.
+That pointer is not a catalog row and is not mirrored. It changes on every move, and a mirror
+written on every move would be churn of the kind telemetry is kept out for. It is snapshotted to
+disk at the boundary event, and the boot step recovers it from that snapshot.
 
 **Use one sync mechanism for the whole catalog.** Every category — places, possessions,
 people, symbols — inherits the *identical* write-through / read-fallback / import behavior from
@@ -139,6 +147,16 @@ change-of-location cue invites entering (and reading, and *updating*) the place.
 fires on a **contextual trigger — not on a clock, and not on every turn**; it *encourages* the
 deliberate act without *forcing* the content into context. One nudge per engageable category,
 each tied to the cue that makes engagement apt.
+
+A nudge comes in one of two forms, and a rib must name which it uses:
+
+- **Edge-triggered** — fires once, when the cue first appears. Right for low-stakes nudges, where a
+  miss costs little and a repeat would be noise.
+- **Level-triggered** — stays up until a delivery condition is met. Right for anything a channel
+  must not miss, because whichever channel polls first cannot consume it for the others.
+
+The location cue is level-triggered. The first version was edge-triggered, and a move was lost to
+whichever channel polled first. See the location-sense rib for the chain that discharges it.
 
 This is the layer's distinguishing engagement-property, and the exact inverse of an always-on
 ambient layer: **ambient injection pushes a little context in on every turn; the catalog stays
@@ -174,8 +192,14 @@ the harness-contract pattern.
 - `SURFACE A CONTEXT-CUED OUTBOUND NUDGE PER ENGAGEABLE CATEGORY` — a lightweight prompt the
   harness raises when a trigger matches (a clothing/dressing cue → engage the wardrobe; a
   change-of-location cue → enter the place), encouraging deliberate engagement; fires on a
-  contextual trigger, never on a clock or every turn. The catalog is never ambient-injected.
-  Relies on the Spine's ability to surface a context-matched prompt.
+  contextual trigger, never on a clock or every turn. Declare each nudge edge-triggered or
+  level-triggered; a cue that must not be missed is level-triggered and stays up until delivered.
+  The catalog is never ambient-injected as a whole. A location flag may carry a clipped copy of one
+  room, because its purpose is to cause the fetch of the whole room. Relies on the Spine's ability
+  to surface a context-matched prompt.
+- `KEEP THE PRESENCE POINTER (CURRENT AND ACKNOWLEDGED ROOM) OUTSIDE THE CATALOG` — not a row, not
+  mirrored; snapshot it to disk at the boundary event and recover it from there. Relies on the
+  boundary signal.
 
 Mutations and queries are tool calls — this rib bolts onto the Spine's *tool-calling*
 capability, and its outbound nudges onto the Spine's context-matched-prompt capability; little

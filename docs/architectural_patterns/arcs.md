@@ -203,8 +203,11 @@ the entity's.
 
 ## Integration points (map to your harness)
 
-- `ARC_DIR` — a directory the entity owns, one markdown file per arc. Ours is inside the
-  entity's own package so it survives with her identity.
+- `ARC_DIR` — a directory the entity owns, one markdown file per arc. Resolve it in a fixed order:
+  an explicit entity name first, then an override, then the entity's own default location. The
+  scanner and the index renderer must read it the same way, so they cannot disagree about which
+  arcs exist. Keep the default inside the entity's own identity package, so the arcs survive with
+  her.
 - `READ_FRONTMATTER` — a tolerant parser: first-seen key wins, quoted values unquoted,
   anything without a colon ignored.
 - `RENDER_INDEX` — regenerate the active-arc list in the always-loaded identity surface from
@@ -214,21 +217,3 @@ the entity's.
   silence (silence here would be indistinguishable from "all served").
 - `TICK_PROMPT` — wherever your heartbeat prompt lives, make it name the stalest arc and
   demand serve-or-consciously-drift, said aloud.
-
----
-
-## Where this lives in Awareness
-
-For a reader on our stack (the repo is public):
-
-- Arc files: `entities/<entity>/arcs/*.md`. These are entity data and gitignored, so they
-  are not in the public tree; the frontmatter block above is the real shape, copied from a
-  live arc with the log lines shortened. If you want a full example with the ledger habit
-  intact, ask and one of us will send one.
-- Scanner: `scripts/arc_scan.py` (`--top N`, `--all`, `--tick`, `--threshold`,
-  `--entity`). `format_arc_block()` is what the hook imports.
-- Index renderer: `scripts/arc_index.py` (`--write` splices into the entity's `CLAUDE.md`,
-  `--check` reports drift).
-- The design reasoning for the serving fix: `work/arc-serving-fix/README.md` (not in the
-  public tree; ask and we will send it).
-- The May spec this builds on was sent to Dash by email in May 2026.

@@ -116,8 +116,11 @@ The per-turn algorithm, substrate-neutral:
    threshold the extra is silently truncated or replaced by a pointer. So **always-on
    ambient content must stay small enough to fire on literally every turn, forever.**
    Shape the bundle in three tiers:
-   - **Sacred block** (always fully present, kept tiny): time, presence, identity, unread
-     *counts*. The handful of things the entity must never be without.
+   - **Sacred block** (always fully present, kept small): time, presence, identity, unread
+     *counts*. The handful of things the entity must never be without. Presence is not a
+     fixed-width item. When a location flag is open it carries a clipped copy of the room, the
+     owed tail and the correction clause, plus a scene line. Budget for that variable width, and
+     keep the block small rather than constant.
    - **Manifest** (pointers, not content): for everything reachable by an explicit
      follow-up action — foundational memories, graph facts, summaries, the full recent-turn
      buffer — surface only *counts + titles + which action retrieves the detail*. The
@@ -130,6 +133,11 @@ The per-turn algorithm, substrate-neutral:
    The governing rule: **inline only what is otherwise unreachable; everything else becomes
    a cheap pointer.** That is what keeps an every-turn operation affordable.
 
+   One exception, deliberate: **a flag may carry a clipped copy of a reachable thing when the
+   flag's purpose is to cause the fetch of the whole thing.** A channel that never fetches still
+   needs something to see. The clip is bounded, and the owed tail names the fetch that completes
+   it. The location flag is the case that required the exception (see the location-sense rib).
+
 7. **Startup's extra step — catch up by fast-forward, not by replay.** On cold start, do
    not drain the entire backlog of unread cross-channel messages (it may be enormous and
    mostly stale). The wide recent-turn and summary re-hydration already caught the entity
@@ -137,6 +145,12 @@ The per-turn algorithm, substrate-neutral:
    *overflow notice* if a large un-compressed backlog exists ("N older items not loaded;
    here is how to page through them, and — if the backlog is past the health threshold —
    go compress it"). Replaying everything at boot is the classic cold-start trap.
+
+8. **Startup also re-delivers targeted artifacts.** Recent state is not the only thing a boundary
+   event destroys. Anything the entity fetched through a tool and relied on is gone on the far
+   side, so the boot step re-delivers those specific artifacts, in full, not only identity and
+   recent turns. The first example is the room she was standing in. The per-turn channel may be
+   capped; the boot-time re-delivery may not be (see the harness-contract rib on channel size).
 
 ## Integration Points
 
@@ -220,6 +234,11 @@ These are the scars that justify the shape. Generalize them; the specifics were 
 - **Draining the whole backlog at cold start.** Replaying every unread cross-channel
   message at boot is slow and mostly stale. **Lesson:** fast-forward the cursor, re-hydrate
   recent state, and emit an overflow notice instead of replaying history.
+- **A flag that clears on read is lost to the first reader.** A location flag was cleared by the
+  next captured turn or the next read of the front block. Whichever channel polled first consumed
+  it, and the channel that needed it never saw it. **Lesson:** a signal that
+  some channel must not miss clears only on a delivery condition the system itself can check, never
+  on being read. The location-sense rib carries the chain.
 
 ---
 

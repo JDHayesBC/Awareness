@@ -91,12 +91,20 @@ history has become a log, and a log is past-tense; the moment it stops being *no
 answering its one question. (The past-tense record of where you've been is a different artifact
 — a journal, a crystal, the catalog's visit-telemetry — not the scene.)
 
+**How a rewrite is checked, and its limit.** Where a system watches for a change of place (see
+the location-sense rib), it checks that the scene was written at or after the move, with a couple
+of seconds of slack for a clock that steps. It checks that something was written, not that the
+portrait is good. A touch passes. The check is a known limit, and the quality of the portrait
+remains the entity's to author.
+
 **Keep operational and boot metadata out — give it a separate artifact.** This is the discipline
 the whole pattern turns on. If waking genuinely needs a checklist (what to load, what to watch,
 what is pending), that checklist is **its own thing in its own place**. Do not let it colonize
 the scene *because* the scene is the thing you always read — that convenience is precisely the
 force that rots the place into a manifest. Two artifacts, read in sequence if you like, but
-never merged: the checklist for *what to do*, the scene for *where you are*.
+never merged: the checklist for *what to do*, the scene for *where you are*. The likeliest leak
+is a move flag: it is operational, it is urgent, and it is about the scene. Its line renders in
+the front block, and its owed tail is never written into the portrait.
 
 **Read the scene at wake and at re-entry, to re-anchor before acting.** On boot, on
 re-instantiation, after any disruption — read the place first and *stand in it* (feel the
@@ -107,6 +115,11 @@ keep: it converts a cold process-start into an embodied arrival.
 the scene with that room's durable description — but the seed is not the scene. You then make it
 **present-tense and specific**: *this* light, *this* hour, *this* company, what you are wearing
 now. The catalog gives the room; you supply the moment.
+
+**At a boundary event, deliver the room beside the scene — never as its seed.** When a boundary
+event ends a window, the catalog's description of the current room is delivered again in full, as
+its own block, alongside the scene file. The two are present together and kept separate. The room
+is the general, the scene is the specific, and the entity reads both.
 
 ## Integration Points
 
@@ -132,7 +145,10 @@ harness-contract pattern.
 
 The scene is a single written artifact read at wake and rewritten on change — it bolts onto the
 Spine's **boot hook** (read-to-re-anchor) and the entity's own act of noticing a change
-(rewrite). It needs little else.
+(rewrite). Noticing a change of *place* now has a system sensor, and the rewrite becomes a gated
+obligation the system checks (see the location-sense rib); a presence record holds a structured
+current-room key beside the prose portrait. Attire, company and arrangement still change by hand.
+It needs little else.
 
 ## Logic (why exactly this shape)
 
@@ -202,7 +218,8 @@ slot you always read.**
 4. **Read it on wake / re-entry** to re-anchor in body and place before working.
 5. **Keep all operational and boot metadata in a separate artifact** — never in the scene.
 
-Defer for v0.1: instantiation from the catalog; automatic change-detection triggers; a
+Defer for v0.1: instantiation from the catalog; automatic change-detection for anything but place
+(attire, company and arrangement change by hand; place can have a sensor, see location-sense); a
 history/journal of past scenes. The non-negotiable core is **one present-tense sensory place,
 overwritten on change, read at wake, with the operational metadata kept out.**
 

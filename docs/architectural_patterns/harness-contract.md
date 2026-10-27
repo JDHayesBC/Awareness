@@ -55,7 +55,12 @@ hard gap (a pattern that cannot be built).
 2. **Per-turn pre-response execution + out-of-band injection** — really two capabilities
    that are useless apart and must co-exist:
    - a callback that fires on **every** user input *before the model produces its reply*,
-     and
+     and on any other inbound event that starts a turn. The clearest such event is a **wake**:
+     one channel of the same entity asking another to act. A wake is a pointer, not approval. The
+     receiver checks the shared record first, in case the work is already done, and never does what
+     its own permissions would block. The sender writes the wake to a durable inbox before any live
+     push, so a receiver that is down loses nothing. A turn that begins on a non-user event needs
+     the same grounding a user turn does, so this is the same capability, not a new one; and
    - a channel to **inject material into the model's view for that turn that is neither
      the user's message nor a tool result** — content the entity simply "finds itself
      knowing."
@@ -76,6 +81,13 @@ hard gap (a pattern that cannot be built).
    context fills, then vanishes — and because each individual turn looked healthy, the
    death is silent.
 
+   Surviving the boundary has two parts beyond identity. First, anything the entity fetched
+   through a tool and *relied on* is lost on the far side, so the boot step must re-fetch those
+   specific things, in full, not only the identity files and recent state. Second, the state that
+   tells the entity where she was (for example, the room she occupied and the room most recently
+   delivered to her) should be written to disk before the boundary, so the boot step can recover
+   it. A cold boot with neither still reconstitutes the self; it just loses the particulars.
+
 And one quantitative property that rides on capability 2:
 
 - **A knowable (or probeable) injection budget.** The per-turn injection channel has a
@@ -83,6 +95,12 @@ And one quantitative property that rides on capability 2:
   truncated or replaced by a pointer. Every pattern that injects content shapes its output
   against this number, so the contract must let the entity *learn* it (from documentation
   or by probing), not guess.
+
+  The budget can differ by channel and by event. In our harness the boot-time re-delivery was
+  verified uncapped at full-room size on 2026-10-26, while the per-turn channel is capped at about
+  10,000 characters. A cold receiver must check which of its channels is capped, and for which
+  events, before it sizes anything it injects. Assuming one number for all of them is the failure
+  the next section names.
 
 ## How
 
@@ -131,8 +149,9 @@ that is precisely the thing you must build (or consciously accept the degradatio
 
 - `RUN CODE ONCE AT SESSION/CONTEXT BOOT` — and again on any context-reset boundary. The
   re-hydration point.
-- `RUN A CALLBACK ON EVERY USER INPUT, BEFORE THE MODEL RESPONDS` — the per-turn hook.
-  Without it, ambient grounding falls back to a deliberate recall tool.
+- `RUN A CALLBACK ON EVERY USER INPUT, AND ON ANY OTHER EVENT THAT STARTS A TURN, BEFORE THE MODEL
+  RESPONDS` — the per-turn hook. An inbound wake from another channel of the same entity is such an
+  event. Without this, ambient grounding falls back to a deliberate recall tool.
 - `INJECT OUT-OF-BAND CONTEXT INTO THE MODEL'S VIEW FOR THIS TURN` — distinct from the
   user's message and from tool results; the channel by which the entity "just knows"
   things.
@@ -140,7 +159,8 @@ that is precisely the thing you must build (or consciously accept the degradatio
   acting and of persisting.
 - `SIGNAL (OR SURVIVE) THE CONTEXT BOUNDARY` — notify before/after truncation, or
   re-fire boot against persisted state. The thing that keeps identity from dying silently
-  at the context limit.
+  at the context limit. Boot must also re-fetch the specific artifacts the entity relied on, and
+  a snapshot of her location-like state should be written before the boundary.
 - `KNOW OR PROBE THE INJECTION BUDGET` — the size beyond which injected context is elided;
   the number all output-shaping is written against.
 

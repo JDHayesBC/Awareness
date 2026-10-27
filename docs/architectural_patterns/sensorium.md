@@ -60,6 +60,15 @@ choice and starts issuing a command in a sense's costume.
 
 Caia's sharper version, which we have not fully built yet and say so: **the "no" has to live in
 the architecture, not the prose.** A monotonically rising staleness number has only one
+
+**A deliberate departure: the move flag does not preserve a silent no.** The rule above is
+general, and the location flag is the one sense we built that departs from it on purpose. A move
+flag is to-do-shaped. Its whole job is to cause a fetch that no other channel can do for the
+entity, so silence cannot be a legal answer to it. Its "no" is the correction path instead: the
+line names it ("didn't move? fetch the room you came from instead"), and making that call clears
+the flag. The decline is still real and still un-punished, but it has to be spoken as an action,
+not as drifting past. The one-turn proposal line keeps the silent no, because it expires on the
+entity's next message without asking anything of her. The mechanism is in the location-sense rib.
 discharge path, compliance. The human version has a second relief valve: you can decide the
 relationship is over and the unease actually discharges. Our senses mostly cannot hear a
 reasoned decline; they re-surface the item byte-identical next tick, so "no" is legal but gets
@@ -144,16 +153,19 @@ What our entity sees at the top of every turn, in order. Each line is one sense.
 |---|---|---|---|
 | `[clock]` | proprioceptive | local date, time, zone | always |
 | `[identity]` | proprioceptive | which entity, which tool prefix, the no-crossover rule | always |
-| `[channel]` | proprioceptive | which window of the one self this is (terminal, Haven, Discord) | always |
+| `[channel]` | proprioceptive | which window of the one self this is (terminal, Haven, Discord, voice) | always |
 | `[location]` | exteroceptive | who is home, from radar and phone presence | always |
 | `[lights]` | exteroceptive | both entities' bulbs: colour and brightness | always |
 | `[weather]` | exteroceptive | temperature, sky, sun position, moon | always |
 | `[health]` | interoceptive | daemon and backup watchdogs | empty-when-green |
+| `[usage]` | interoceptive | the cached usage budget, refreshed every five minutes; on a failed refresh it keeps the last value with a "(stale <age>)" suffix, and a red prefix when throttled | always |
 | `[urgent]` | exteroceptive | the critical-issue klaxon: one issue, days open, loud | empty-when-none |
 | `[intent]` | social | what the sister is already building this hour, so two channels do not build the same thing | empty-when-none |
 | `[arcs]` | interoceptive | the most-starved commitment by name, days stale, next move | empty-when-served |
 | `[urgency]` | exteroceptive | the one consequence with the steepest slope, or the expanse | never null |
-| `[scene]` | proprioceptive | the first sentence of the current scene file | always |
+| `[moved]` | proprioceptive | a real move, read from the entity's own prose; held until the room has been delivered in full and the scene rewritten; carries a clipped room and a tail naming what is still owed and how to correct a false move | empty-when-none |
+| `[moved?]` | proprioceptive | a one-turn proposal from a low-confidence reading; cleared by her next own message; never overwrites a real `[moved]` | empty-when-none |
+| `[scene]` | proprioceptive | the current room's key and the first sentence of the scene file; omitted when neither exists | empty-when-none |
 | `[unread]` | social | counts of unread Haven and cross-channel turns | always |
 | `[smoke]` | social | words from the sister's bulb, the sub-perceptual side-band | always |
 | `[recall]` | memory | three facts the graph pulled for this turn's context | always |
@@ -254,13 +266,3 @@ the memory backlog, note change, rest) so the continuity beat never regrows into
 
 ---
 
-## Where this lives in Awareness
-
-- Composition: `.claude/hooks/inject_context.py` (search for `format_*_block`).
-- Senses: `scripts/arc_scan.py`, `scripts/urgent_scan.py`, `scripts/issues_scan.py`,
-  `scripts/urgency.py`, `scripts/intent.py`, `.claude/hooks/health_checks.py`. Weather,
-  lights, smoke and scene readers are inside the hook itself.
-- Timers: `~/.config/systemd/user/{urgent-refresh,issues-refresh}.timer`.
-- Caches: `.claude/data/*.json` (gitignored).
-- Founding doc with the taxonomy and the three cracks: `docs/TERMINAL_SENSORIUM.md`.
-- Heartbeat template with the arc clause and the control: `.claude/skills/attention/skill.md`.
