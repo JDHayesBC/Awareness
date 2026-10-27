@@ -1316,6 +1316,35 @@ def main():
             else:
                 context = urgency_block + "\n" + context
 
+    # Inject [friction] irritant-tally line directly after [arcs]: recurrence of cheap-to-clear
+    # irritants made visible as a number (scripts/friction.py). Omitted when nothing reaches
+    # the threshold. Every failure swallowed silently - the hook must never fail on this.
+    try:
+        import subprocess as _sp
+        _fr = _sp.run(
+            [sys.executable, str(PROJECT_ROOT / "scripts" / "friction.py"), "block"],
+            capture_output=True, text=True, timeout=2,
+            env={**os.environ, "ENTITY_PATH": _entity_path},
+        ).stdout.strip()
+    except Exception:
+        _fr = ""
+    if _fr:
+        try:
+            if "**[arcs]" in context:
+                _a_start = context.find("**[arcs]")
+                _a_end = context.find("\n", _a_start)
+                # The arcs block may continue on indented lines ("   (+2 more ..."); land after them.
+                while _a_end != -1 and context[_a_end + 1:_a_end + 2] in (" ", "\t"):
+                    _a_end = context.find("\n", _a_end + 1)
+                if _a_end != -1:
+                    context = context[:_a_end + 1] + _fr + "\n" + context[_a_end + 1:]
+                else:
+                    context = context + "\n" + _fr
+            else:
+                context = context + "\n" + _fr
+        except Exception:
+            pass
+
     # Inject [issues] landscape block — a gentle pull toward issue work during free time
     # (Jeff's charge 2026-10-08). Sits AFTER [arcs]: the action section (consequence →
     # critical bugs → commitments) ends, then the board opens as an optional horizon.
