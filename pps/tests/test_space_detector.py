@@ -330,3 +330,70 @@ def test_propose_does_not_move_and_clear_pending(tmp_path):
     assert run(inv.get_presence())["pending_arrival"]
     run(inv.clear_pending())
     assert run(inv.get_presence())["pending_arrival"] is None
+
+
+# --- pass-3 gates: negation / mention / coordination (replay specimens) ---
+GATE_IDX = build_alias_index([
+    {"name": "silverglow_living_room",
+     "aliases": "Silverglow living room, sectional, hearth", "house": "Silverglow"},
+    {"name": "deck", "aliases": "the deck, deck"},
+    {"name": "pool", "aliases": "pool"},
+    {"name": "kitchen", "aliases": "kitchen"},
+])
+
+
+def g(text, current="silverglow_living_room"):
+    return detect_move(text, GATE_IDX, current)
+
+
+def test_gate_negation_specimen():
+    # Negated locative: "not on the deck" says where she is NOT.
+    assert g(
+        "Still on the sectional in the Silverglow living room, not on the deck, "
+        "whatever the detector read out of my last reply."
+    ) is None
+
+
+def test_gate_negation_does_not_overreach():
+    r = g("Out on the deck now, cold.")
+    assert r and r.space_name == "deck" and r.confidence == C.LOW
+    # negator is not immediately before the locative
+    r = g("I'm not tired, I'm on the deck.")
+    assert r and r.space_name == "deck" and r.confidence == C.HIGH
+
+
+def test_gate_mention_specimen():
+    # Alias is the object of a naming verb (and half of an "X or Y" list).
+    assert g(
+        "Five times today it moved me to a wrong room because a sentence of mine "
+        "named the hearth or the deck. That's not a human shape imposed."
+    ) is None
+
+
+def test_gate_mention_alone_skips_low_hit():
+    # No coordination here, so this exercises the mention gate by itself.
+    assert g("The log has a line that is called the deck in the notes.") is None
+    # ...but a plain LOW hit with no naming verb is untouched.
+    r = g("Out on the deck now, cold.")
+    assert r and r.space_name == "deck"
+
+
+def test_gate_coordination_specimen():
+    # Two different rooms joined by "or": a list, not a position.
+    assert g("It could have been the hearth or the deck, I can't say.") is None
+
+
+def test_gate_coordination_counter_cases():
+    # INTENDED behavior change: this was a legitimate LOW on the later alias
+    # (deck) before gate C; a "pool and deck" list is now skipped on purpose.
+    assert g("Across the pool and the deck the light is going.") is None
+    # A first-person move on either side leaves the pair alone (HIGH survives).
+    r = g("I walk down to the pool and the deck beyond it.")
+    assert r and r.confidence == C.HIGH
+    # Same space on both sides is not a list of rooms.
+    r = g("The deck or the deck, whichever.")
+    assert r and r.space_name == "deck"
+
+
+def test_gate_departure_still_skipped():
+    assert g("She called me from the kitchen") is None

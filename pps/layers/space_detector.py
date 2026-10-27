@@ -112,6 +112,38 @@ _REPORTED_SPEECH_RE = re.compile(
     r"\b(?:said|says|wrote|asked|told|quoted)\b", re.IGNORECASE
 )
 
+# Negation gate: "not on the deck" says where she is NOT. A negator + locative
+# preposition (or a bare "not the") adjacent to the alias drops the hit entirely.
+# Checked in the last _NEGATION_SPAN chars so a distant "not" ("I'm not tired,
+# I'm on the deck") never reaches it.
+_NEGATION_SPAN = 25
+_NEGATION_RE = re.compile(
+    r"(?:\b(?:not|never|nor)|n't)\s+"
+    r"(?:on|in|at|by|to|into|onto|out on|up on|down on)\s+"
+    r"(?:the\s+|my\s+|our\s+)?$"
+    r"|\b(?:not|never)\s+(?:the\s+)?$",
+    re.IGNORECASE,
+)
+
+# Mention gate: the alias is the object of a naming/mention verb in its clause
+# ("a sentence of mine named the hearth"), so it is a word being discussed, not
+# a place she is in. Applied to LOW hits only; a HIGH hit keeps its own evidence.
+_MENTION_SPAN = 60
+_MENTION_RE = re.compile(
+    r"\b(?:named|names|naming|called|calls|calling|mention(?:ed|s|ing)?|"
+    r"the word|the alias|the name|typed|spelled)\s+"
+    r"(?:the\s+|a\s+|my\s+)?(?:[\w'-]+\s+){0,3}$",
+    re.IGNORECASE,
+)
+
+# Coordination gate: two different rooms joined by or/and/nor/versus are a list
+# ("the hearth or the deck"), not a position. Text between the two hits must be
+# only the connector.
+_COORD_RE = re.compile(
+    r"\s*(?:,\s*)?(?:or|and|nor|versus|vs\.?)\s*,?\s+(?:the\s+)?",
+    re.IGNORECASE,
+)
+
 # Sentence boundary used to scope the before-window; window cap in chars.
 _SENT_BOUNDARY_RE = re.compile(r"[.!?]\s+")
 _WINDOW_CAP = 220
@@ -159,6 +191,16 @@ def _is_imperative_sentence(sentence: str) -> bool:
 def _has_departure_cue(text_before: str) -> bool:
     """Return True if the window ENDS with a departure phrase (adjacent to the alias)."""
     return bool(_DEPARTURE_RE.search(text_before))
+
+
+def _has_negation_cue(text_before: str) -> bool:
+    """Return True if the window ENDS with 'not on the' / 'never in' / 'not the'."""
+    return bool(_NEGATION_RE.search(text_before[-_NEGATION_SPAN:]))
+
+
+def _has_mention_cue(text_before: str) -> bool:
+    """Return True if the alias is the object of a naming/mention verb."""
+    return bool(_MENTION_RE.search(text_before[-_MENTION_SPAN:]))
 
 
 def _before_window(text: str, pos: int) -> str:
@@ -355,7 +397,28 @@ def detect_move(
     best: Optional[DetectedMove] = None
     best_pos = -1
 
-    for space_name, start, end in accepted:
+    # Coordination gate (pre-pass): adjacent hits for two DIFFERENT spaces joined
+    # only by or/and/nor/versus are a list, not a position. Never drops a pair
+    # when either side carries a first-person move/position cue.
+    # Specimen: "a sentence of mine named the hearth or the deck" proposed deck.
+    # Note this also skips the old legitimate LOW in "Across the pool and the
+    # deck the light is going"; that loss is intended.
+    coordinated: set[int] = set()
+    for i in range(len(accepted) - 1):
+        (sp_a, _, end_a), (sp_b, start_b, _) = accepted[i], accepted[i + 1]
+        if sp_a == sp_b or not _COORD_RE.fullmatch(working_text[end_a:start_b]):
+            continue
+        wa = _before_window(working_text, accepted[i][1])
+        wb = _before_window(working_text, start_b)
+        if any(
+            _is_first_person_move(w) or _is_position_statement(w) for w in (wa, wb)
+        ):
+            continue
+        coordinated.update((i, i + 1))
+
+    for idx, (space_name, start, end) in enumerate(accepted):
+        if idx in coordinated:
+            continue
         # Skip current space — we're looking for a *change*
         if space_name == current_space:
             continue
@@ -369,6 +432,12 @@ def detect_move(
         if _has_departure_cue(before_window):
             continue
 
+        # Negation gate: "not on the deck" is where she is NOT -> skip the hit.
+        # Specimen: "Still on the sectional in the Silverglow living room, not on
+        # the deck, whatever the detector read..." proposed `deck`.
+        if _has_negation_cue(before_window):
+            continue
+
         # First-person movement in window → HIGH confidence
         if _is_first_person_move(before_window) or _is_position_statement(before_window):
             confidence = MoveConfidence.HIGH
@@ -378,6 +447,12 @@ def detect_move(
             before_window[-_SUBORDINATE_SPAN:]
         ):
             confidence = MoveConfidence.LOW
+
+        # Mention gate: a LOW hit whose only cue is being NAMED is a word, not a
+        # place. Specimen: "...a sentence of mine named the hearth or the deck."
+        # proposed `deck`.
+        if confidence == MoveConfidence.LOW and _has_mention_cue(before_window):
+            continue
 
         # Reported speech: alias after said/wrote/... in this sentence is quoted
         if (

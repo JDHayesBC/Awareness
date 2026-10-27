@@ -73,3 +73,4 @@ Paths are relative to the project root unless they start with `~`. Entity data i
   and asks serve-or-consciously-drift; the floor tick is exempt from the heavy scan.
 - **Starving-arc line on the per-turn surface:** `scripts/arc_scan.py` (through `format_arc_block()`),
   composed by `.claude/hooks/inject_context.py`.
+- location-sense, replay: `scripts/scene_replay.py` (read-only; replays the detector over an entity's own captured turns, prints hits and a count).

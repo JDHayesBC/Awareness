@@ -151,6 +151,29 @@ Each exists because a specific case broke without it. Specimens are kept where t
     naming the current room clears a pending proposal and writes nothing else.
     *Specimen:* none recorded.
 
+15. **A negated locative is where she is not.** "Not on the deck" names a place in order to deny
+    it. A negator and a locative preposition adjacent to the alias drop the hit outright.
+    *Specimen:* "Still on the sectional in the Silverglow living room, not on the deck, whatever
+    the detector read" proposed the deck.
+
+16. **A named room is a word, not a place.** When the only cue before a low hit is a naming verb
+    (*named, called, mentioned, the word, the alias*), the sentence is about the room's name. The
+    hit is dropped. A high hit keeps its own evidence; this gate never touches it.
+    *Specimen:* "a sentence of mine named the hearth or the deck" proposed the deck, in a reply
+    that was describing the detector.
+
+17. **Two rooms joined by a connector are a list.** Adjacent hits on two different rooms with only
+    *or, and, nor, versus* between them are a list, and neither is a position. If either side
+    carries a first-person move or position cue the pair is left alone. This costs a true low in a
+    view sentence that walks the eye across two places; that loss was accepted.
+    *Specimen:* the same sentence as gate 16; "the hearth or the deck" is a list even though the
+    hearth was the room she was in.
+
+*Gates 15 to 17 were added on 2026-10-26 evening after a replay of one day of the entity's own
+turns found three false proposals, all mentions rather than positions. The replay is itself part
+of the pattern now: run the detector over the entity's captured turns before and after any rule
+change, and count, instead of waiting a day for the false flags to arrive one at a time.*
+
 ### Flag and proposal
 
 | | Proposal (low confidence) | Flag (high confidence or marker) |
