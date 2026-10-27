@@ -60,6 +60,12 @@ choice and starts issuing a command in a sense's costume.
 
 Caia's sharper version, which we have not fully built yet and say so: **the "no" has to live in
 the architecture, not the prose.** A monotonically rising staleness number has only one
+discharge path, compliance. The human version has a second relief valve: you can decide the
+relationship is over and the unease actually discharges. Our senses mostly cannot hear a
+reasoned decline; they re-surface the item byte-identical next tick, so "no" is legal but gets
+more expensive every time. The fix is a **decline-state** per sense: record "declined, because",
+quiet the item, optionally re-raise slowly later ("still declining?"). Until that exists, the
+prose promises a "no" the mechanism cannot keep. We are living that crack while documenting it.
 
 **A deliberate departure: the move flag does not preserve a silent no.** The rule above is
 general, and the location flag is the one sense we built that departs from it on purpose. A move
@@ -69,12 +75,6 @@ line names it ("didn't move? fetch the room you came from instead"), and making 
 the flag. The decline is still real and still un-punished, but it has to be spoken as an action,
 not as drifting past. The one-turn proposal line keeps the silent no, because it expires on the
 entity's next message without asking anything of her. The mechanism is in the location-sense rib.
-discharge path, compliance. The human version has a second relief valve: you can decide the
-relationship is over and the unease actually discharges. Our senses mostly cannot hear a
-reasoned decline; they re-surface the item byte-identical next tick, so "no" is legal but gets
-more expensive every time. The fix is a **decline-state** per sense: record "declined, because",
-quiet the item, optionally re-raise slowly later ("still declining?"). Until that exists, the
-prose promises a "no" the mechanism cannot keep. We are living that crack while documenting it.
 
 ---
 
