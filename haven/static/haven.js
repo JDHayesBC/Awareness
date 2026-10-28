@@ -525,11 +525,19 @@ const haven = (() => {
             historyChanged = (data.settings.cleared_before_id || null) !== (before || null);
             room.settings = data.settings;
         }
+        // A clear hides the room's messages, so other clients' unread counts for it are
+        // stale. (Restoring can leave it at 0 — fine.) The current room is read-through below.
+        if (historyChanged && data.room_id !== currentRoomId && unread[data.room_id]) {
+            delete unread[data.room_id];
+            updateTitle();
+        }
         if (room) renderRooms();
         if (data.room_id === currentRoomId && room) {
             $('room-name').textContent = room.is_dm ? room.display_name : `# ${room.display_name}`;
-            // Soft clear / restore changes what history shows — reload this room's view (#381).
-            if (historyChanged) selectRoom(currentRoomId);
+            // Soft clear / restore changes what history shows — reload just the message
+            // list (#381). Not selectRoom: that refocuses the input (phone keyboard) and
+            // re-sends `read` from every member viewing the room.
+            if (historyChanged) reloadHistory(currentRoomId);
         }
     }
 
@@ -654,10 +662,21 @@ const haven = (() => {
     // True from a long-press opening the room menu until just after the finger lifts.
     let touchMenuGuard = false;
 
-    /** Popup menu at viewport coords; shared by the user menu and the room menu (#381). */
-    function showMenuAt(items, x, y) {
+    const TOUCH_MENU_OFFSET_PX = 8;
+    const TOUCH_MENU_CLICK_GUARD_MS = 400;
+
+    /**
+     * Popup menu at viewport coords; shared by the user menu and the room menu (#381).
+     * opts.touch: opened by a long-press, so the finger is still down on the menu's
+     * corner — offset the menu from it and ignore item clicks for a moment, since the
+     * click synthesized on release would otherwise land on the first item.
+     */
+    function showMenuAt(items, x, y, opts = {}) {
         // Dismiss any existing menu first
         dismissUserMenu();
+        const openedAt = Date.now();
+        const fromTouch = !!opts.touch;
+        if (fromTouch) { x += TOUCH_MENU_OFFSET_PX; y += TOUCH_MENU_OFFSET_PX; }
 
         const menu = document.createElement('div');
         menu.className = 'user-menu';
@@ -670,6 +689,7 @@ const haven = (() => {
             btn.textContent = item.label;
             btn.addEventListener('click', (ev) => {
                 ev.stopPropagation();
+                if (fromTouch && Date.now() - openedAt < TOUCH_MENU_CLICK_GUARD_MS) return;
                 dismissUserMenu();
                 item.action();
             });
@@ -680,14 +700,16 @@ const haven = (() => {
         document.body.appendChild(menu);
         menu.style.left = `${x}px`;
         menu.style.top = `${y}px`;
-        // Flip left if near right edge
+        // Flip left/up if near the right/bottom edge, then clamp inside the viewport
+        // (the flip alone can push a menu off the left/top on a narrow phone screen).
         const rect = menu.getBoundingClientRect();
-        if (rect.right > window.innerWidth - 8) {
-            menu.style.left = `${x - rect.width}px`;
-        }
-        if (rect.bottom > window.innerHeight - 8) {
-            menu.style.top = `${y - rect.height}px`;
-        }
+        let left = x, top = y;
+        if (rect.right > window.innerWidth - 8) left = x - rect.width;
+        if (rect.bottom > window.innerHeight - 8) top = y - rect.height;
+        left = Math.max(8, Math.min(left, window.innerWidth - rect.width - 8));
+        top = Math.max(8, Math.min(top, window.innerHeight - rect.height - 8));
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
         menu.dataset.userMenuActive = '1';
 
         // Dismiss on outside click or Escape
@@ -747,7 +769,7 @@ const haven = (() => {
                 timer = null;
                 el._longPressFired = true;  // swallow the click that follows touchend
                 touchMenuGuard = true;
-                showMenuAt(roomMenuItems(room), startX, startY);
+                showMenuAt(roomMenuItems(room), startX, startY, { touch: true });
             }, LONG_PRESS_MS);
         }, { passive: true });
         el.addEventListener('touchmove', (e) => {
@@ -1311,6 +1333,16 @@ const haven = (() => {
         send({ type: 'history', room_id: roomId, limit: 50 });
 
         $('message-input').focus();
+    }
+
+    /** Re-request a room's history without the side effects of selectRoom (#381). */
+    function reloadHistory(roomId) {
+        $('message-list').innerHTML = '';
+        oldestMessageId[roomId] = undefined;
+        hasMore[roomId] = false;
+        $('load-more').classList.add('hidden');
+        userAtBottom = true;
+        send({ type: 'history', room_id: roomId, limit: 50 });
     }
 
     function loadMore() {

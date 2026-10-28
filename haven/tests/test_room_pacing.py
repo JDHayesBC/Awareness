@@ -177,11 +177,22 @@ def test_switch_logs_room_from_to_and_running_count(fake, capsys):
     asyncio.run(bot._apply_room_model("aaaaaaaa-1"))
     asyncio.run(bot._apply_room_model("aaaaaaaa-1"))  # already opus: no churn
     asyncio.run(bot._apply_room_model("bbbbbbbb-2"))  # back to the service default
-    assert fake.calls == ["claude-opus-5-5", "sonnet"]
+    # The default room switches back to the concrete id of the env alias.
+    assert fake.calls == ["claude-opus-5-5", "claude-sonnet-5-5"]
     assert bot.model_switch_count == 2
     err = capsys.readouterr().err
     assert "MODEL SWITCH #1 room=aaaaaaaa sonnet -> claude-opus-5-5" in err
-    assert "MODEL SWITCH #2 room=bbbbbbbb claude-opus-5-5 -> sonnet" in err
+    assert "MODEL SWITCH #2 room=bbbbbbbb claude-opus-5-5 -> claude-sonnet-5-5" in err
+
+
+def test_alias_and_concrete_id_are_the_same_model(fake, capsys):
+    """CLAUDE_MODEL=sonnet and a room set to 'sonnet' must not cost a cache-miss switch."""
+    bot.room_settings["dddddddd-4"] = {"model": "sonnet"}
+    asyncio.run(bot._apply_room_model("dddddddd-4"))
+    bot.room_settings["eeeeeeee-5"] = {"model": "default"}
+    asyncio.run(bot._apply_room_model("eeeeeeee-5"))
+    assert fake.calls == [] and bot.model_switch_count == 0
+    assert "MODEL SWITCH" not in capsys.readouterr().err
 
 
 def test_failed_switch_is_logged_and_not_counted(fake, capsys):
@@ -189,7 +200,87 @@ def test_failed_switch_is_logged_and_not_counted(fake, capsys):
     bot.room_settings["cccccccc-3"] = {"model": "fable"}
     asyncio.run(bot._apply_room_model("cccccccc-3"))
     assert bot.model_switch_count == 0
-    assert "MODEL SWITCH FAILED room=cccccccc" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "MODEL SWITCH FAILED room=cccccccc" in err and "WARNING" in err
+
+
+def test_failed_switch_is_not_retried_every_batch(fake, capsys, monkeypatch):
+    monkeypatch.setattr(bot, "_failed_model_switches", set())
+    fake.fail = True
+    bot.room_settings["cccccccc-3"] = {"model": "fable"}
+    for _ in range(3):
+        asyncio.run(bot._apply_room_model("cccccccc-3"))
+    assert capsys.readouterr().err.count("MODEL SWITCH FAILED") == 1
+    # Changing the room's model setting earns a fresh attempt.
+    fake.fail = False
+    bot._cache_room_settings("cccccccc-3", {"model": "opus"})
+    asyncio.run(bot._apply_room_model("cccccccc-3"))
+    assert fake.calls == ["claude-opus-5-5"]
+
+
+# --- clear / unclear drops the bot's in-memory room history -------------------
+
+class _FakeResp:
+    def __init__(self, messages):
+        self.status_code = 200
+        self._messages = messages
+
+    def json(self):
+        return {"messages": self._messages}
+
+
+def _fake_http(monkeypatch, messages):
+    class Client:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, *a, **kw): return _FakeResp(messages)
+    monkeypatch.setattr(bot.httpx, "AsyncClient", Client)
+
+
+@pytest.fixture
+def clean_history():
+    for d in (bot.room_history, bot.room_settings):
+        d.clear()
+    bot._room_history_seeded.clear()
+    yield
+    for d in (bot.room_history, bot.room_settings):
+        d.clear()
+    bot._room_history_seeded.clear()
+
+
+def test_clear_drops_history_and_reseeds_from_filtered_rest(clean_history, monkeypatch):
+    old = [{"id": 1, "content": "before the clear"}]
+    _fake_http(monkeypatch, old)
+    bot._cache_room_settings("r1", {"cleared_before_id": None})
+    asyncio.run(bot._seed_room_history("r1"))
+    assert [m["id"] for m in bot.room_history["r1"]] == [1]
+
+    # Admin clears: cutoff moves. In-memory history and seeded flag must go.
+    bot._on_room_updated("r1", {"cleared_before_id": 1})
+    assert "r1" not in bot.room_history and "r1" not in bot._room_history_seeded
+
+    # Re-seed gets the filtered (empty) history: the stale deque must not come back.
+    _fake_http(monkeypatch, [])
+    asyncio.run(bot._seed_room_history("r1"))
+    assert list(bot.room_history["r1"]) == []
+
+    # Unclear moves the cutoff back: drop again, re-seed sees the restored messages.
+    bot._on_room_updated("r1", {"cleared_before_id": None})
+    assert "r1" not in bot._room_history_seeded
+    _fake_http(monkeypatch, old)
+    asyncio.run(bot._seed_room_history("r1"))
+    assert [m["id"] for m in bot.room_history["r1"]] == [1]
+
+
+def test_unrelated_room_update_keeps_history(clean_history):
+    from collections import deque
+    bot._cache_room_settings("r1", {"cleared_before_id": 5, "verbosity": "short"})
+    bot.room_history["r1"] = deque([{"id": 9, "content": "x"}])
+    bot._room_history_seeded.add("r1")
+    bot._on_room_updated("r1", {"cleared_before_id": 5, "verbosity": "full"})
+    assert list(bot.room_history["r1"]) and "r1" in bot._room_history_seeded
+    assert bot.room_settings["r1"]["verbosity"] == "full"
 
 
 # --- ClaudeInvoker.set_model --------------------------------------------------

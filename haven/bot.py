@@ -31,7 +31,7 @@ import httpx
 import websockets
 
 from haven.brain.boot_context import fetch_boot_context as _shared_fetch_boot_context
-from haven.room_settings import DEFAULT_VERBOSITY, resolve_model_id, resolve_verbosity
+from haven.room_settings import MODEL_ALIASES, DEFAULT_VERBOSITY, resolve_model_id, resolve_verbosity
 from haven.redact import (
     allowed_humans,
     get_known_secrets,
@@ -194,6 +194,7 @@ room_settings: dict[str, dict] = {}
 # How many per-room model switches this process has made. Each one is a prompt-cache
 # miss on the whole context, so the count rides every switch log line.
 model_switch_count = 0
+_failed_model_switches: set[tuple[str, str]] = set()  # (room_id, target) that set_model rejected
 responding_lock = asyncio.Lock()  # prevents concurrent responses
 
 # Adaptive debounce state
@@ -525,9 +526,10 @@ async def _seed_room_history(room_id: str) -> None:
         if resp.status_code != 200:
             return
         fetched = [m for m in resp.json().get("messages", []) if (m.get("content") or "").strip()]
-        if fetched:
-            # Server history (oldest first) already includes anything we received live.
-            room_history[room_id] = deque(fetched, maxlen=ROOM_HISTORY_MAX)
+        # Server history (oldest first) already includes anything we received live.
+        # An empty result is authoritative too: after an admin clear (#381) the
+        # filtered history is empty and any stale local deque must not survive it.
+        room_history[room_id] = deque(fetched, maxlen=ROOM_HISTORY_MAX)
     except Exception as e:
         print(f"[{ENTITY_NAME}] Room history seed failed for {room_id[:8]}: {e}", file=sys.stderr)
 
@@ -952,7 +954,37 @@ def build_pacing_note(
 def _cache_room_settings(room_id: str, settings: dict | None) -> None:
     """Remember a room's settings from a connected/room_updated event (#381)."""
     if room_id and isinstance(settings, dict):
+        # A changed model choice deserves a fresh attempt even if the last one failed.
+        if room_settings.get(room_id, {}).get("model") != settings.get("model"):
+            for key in [k for k in _failed_model_switches if k[0] == room_id]:
+                _failed_model_switches.discard(key)
         room_settings[room_id] = settings
+
+
+def _on_room_updated(room_id: str, settings: dict | None) -> None:
+    """Handle a room_updated event: cache settings, and drop the room's in-memory
+    history if an admin clear/unclear moved the cutoff (#381).
+
+    The Jev gate judges against room_history; without this it keeps judging against
+    messages the room no longer shows. Dropping history AND the seeded flag makes the
+    next batch re-seed from the (cutoff-filtered) REST history. The comparison must
+    run BEFORE the cache is updated.
+    """
+    if not room_id:
+        return
+    if isinstance(settings, dict):
+        before = room_settings.get(room_id, {}).get("cleared_before_id") or None
+        after = settings.get("cleared_before_id") or None
+        if before != after:
+            room_history.pop(room_id, None)
+            _room_history_seeded.discard(room_id)
+    _cache_room_settings(room_id, settings)
+
+
+def _default_model_id() -> str:
+    """The service's own model as a concrete id: units set CLAUDE_MODEL=sonnet, rooms
+    resolve to claude-sonnet-5-5, and the two must compare equal."""
+    return MODEL_ALIASES.get(CLAUDE_MODEL) or CLAUDE_MODEL
 
 
 async def _apply_room_model(room_id: str) -> None:
@@ -966,16 +998,19 @@ async def _apply_room_model(room_id: str) -> None:
     if invoker is None:
         return
     alias = room_settings.get(room_id, {}).get("model")
-    target = resolve_model_id(alias, CLAUDE_MODEL)
+    target = resolve_model_id(alias, _default_model_id())
     current = invoker.model
-    if target == current:
+    if target == (MODEL_ALIASES.get(current) or current):
         return
+    if (room_id, target) in _failed_model_switches:
+        return  # already failed and logged; retried only if the room's model setting changes
     try:
         await invoker.set_model(target)
     except Exception as e:
+        _failed_model_switches.add((room_id, target))
         print(
-            f"[{ENTITY_NAME}] MODEL SWITCH FAILED room={room_id[:8]} "
-            f"{current} -> {target}: {e}",
+            f"[{ENTITY_NAME}] WARNING MODEL SWITCH FAILED room={room_id[:8]} "
+            f"{current} -> {target}: {e} (not retrying until the room's model changes)",
             file=sys.stderr,
         )
         return
@@ -1293,7 +1328,7 @@ async def connect() -> None:
                         for r in rooms:
                             if r.get("is_dm"):
                                 dm_rooms.add(r["id"])
-                            _cache_room_settings(r["id"], r.get("settings"))
+                            _on_room_updated(r["id"], r.get("settings"))
                         # Track which users are bots (for topology detection)
                         for u in users:
                             if u.get("is_bot"):
@@ -1331,7 +1366,7 @@ async def connect() -> None:
                             print(f"[{ENTITY_NAME}] {who} is {status}", file=sys.stderr)
 
                     elif event_type == "room_updated":
-                        _cache_room_settings(data.get("room_id", ""), data.get("settings"))
+                        _on_room_updated(data.get("room_id", ""), data.get("settings"))
 
                     elif event_type == "member_joined":
                         joined_user_id = data.get("user_id", "")
