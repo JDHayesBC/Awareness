@@ -516,12 +516,20 @@ const haven = (() => {
     function onRoomUpdated(data) {
         // Update rooms array and re-render header + sidebar
         const room = rooms.find(r => r.id === data.room_id);
-        if (room) {
+        if (room && data.display_name) {
             room.display_name = data.display_name;
-            renderRooms();
         }
+        let historyChanged = false;
+        if (room && data.settings) {
+            const before = room.settings ? room.settings.cleared_before_id : null;
+            historyChanged = (data.settings.cleared_before_id || null) !== (before || null);
+            room.settings = data.settings;
+        }
+        if (room) renderRooms();
         if (data.room_id === currentRoomId && room) {
             $('room-name').textContent = room.is_dm ? room.display_name : `# ${room.display_name}`;
+            // Soft clear / restore changes what history shows — reload this room's view (#381).
+            if (historyChanged) selectRoom(currentRoomId);
         }
     }
 
@@ -575,7 +583,13 @@ const haven = (() => {
                 el.textContent = label;
             }
 
-            el.addEventListener('click', () => selectRoom(r.id));
+            el.addEventListener('click', (e) => {
+                // A long-press that opened the context menu must not also open the room
+                // (or close the mobile drawer via the sidebar's click handler).
+                if (el._longPressFired) { el._longPressFired = false; e.stopPropagation(); return; }
+                selectRoom(r.id);
+            });
+            attachRoomMenuTriggers(el, r);
 
             if (r.is_dm) {
                 dmList.appendChild(el);
@@ -627,13 +641,6 @@ const haven = (() => {
 
     /** Show a small popup menu near a click event for a user (GH#285). */
     function showUserMenu(u, e) {
-        // Dismiss any existing user menu first
-        dismissUserMenu();
-
-        const menu = document.createElement('div');
-        menu.className = 'user-menu';
-        menu.setAttribute('role', 'menu');
-
         const items = [
             { label: `Message @${u.username}`, action: () => startDM(u.username) },
         ];
@@ -641,10 +648,24 @@ const haven = (() => {
         if (currentUser && u.id !== currentUser.id) {
             items.push({ label: `Rename…`, action: () => promptRenameUser(u) });
         }
+        showMenuAt(items, e.clientX, e.clientY);
+    }
+
+    // True from a long-press opening the room menu until just after the finger lifts.
+    let touchMenuGuard = false;
+
+    /** Popup menu at viewport coords; shared by the user menu and the room menu (#381). */
+    function showMenuAt(items, x, y) {
+        // Dismiss any existing menu first
+        dismissUserMenu();
+
+        const menu = document.createElement('div');
+        menu.className = 'user-menu';
+        menu.setAttribute('role', 'menu');
 
         items.forEach(item => {
             const btn = document.createElement('button');
-            btn.className = 'user-menu-item';
+            btn.className = 'user-menu-item' + (item.danger ? ' danger' : '');
             btn.setAttribute('role', 'menuitem');
             btn.textContent = item.label;
             btn.addEventListener('click', (ev) => {
@@ -657,8 +678,6 @@ const haven = (() => {
 
         // Position near the click event
         document.body.appendChild(menu);
-        const x = e.clientX;
-        const y = e.clientY;
         menu.style.left = `${x}px`;
         menu.style.top = `${y}px`;
         // Flip left if near right edge
@@ -673,6 +692,8 @@ const haven = (() => {
 
         // Dismiss on outside click or Escape
         const onOutside = (ev) => {
+            // The click synthesized when a long-press is released lands outside the menu.
+            if (touchMenuGuard) return;
             if (!menu.contains(ev.target)) dismissUserMenu();
         };
         const onKey = (ev) => {
@@ -689,6 +710,173 @@ const haven = (() => {
 
     function dismissUserMenu() {
         const existing = document.querySelector('.user-menu[data-user-menu-active]');
+        if (existing) {
+            if (existing._cleanup) existing._cleanup();
+            existing.remove();
+        }
+    }
+
+    // --- Room context menu + settings (#381) ---
+
+    const LONG_PRESS_MS = 500;
+
+    /** Right-click (desktop) or ~500ms long-press (touch) on a sidebar room/DM opens the menu. */
+    function attachRoomMenuTriggers(el, room) {
+        el.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showMenuAt(roomMenuItems(room), e.clientX, e.clientY);
+        });
+
+        let timer = null;
+        let startX = 0, startY = 0;
+        const cancel = () => { clearTimeout(timer); timer = null; };
+        const release = () => {
+            cancel();
+            // The click from this release arrives right after touchend; guard it, then drop the guard.
+            if (touchMenuGuard) setTimeout(() => { touchMenuGuard = false; }, 450);
+            // If no click followed (touchcancel), don't let the flag eat the next real tap.
+            if (el._longPressFired) setTimeout(() => { el._longPressFired = false; }, 600);
+        };
+        el.addEventListener('touchstart', (e) => {
+            if (e.touches.length !== 1) return;
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+            cancel();
+            timer = setTimeout(() => {
+                timer = null;
+                el._longPressFired = true;  // swallow the click that follows touchend
+                touchMenuGuard = true;
+                showMenuAt(roomMenuItems(room), startX, startY);
+            }, LONG_PRESS_MS);
+        }, { passive: true });
+        el.addEventListener('touchmove', (e) => {
+            // Scrolling the sidebar is not a press.
+            const t = e.touches[0];
+            if (timer && Math.hypot(t.clientX - startX, t.clientY - startY) > 10) cancel();
+        }, { passive: true });
+        el.addEventListener('touchend', release);
+        el.addEventListener('touchcancel', release);
+    }
+
+    function roomMenuItems(room) {
+        const isAdmin = !!(currentUser && currentUser.is_admin);
+        const items = [
+            { label: 'Room settings…', action: () => openRoomSettings(room) },
+        ];
+        if (!room.is_dm) {
+            items.push({ label: 'Rename…', action: () => { selectRoom(room.id); renameCurrentRoom(); } });
+        }
+        items.push({ label: 'Mark as read', action: () => markRoomRead(room.id) });
+        if (isAdmin) {
+            items.push({ label: 'Clear history…', danger: true, action: () => clearRoomHistory(room) });
+            if (room.settings && room.settings.cleared_before_id) {
+                items.push({ label: 'Restore cleared history', action: () => unclearRoomHistory(room) });
+            }
+        }
+        items.push({
+            label: room.is_dm ? 'Close conversation' : 'Leave room',
+            action: () => { selectRoom(room.id); leaveRoom(); },
+        });
+        return items;
+    }
+
+    function markRoomRead(roomId) {
+        delete unread[roomId];
+        send({ type: 'read', room_id: roomId });
+        updateTitle();
+        renderRooms();
+    }
+
+    async function roomAction(roomId, method, path, body) {
+        const res = await fetch(`/api/rooms/${roomId}/${path}`, {
+            method,
+            headers: {
+                'Authorization': `Bearer ${getToken()}`,
+                'Content-Type': 'application/json',
+            },
+            body: body ? JSON.stringify(body) : undefined,
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(`Failed: ${err.detail || res.status}`);
+            return null;
+        }
+        return res.json();
+    }
+
+    function clearRoomHistory(room) {
+        const ok = confirm(
+            `Clear history in "${roomDisplayLabel(room)}"?\n\n` +
+            "Hides this room's history in Haven for everyone. It doesn't erase it from " +
+            "the entities' memory: everything said here is already part of what they remember."
+        );
+        if (!ok) return;
+        // Every member's view refreshes from the room_updated broadcast.
+        roomAction(room.id, 'POST', 'clear');
+    }
+
+    function unclearRoomHistory(room) {
+        roomAction(room.id, 'POST', 'unclear');
+    }
+
+    const VERBOSITY_OPTIONS = [
+        ['auto', 'Auto (full in DMs, short in shared rooms)'],
+        ['short', 'Short (1-3 sentences)'],
+        ['medium', 'Medium (a paragraph or two)'],
+        ['full', 'Full (no length limit)'],
+    ];
+    const MODEL_OPTIONS = [
+        ['default', 'Default (the service model)'],
+        ['sonnet', 'Sonnet'],
+        ['opus', 'Opus'],
+        ['fable', 'Fable (costs ~3-4x Opus)'],
+    ];
+
+    function openRoomSettings(room) {
+        closeRoomSettings();
+        const cur = room.settings || { verbosity: 'auto', model: 'default' };
+        const canSetModel = !!(currentUser && currentUser.is_admin);
+        const opts = (list, val) => list.map(([v, l]) =>
+            `<option value="${v}"${v === val ? ' selected' : ''}>${escapeHtml(l)}</option>`).join('');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'room-settings-overlay';
+        overlay.innerHTML = `
+            <div class="room-settings-dialog" role="dialog" aria-label="Room settings">
+                <h3>${escapeHtml(roomDisplayLabel(room))}</h3>
+                <label>Reply length
+                    <select id="rs-verbosity">${opts(VERBOSITY_OPTIONS, cur.verbosity)}</select>
+                </label>
+                <label>Model
+                    <select id="rs-model"${canSetModel ? '' : ' disabled'}>${opts(MODEL_OPTIONS, cur.model)}</select>
+                </label>
+                ${canSetModel ? '' : '<p class="rs-note">Only admins and the entities can change the model.</p>'}
+                <div class="rs-actions">
+                    <button id="rs-cancel" type="button">Cancel</button>
+                    <button id="rs-save" type="button" class="primary">Save</button>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeRoomSettings(); });
+        overlay.querySelector('#rs-cancel').addEventListener('click', closeRoomSettings);
+        overlay.querySelector('#rs-save').addEventListener('click', async () => {
+            const body = { verbosity: overlay.querySelector('#rs-verbosity').value };
+            if (canSetModel) body.model = overlay.querySelector('#rs-model').value;
+            const result = await roomAction(room.id, 'PATCH', 'settings', body);
+            if (result) {
+                room.settings = result.settings;  // the broadcast will land too; same data
+                closeRoomSettings();
+            }
+        });
+        const onKey = (ev) => { if (ev.key === 'Escape') closeRoomSettings(); };
+        document.addEventListener('keydown', onKey);
+        overlay._cleanup = () => document.removeEventListener('keydown', onKey);
+    }
+
+    function closeRoomSettings() {
+        const existing = document.querySelector('.room-settings-overlay');
         if (existing) {
             if (existing._cleanup) existing._cleanup();
             existing.remove();

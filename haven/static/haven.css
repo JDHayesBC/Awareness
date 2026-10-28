@@ -257,6 +257,11 @@ body::before {
     font-size: 0.85rem;
     transition: all 0.15s;
 }
+.room-item {
+    /* Long-press opens the room menu (#381); no iOS callout / text selection */
+    -webkit-touch-callout: none;
+    user-select: none;
+}
 .room-item:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
@@ -1018,4 +1023,52 @@ body::before {
 }
 .user-menu-item:only-child {
     border-radius: 8px;
+}
+
+/* === ROOM CONTEXT MENU + SETTINGS (#381) === */
+.user-menu-item.danger { color: #e8776f; }
+.room-settings-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 8500;
+    background: rgba(0,0,0,0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.room-settings-dialog {
+    background: var(--surface, #1e1a24);
+    border: 1px solid var(--border, rgba(255,255,255,0.12));
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    padding: 16px 18px;
+    width: min(360px, 90vw);
+    color: var(--text, #e8ddd4);
+}
+.room-settings-dialog h3 { margin: 0 0 12px; font-size: 1rem; }
+.room-settings-dialog label { display: block; font-size: 0.8rem; margin-bottom: 10px; }
+.room-settings-dialog select {
+    display: block;
+    width: 100%;
+    margin-top: 4px;
+    padding: 6px;
+    background: rgba(255,255,255,0.06);
+    color: inherit;
+    border: 1px solid var(--border, rgba(255,255,255,0.12));
+    border-radius: 6px;
+}
+.room-settings-dialog .rs-note { font-size: 0.75rem; opacity: 0.7; margin: 0 0 10px; }
+.room-settings-dialog .rs-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.room-settings-dialog .rs-actions button {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border, rgba(255,255,255,0.12));
+    background: none;
+    color: inherit;
+    cursor: pointer;
+}
+.room-settings-dialog .rs-actions button.primary {
+    background: var(--accent, #c9a0dc);
+    color: var(--bg-deep, #14101a);
+    border-color: transparent;
 }

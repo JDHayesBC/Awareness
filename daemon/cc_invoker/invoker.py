@@ -190,6 +190,7 @@ class ClaudeInvoker:
         init_timeout: float = 60.0,
         capture_channel: Optional[str] = None,
         effort: Optional[str] = None,
+        cli_path: Optional[str] = None,
     ):
         """
         Initialize invoker configuration.
@@ -276,6 +277,11 @@ class ClaudeInvoker:
         # ClaudeAgentOptions(effort=...), which the SDK transport turns into the
         # `--effort` CLI flag (GH #314). None = let the CLI/settings decide.
         self.effort = effort
+        # Claude Code binary to drive. None = the SDK's bundled CLI, which lags
+        # (SDK 0.1.73 bundles 2.1.128: aliases resolve to sonnet-4-6/opus-4-7 and
+        # current model ids 400 as "version too old"). Pass the system CLI to
+        # get current models (#381).
+        self.cli_path = cli_path
 
         self._client: Optional[ClaudeSDKClient] = None
         self._connected = False
@@ -443,6 +449,17 @@ class ClaudeInvoker:
             last_error=last_error
         )
 
+    async def set_model(self, model: str | None) -> None:
+        """Switch the model of the live session without restarting it.
+
+        Keeps one session/context (the river property); the cost is a prompt-cache
+        miss on the next turn. Updates self.model so initialize() re-applies the
+        same model after a restart or reconnect (see the set_model call there).
+        """
+        if self._client is not None and self._connected:
+            await self._client.set_model(model)
+        self.model = model
+
     async def initialize(self, timeout: Optional[float] = None, send_startup: bool = True) -> dict:
         """
         Initialize the persistent connection.
@@ -485,6 +502,7 @@ class ClaudeInvoker:
             permission_mode="bypassPermissions" if self.bypass_permissions else None,
             env=self.subprocess_env(),
             effort=self.effort,
+            cli_path=self.cli_path,
         )
 
         # Create and connect client

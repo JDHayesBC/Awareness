@@ -38,6 +38,7 @@ from haven.models import (
     SetPasswordRequest,
     TypingRequest,
     UpdateRoomRequest,
+    UpdateRoomSettingsRequest,
     UserResponse,
 )
 
@@ -1028,10 +1029,86 @@ async def update_room(room_id: str, request: Request, body: UpdateRoomRequest):
         "type": "room_updated",
         "room_id": room_id,
         "display_name": body.display_name.strip(),
+        "settings": await db.get_room_settings(room_id),
     }
     await manager.broadcast_to_room(room_id, event)
 
     return {"ok": True, "room_id": room_id, "display_name": body.display_name.strip()}
+
+
+# --- Room settings (#381) ---
+
+async def _broadcast_room_settings(room_id: str, settings: dict) -> None:
+    """room_updated carries display_name too so older clients that only know
+    the rename shape don't blank the sidebar label."""
+    room = await db.get_room(room_id)
+    await manager.broadcast_to_room(room_id, {
+        "type": "room_updated",
+        "room_id": room_id,
+        "display_name": room["display_name"] if room else None,
+        "settings": settings,
+    })
+
+
+@app.get("/api/rooms/{room_id}/settings")
+async def get_room_settings(room_id: str, request: Request):
+    user_id = await get_current_user_id(request, db)
+    if not await db.get_room(room_id):
+        raise HTTPException(status_code=404, detail="Room not found")
+    if not await db.is_room_member(room_id, user_id):
+        raise HTTPException(status_code=403, detail="Not a member of this room")
+    return await db.get_room_settings(room_id)
+
+
+@app.patch("/api/rooms/{room_id}/settings")
+async def update_room_settings(
+    room_id: str, request: Request, body: UpdateRoomSettingsRequest
+):
+    """Set verbosity (any member) and/or model (admin or entity-bot member).
+
+    Model is gated because it changes cost; a guest can ask an entity to change
+    it. A request carrying a forbidden field is rejected whole (no partial apply).
+    """
+    user_id = await get_current_user_id(request, db)
+    if not await db.get_room(room_id):
+        raise HTTPException(status_code=404, detail="Room not found")
+    if not await db.is_room_member(room_id, user_id):
+        raise HTTPException(status_code=403, detail="Not a member of this room")
+
+    if body.model is not None:
+        user = await db.get_user(user_id)
+        if not (await db.is_admin(user_id) or (user and user.get("is_bot"))):
+            raise HTTPException(
+                status_code=403, detail="Only admins or entities can change a room's model"
+            )
+
+    settings = await db.update_room_settings(
+        room_id, user_id, verbosity=body.verbosity, model=body.model
+    )
+    await _broadcast_room_settings(room_id, settings)
+    return {"ok": True, "room_id": room_id, "settings": settings}
+
+
+@app.post("/api/rooms/{room_id}/clear")
+async def clear_room_history(room_id: str, request: Request):
+    """Soft-clear a room's history for everyone (admin only). Rows are kept."""
+    user_id = await require_admin(request)
+    if not await db.get_room(room_id):
+        raise HTTPException(status_code=404, detail="Room not found")
+    settings = await db.clear_room_history(room_id, user_id)
+    await _broadcast_room_settings(room_id, settings)
+    return {"ok": True, "room_id": room_id, "settings": settings}
+
+
+@app.post("/api/rooms/{room_id}/unclear")
+async def unclear_room_history(room_id: str, request: Request):
+    """Reverse a soft clear (admin only)."""
+    user_id = await require_admin(request)
+    if not await db.get_room(room_id):
+        raise HTTPException(status_code=404, detail="Room not found")
+    settings = await db.unclear_room_history(room_id, user_id)
+    await _broadcast_room_settings(room_id, settings)
+    return {"ok": True, "room_id": room_id, "settings": settings}
 
 
 # --- Admin endpoints ---
@@ -1199,6 +1276,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = ""):
         # Per-room unread counts, so the sidebar shows badges immediately on
         # (re)connect — durable across the background/notification/reopen cycle.
         unread = await db.get_unread_counts(user_id)
+        room_settings = await db.get_room_settings_bulk([r["id"] for r in rooms])
         await ws.send_text(json.dumps({
             "type": "connected",
             "unread": unread,
@@ -1215,6 +1293,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = ""):
                     "display_name": r["display_name"],
                     "is_dm": bool(r["is_dm"]),
                     "member_count": r["member_count"],
+                    "settings": room_settings[r["id"]],
                 }
                 for r in rooms
             ],
