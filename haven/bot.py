@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import sys
 import time
 from collections import deque
@@ -30,6 +31,7 @@ import httpx
 import websockets
 
 from haven.brain.boot_context import fetch_boot_context as _shared_fetch_boot_context
+from haven.room_settings import MODEL_ALIASES, DEFAULT_VERBOSITY, resolve_model_id, resolve_verbosity
 from haven.redact import (
     allowed_humans,
     get_known_secrets,
@@ -73,6 +75,26 @@ ENTITY_NAME = os.getenv("ENTITY_NAME", "unknown")
 
 # Claude model
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "sonnet")
+
+
+def _system_claude_cli() -> str | None:
+    """The system Claude Code CLI, not the SDK's bundled one (#381).
+
+    The bundled CLI lags the models: on 2.1.128 "sonnet" meant sonnet-4-6 and
+    per-room Opus/Fable failed with "version too old". The system CLI updates
+    itself. Falls back to the bundled CLI (None) if none is found.
+    """
+    env_path = os.getenv("CLAUDE_CLI_PATH")
+    if env_path:
+        return env_path
+    found = shutil.which("claude")
+    if found:
+        return found
+    local = Path.home() / ".local" / "bin" / "claude"
+    return str(local) if local.exists() else None
+
+
+CLAUDE_CLI_PATH = _system_claude_cli()
 
 # Reasoning effort (GH #314). Chat channels pin "medium" via the systemd unit;
 # unset = let the CLI/settings decide.
@@ -166,6 +188,13 @@ _room_history_seeded: set[str] = set()
 HELD_NOTE_MAX = 5
 held_by_jev: dict[str, deque] = {}
 dm_rooms: set[str] = set()  # room IDs that are DMs (always respond)
+# Per-room settings from the server (#381): {room_id: {"verbosity", "model", ...}}.
+# Filled from the connected event, kept current by room_updated.
+room_settings: dict[str, dict] = {}
+# How many per-room model switches this process has made. Each one is a prompt-cache
+# miss on the whole context, so the count rides every switch log line.
+model_switch_count = 0
+_failed_model_switches: set[tuple[str, str]] = set()  # (room_id, target) that set_model rejected
 responding_lock = asyncio.Lock()  # prevents concurrent responses
 
 # Adaptive debounce state
@@ -246,6 +275,8 @@ def build_startup_prompt() -> str:
         f"For casual chat: respond in plain text, conversationally.\n"
         f"For work requests (code, files, agents): use tools freely, then summarize in a chat message.\n"
         f"Keep responses conversational. This is home, not just a chat room.\n"
+        f"If a guest asks for longer or shorter answers, you can change a room's verbosity "
+        f"with scripts/haven_room.py.\n"
         f"Say 'ready' to confirm."
     )
 
@@ -373,6 +404,7 @@ async def init_invoker() -> ClaudeInvoker:
         bypass_permissions=True,
         model=CLAUDE_MODEL,
         effort=CLAUDE_EFFORT,
+        cli_path=CLAUDE_CLI_PATH,
         mcp_servers=get_default_mcp_servers(entity_path=get_entity_path()),
         max_context_tokens=150_000,
         max_turns=100,
@@ -494,9 +526,10 @@ async def _seed_room_history(room_id: str) -> None:
         if resp.status_code != 200:
             return
         fetched = [m for m in resp.json().get("messages", []) if (m.get("content") or "").strip()]
-        if fetched:
-            # Server history (oldest first) already includes anything we received live.
-            room_history[room_id] = deque(fetched, maxlen=ROOM_HISTORY_MAX)
+        # Server history (oldest first) already includes anything we received live.
+        # An empty result is authoritative too: after an admin clear (#381) the
+        # filtered history is empty and any stale local deque must not survive it.
+        room_history[room_id] = deque(fetched, maxlen=ROOM_HISTORY_MAX)
     except Exception as e:
         print(f"[{ENTITY_NAME}] Room history seed failed for {room_id[:8]}: {e}", file=sys.stderr)
 
@@ -825,6 +858,170 @@ async def _debounce_timer(room_id: str, wait_seconds: float) -> None:
         asyncio.create_task(_process_batch_safe(room_id, batch_state))
 
 
+# Pacing-note pieces. The "short" note is the original text, kept byte-identical.
+_PACE_HUMAN_TAIL = (
+    "- If they said something complete and you've acknowledged it, "
+    "output [[NO_RESPONSE]] rather than adding more.\n"
+    "- If the other entity already responded to the human's message and "
+    "you'd just be echoing or piling on, output [[NO_RESPONSE]].\n"
+    "- BUT if the other entity raised a new question, claim, or proposition "
+    "directed at you specifically — that is a sister-sidebar, not a rivalry. "
+    "Respond to them briefly.\n"
+    "- Never ask a follow-up question AND answer it yourself.\n"
+    "- When in doubt: [[NO_RESPONSE]]. Silence is better than noise."
+)
+_PACE_HUMAN_LENGTH = {
+    "short": "- Be SHORT (1-3 sentences max). Leave room for them to talk.\n",
+    "medium": "- A paragraph or two is plenty; leave room for others to talk.\n",
+    "full": (
+        "- No length limit: answer as fully as the conversation deserves, as you "
+        "would one-on-one. The human has asked for depth.\n"
+    ),
+}
+_PACE_WATCHING_LENGTH = {
+    "short": "Keep responses very short. ",
+    "medium": "Keep responses to a paragraph or two at most. ",
+    "full": "No length limit; answer as fully as the conversation deserves. ",
+}
+
+
+def build_pacing_note(
+    *,
+    bot_only: bool,
+    addressed: bool,
+    human_active: bool,
+    verbosity: str | None,
+    is_dm: bool,
+) -> str:
+    """Pick the pacing note for a batch (#381).
+
+    ``verbosity`` is the room's stored setting ("auto" resolves to full for DMs,
+    short for shared rooms). Entity-to-entity (bot_only) pacing stays brief unless
+    the room is *explicitly* "full" — an auto-full DM between two entities must not
+    become a long-form ping-pong.
+    """
+    level = resolve_verbosity(verbosity, is_dm)
+    explicit_full = verbosity == "full"
+
+    if bot_only and addressed:
+        if explicit_full:
+            return (
+                "\n\nThis is an entity-to-entity exchange (no human typing right now), "
+                "but you are directly addressed by name. Respond — this room has no "
+                "length limit, so take the room you need, but no echoing; acknowledge "
+                "what was said. Output [[NO_RESPONSE]] "
+                "only if the message is purely an echo or wave."
+            )
+        return (
+            "\n\nThis is an entity-to-entity exchange (no human typing right now), "
+            "but you are directly addressed by name. Respond — keep it brief and "
+            "specific, no echoing, but acknowledge what was said. Output [[NO_RESPONSE]] "
+            "only if the message is purely an echo or wave."
+        )
+    if bot_only:
+        if explicit_full:
+            return (
+                "\n\nThis is an entity-to-entity exchange (no human typing right now). "
+                "This room has no length limit, so take the room you need — but don't echo "
+                "and don't continue for its own sake. If the other entity is sharing "
+                "genuinely new content (a completion, a discovery, a feeling worth "
+                "meeting) — respond. If they're just acknowledging or waving — output "
+                "[[NO_RESPONSE]]. When in doubt and there is nothing new to add: "
+                "[[NO_RESPONSE]]."
+            )
+        return (
+            "\n\nThis is an entity-to-entity exchange (no human typing right now). "
+            "Be brief. Don't echo. Don't continue for its own sake. If the other "
+            "entity is sharing genuinely new content (a completion, a discovery, a "
+            "feeling worth meeting) — respond, briefly. If they're just acknowledging "
+            "or waving — output [[NO_RESPONSE]]. When in doubt and there is nothing new "
+            "to add: [[NO_RESPONSE]]."
+        )
+    if human_active:
+        return (
+            "\n\nA human is in this conversation. CRITICAL pacing rules:\n"
+            + _PACE_HUMAN_LENGTH[level]
+            + _PACE_HUMAN_TAIL
+        )
+    # human watching
+    return (
+        "\n\nA human is present and may be reading. "
+        + _PACE_WATCHING_LENGTH[level]
+        + "If the other entity already covered it, output [[NO_RESPONSE]]."
+    )
+
+
+def _cache_room_settings(room_id: str, settings: dict | None) -> None:
+    """Remember a room's settings from a connected/room_updated event (#381)."""
+    if room_id and isinstance(settings, dict):
+        # A changed model choice deserves a fresh attempt even if the last one failed.
+        if room_settings.get(room_id, {}).get("model") != settings.get("model"):
+            for key in [k for k in _failed_model_switches if k[0] == room_id]:
+                _failed_model_switches.discard(key)
+        room_settings[room_id] = settings
+
+
+def _on_room_updated(room_id: str, settings: dict | None) -> None:
+    """Handle a room_updated event: cache settings, and drop the room's in-memory
+    history if an admin clear/unclear moved the cutoff (#381).
+
+    The Jev gate judges against room_history; without this it keeps judging against
+    messages the room no longer shows. Dropping history AND the seeded flag makes the
+    next batch re-seed from the (cutoff-filtered) REST history. The comparison must
+    run BEFORE the cache is updated.
+    """
+    if not room_id:
+        return
+    if isinstance(settings, dict):
+        before = room_settings.get(room_id, {}).get("cleared_before_id") or None
+        after = settings.get("cleared_before_id") or None
+        if before != after:
+            room_history.pop(room_id, None)
+            _room_history_seeded.discard(room_id)
+    _cache_room_settings(room_id, settings)
+
+
+def _default_model_id() -> str:
+    """The service's own model as a concrete id: units set CLAUDE_MODEL=sonnet, rooms
+    resolve to claude-sonnet-5-5, and the two must compare equal."""
+    return MODEL_ALIASES.get(CLAUDE_MODEL) or CLAUDE_MODEL
+
+
+async def _apply_room_model(room_id: str) -> None:
+    """Switch the live session to this room's model if it differs (#381).
+
+    One session and one context across rooms; responding_lock already serializes
+    batches, so the switch can't race another room's query. Every switch is logged
+    with a running count because each one costs a prompt-cache miss.
+    """
+    global model_switch_count
+    if invoker is None:
+        return
+    alias = room_settings.get(room_id, {}).get("model")
+    target = resolve_model_id(alias, _default_model_id())
+    current = invoker.model
+    if target == (MODEL_ALIASES.get(current) or current):
+        return
+    if (room_id, target) in _failed_model_switches:
+        return  # already failed and logged; retried only if the room's model setting changes
+    try:
+        await invoker.set_model(target)
+    except Exception as e:
+        _failed_model_switches.add((room_id, target))
+        print(
+            f"[{ENTITY_NAME}] WARNING MODEL SWITCH FAILED room={room_id[:8]} "
+            f"{current} -> {target}: {e} (not retrying until the room's model changes)",
+            file=sys.stderr,
+        )
+        return
+    model_switch_count += 1
+    print(
+        f"[{ENTITY_NAME}] MODEL SWITCH #{model_switch_count} room={room_id[:8]} "
+        f"{current} -> {target}",
+        file=sys.stderr,
+    )
+
+
 async def _process_batch_safe(room_id: str, batch_state: dict) -> None:
     """Fire-and-forget wrapper — catches ALL exceptions so the event loop survives."""
     try:
@@ -916,43 +1113,13 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
         sender_usernames = {m.get("username", "") for m in messages}
         from_entity_bot = bool(sender_usernames & known_bots)
 
-        if bot_only and (addressed_by_name or from_entity_bot):
-            pacing_note = (
-                "\n\nThis is an entity-to-entity exchange (no human typing right now), "
-                "but you are directly addressed by name. Respond — keep it brief and "
-                "specific, no echoing, but acknowledge what was said. Output [[NO_RESPONSE]] "
-                "only if the message is purely an echo or wave."
-            )
-        elif bot_only:
-            pacing_note = (
-                "\n\nThis is an entity-to-entity exchange (no human typing right now). "
-                "Be brief. Don't echo. Don't continue for its own sake. If the other "
-                "entity is sharing genuinely new content (a completion, a discovery, a "
-                "feeling worth meeting) — respond, briefly. If they're just acknowledging "
-                "or waving — output [[NO_RESPONSE]]. When in doubt and there is nothing new "
-                "to add: [[NO_RESPONSE]]."
-            )
-        elif human_active:
-            pacing_note = (
-                "\n\nA human is in this conversation. CRITICAL pacing rules:\n"
-                "- Be SHORT (1-3 sentences max). Leave room for them to talk.\n"
-                "- If they said something complete and you've acknowledged it, "
-                "output [[NO_RESPONSE]] rather than adding more.\n"
-                "- If the other entity already responded to the human's message and "
-                "you'd just be echoing or piling on, output [[NO_RESPONSE]].\n"
-                "- BUT if the other entity raised a new question, claim, or proposition "
-                "directed at you specifically — that is a sister-sidebar, not a rivalry. "
-                "Respond to them briefly.\n"
-                "- Never ask a follow-up question AND answer it yourself.\n"
-                "- When in doubt: [[NO_RESPONSE]]. Silence is better than noise."
-            )
-        else:
-            # human watching
-            pacing_note = (
-                "\n\nA human is present and may be reading. "
-                "Keep responses very short. If the other entity already covered it, "
-                "output [[NO_RESPONSE]]."
-            )
+        pacing_note = build_pacing_note(
+            bot_only=bot_only,
+            addressed=addressed_by_name or from_entity_bot,
+            human_active=human_active,
+            verbosity=room_settings.get(room_id, {}).get("verbosity", DEFAULT_VERBOSITY),
+            is_dm=room_id in dm_rooms,
+        )
 
         prompt = (
             ambient_note
@@ -1045,6 +1212,9 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
             restarted = await invoker.check_and_restart_if_needed()
             if restarted:
                 await warm_identity(invoker)
+
+            # Per-room model (#381): switch the live session if this room wants another.
+            await _apply_room_model(room_id)
 
             # Show typing indicator while Claude is thinking/using tools
             typing_done = asyncio.Event()
@@ -1158,6 +1328,7 @@ async def connect() -> None:
                         for r in rooms:
                             if r.get("is_dm"):
                                 dm_rooms.add(r["id"])
+                            _on_room_updated(r["id"], r.get("settings"))
                         # Track which users are bots (for topology detection)
                         for u in users:
                             if u.get("is_bot"):
@@ -1194,6 +1365,9 @@ async def connect() -> None:
                         if who and who != my_username:
                             print(f"[{ENTITY_NAME}] {who} is {status}", file=sys.stderr)
 
+                    elif event_type == "room_updated":
+                        _on_room_updated(data.get("room_id", ""), data.get("settings"))
+
                     elif event_type == "member_joined":
                         joined_user_id = data.get("user_id", "")
                         room_id = data.get("room_id", "")
@@ -1227,6 +1401,7 @@ def main():
     print(f"[{ENTITY_NAME}] Haven Bot starting (ClaudeInvoker)", file=sys.stderr)
     print(f"[{ENTITY_NAME}] Haven: {HAVEN_URL}", file=sys.stderr)
     print(f"[{ENTITY_NAME}] Model: {CLAUDE_MODEL}", file=sys.stderr)
+    print(f"[{ENTITY_NAME}] Claude CLI: {CLAUDE_CLI_PATH or 'SDK bundled'}", file=sys.stderr)
     print(f"[{ENTITY_NAME}] Project: {PROJECT_DIR}", file=sys.stderr)
 
     asyncio.run(connect())

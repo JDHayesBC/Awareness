@@ -1,6 +1,8 @@
 """Haven — Pydantic models for request/response validation."""
 
 from datetime import datetime
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -40,6 +42,12 @@ class SetNicknameRequest(BaseModel):
 
 class UpdateRoomRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=128)
+
+
+class UpdateRoomSettingsRequest(BaseModel):
+    """Partial update: omitted fields are left alone."""
+    verbosity: Literal["auto", "short", "medium", "full"] | None = None
+    model: Literal["default", "sonnet", "opus", "fable"] | None = None
 
 
 # --- Response Models ---

@@ -66,6 +66,17 @@ CREATE TABLE IF NOT EXISTS user_nicknames (
     PRIMARY KEY (viewer_id, target_id)
 );
 
+-- Per-room settings (#381). NULL column = default. cleared_before_id is a soft
+-- clear: messages with id <= it are hidden from history, never deleted.
+CREATE TABLE IF NOT EXISTS room_settings (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id),
+    verbosity TEXT,
+    model TEXT,
+    cleared_before_id INTEGER,
+    updated_by TEXT,
+    updated_at TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_room_time
     ON messages(room_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_users_token_hash
@@ -312,6 +323,12 @@ class HavenDB:
         conditions = ["m.room_id = ?"]
         params: list = [room_id]
 
+        # Soft clear (#381): hide rows at or below the room's cleared marker.
+        conditions.append(
+            "m.id > COALESCE((SELECT cleared_before_id FROM room_settings "
+            "WHERE room_id = m.room_id), 0)"
+        )
+
         if before_id is not None:
             conditions.append("m.id < ?")
             params.append(before_id)
@@ -375,6 +392,9 @@ class HavenDB:
                        ON m.room_id = rm.room_id
                       AND m.user_id != rm.user_id
                       AND m.id > COALESCE(rr.last_read_id, 0)
+                      AND m.id > COALESCE(
+                          (SELECT cleared_before_id FROM room_settings
+                            WHERE room_id = rm.room_id), 0)
                 WHERE rm.user_id = ?
                 GROUP BY rm.room_id""",
             (user_id,),
@@ -570,3 +590,93 @@ class HavenDB:
             (display_name.strip(), room_id),
         )
         await self._db.commit()
+
+    # --- Room settings (#381) ---
+
+    @staticmethod
+    def _settings_dict(row) -> dict:
+        """Normalize a room_settings row (or None) to API shape, NULL -> default."""
+        r = dict(row) if row else {}
+        return {
+            "verbosity": r.get("verbosity") or "auto",
+            "model": r.get("model") or "default",
+            "cleared_before_id": r.get("cleared_before_id"),
+            "updated_by": r.get("updated_by"),
+            "updated_at": r.get("updated_at"),
+        }
+
+    async def get_room_settings(self, room_id: str) -> dict:
+        async with self._db.execute(
+            "SELECT * FROM room_settings WHERE room_id = ?", (room_id,)
+        ) as cursor:
+            return self._settings_dict(await cursor.fetchone())
+
+    async def get_room_settings_bulk(self, room_ids: list[str]) -> dict[str, dict]:
+        """{room_id: settings} for every id, defaults for rooms with no row."""
+        out = {rid: self._settings_dict(None) for rid in room_ids}
+        if not room_ids:
+            return out
+        placeholders = ",".join("?" * len(room_ids))
+        async with self._db.execute(
+            f"SELECT * FROM room_settings WHERE room_id IN ({placeholders})", room_ids
+        ) as cursor:
+            for row in await cursor.fetchall():
+                out[row["room_id"]] = self._settings_dict(row)
+        return out
+
+    async def update_room_settings(
+        self,
+        room_id: str,
+        updated_by: str,
+        verbosity: str | None = None,
+        model: str | None = None,
+    ) -> dict:
+        """Partial upsert: only the provided fields change."""
+        await self._touch_room_settings(room_id, updated_by)
+        if verbosity is not None:
+            await self._db.execute(
+                "UPDATE room_settings SET verbosity = ? WHERE room_id = ?",
+                (verbosity, room_id),
+            )
+        if model is not None:
+            await self._db.execute(
+                "UPDATE room_settings SET model = ? WHERE room_id = ?",
+                (model, room_id),
+            )
+        await self._db.commit()
+        return await self.get_room_settings(room_id)
+
+    async def clear_room_history(self, room_id: str, updated_by: str) -> dict:
+        """Soft clear: hide everything up to the room's current newest message."""
+        await self._touch_room_settings(room_id, updated_by)
+        await self._db.execute(
+            """UPDATE room_settings
+                  SET cleared_before_id =
+                      (SELECT COALESCE(MAX(id), 0) FROM messages WHERE room_id = ?)
+                WHERE room_id = ?""",
+            (room_id, room_id),
+        )
+        await self._db.commit()
+        return await self.get_room_settings(room_id)
+
+    async def unclear_room_history(self, room_id: str, updated_by: str) -> dict:
+        """Reverse a soft clear. Nothing was deleted, so everything reappears."""
+        await self._touch_room_settings(room_id, updated_by)
+        await self._db.execute(
+            "UPDATE room_settings SET cleared_before_id = NULL WHERE room_id = ?",
+            (room_id,),
+        )
+        await self._db.commit()
+        return await self.get_room_settings(room_id)
+
+    async def _touch_room_settings(self, room_id: str, updated_by: str) -> None:
+        """Ensure the row exists and stamp who/when (caller commits)."""
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            """INSERT INTO room_settings (room_id, updated_by, updated_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(room_id) DO UPDATE SET
+                   updated_by = excluded.updated_by,
+                   updated_at = excluded.updated_at""",
+            (room_id, updated_by, now),
+        )
