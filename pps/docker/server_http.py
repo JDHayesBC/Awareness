@@ -44,6 +44,7 @@ class AmbientRecallRequest(BaseModel):
     consumer_key: str = ""  # Cursor identity (e.g., "terminal:abc12345"). Decoupled from `channel` so multiple processes claiming the same channel keep independent cursors. Falls back to `channel` if empty (issue #176).
     user_timezone: str = ""  # User's local timezone abbreviation (e.g., "PDT") — passed from hook
     full: bool = False  # Issue #313: opt-out of query-mode truncation/capping for callers that genuinely want the raw, uncapped payload.
+    speakers: list[str] = []  # #383: author names of the turn being answered (as stored by the bridge). Lets [first-meeting] fire even when their row hasn't landed yet. Empty = scan the last 24h instead.
 
 
 class AnchorSearchRequest(BaseModel):
@@ -1986,6 +1987,21 @@ async def ambient_recall(request: AmbientRecallRequest):
                 formatted_lines.append(f"**[scene]** {scene_text}")
         except Exception:
             pass  # scene file is optional; never break ambient_recall on its absence
+
+    # [last-contact] / [first-meeting] (#383) — computed from THIS entity's own
+    # conversations.db / inventory.db only. Never raises: each helper returns
+    # None / [] on any error and the try/except is a second belt.
+    try:
+        from last_contact import format_first_meeting_lines, format_last_contact_line
+        _lc = format_last_contact_line(data_path, inventory_db_path)
+        if _lc:
+            formatted_lines.append(re.sub(r"^(\[[^\]]+\])", r"**\1**", _lc))
+        for _fm in format_first_meeting_lines(
+            data_path, ENTITY_NAME, speakers=request.speakers, channel_hint=request.channel
+        ):
+            formatted_lines.append(re.sub(r"^(\[[^\]]+\])", r"**\1**", _fm))
+    except Exception:
+        pass  # optional sense; never break ambient_recall
 
     # Unread counts — surface counts even when zero so the model knows the pipeline is live.
     # Inline content blocks for haven/other_channels appear lower (load-bearing per design).

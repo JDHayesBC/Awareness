@@ -475,13 +475,18 @@ async def send_typing_indicator(room_id: str) -> None:
         pass  # Best effort — don't let typing indicator failures block responses
 
 
-async def fetch_ambient_context() -> str:
+async def fetch_ambient_context(speakers: list[str] | None = None) -> str:
     """Fetch ambient context from PPS HTTP server.
 
     Calls the Docker PPS server directly (not via MCP) to get the same
     ambient_recall context that terminal Claude gets via hooks. This gives
     the bot awareness of terminal conversations, Haven messages, crystals,
     word-photos, and rich texture — everything.
+
+    ``speakers`` (#383): author names of the batch being answered, exactly as
+    haven/bridge.py stores them (the sender's display_name). PPS uses them to
+    raise [first-meeting] even when the bridge's fire-and-forget store of the
+    guest's first message hasn't landed yet.
 
     Returns formatted context string, or empty string on failure.
     """
@@ -495,7 +500,8 @@ async def fetch_ambient_context() -> str:
                     "context": "haven bot turn",
                     "token": ENTITY_TOKEN,
                     "channel": "haven",
-                    "consumer_key": f"haven-{ENTITY_NAME}"
+                    "consumer_key": f"haven-{ENTITY_NAME}",
+                    "speakers": list(speakers or []),
                 },
             )
             if resp.status_code != 200:
@@ -1048,7 +1054,13 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
 
         # Fetch ambient context (terminal turns, crystals, etc.)
         ambient_start = time.time()
-        ambient = await fetch_ambient_context()
+        # bridge.py stores display_name as author_name; pass the SAME string (#383).
+        batch_speakers = [
+            (m.get("display_name") or m.get("username") or "").strip() for m in messages
+        ]
+        ambient = await fetch_ambient_context(
+            speakers=[n for n in dict.fromkeys(batch_speakers) if n]
+        )
         ambient_elapsed = time.time() - ambient_start
         if ambient:
             ambient_note = f"[ambient context]\n{ambient}\n\n"

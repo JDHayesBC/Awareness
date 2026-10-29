@@ -118,6 +118,9 @@ class MessageSummariesLayer(PatternLayer):
 
                 # Create indexes for efficient querying
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_messages_summary_id ON messages(summary_id)')
+                # #383 [first-meeting]: MIN(created_at) per author_name must be an index seek,
+                # not a scan of the whole (100k+ row) table on every ambient call.
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_messages_author_name_time ON messages(author_name, created_at)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_summaries_time_span ON message_summaries(time_span_start, time_span_end)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_summaries_created_at ON message_summaries(created_at)')
 
