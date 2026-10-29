@@ -10,9 +10,8 @@ from __future__ import annotations
 VERBOSITY_VALUES = ("auto", "short", "medium", "full")
 DEFAULT_VERBOSITY = "auto"
 
-# What "auto" means in a DM. Held at "short" (today's behaviour) until Jeff
-# decides: flipping it to "full" lengthens his existing DMs, phone included
-# (#381, Caia's sidebar). Per-room settings override it either way.
+# What "auto" means in a DM. Jeff, 2026-10-29: every room defaults to "short",
+# DMs included; each room is individually settable and the setting persists.
 AUTO_DM_VERBOSITY = "short"
 
 # Model aliases a room may select. None = "the bot's own CLAUDE_MODEL".
