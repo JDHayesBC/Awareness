@@ -55,6 +55,15 @@ NON_JEFF = [
     "[IDENTITY WALL — ABSOLUTE, applies to EVERY word you speak in-world. ...]",
     "[Haven messages in #39d8d930]\nJeff (jeff): Caia?  Lyra?  I'm at work now.",
     "   \n[you are in second life  (leading whitespace + lowercase still caught)",
+    # --- #325 cron tick leads that leaked 2026-10-29 (caught by the structural regex
+    # or the "heartbeat (" prefix, not by listing each wording) ---
+    "[floor-tick — 2h continuity floor. Re-anchor, confirm alive, note any change.]",
+    "[floor tick — 2h continuity beat. Re-anchor, confirm alive.]",
+    "[overnight heartbeat] Jeff asleep; tend the field.",
+    "[work-tick — deep work block, check the arc]",
+    "[presence-tick — Jeff is here, self-scan first]",
+    "Heartbeat (2h floor — Caia) re-anchor and confirm alive.",
+    "   \n[Floor-Tick — leading whitespace + mixed case still caught]",
 ]
 
 # Must be STORED (genuine Jeff input, or a sole-capture path — never dropped)
@@ -67,6 +76,14 @@ REAL = [
     "Hey what's this <task-notification> thing you keep getting?",
     "my message [in brackets] about heartbeat tick timing",  # not a leading marker
     "",  # empty — not harness
+    # #325 tick-filter false-positive guards: bracket/word near-misses must be stored
+    "[Ticket #12] the printer is jammed again",
+    "[ticker] AAPL is up today",
+    "Heartbeat is weird today",  # bare "heartbeat" is NOT a prefix — Jeff may type it
+    "tick the box for me",
+    "[note] my heart beat fast",
+    "Jeff here: [overnight] heartbeat thing was odd",  # tag not leading / no tick word in it
+    "Can you check the [floor-tick] cron? It looks off.",  # mentions a tag mid-line
     # #325 CRITICAL: [ambient context] is Discord's SOLE capture path. A Discord
     # wrapper prompt leads with it and MUST still be stored, or every Discord
     # message silently vanishes. Do NOT add "[ambient context" to the belt.

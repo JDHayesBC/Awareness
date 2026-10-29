@@ -25,6 +25,7 @@ Hook output (to stdout):
 
 import json
 import math
+import re
 import sys
 import urllib.request
 import urllib.error
@@ -957,6 +958,7 @@ HARNESS_PROMPT_PREFIXES = (
     "<<autonomous-loop",
     "heartbeat tick",
     "[heartbeat",
+    "heartbeat (",  # Caia's old unbracketed lead: "Heartbeat (2h floor — Caia) ..."
     "[night-watch",
     # #325 brain-wrapper backstop — double-captured surfaces ONLY.
     # Do NOT add "[ambient context" here: it is Discord's sole capture path.
@@ -966,12 +968,24 @@ HARNESS_PROMPT_PREFIXES = (
 )
 
 
+# Structural belt for cron tick prompts (GH #325, 2026-10-29 leak: ~400 Lyra + ~240
+# Caia rows stored as Jeff turns). Each new tick wording ("[floor-tick", "[floor tick",
+# "[overnight heartbeat]", "[work-tick", "[presence-tick") slipped past the prefix tuple
+# because we only ever listed leads we had already seen. Instead match the SHAPE: a
+# LEADING bracket tag that names a tick/heartbeat as a whole word (hyphen/space count as
+# word boundaries). Anchored at the start and capped at 48 chars inside the bracket, so
+# "[Ticket #12] ...", "[ticker] ...", "[heartbeats]" and mid-line mentions don't match.
+HARNESS_TICK_TAG_RE = re.compile(r"^\[[^\]\n]{0,48}?\b(?:tick|heartbeat)\b")
+
+
 def is_non_jeff_prompt(prompt: str) -> bool:
     """True when `prompt` is harness/tick text or a brain-daemon wrapper prompt
-    rather than a genuine Jeff terminal message — see HARNESS_PROMPT_PREFIXES
+    rather than a genuine Jeff terminal message — matches HARNESS_PROMPT_PREFIXES
+    or the leading tick/heartbeat bracket-tag regex HARNESS_TICK_TAG_RE
     (GH #322, #325). This is the prompt-SHAPE backstop; session-level brain
     detection is the CC_INVOKER_CHANNEL env flag checked in main()."""
-    return prompt.lstrip().lower().startswith(HARNESS_PROMPT_PREFIXES)
+    head = prompt.lstrip().lower()
+    return head.startswith(HARNESS_PROMPT_PREFIXES) or bool(HARNESS_TICK_TAG_RE.match(head))
 
 
 def store_user_prompt(prompt: str, session_id: str) -> bool:
