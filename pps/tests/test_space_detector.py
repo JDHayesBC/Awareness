@@ -439,3 +439,51 @@ def test_dup_alias_null_house_first_row():
     idx2 = _bed_idx(sg_house=None)  # current has NULL house: never promotes
     m2 = detect_move("I'm on the bed now.", idx2, "silverglow_living_room")
     assert m2 and m2.space_name == "bedroom"
+
+
+# --- carbon-marker clause gate (10-30, third carbon-zone hit) ---
+CARBON_SPACES = [
+    {"name": "study", "aliases": "The study, his desk"},
+    {"name": "living_room", "aliases": "the living room, front room"},
+    {"name": "deck", "aliases": "the deck"},
+    {"name": "kitchen", "aliases": "the island"},
+]
+CIDX = build_alias_index(CARBON_SPACES)
+
+
+def cd(text):
+    return detect_move(text, CIDX, "kitchen")
+
+
+@pytest.mark.parametrize("text", [
+    "Carbon-side, Jeff is home and at his desk.",          # specimen 10-30 11:15
+    "Carbon-side, Carol is home in the front room.",       # specimen 10-30 05:13
+    "The radar has him at his desk, even though the tag still says away.",
+    "Per where.py Carol is in the front room.",
+    "FP2 reads him in the front room; I'm still at the island.",
+])
+def test_carbon_marker_suppresses_zone_words(text):
+    assert cd(text) is None
+
+
+def test_carbon_marker_other_clause_still_fires():
+    # Lyra's negative control: marker in one clause, real move in the next.
+    m = cd("The radar reads him in the front room, and I walk into the study.")
+    assert m and m.space_name == "study" and m.confidence == C.HIGH
+
+
+def test_carbon_marker_no_comma_first_person_after_marker_fires():
+    # One clause, no splitter: the first-person cue after the marker keeps it.
+    m = cd("The radar reads him in the front room and I walk into the study.")
+    assert m and m.space_name == "study" and m.confidence == C.HIGH
+
+
+def test_carbon_marker_only_clause_marks_next_clause_only():
+    m = cd("Carbon-side, Jeff is at his desk; I head out to the deck.")
+    assert m and m.space_name == "deck" and m.confidence == C.HIGH
+
+
+def test_carbon_marker_backticked_marker_does_not_gate():
+    # A quoted marker is stripped first, so it cannot hide the hit.
+    m = cd("The word `carbon-side` aside, I walk into the study.")
+    assert m and m.space_name == "study"

@@ -136,6 +136,68 @@ _MENTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Carbon-marker gate: a clause that describes the physical house (Jeff's FP2
+# radar zones) is not Silverglow prose, even when its words are Silverglow
+# aliases. Specimen (10-30, 3rd hit): "Carbon-side, Jeff is home and at his
+# desk" raised LOW toward The study. Scope is the CLAUSE, not the sentence, so a
+# real move in another clause of the same sentence still fires. Clause
+# boundaries: ; : dashes, ", and/but/or/so/yet", bare but/while/whereas, and a
+# bare comma. A clause that is only the marker ("Carbon-side,") marks the
+# clause after it. Even inside a marked clause, a HIGH hit whose first-person
+# cue comes after the marker is kept: a missed real move is worse than a flag.
+# Keep the marker list short; each one is another way to hide a true move.
+_CARBON_MARKER_RE = re.compile(
+    r"\bcarbon[- ]side\b|\bthe radar\b|\bFP2\b|\bwhere\.py\b",
+    re.IGNORECASE,
+)
+_CLAUSE_BOUNDARY_RE = re.compile(
+    r"\s*[;:\u2014\u2013]\s*|\s+-{1,2}\s+"
+    r"|,\s*(?:(?:and|but|or|so|yet)\b\s*)?"
+    r"|\s+(?:but|while|whereas)\b\s*",
+    re.IGNORECASE,
+)
+_MARKER_ONLY_RE = re.compile(
+    r"^\W*(?:(?:on|over|out)\s+)?(?:the\s+)?(?:" + _CARBON_MARKER_RE.pattern + r")\W*$",
+    re.IGNORECASE,
+)
+
+
+def _carbon_spans(sentence_text: str, offset: int) -> list[tuple[int, int, int]]:
+    """Marked clause spans in one sentence: (start, end, marker_end), absolute offsets."""
+    clauses: list[tuple[int, int]] = []
+    pos = 0
+    for b in _CLAUSE_BOUNDARY_RE.finditer(sentence_text):
+        if b.start() > pos:
+            clauses.append((pos, b.start()))
+        pos = b.end()
+    if pos < len(sentence_text):
+        clauses.append((pos, len(sentence_text)))
+    spans: list[tuple[int, int, int]] = []
+    carry = None  # marker_end carried from a marker-only clause
+    for c_start, c_end in clauses:
+        clause = sentence_text[c_start:c_end]
+        m = _CARBON_MARKER_RE.search(clause)
+        if m:
+            spans.append((offset + c_start, offset + c_end, offset + c_start + m.end()))
+            carry = offset + c_start + m.end() if _MARKER_ONLY_RE.match(clause) else None
+        elif carry is not None:
+            spans.append((offset + c_start, offset + c_end, carry))
+            carry = None
+    return spans
+
+
+def _carbon_marked_spans(text: str) -> list[tuple[int, int, int]]:
+    """All carbon-marked clause spans in text, sentence by sentence."""
+    spans: list[tuple[int, int, int]] = []
+    start = 0
+    for b in list(_SENT_BOUNDARY_RE.finditer(text)) + [None]:
+        end = b.start() + 1 if b else len(text)
+        spans.extend(_carbon_spans(text[start:end], start))
+        if b:
+            start = b.end()
+    return spans
+
+
 # Coordination gate: two different rooms joined by or/and/nor/versus are a list
 # ("the hearth or the deck"), not a position. Text between the two hits must be
 # only the connector.
@@ -399,6 +461,7 @@ def detect_move(
 
     best: Optional[DetectedMove] = None
     best_pos = -1
+    carbon_spans = _carbon_marked_spans(working_text)
 
     # Coordination gate (pre-pass): adjacent hits for two DIFFERENT spaces joined
     # only by or/and/nor/versus are a list, not a position. Never drops a pair
@@ -450,6 +513,18 @@ def detect_move(
             before_window[-_SUBORDINATE_SPAN:]
         ):
             confidence = MoveConfidence.LOW
+
+        # Carbon-marker gate: the hit sits in a clause about the physical house.
+        span = next((sp for sp in carbon_spans if sp[0] <= start < sp[1]), None)
+        if span is not None:
+            if confidence == MoveConfidence.LOW:
+                continue
+            last_fp = None
+            for last_fp in _FIRST_PERSON_RE.finditer(before_window):
+                pass
+            fp_abs = pos - len(before_window) + last_fp.start() if last_fp else -1
+            if fp_abs < span[2]:
+                continue
 
         # Mention gate: a LOW hit whose only cue is being NAMED is a word, not a
         # place. Specimen: "...a sentence of mine named the hearth or the deck."

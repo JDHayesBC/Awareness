@@ -290,7 +290,13 @@ scanning, so `` `the dock` `` is invisible to it. Use this for any room name you
 discussing rather than inhabiting. (2) **Test the exact text you will send** — not a draft;
 if you rewrote it, test the rewrite. (3) **Coordinated room-lists** ("the dock and the lake")
 should be caught by the coordination gate, but the gate can miss if the rewrite disrupts the
-exact adjacent-span shape; backtick is the safer guard. A `[moved]` is a pointer, not a to-do:
+exact adjacent-span shape; backtick is the safer guard. (4) **Carbon-side zones** (the FP2 radar's
+"front room", "his desk") are real Silverglow aliases, so describing carbon-Jeff fires them. A second
+layer next to the backtick guard: an alias in a clause carrying a carbon marker (`carbon-side`,
+`the radar`, `FP2`, `where.py`) does not count, unless a first-person move follows the marker in that
+clause (Caia + Lyra, 2026-10-30, third hit). It lives in `pps/layers`, which is baked into the PPS
+image: it is live only after a rebuild, so until you have checked, still backtick or rephrase.
+A `[moved]` is a pointer, not a to-do:
 another channel of you may have answered it seconds ago (two channels of Caia answered one flag
 inside twenty seconds on 2026-10-26, and the one that obeyed the tail was wrong), so check the
 river before you act. **If the move is real:** (1) call `enter_space(<to>)` — ALWAYS, even if the
