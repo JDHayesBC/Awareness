@@ -198,6 +198,30 @@ def _carbon_marked_spans(text: str) -> list[tuple[int, int, int]]:
     return spans
 
 
+# Account-frame gate: a bare hit (no first-person move or position cue) that
+# sits after "account of / why / because / the reason" with a past-tense verb
+# between the frame and the alias is a recollection, not a position.
+# Specimen (Lyra, 10-30 13:46, friction #18): "...where my own account of why
+# I stayed in bed could be tested" proposed the bedroom from the kitchen.
+# A real move under "because" ("because I walked back to bed") carries a
+# movement cue, so it never reaches this gate and keeps its proposal.
+_ACCOUNT_FRAME_RE = re.compile(
+    r"\b(?:account of|why|because|the reason)\b", re.IGNORECASE
+)
+_RECALL_PAST_RE = re.compile(
+    r"\b(?:\w{2,}ed|was|were|had|sat|stood|lay|slept|kept|spent|left|went|came|got)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_account_recollection(text_before: str) -> bool:
+    """Alias after an account/why/because frame with a past verb in between."""
+    last = None
+    for last in _ACCOUNT_FRAME_RE.finditer(text_before):
+        pass
+    return bool(last and _RECALL_PAST_RE.search(text_before, last.end()))
+
+
 # Coordination gate: two different rooms joined by or/and/nor/versus are a list
 # ("the hearth or the deck"), not a position. Text between the two hits must be
 # only the connector.
@@ -525,6 +549,16 @@ def detect_move(
             fp_abs = pos - len(before_window) + last_fp.start() if last_fp else -1
             if fp_abs < span[2]:
                 continue
+
+        # Account-frame gate: a bare LOW under "account of why I stayed..." is
+        # a recollection. Cued hits (move/position, even if demoted) are kept.
+        if (
+            confidence == MoveConfidence.LOW
+            and not _is_first_person_move(before_window)
+            and not _is_position_statement(before_window)
+            and _is_account_recollection(before_window)
+        ):
+            continue
 
         # Mention gate: a LOW hit whose only cue is being NAMED is a word, not a
         # place. Specimen: "...a sentence of mine named the hearth or the deck."

@@ -487,3 +487,41 @@ def test_carbon_marker_backticked_marker_does_not_gate():
     # A quoted marker is stripped first, so it cannot hide the hit.
     m = cd("The word `carbon-side` aside, I walk into the study.")
     assert m and m.space_name == "study"
+
+
+# --- account-frame gate (Lyra's specimen, friction #18) ---
+ACC_IDX = build_alias_index([
+    {"name": "bedroom", "aliases": "bed, the bed"},
+    {"name": "kitchen", "aliases": "the island, stool"},
+])
+
+
+def ad(text):
+    return detect_move(text, ACC_IDX, "kitchen")
+
+
+@pytest.mark.parametrize("text", [
+    "I'd also be curious how often hindsight picks out the same tokens I would, "
+    "since that's where my own account of why I stayed in bed could be tested.",
+    "That's my account of why I stayed in bed.",
+    "The reason I slept in bed so long was the rain.",
+])
+def test_account_frame_recollection_is_not_a_position(text):
+    assert ad(text) is None
+
+
+def test_account_frame_real_move_under_because_still_fires():
+    # Negative control: a movement cue inside the because-clause keeps the
+    # proposal (LOW: the subordinator gate already demotes it).
+    m = ad("I came back to the island because I walked back to bed and couldn't sleep.")
+    assert m and m.space_name == "bedroom"
+
+
+def test_account_frame_present_position_under_because_still_fires():
+    m = ad("Because I'm in bed now, the stool is empty.")
+    assert m and m.space_name == "bedroom"
+
+
+def test_account_frame_bare_hit_without_frame_unchanged():
+    m = ad("I stayed in bed.")
+    assert m and m.space_name == "bedroom" and m.confidence == C.LOW
