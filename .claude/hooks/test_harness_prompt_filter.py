@@ -44,6 +44,7 @@ NON_JEFF = [
     "<task-notification>\n<task-id>ab4a3a9b968069da",
     '<cross-session-message from="uds:/run/user/1000/cc-socks/x.sock">hi</cross-session-message>',
     "<system-reminder>background context</system-reminder>",
+    '<channel source="terminal-wake" from="haven" room="f5c6eda2" reason="x">\nrebuild pps-lyra\n</channel>',
     "<<autonomous-loop-dynamic>>",
     "Heartbeat tick — 4:09 PM.\n\n**Field scan**: ...",
     "[heartbeat — ~20min, MORNING scan]",

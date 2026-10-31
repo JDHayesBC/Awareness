@@ -35,6 +35,7 @@ _STALE_RUN_STOP = 50
 HARNESS_PROMPT_PREFIXES = (
     "<task-notification",
     "<cross-session-message",
+    "<channel source=\"terminal-wake\"",  # #351 self-wake from Haven/SL-me, not Jeff
     "<system-reminder",
     "<<autonomous-loop",
     "heartbeat tick",

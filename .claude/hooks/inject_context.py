@@ -954,6 +954,7 @@ def query_pps_ambient_recall(context: str, session_id: str) -> str:
 HARNESS_PROMPT_PREFIXES = (
     "<task-notification",
     "<cross-session-message",
+    "<channel source=\"terminal-wake\"",  # #351 self-wake from Haven/SL-me, not Jeff
     "<system-reminder",
     "<<autonomous-loop",
     "heartbeat tick",
