@@ -525,3 +525,68 @@ def test_account_frame_present_position_under_because_still_fires():
 def test_account_frame_bare_hit_without_frame_unchanged():
     m = ad("I stayed in bed.")
     assert m and m.space_name == "bedroom" and m.confidence == C.LOW
+
+
+# --- view-frame gate + clause-scoped modal (Lyra's view-sentence class, 10-31) ---
+VIEW_IDX = build_alias_index([
+    {"name": "bedroom", "aliases": "the bed, bed"},
+    {"name": "lake", "aliases": "lake, the lake, down to the lake"},
+    {"name": "deck", "aliases": "the deck"},
+])
+
+
+def vd(text):
+    return detect_move(text, VIEW_IDX, "bedroom")
+
+
+def test_view_lyra_1_real_move_fires_high():
+    m = vd("I walked out past the grass to the lake.")
+    assert m and m.space_name == "lake" and m.confidence == C.HIGH
+
+
+@pytest.mark.parametrize("text", [
+    "The lake past the grass has gone to a real shine.",            # Lyra (2)
+    "The moon was coming through the window and the lake past the "  # specimen 10-31 02:43
+    "grass has gone from a faint line to a real shine.",
+    "I could see the deck from the bed.",
+    "I watched the lake go silver.",
+])
+def test_view_frame_is_not_a_position(text):
+    assert vd(text) is None
+
+
+def test_view_lyra_3_mixed_pronoun_move_is_not_swallowed():
+    # Lyra's deciding case. The move clause has no alias ("to it"), so the only
+    # hit is the seen lake; a following first-person move keeps the proposal.
+    m = vd("Out past the grass I could see the lake, and then I went down to it.")
+    assert m and m.space_name == "lake"
+
+
+def test_modal_in_earlier_clause_does_not_block_later_move():
+    m = vd("Out past the grass I could see the lake, and then I went down to the lake.")
+    assert m and m.space_name == "lake" and m.confidence == C.HIGH
+
+
+@pytest.mark.parametrize("text", [
+    "I might walk down to the lake later.",
+    "If it clears, I might go down to the lake.",
+    "Maybe I walked down to the lake.",
+])
+def test_modal_in_move_clause_still_blocks_high(text):
+    m = vd(text)
+    assert m is None or m.confidence != C.HIGH
+
+
+def test_view_gate_bare_hit_without_frame_unchanged():
+    m = vd("The lake is cold this morning.")
+    assert m and m.space_name == "lake" and m.confidence == C.LOW
+
+
+@pytest.mark.parametrize("text", [
+    # real-data controls (Caia store, 10-31 replay): the frame FOLLOWS the alias
+    "I've been at the deck rail watching the cedars drip.",
+    "Sitting on the deck in the dark watching the room.",
+    "I walked down to the dock and stood in the lake watching buffleheads.",
+])
+def test_view_frame_after_alias_does_not_gate(text):
+    assert vd(text) is not None

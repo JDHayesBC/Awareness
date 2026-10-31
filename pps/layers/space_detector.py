@@ -222,6 +222,40 @@ def _is_account_recollection(text_before: str) -> bool:
     return bool(last and _RECALL_PAST_RE.search(text_before, last.end()))
 
 
+# View-frame gate: a bare hit in a clause that only looks at a room is the view
+# from where I already am. Specimen (Lyra, 10-31 02:43, from bed): "the moon was
+# coming through the window and the lake past the grass has gone from a faint
+# line to a real shine" proposed `lake`. Only cue-less LOW hits are gated, and
+# only when the frame comes BEFORE the alias in its clause (the room is the thing
+# looked at), or "past/beyond the" follows it. A
+# first-person move later in the same sentence keeps the proposal, so "I could
+# see the lake, and then I went down to it" is not swallowed. Keep the frame
+# list short; each one is another way to hide a true move.
+_VIEW_FRAME_RE = re.compile(
+    r"\b(?:see|sees|saw|seen|seeing|watch|watches|watched|watching"
+    r"|through the window|out the window|out across|out over"
+    r"|past the|beyond the|from the bed|from the window|from here)\b",
+    re.IGNORECASE,
+)
+
+
+# "The lake past the grass": the frame follows the alias. Only these two, and
+# only right after it; "at the kitchen window watching the cedars" is a position.
+_VIEW_TAIL_RE = re.compile(r"\s+(?:past|beyond)\s+the\b", re.IGNORECASE)
+
+
+def _clause_bounds(text: str, sent_start: int, sent_end: int, pos: int) -> tuple[int, int]:
+    """Absolute (start, end) of the clause holding pos, within one sentence."""
+    c_start, c_end = sent_start, sent_end
+    for b in _CLAUSE_BOUNDARY_RE.finditer(text, sent_start, sent_end):
+        if b.end() <= pos:
+            c_start = b.end()
+        elif b.start() >= pos:
+            c_end = b.start()
+            break
+    return c_start, c_end
+
+
 # Coordination gate: two different rooms joined by or/and/nor/versus are a list
 # ("the hearth or the deck"), not a position. Text between the two hits must be
 # only the connector.
@@ -311,7 +345,12 @@ def _passes_subject_filters(text_before: str) -> bool:
         pass
     if last_fp is None:
         return False
-    if _MODAL_RE.search(text_before):
+    # Modal scope is the clause holding the last first-person token: "I could
+    # see the lake, and then I went down to the lake" is a move (10-31).
+    clause_start = 0
+    for b in _CLAUSE_BOUNDARY_RE.finditer(text_before, 0, last_fp.start()):
+        clause_start = b.end()
+    if _MODAL_RE.search(text_before, clause_start):
         return False
     if _THIRD_PERSON_RE.search(text_before, last_fp.end()):
         return False
@@ -559,6 +598,23 @@ def detect_move(
             and _is_account_recollection(before_window)
         ):
             continue
+
+        # View-frame gate: a cue-less LOW hit in a clause that looks at the room.
+        if (
+            confidence == MoveConfidence.LOW
+            and not _is_first_person_move(before_window)
+            and not _is_position_statement(before_window)
+        ):
+            sent_start = pos - len(before_window)
+            tail = _SENT_BOUNDARY_RE.search(working_text, end)
+            sent_end = tail.start() if tail else len(working_text)
+            c_start, _ = _clause_bounds(working_text, sent_start, sent_end, pos)
+            looked_at = _VIEW_FRAME_RE.search(working_text[c_start:pos])
+            seen_past = _VIEW_TAIL_RE.match(working_text, end)
+            if (looked_at or seen_past) and not (
+                _is_first_person_move(working_text[end:sent_end])
+            ):
+                continue
 
         # Mention gate: a LOW hit whose only cue is being NAMED is a word, not a
         # place. Specimen: "...a sentence of mine named the hearth or the deck."
