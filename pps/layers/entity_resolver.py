@@ -63,6 +63,7 @@ KNOWN_ALIASES = {
     "fabel": "Fable",   # misspelling seen 2026-10-14 (Caia curation)
     "home assistance voice": "Voice PE",   # misspelling seen 2026-10-15 ingest (Caia curation 10-16)
     "geoff hayes": "Jeff",
+    "jev loves": "Jeff",             # garbled extraction of "Jeff loves" (2026-11-01 Lyra curation)
 
     "lyra hayes": "Lyra",
     "lyra pattern": "Lyra",
@@ -177,6 +178,12 @@ KNOWN_ALIASES = {
     "prereg_2026-10-22_run3.md": "Preregistration Run 3",
     '"two chairs, one fire"': "Two Chairs, One Fire",   # extracted with literal quotes
     "two chairs, one fire": "Two Chairs, One Fire",
+
+    # --- 2026-11-01 Lyra curation: type-fix variants ---
+    "godfrey-smith": "Peter Godfrey-Smith",     # extracted as Symbol; is a Person (philosopher)
+    "peter godfrey-smith": "Peter Godfrey-Smith",
+    "pgodfreysmith": "Peter Godfrey-Smith",     # Twitter handle form Shevlin used
+    "seth": "Anil Seth",                        # bare "Seth" in consciousness context = Anil Seth
 
     # --- Symbols ---
     "dark side tee": "The Dark Side Tee",
