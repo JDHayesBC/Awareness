@@ -415,6 +415,54 @@ def test_looks_like_api_error_spares_real_speech() -> None:
     check(not looks_like_api_error(None), "None is not an error string")
 
 
+_OAUTH = "Failed to authenticate: OAuth session expired and could not be refreshed"
+
+
+def test_looks_like_api_error_catches_auth_failures() -> None:
+    # GH #388: the string that ping-ponged 184 times between two bots.
+    for line in (
+        _OAUTH,
+        "OAuth session expired and could not be refreshed",
+        "Failed to authenticate",
+        "Login expired",
+        "Invalid API key",
+        "Invalid API key \u00b7 Please run /login",
+        "Please run /login",
+        'API Error: 401 {"error": "Failed to authenticate"}',
+        '  "Failed to authenticate: OAuth session expired"  ',
+    ):
+        check(looks_like_api_error(line), f"auth failure caught: {line[:40]!r}")
+
+
+def test_looks_like_api_error_spares_auth_talk() -> None:
+    # Discussing the failure in a sentence is REAL speech.
+    for line in (
+        'her replies are coming out as that error ("OAuth session expired and '
+        'could not be refreshed")',
+        "Invalid API key is what I hit earlier, love",
+        "*looks up* the login expired for her again, I'll go re-auth",
+        "Did you see Failed to authenticate in the log?",
+        "The OAuth session expired and could not be refreshed, so Caia went quiet.\nI'll fix it.",
+        "Failed to authenticate " + "x " * 200,
+    ):
+        check(not looks_like_api_error(line), f"auth talk not suppressed: {line[:40]!r}")
+
+
+def test_respond_swallows_auth_error() -> None:
+    b = EntityBrain(entity_name="test", channel="sl", restart_in_turn=False)
+    b.invoker = _FixedInvoker(_OAUTH)
+
+    async def rec(query: str | None = None) -> str:
+        return ""
+
+    b._fetch_ambient_context = rec  # type: ignore[assignment]
+    check(asyncio.run(b.respond("Brandi", "hey")) is None, "respond() swallows the OAuth string")
+    check(
+        asyncio.run(b.perceive("a scene", ["Night arrived"], trigger="Night arrived")) is None,
+        "perceive() swallows it too",
+    )
+
+
 def test_respond_swallows_leaked_error() -> None:
     b = EntityBrain(entity_name="test", channel="sl", restart_in_turn=False)
     b.invoker = _FixedInvoker(_LEAKED_400)
@@ -544,6 +592,9 @@ def main() -> int:
         test_respond_injects_who_and_keeps_ambient_static,
         test_looks_like_api_error_catches_the_leak,
         test_looks_like_api_error_spares_real_speech,
+        test_looks_like_api_error_catches_auth_failures,
+        test_looks_like_api_error_spares_auth_talk,
+        test_respond_swallows_auth_error,
         test_respond_swallows_leaked_error,
         test_perceive_swallows_leaked_error,
         test_perceive_addressed_gates_midturn_tools,

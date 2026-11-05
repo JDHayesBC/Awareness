@@ -102,6 +102,56 @@ _API_ERROR_SUBSTRINGS = (
     "authentication_error",
 )
 
+# Auth/login-failure messages (GH #388). When an OAuth login expired, the CLI
+# returned "Failed to authenticate: OAuth session expired and could not be
+# refreshed" as assistant text and two Haven bots posted it at each other 184
+# times. These phrases CAN appear in genuine speech ("her replies are coming
+# out as that error (...)"), so unlike the substrings above they are only
+# matched when the WHOLE short message is the error: it must START with the
+# phrase, stay short and single-line, and carry no conversational first/second
+# person words after it.
+_AUTH_ERROR_START_RE = re.compile(
+    r'^[\W_]*(?:api error:?\s*(?:\d{3}\s*)?)?'
+    r'(failed to authenticate'
+    r'|oauth (?:session|token) (?:has )?expired'
+    r'|(?:your )?(?:login|session) (?:has )?expired'
+    r'|invalid api key'
+    r'|please run\s+/login'
+    r'|not logged in)\b',
+    re.IGNORECASE,
+)
+_AUTH_ERROR_MAX_CHARS = 240
+_CONVERSATIONAL_RE = re.compile(
+    r"\b(i|i'm|i've|i'll|me|my|we|you|your|you're|her|his|she|he|they|love|sorry|"
+    r"because|that|this|is what|was)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_auth_error(response: str | None) -> bool:
+    """True when ``response`` is a leaked login/auth failure (GH #388).
+
+    Narrower than ``looks_like_api_error``: content-filter and rate-limit errors
+    are NOT auth failures. Used to decide whether to alert the human.
+    """
+    if not response:
+        return False
+    if "authentication_error" in response.lower():
+        return True
+    return _looks_like_auth_error(response)
+
+
+def _looks_like_auth_error(text: str) -> bool:
+    t = text.strip()
+    if len(t) > _AUTH_ERROR_MAX_CHARS or "\n" in t:
+        return False
+    m = _AUTH_ERROR_START_RE.match(t)
+    if not m:
+        return False
+    # "your login expired" starts with a pronoun alternative: judge only the
+    # text AFTER the matched phrase for conversational words.
+    return _CONVERSATIONAL_RE.search(t[m.end():]) is None
+
 
 def looks_like_api_error(response: str | None) -> bool:
     """True when ``response`` is a leaked SDK/API error string, not real speech.
@@ -115,6 +165,8 @@ def looks_like_api_error(response: str | None) -> bool:
     if not response:
         return False
     if _API_ERROR_PREFIX_RE.match(response):
+        return True
+    if looks_like_auth_error(response):
         return True
     low = response.lower()
     return any(s in low for s in _API_ERROR_SUBSTRINGS)

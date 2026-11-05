@@ -18,6 +18,8 @@ Usage:
 """
 
 import asyncio
+import difflib
+import subprocess
 import json
 import logging
 import os
@@ -31,6 +33,7 @@ import httpx
 import websockets
 
 from haven.brain.boot_context import fetch_boot_context as _shared_fetch_boot_context
+from haven.brain.entity_brain import looks_like_api_error, looks_like_auth_error
 from haven.room_settings import MODEL_ALIASES, DEFAULT_VERBOSITY, resolve_model_id, resolve_verbosity
 from haven.redact import (
     allowed_humans,
@@ -126,8 +129,31 @@ RAPID_MESSAGE_THRESHOLD_SECONDS = float(os.getenv("RAPID_MESSAGE_THRESHOLD_SECON
 DEBOUNCE_HUMAN_INITIAL_SECONDS = float(os.getenv("DEBOUNCE_HUMAN_INITIAL_SECONDS", "15.0"))
 HUMAN_PRESENCE_TIMEOUT_SECONDS = float(os.getenv("HUMAN_PRESENCE_TIMEOUT_SECONDS", "1800.0"))
 
-# Bot-to-bot loop guard: max consecutive bot turns before pausing (default 10)
+# Bot-to-bot loop guard: max consecutive bot turns before pausing (default 200).
+# Deliberately high so a long, genuine sister conversation is never cut off; it is
+# only a backstop. The repeat-burst breaker below is the tight guard (#388).
 MAX_BOT_TURNS = int(os.getenv("MAX_BOT_TURNS", "200"))
+
+# Same-author repeat-burst breaker (#388). Independent of text matching: when one
+# bot author posts REPEAT_BURST_THRESHOLD near-identical messages inside
+# REPEAT_BURST_WINDOW_SECONDS in a room, this bot stops responding there until a
+# human speaks. Catches any ping-pong of an unrecognised error string (the
+# 2026-11 OAuth incident was 184 identical posts in 34 min, ~1 per 11s, under
+# the 200-turn guard). Defaults are conservative: 4 near-copies in 5 minutes
+# never happens in varied conversation. Set REPEAT_BURST_THRESHOLD=0 to disable.
+REPEAT_BURST_THRESHOLD = int(os.getenv("REPEAT_BURST_THRESHOLD", "4"))
+REPEAT_BURST_WINDOW_SECONDS = float(os.getenv("REPEAT_BURST_WINDOW_SECONDS", "300.0"))
+# difflib ratio at/above which two normalized messages count as "near-identical".
+REPEAT_BURST_SIMILARITY = float(os.getenv("REPEAT_BURST_SIMILARITY", "0.92"))
+# Phone alert when Haven's login has expired (#388). Suppressing the leaked error
+# string removes the beeping that used to tell Jeff something was wrong, so one
+# ntfy per entity per cooldown replaces it.
+AUTH_ALERT_COOLDOWN_SECONDS = float(os.getenv("AUTH_ALERT_COOLDOWN_SECONDS", "3600"))
+AUTH_ALERT_TIMEOUT_SECONDS = float(os.getenv("AUTH_ALERT_TIMEOUT_SECONDS", "15"))
+_NOTIFY_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "notify.py"
+_last_auth_alert: float | None = None
+# Ignore very short messages ("ok", "*nods*"): repeats of those are normal.
+REPEAT_BURST_MIN_CHARS = int(os.getenv("REPEAT_BURST_MIN_CHARS", "20"))
 
 # Always-respond mode: respond to all human messages in all rooms (for private spaces).
 # Set ALWAYS_RESPOND=1 when Haven has no strangers and @mention-gating isn't wanted.
@@ -206,6 +232,10 @@ recent_room_authors: dict[str, dict[str, tuple[float, bool]]] = {}
 known_bots: set[str] = set()
 # Consecutive bot turns per room (reset when a human speaks)
 consecutive_bot_turns: dict[str, int] = {}
+# Repeat-burst breaker state (#388): recent (time, normalized_text) per room+author,
+# and the rooms where the breaker has tripped (cleared when a human speaks).
+recent_bot_texts: dict[tuple[str, str], deque] = {}
+burst_tripped_rooms: set[str] = set()
 # When we last responded in each room — for post-response human hold
 last_response_sent: dict[str, float] = {}
 # When a human typing signal expires per room (time.time() + TTL)
@@ -609,6 +639,10 @@ def should_respond(room_id: str, username: str, content: str) -> bool:
         )
         return False
 
+    # Repeat-burst breaker (#388): tripped rooms stay quiet until a human speaks.
+    if room_id in burst_tripped_rooms:
+        return False
+
     now = time.time()
 
     # DMs — always respond (no need for @mention in a private conversation)
@@ -637,7 +671,78 @@ def should_respond(room_id: str, username: str, content: str) -> bool:
     return False
 
 
-def _track_author(room_id: str, username: str) -> None:
+def _run_notify(entity: str, message: str) -> None:
+    """Blocking notify.py call; always swallows its own failures."""
+    try:
+        subprocess.run(
+            [sys.executable, str(_NOTIFY_SCRIPT), "--entity", entity,
+             "--priority", "high", message],
+            timeout=AUTH_ALERT_TIMEOUT_SECONDS,
+            capture_output=True,
+            check=False,
+        )
+    except Exception as e:  # incl. TimeoutExpired; never raise into the bot
+        print(f"[{ENTITY_NAME}] auth alert notify failed: {e}", file=sys.stderr)
+
+
+async def alert_auth_failure() -> bool:
+    """Send Jeff one phone notification per cooldown. Returns True if sent."""
+    global _last_auth_alert
+    now = time.time()
+    if _last_auth_alert is not None and now - _last_auth_alert < AUTH_ALERT_COOLDOWN_SECONDS:
+        print(
+            f"[{ENTITY_NAME}] auth alert THROTTLED (last sent "
+            f"{now - _last_auth_alert:.0f}s ago, cooldown {AUTH_ALERT_COOLDOWN_SECONDS:.0f}s)",
+            file=sys.stderr,
+        )
+        return False
+    _last_auth_alert = now  # set first so concurrent failures can't double-send
+    print(f"[{ENTITY_NAME}] auth alert SENDING phone notification", file=sys.stderr)
+    msg = (f"{ENTITY_NAME.capitalize()}'s Haven login expired and needs a "
+           f"`claude` re-login. She can't reply in Haven until then.")
+    try:
+        await asyncio.to_thread(_run_notify, ENTITY_NAME, msg)
+    except Exception as e:
+        print(f"[{ENTITY_NAME}] auth alert failed: {e}", file=sys.stderr)
+    return True
+
+
+def _normalize_for_repeat(content: str) -> str:
+    """Lowercase, drop digits/punctuation/whitespace so timestamps, ids and
+    spacing differences don't hide a repeated message."""
+    return "".join(ch for ch in (content or "").lower() if ch.isalpha())
+
+
+def _note_bot_text(room_id: str, username: str, content: str) -> bool:
+    """Record a bot message; trip the breaker and return True on a repeat burst."""
+    if REPEAT_BURST_THRESHOLD <= 0:
+        return False
+    norm = _normalize_for_repeat(content)
+    if len(norm) < REPEAT_BURST_MIN_CHARS:
+        return False
+    now = time.time()
+    hist = recent_bot_texts.setdefault((room_id, username), deque(maxlen=50))
+    while hist and now - hist[0][0] > REPEAT_BURST_WINDOW_SECONDS:
+        hist.popleft()
+    similar = 1 + sum(
+        1 for _, prev in hist
+        if difflib.SequenceMatcher(None, prev, norm).ratio() >= REPEAT_BURST_SIMILARITY
+    )
+    hist.append((now, norm))
+    if similar >= REPEAT_BURST_THRESHOLD and room_id not in burst_tripped_rooms:
+        burst_tripped_rooms.add(room_id)
+        print(
+            f"[{ENTITY_NAME}] WARNING repeat-burst breaker TRIPPED in {room_id[:8]}: "
+            f"{username} posted {similar} near-identical messages in "
+            f"{REPEAT_BURST_WINDOW_SECONDS:.0f}s ({content[:80]!r}); "
+            f"not responding in this room until a human speaks",
+            file=sys.stderr,
+        )
+        return True
+    return room_id in burst_tripped_rooms
+
+
+def _track_author(room_id: str, username: str, content: str | None = None) -> None:
     """Track who's recently spoken in a room for topology detection and loop guard."""
     is_bot = username in known_bots or username == my_username
     if room_id not in recent_room_authors:
@@ -647,8 +752,19 @@ def _track_author(room_id: str, username: str) -> None:
     # Maintain consecutive bot turn counter for loop detection
     if is_bot:
         consecutive_bot_turns[room_id] = consecutive_bot_turns.get(room_id, 0) + 1
+        if content:
+            _note_bot_text(room_id, username, content)
     else:
         consecutive_bot_turns[room_id] = 0
+        if room_id in burst_tripped_rooms:
+            burst_tripped_rooms.discard(room_id)
+            print(
+                f"[{ENTITY_NAME}] repeat-burst breaker reset in {room_id[:8]}: "
+                f"human {username} spoke",
+                file=sys.stderr,
+            )
+        for key in [k for k in recent_bot_texts if k[0] == room_id]:
+            del recent_bot_texts[key]
 
 
 def _detect_topology(room_id: str) -> tuple[int, bool, str]:
@@ -713,7 +829,7 @@ async def handle_message(data: dict) -> None:
     content = data.get("content", "")
 
     # Always track who's speaking (even messages we won't respond to)
-    _track_author(room_id, username)
+    _track_author(room_id, username, content)
     if (content or "").strip():
         room_history.setdefault(room_id, deque(maxlen=ROOM_HISTORY_MAX)).append(data)
 
@@ -1043,6 +1159,10 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
     if not messages:
         return
 
+    # A batch queued before the breaker tripped must not still answer (#388).
+    if room_id in burst_tripped_rooms:
+        return
+
     async with responding_lock:
         waited = batch_state["current_wait"]
         print(
@@ -1246,6 +1366,18 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
                 response = response.strip()
                 if response.startswith("```") and response.endswith("```"):
                     response = response[3:-3].strip()
+
+                # Never POST a leaked SDK/API/auth error string as speech (#388).
+                # Same check EntityBrain applies on the SL/Discord paths.
+                if looks_like_api_error(response):
+                    print(
+                        f"[{ENTITY_NAME}] SUPPRESSED leaked API/error string "
+                        f"from={msg_source} chars={len(response)}: {response[:120]!r}",
+                        file=sys.stderr,
+                    )
+                    if looks_like_auth_error(response):
+                        await alert_auth_failure()
+                    return
 
                 # Safety net (issue #283, 2026-07-22): the /attention heartbeat
                 # ritual is terminal-only; when it leaks here the model emits a
