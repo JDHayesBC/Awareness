@@ -264,6 +264,60 @@ _COORD_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Third-person gate (#378, 2026-11-07): a bare LOW hit in a clause about someone
+# else ("It fits him being on his side of the bed") is where THEY are, not where
+# I am. Specimens: Lyra's 11-07 kitchen stay raised `silverglow_bedroom` from two
+# such clauses. A first-person token anywhere in the same clause wins ("I sit
+# beside him on the bed", "I curl up on my side of the bed").
+_THIRD_PERSON_CLAUSE_RE = re.compile(
+    r"\b(?:he|she|they|him|his|her|hers|them|their"
+    r"|Jeff|Caia|Carol|Bitsy|Nexus|Dash|Steve|Val)\b",
+    re.IGNORECASE,
+)
+
+# A third-person token that is the OBJECT of a preposition ("in bed with Jeff",
+# "against him", "under Jeff's arm", "on Jeff's left") is who I am next to, not the
+# holder of the position, so it does not trip the gate. A subject, a verb's object
+# ("reads him on", "fits him being") or "his side of the" does. The self-name
+# counts as first person.
+_TP_OBJECT_PREPS = frozenset(
+    "with against beside besides under near by to around behind beneath onto upon "
+    "on in over of for from at toward towards into between across along".split()
+)
+_TP_SIDE_RE = re.compile(r"\s+side\s+of\b", re.IGNORECASE)
+_SELF_NAME_RE = re.compile(r"\bLyra\b")
+_PREV_WORD_RE = re.compile(r"([\w'-]+)\W*$")
+
+
+_SUBJECT_TP_RE = re.compile(
+    r"\b(?:he|she|they|Jeff|Caia|Carol|Bitsy|Nexus|Dash|Steve|Val)\b", re.IGNORECASE
+)
+
+
+def _in_action_span(text: str, pos: int) -> bool:
+    """True when pos sits inside a *stage direction* (odd count of single asterisks before it)."""
+    return text[:pos].replace("**", "").count("*") % 2 == 1
+
+
+def _clause_is_about_someone_else(clause: str, in_action: bool = False) -> bool:
+    """True when a third-person token holds the position in this clause (subject, verb object, 'his side of')."""
+    if _FIRST_PERSON_RE.search(clause) or _SELF_NAME_RE.search(clause):
+        return False
+    for m in _THIRD_PERSON_CLAUSE_RE.finditer(clause):
+        # An *action* with no explicit subject is my own: only a subject-shaped
+        # token ("*he settles*", "*Jeff sits*") makes it someone else's.
+        if in_action and not _SUBJECT_TP_RE.fullmatch(m.group(0)) and not (
+            m.group(0).lower() in ("his", "her", "their") and _TP_SIDE_RE.match(clause, m.end())
+        ):
+            continue
+        if m.group(0).lower() in ("his", "her", "their") and _TP_SIDE_RE.match(clause, m.end()):
+            return True
+        prev = _PREV_WORD_RE.search(clause[: m.start()])
+        if not (prev and prev.group(1).lower() in _TP_OBJECT_PREPS):
+            return True
+    return False
+
+
 # Sentence boundary used to scope the before-window; window cap in chars.
 _SENT_BOUNDARY_RE = re.compile(r"[.!?]\s+")
 _WINDOW_CAP = 220
@@ -576,6 +630,16 @@ def detect_move(
             before_window[-_SUBORDINATE_SPAN:]
         ):
             confidence = MoveConfidence.LOW
+
+        if confidence == MoveConfidence.LOW:
+            # Third-person gate: clause is about someone else, no first person in it.
+            sent_start = pos - len(before_window)
+            tail = _SENT_BOUNDARY_RE.search(working_text, end)
+            sent_end = tail.start() if tail else len(working_text)
+            c_start, c_end = _clause_bounds(working_text, sent_start, sent_end, pos)
+            clause = working_text[c_start:c_end]
+            if _clause_is_about_someone_else(clause, _in_action_span(working_text, pos)):
+                continue
 
         # Carbon-marker gate: the hit sits in a clause about the physical house.
         span = next((sp for sp in carbon_spans if sp[0] <= start < sp[1]), None)

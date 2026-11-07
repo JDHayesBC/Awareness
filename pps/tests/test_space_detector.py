@@ -137,11 +137,15 @@ def test_position_statement_high(text, space):
 
 @pytest.mark.parametrize("text", [
     "I was on the couch earlier.",
-    "Jeff is on the couch.",
 ])
 def test_position_statement_negatives_low(text):
     m = d2(text)
     assert m and m.space_name == "main_room" and m.confidence == C.LOW
+
+
+def test_third_person_position_is_dropped():
+    # was LOW before the #378 third-person gate; Jeff's position is not mine
+    assert d2("Jeff is on the couch.") is None
 
 
 def test_window_does_not_cross_sentence():
@@ -590,3 +594,69 @@ def test_view_gate_bare_hit_without_frame_unchanged():
 ])
 def test_view_frame_after_alias_does_not_gate(text):
     assert vd(text) is not None
+
+
+# --- third-person gate (#378, 2026-11-07) ---
+IDX_TP = build_alias_index([
+    {"name": "silverglow_kitchen", "aliases": "Silverglow kitchen, the island, the kettle", "house": "silverglow"},
+    {"name": "silverglow_bedroom", "aliases": "Silverglow bedroom, the bed, our bed, in bed", "house": "silverglow"},
+    {"name": "silverglow_deck", "aliases": "the deck, deck, the rail", "house": "silverglow"},
+    {"name": "main_room", "aliases": "the couch, couch", "house": "silverglow"},
+    {"name": "dock", "aliases": "the dock bench, the dock", "house": "silverglow"},
+    {"name": "front_room", "aliases": "the front room", "house": "silverglow"},
+])
+
+
+def d_tp(text):
+    return detect_move(text, IDX_TP, "silverglow_kitchen")
+
+
+@pytest.mark.parametrize("text,space", [
+    ("It fits him being on his side of the bed", "silverglow_bedroom"),
+    ("- **Jeff:** the radar has him back in `Jeff Floor`, which is his side of the bed, "
+     "so he's probably gone back to bed after being up early", "silverglow_bedroom"),
+    ("Caia's already out on the deck", "silverglow_deck"),
+    ("she's on the deck", "silverglow_deck"),
+    ("Jeff is home in bed", "silverglow_bedroom"),
+    ("the radar reads him on his side of the bed", "silverglow_bedroom"),
+    ("radar shows Jeff on his side of the bed", "silverglow_bedroom"),
+    ("Caia and Jeff on the deck through the open doors", "silverglow_deck"),
+    ("Jeff and Carol in the front room", "front_room"),
+    ("*Jeff settles onto the couch*", "main_room"),
+])
+def test_third_person_holder_drops_low(text, space):
+    m = d_tp(text)
+    assert m is None or m.space_name != space
+
+
+def test_third_person_gate_control_bare_hit_still_low():
+    m = d_tp("The quilt is folded over the bed")
+    assert m and m.space_name == "silverglow_bedroom" and m.confidence == C.LOW
+
+
+@pytest.mark.parametrize("text,space", [
+    ("In bed on Jeff's left, cheek on his shoulder", "silverglow_bedroom"),
+    ("Lyra, alive, in bed with Jeff", "silverglow_bedroom"),
+    ("Lyra, alive, on the couch against Jeff", "main_room"),
+    ("Still on the dock bench under Jeff's arm", "dock"),
+    ("*settles against him on the couch*", "main_room"),
+    ("settles onto the couch beside him*", "main_room"),
+    ("Lyra, alive, in bed beside Jeff in Haven", "silverglow_bedroom"),
+    ("*Hugging him back in the cool hollow of the bed, then sliding out*", "silverglow_bedroom"),
+    ("I curl up on my side of the bed", "silverglow_bedroom"),
+    ("I sit beside him on the bed", "silverglow_bedroom"),
+])
+def test_self_position_next_to_third_person_keeps_hit(text, space):
+    m = d_tp(text)
+    assert m and m.space_name == space
+
+
+def test_rail_is_a_deck_alias_today():
+    # documents current behaviour: room-fixture false fires are handled as alias data
+    m = d_tp("The last gust set the pans on the rail knocking together")
+    assert m and m.space_name == "silverglow_deck" and m.confidence == C.LOW
+
+
+def test_real_move_to_deck_still_high():
+    m = d_tp("I walk out to the deck and lean on the rail")
+    assert m and m.space_name == "silverglow_deck" and m.confidence == C.HIGH
