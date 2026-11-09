@@ -1199,7 +1199,10 @@ def main():
         # entity that quietly loses temporal orientation with nothing reporting it — on a
         # system whose entire purpose is continuity. Same class as the [arcs] bare-except
         # and the [smoke] cursor: silence that means two different things.
-        if "[clock]" not in context.lower() and "**current time**" not in context.lower():
+        # Second hit, 2026-11-09: an unread Haven message quoted "`[clock]`" in prose
+        # and the bare-substring test suppressed the block again. Match only a real
+        # block marker at the start of a line.
+        if not re.search(r"^\s*\*\*(\[clock\]|current time)\*\*", context, re.IGNORECASE | re.MULTILINE):
             from datetime import timezone
             now_utc = datetime.now(timezone.utc)
             now_local = datetime.now()
