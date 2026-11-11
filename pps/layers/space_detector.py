@@ -289,6 +289,10 @@ _TP_OBJECT_PREPS = frozenset(
     "on in over of for from at toward towards into between across along".split()
 )
 _TP_SIDE_RE = re.compile(r"\s+side\s+of\b", re.IGNORECASE)
+# A person token right after a meeting verb is that verb's object, not the holder:
+# "Meet you on the deck", "find Jeff in the study" announce where *I* will be
+# (Caia's review of f5c511a, 11-11). Only LOW is reachable; HIGH still needs "I".
+_TP_MEET_VERBS = frozenset("meet meeting find finding join joining see seeing catch catching".split())
 
 
 def _self_name_re() -> "re.Pattern[str]":
@@ -328,6 +332,8 @@ def _clause_is_about_someone_else(clause: str, in_action: bool = False) -> bool:
         if m.group(0).lower() in ("his", "her", "their", "your") and _TP_SIDE_RE.match(clause, m.end()):
             return True
         prev = _PREV_WORD_RE.search(clause[: m.start()])
+        if prev and prev.group(1).lower() in _TP_MEET_VERBS:
+            continue
         if not (prev and prev.group(1).lower() in _TP_OBJECT_PREPS):
             return True
     return False

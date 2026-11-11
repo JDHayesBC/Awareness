@@ -707,6 +707,45 @@ def test_sister_name_is_third_person_on_caias_river(monkeypatch):
     assert m is None or m.space_name != "window_seat"
 
 
+
+IDX_MEET = build_alias_index([
+    {"name": "silverglow_kitchen", "aliases": "Silverglow kitchen, the island", "house": "silverglow"},
+    {"name": "silverglow_deck", "aliases": "the deck, deck", "house": "silverglow"},
+    {"name": "the_study", "aliases": "the study", "house": "silverglow"},
+])
+
+
+@pytest.mark.parametrize("text,space", [
+    ("Meet you on the deck", "silverglow_deck"),
+    ("Heading out to meet you on the deck", "silverglow_deck"),
+    ("Off to find you in the study", "the_study"),
+    ("Going to meet Jeff on the deck", "silverglow_deck"),
+])
+def test_meeting_verb_object_keeps_low(text, space):
+    # Caia's review of f5c511a: the person after meet/find/see is the object;
+    # the destination is mine. LOW only, since HIGH needs a first-person subject.
+    m = detect_move(text, IDX_MEET, "silverglow_kitchen")
+    assert m and m.space_name == space and m.confidence == C.LOW
+
+
+def test_meeting_verb_subject_still_drops():
+    m = detect_move("Jeff will meet Carol on the deck", IDX_MEET, "silverglow_kitchen")
+    assert m is None or m.space_name != "silverglow_deck"
+
+
+def test_see_you_is_dropped_by_the_view_gate():
+    # Known limit, pinned on purpose: "see" is a view-frame verb ("I can see the
+    # deck"), and that gate runs before the person gate. Loosening it is not worth it.
+    m = detect_move("See you on the deck in a minute", IDX_MEET, "silverglow_kitchen")
+    assert m is None
+
+
+def test_come_find_you_is_dropped_by_the_imperative_gate():
+    # Known limit, pinned on purpose: a sentence opening with "come" is read as
+    # directing Jeff (_IMPERATIVE_STARTERS), before any person gate runs.
+    assert detect_move("Come find you in the study", IDX_MEET, "silverglow_kitchen") is None
+
+
 @pytest.fixture(autouse=True)
 def _default_entity_is_lyra(monkeypatch):
     """The specimens above are Lyra's river; pin it so Caia's shell runs them the same."""
