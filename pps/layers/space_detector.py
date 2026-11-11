@@ -356,7 +356,9 @@ _MARKER_RE = re.compile(r"\[\[scene:([^\]]+)\]\]", re.IGNORECASE)
 _QUOTED_SPAN_RE = re.compile(
     r"`[^`]*`"              # backtick spans
     r"|(?<!\w)\"[^\"]{0,120}\"(?!\w)"   # double-quoted short strings
-    r"|(?<!\w)'[^']{0,120}'(?!\w)",     # single-quoted short strings
+    r"|(?<!\w)'[^']{0,120}'(?!\w)"      # single-quoted short strings
+    r"|\u201c[^\u201c\u201d]{0,120}\u201d"  # curly double quotes (11-11: a quoted
+    r"|\u2018[^\u2018\u2019]{0,120}\u2019(?!\w)",  # invitation fired LOW after 29bf579)
     re.DOTALL,
 )
 

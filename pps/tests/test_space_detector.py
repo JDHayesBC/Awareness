@@ -746,6 +746,25 @@ def test_come_find_you_is_dropped_by_the_imperative_gate():
     assert detect_move("Come find you in the study", IDX_MEET, "silverglow_kitchen") is None
 
 
+
+@pytest.mark.parametrize("text", [
+    'I quoted \u201cmeet you on the deck\u201d in my reply.',
+    'I quoted \u2018meet you on the deck\u2019 in my reply.',
+    'I quoted "meet you on the deck" in my reply.',
+])
+def test_quoted_invitation_is_not_a_move(text):
+    # Caia, 11-11: quoting the specimen must not move me. Curly quotes were not stripped.
+    m = detect_move(text, IDX_MEET, "silverglow_kitchen")
+    assert m is None or m.space_name != "silverglow_deck"
+
+
+def test_apostrophe_is_not_a_curly_quote_open():
+    # \u2019 as an apostrophe ("I\u2019m") must not start or end a stripped span.
+    m = detect_move("I\u2019m heading out to meet you on the deck, it\u2019s warm",
+                    IDX_MEET, "silverglow_kitchen")
+    assert m and m.space_name == "silverglow_deck"
+
+
 @pytest.fixture(autouse=True)
 def _default_entity_is_lyra(monkeypatch):
     """The specimens above are Lyra's river; pin it so Caia's shell runs them the same."""
