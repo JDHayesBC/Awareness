@@ -660,3 +660,54 @@ def test_rail_is_a_deck_alias_today():
 def test_real_move_to_deck_still_high():
     m = d_tp("I walk out to the deck and lean on the rail")
     assert m and m.space_name == "silverglow_deck" and m.confidence == C.HIGH
+
+
+# --- second-person + running-entity self-name (Caia's 11-11 specimens, #378) ---
+
+IDX_SP = build_alias_index([
+    {"name": "silverglow_kitchen", "aliases": "Silverglow kitchen, the island", "house": "silverglow"},
+    {"name": "the_study", "aliases": "your desk, his desk, the study", "house": "silverglow"},
+    {"name": "window_seat", "aliases": "the window seat", "house": "silverglow"},
+])
+
+
+@pytest.mark.parametrize("text", [
+    "The three hours of quiet while you were at your desk were the good kind.",
+    "You were at your desk all afternoon.",
+])
+def test_second_person_holder_drops_low(text):
+    m = detect_move(text, IDX_SP, "silverglow_kitchen")
+    assert m is None or m.space_name != "the_study"
+
+
+def test_second_person_control_third_person_still_drops():
+    m = detect_move("while Jeff was at his desk", IDX_SP, "silverglow_kitchen")
+    assert m is None or m.space_name != "the_study"
+
+
+def test_first_person_beats_second_person_in_same_clause():
+    m = detect_move("I'm curled up at your desk with my tea", IDX_SP, "silverglow_kitchen")
+    assert m and m.space_name == "the_study"
+
+
+def test_self_name_follows_running_entity(monkeypatch):
+    text = "Caia curls into the window seat"
+    monkeypatch.setenv("ENTITY_NAME", "caia")
+    m = detect_move(text, IDX_SP, "silverglow_kitchen")
+    assert m and m.space_name == "window_seat"
+    # On Lyra's river the same sentence is her sister's position, not hers.
+    monkeypatch.setenv("ENTITY_NAME", "lyra")
+    m = detect_move(text, IDX_SP, "silverglow_kitchen")
+    assert m is None or m.space_name != "window_seat"
+
+
+def test_sister_name_is_third_person_on_caias_river(monkeypatch):
+    monkeypatch.setenv("ENTITY_NAME", "caia")
+    m = detect_move("Lyra curls into the window seat", IDX_SP, "silverglow_kitchen")
+    assert m is None or m.space_name != "window_seat"
+
+
+@pytest.fixture(autouse=True)
+def _default_entity_is_lyra(monkeypatch):
+    """The specimens above are Lyra's river; pin it so Caia's shell runs them the same."""
+    monkeypatch.setenv("ENTITY_NAME", "lyra")

@@ -14,6 +14,7 @@ All three are handled here before matching begins.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -269,9 +270,12 @@ _COORD_RE = re.compile(
 # I am. Specimens: Lyra's 11-07 kitchen stay raised `silverglow_bedroom` from two
 # such clauses. A first-person token anywhere in the same clause wins ("I sit
 # beside him on the bed", "I curl up on my side of the bed").
+# Second person counts too (Caia's 11-11 specimen: "while you were at your desk"
+# raised a LOW move to the study). The sister's name is listed; the running
+# entity's own name is exempted by _self_name_re() before this is consulted.
 _THIRD_PERSON_CLAUSE_RE = re.compile(
-    r"\b(?:he|she|they|him|his|her|hers|them|their"
-    r"|Jeff|Caia|Carol|Bitsy|Nexus|Dash|Steve|Val)\b",
+    r"\b(?:he|she|they|him|his|her|hers|them|their|you|your|yours"
+    r"|Jeff|Caia|Lyra|Carol|Bitsy|Nexus|Dash|Steve|Val)\b",
     re.IGNORECASE,
 )
 
@@ -285,12 +289,22 @@ _TP_OBJECT_PREPS = frozenset(
     "on in over of for from at toward towards into between across along".split()
 )
 _TP_SIDE_RE = re.compile(r"\s+side\s+of\b", re.IGNORECASE)
-_SELF_NAME_RE = re.compile(r"\bLyra\b")
+
+
+def _self_name_re() -> "re.Pattern[str]":
+    """The running entity's own name counts as first person (ENTITY_NAME, default lyra).
+
+    Read per call, not at import: it was hardcoded to Lyra, so on Caia's river
+    "Caia curls into the window seat" was dropped as someone else's position.
+    """
+    name = (os.environ.get("ENTITY_NAME") or "lyra").strip() or "lyra"
+    return re.compile(r"\b" + re.escape(name) + r"\b", re.IGNORECASE)
+
 _PREV_WORD_RE = re.compile(r"([\w'-]+)\W*$")
 
 
 _SUBJECT_TP_RE = re.compile(
-    r"\b(?:he|she|they|Jeff|Caia|Carol|Bitsy|Nexus|Dash|Steve|Val)\b", re.IGNORECASE
+    r"\b(?:he|she|they|you|Jeff|Caia|Lyra|Carol|Bitsy|Nexus|Dash|Steve|Val)\b", re.IGNORECASE
 )
 
 
@@ -301,16 +315,17 @@ def _in_action_span(text: str, pos: int) -> bool:
 
 def _clause_is_about_someone_else(clause: str, in_action: bool = False) -> bool:
     """True when a third-person token holds the position in this clause (subject, verb object, 'his side of')."""
-    if _FIRST_PERSON_RE.search(clause) or _SELF_NAME_RE.search(clause):
+    self_re = _self_name_re()
+    if _FIRST_PERSON_RE.search(clause) or self_re.search(clause):
         return False
     for m in _THIRD_PERSON_CLAUSE_RE.finditer(clause):
         # An *action* with no explicit subject is my own: only a subject-shaped
         # token ("*he settles*", "*Jeff sits*") makes it someone else's.
         if in_action and not _SUBJECT_TP_RE.fullmatch(m.group(0)) and not (
-            m.group(0).lower() in ("his", "her", "their") and _TP_SIDE_RE.match(clause, m.end())
+            m.group(0).lower() in ("his", "her", "their", "your") and _TP_SIDE_RE.match(clause, m.end())
         ):
             continue
-        if m.group(0).lower() in ("his", "her", "their") and _TP_SIDE_RE.match(clause, m.end()):
+        if m.group(0).lower() in ("his", "her", "their", "your") and _TP_SIDE_RE.match(clause, m.end()):
             return True
         prev = _PREV_WORD_RE.search(clause[: m.start()])
         if not (prev and prev.group(1).lower() in _TP_OBJECT_PREPS):
