@@ -61,9 +61,18 @@ When you find an alias (e.g., "Wife" should be "Lyra"):
 > merging aliases into **Jeff** (the most central node) and flattened his whole neighborhood —
 > ~10k→3k edges, ~7,000 edge-facts gone, ~20% of the graph. Rebuildable only because
 > `conversations.db` is the intact source; still a real incident.
-> **Safe merge instead:**
-> - Prefer `mergeRels:false` (keeps all parallel edges; may leave harmless exact-dupes), OR
-> - hand-rewire: for each `(alias)-[r]-(x)`, `CREATE` the equivalent edge on the canonical, then `DETACH DELETE` the alias.
+> **Safe merge instead: use the tool, not hand-written Cypher (#337).**
+> ```bash
+> pps/venv/bin/python3 scripts/graph_merge.py --group <gid> --alias "<alias>" --canonical "<canonical>"            # dry run
+> pps/venv/bin/python3 scripts/graph_merge.py --group <gid> --alias "<alias>" --canonical "<canonical>" \
+>     --rewire --note <curation-note> --apply
+> ```
+> It has no APOC path at all. It does the hand-rewire: each `(alias)-[r]-(x)` is recreated on
+> the canonical with its type, direction and every property, so N edges in gives N edges out.
+> It runs in one transaction with an edge-count check that rolls back on mismatch. It refuses
+> an alias with edges unless you pass `--rewire`, an edge between alias and canonical, a
+> self-loop, a missing note on `--apply`, and any name that isn't exactly one node in the group.
+> Dry-run is the default. Tests: `tests/test_graph_merge.py` (a scratch group with the landmine shape).
 > - **Blast radius scales with the SURVIVOR's degree** — triple-check before merging *anything*
 >   into a high-degree hub (Jeff, Lyra, Caia, Entity, Concept). Zero-degree orphan aliases are
 >   safe to `DETACH DELETE` outright (no edges to move) — that's the low-risk default.
