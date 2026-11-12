@@ -957,10 +957,27 @@ class CustomGraphLayer(PatternLayer):
         Returns ``(pressure, uncurated_count, days_since_last_curated)`` or
         ``None`` if Neo4j is unavailable or the query fails.
 
-        Composite metric: ``max(uncurated_count / 100.0, days_since / 14.0)``
+        Composite metric: ``uncurated_count / 100.0 + days_since / 14.0``
 
-        - **uncurated_count side**: raw backlog — 100 uncurated entities ≈ pressure 1.0
+        - **uncurated_count side**: actionable backlog — 100 entities ≈ pressure 1.0
         - **days_since side**: ambient drift — 14 days without a curation pass ≈ pressure 1.0
+
+        ``uncurated_count`` counts only entities the ``/curate`` skill allows a
+        pass to touch (#345), and skips what the kruft TTL removes on its own
+        (#336):
+
+        - TechnicalArtifacts younger than 4 days are excluded: the skill forbids
+          curating them, so counting them made the gauge report work that
+          cannot be done, and fresh tech kept it from ever reaching zero.
+        - TechnicalArtifacts with ``mention_count <= 1`` are excluded: they are
+          the TTL prune's job (summarize → tech RAG → delete), not a judgment
+          call, and they were most of the count.
+
+        The two terms are summed, not ``max()``-ed (#336). Under ``max()`` the
+        count term dominated permanently, so the days-since term (the one that
+        says "you've stopped tending this") could never surface, and a good
+        pass barely moved the number. Summed, a fresh-but-large backlog and a
+        small-but-neglected one both read as pressure.
 
         Pressure > 1.0 is a soft signal; > 2.0 is loud.
         ``days_since`` is 999.0 when the graph has never been curated.
@@ -972,8 +989,16 @@ class CustomGraphLayer(PatternLayer):
 
         cypher = """
             MATCH (e:Entity {group_id: $gid})
+            WITH e,
+                 coalesce(e.entity_type, '') = 'TechnicalArtifact' AS tech,
+                 (e.created_at IS NOT NULL
+                  AND e.created_at >= datetime() - duration('P4D')) AS fresh,
+                 coalesce(e.mention_count, 1) AS mentions
             RETURN
-                count(CASE WHEN e.curated_at IS NULL THEN 1 END) AS uncurated_count,
+                count(CASE WHEN e.curated_at IS NULL
+                            AND NOT (tech AND fresh)
+                            AND NOT (tech AND mentions <= 1)
+                           THEN 1 END) AS uncurated_count,
                 max(e.curated_at) AS last_curated
         """
         try:
@@ -988,16 +1013,18 @@ class CustomGraphLayer(PatternLayer):
                     from datetime import datetime as _dt, timezone as _tz
                     if hasattr(last_curated, "to_native"):
                         lc_dt = last_curated.to_native()
-                        if lc_dt.tzinfo is None:
-                            lc_dt = lc_dt.replace(tzinfo=_tz.utc)
+                    elif isinstance(last_curated, _dt):
+                        lc_dt = last_curated
                     else:
                         lc_dt = _dt.now(_tz.utc)
+                    if lc_dt.tzinfo is None:
+                        lc_dt = lc_dt.replace(tzinfo=_tz.utc)
                     days_since = (_dt.now(_tz.utc) - lc_dt).total_seconds() / 86400.0
                 except Exception:
                     days_since = 0.0
             else:
                 days_since = 999.0  # Graph has never been curated
-            pressure = max(uncurated_count / 100.0, days_since / 14.0)
+            pressure = uncurated_count / 100.0 + days_since / 14.0
             return (pressure, uncurated_count, days_since)
         except Exception as exc:
             logger.debug("get_curation_pressure query failed: %s", exc)

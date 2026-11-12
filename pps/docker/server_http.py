@@ -2131,7 +2131,7 @@ async def ambient_recall(request: AmbientRecallRequest):
             urgency = ""
         manifest_lines.append(
             f"- {urgency}graph_curation: pressure={pressure:.1f} "
-            f"({uncurated} uncurated entities, {days_str}) → `/curate`"
+            f"({uncurated} curatable entities, {days_str}) → `/curate`"
         )
 
     # Only emit manifest block if it has actual layers (skip the bare header)
