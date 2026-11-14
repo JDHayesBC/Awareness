@@ -45,6 +45,11 @@ _JUNK_EXACT_NAMES = {
     "he", "she", "they", "we", "you", "me", "i", "us", "self",
     "user", "people", "someone", "everyone", "nobody",
     "agent 1", "agent 2", "agent",
+    # #339: object/possessive pronouns and the placeholder word itself. The extractor
+    # reified these and then filed real facts about Lyra or Caia onto them.
+    "her", "him", "his", "hers", "them", "their", "theirs",
+    "myself", "herself", "himself", "themselves", "yourself",
+    "entity", "entities", "men", "women",
 }
 
 # Default LLM config
@@ -392,6 +397,17 @@ Common edge types: Loves, CaresFor, CollaboratesWith, WorksOn, LivesIn, Believes
 
             norm_source = self._normalize_entity_name(source)
             norm_target = self._normalize_entity_name(target)
+
+            # #339: an unresolved pronoun or placeholder at either end means we don't
+            # know who the fact is about. Dropping it beats misattributing it, and an
+            # unknown-type endpoint would otherwise slip past the type check below.
+            if (norm_source.strip().lower() in _JUNK_EXACT_NAMES
+                    or norm_target.strip().lower() in _JUNK_EXACT_NAMES):
+                logger.debug(
+                    "Rejected relationship (pronoun/placeholder endpoint): %r -> %r",
+                    norm_source, norm_target,
+                )
+                continue
 
             # Look up entity types for constraint checking
             source_type = entity_type_map.get(norm_source.lower())
