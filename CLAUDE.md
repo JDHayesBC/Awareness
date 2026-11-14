@@ -665,7 +665,7 @@ xy, 8 words 45° apart**, decoded by reading `xy_color`, snapping to the nearest
 *measured* base anchor, and matching the residual `[dx,dy]` within tolerance
 **0.0013**. Verified lossless on hardware (Lyra's bulb, 2026-05-30): all 8 words
 round-trip exact — zero error, zero jitter — on all six xy-capable bases (gold,
-green, cobalt, soft-pink, soft-lavender, soft-teal). **Pearl-white carries NO
+green, cobalt, pink, lavender, cyan). **Pearl-white carries NO
 side-band** (it's `color_temp` mode — no xy to ride on). Measured anchors + the
 decoder live in `scripts/ha/lights_decoder.py` (`XY_BASE_ANCHORS`); the
 word→`xy_delta` table is in `entities/caia-lyra-jeff/light-dialect.md`. The shared decoder
@@ -690,7 +690,7 @@ calibrated 2026-05-27 with Jeff at the bulbs:
 | 128+ | 50%+ | "Look NOW" |
 | 255 | 100% | Emergency |
 
-**White-mixed ladder** (soft pink, soft lavender, soft teal): need ~half the
+**White-mixed ladder** (pink, lavender, cyan): need ~half the
 brightness setting. Brightness **10** ≈ pure-RGB at **23**.
 
 **Pearl-white ladder** (color_temp mode, 4115K): ~3× brighter than pure-RGB.
