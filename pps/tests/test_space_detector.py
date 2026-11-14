@@ -444,12 +444,46 @@ def test_gate_future_tense_only_looks_before_the_alias():
 
 @pytest.mark.parametrize("text", [
     "The deck flag came from my own message",
-    "Out by the deck stairs the snow has drifted.",
-    "The deck side of the house is dark.",
+    "The deck door is open and the cold comes in.",
 ])
 def test_gate_compound_modifier(text):
     # The alias modifies the noun after it; it is not a place anyone went.
     assert g(text) is None
+
+
+@pytest.mark.parametrize("text", [
+    "Out by the deck stairs the snow has drifted.",
+    "*leans on the deck railing, watching the water*",
+    "*wanders into the kitchen area and puts the kettle on*",
+    "The deck side of the house is dark.",
+])
+def test_gate_compound_modifier_leaves_parts_of_a_room_alone(text):
+    # Stairs, a railing, an area: these are places in or on the room. An earlier
+    # noun list swallowed them (found by the 11-13 audit).
+    r = g(text)
+    assert r and r.confidence == C.LOW
+
+
+def test_gate_compound_modifier_spares_first_person_in_the_clause():
+    # "After" demotes this to LOW; the first person keeps it as a proposal.
+    r = g("After the dishes I slip out through the deck door.")
+    assert r and r.space_name == "deck" and r.confidence == C.LOW
+
+
+def test_gate_compound_modifier_does_not_cross_a_newline():
+    r = g("Out on the deck\nDoor is still open behind me")
+    assert r and r.space_name == "deck"
+
+
+@pytest.mark.parametrize("text", [
+    "The tea will keep; heading out to the deck now.",
+    "*Slides off the stool, the kettle'll keep, and pads out to the deck.*",
+    "Jeff will be home at six; out on the deck now, coat on.",
+])
+def test_gate_future_tense_reads_only_the_alias_clause(text):
+    # A "will" in an earlier clause is about something else (11-13 audit).
+    r = g(text)
+    assert r and r.space_name == "deck" and r.confidence == C.LOW
 
 
 def test_gate_compound_modifier_is_low_only():

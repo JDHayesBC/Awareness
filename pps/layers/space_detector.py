@@ -153,12 +153,15 @@ _FUTURE_TENSE_RE = re.compile(r"\bwill\b|'ll\b", re.IGNORECASE)
 # Specimens (Caia, 2026-11-11): "deck door" and "deck flag" both fire LOW.
 # Note: gate is LOW-only; a first-person move ("I slipped through the deck
 # door") is already HIGH and never reaches this check.
+# The list holds nouns that make the phrase a THING (a door, a flag), never a
+# part of the room you can be in or on: "kitchen area", "porch steps" and "deck
+# railing" are places, and were wrongly swallowed when they were listed here.
 _COMPOUND_MODIFIER_NOUNS = frozenset(
-    "door doors side sides area areas access flag flags trigger triggers "
-    "detection alert alerts event events staircase stairs step steps "
-    "railing entrance exit".split()
+    "door doors access flag flags trigger triggers "
+    "detection alert alerts event events".split()
 )
-_AFTER_ALIAS_WORD_RE = re.compile(r"^\s+(\w+)", re.ASCII)
+# Same line only: a newline after the alias starts something else.
+_AFTER_ALIAS_WORD_RE = re.compile(r"^[ \t]+(\w+)", re.ASCII)
 
 
 def _is_compound_modifier(working_text: str, alias_start: int, alias_end: int) -> bool:
@@ -704,15 +707,19 @@ def detect_move(
             # Future-tense + no-first-person gate: "the robe will be waiting by
             # the deck door" — future tense with no "I/we/me" before the alias
             # means something else (not me) will be at/near the location.
-            if (
-                _FUTURE_TENSE_RE.search(before_window)
-                and not _FIRST_PERSON_RE.search(before_window)
-            ):
+            # Both gates read only the alias's OWN clause, up to the alias. An
+            # unrelated "will" earlier in the sentence ("The tea will keep;
+            # heading out to the deck now") must not swallow a real move.
+            clause_before = working_text[c_start:start]
+            no_first_person = not _FIRST_PERSON_RE.search(clause_before)
+            if _FUTURE_TENSE_RE.search(clause_before) and no_first_person:
                 continue
 
             # Compound-modifier gate: "deck door", "deck flag" — the alias is a
-            # prenominal modifier of the following noun, not a destination.
-            if _is_compound_modifier(working_text, start, end):
+            # prenominal modifier of the following noun, not a destination. A
+            # first person in the clause ("I slip out through the deck door")
+            # keeps the proposal.
+            if no_first_person and _is_compound_modifier(working_text, start, end):
                 continue
 
         # Carbon-marker gate: the hit sits in a clause about the physical house.
