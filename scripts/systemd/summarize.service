@@ -1,0 +1,27 @@
+[Unit]
+Description=Memory summarization for all entities (one-shot, fired by summarize.timer)
+Documentation=file:///mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/summarize_daemon.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
+
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+Environment="PYTHONPATH=/mnt/c/Users/Jeff/Claude_Projects/Awareness"
+
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python3 /mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/summarize_daemon.py
+
+# One-shot — exit 0 even if NUC/PPS was unreachable (daemon handles that itself).
+# Summarizer holds the NUC via summarizer.lock; kg-ingest defers (scripts/nuc_lock.py).
+SuccessExitStatus=0
+
+MemoryMax=512M
+CPUQuota=50%
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=summarize

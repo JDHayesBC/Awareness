@@ -1,0 +1,14 @@
+[Unit]
+Description=Fire kg-ingest.service every 5 minutes
+Requires=kg-ingest.service
+
+[Timer]
+# First run 2 minutes after boot, then every 5 minutes
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=kg-ingest.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,26 @@
+[Unit]
+Description=Knowledge graph ingestion (one-shot, fired by kg-ingest.timer)
+Documentation=file:///mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/kg_ingest_daemon.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
+
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+Environment="PYTHONPATH=/mnt/c/Users/Jeff/Claude_Projects/Awareness"
+
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/pps/venv/bin/python3 /mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/kg_ingest_daemon.py
+
+# One-shot — exit code 0 even if LLM was unreachable (daemon handles that itself)
+SuccessExitStatus=0
+
+MemoryMax=512M
+CPUQuota=50%
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kg-ingest

@@ -1,0 +1,16 @@
+[Unit]
+Description=Fire summarize.service every 30 minutes
+Requires=summarize.service
+
+[Timer]
+# First run 5 minutes after boot (let kg-ingest settle first), then every 30 minutes.
+# NUC contention with kg-ingest is handled cooperatively via scripts/nuc_lock.py,
+# so exact phase alignment with kg-ingest.timer does not matter.
+OnBootSec=5min
+OnUnitActiveSec=30min
+AccuracySec=30s
+Persistent=true
+Unit=summarize.service
+
+[Install]
+WantedBy=timers.target

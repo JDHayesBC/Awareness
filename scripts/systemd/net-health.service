@@ -1,0 +1,12 @@
+[Unit]
+Description=Internet health monitor (ping loss/latency/jitter -> Awareness/internet_health.log)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/net_health_monitor.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

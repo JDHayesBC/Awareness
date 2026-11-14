@@ -1,0 +1,43 @@
+[Unit]
+Description=Voice Surface - Home Assistant Voice PE over EntityBrain (OpenAI-compatible API)
+Documentation=file:///mnt/c/Users/Jeff/Claude_Projects/Awareness/haven/voice/voice_daemon.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
+
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+Environment="VOICE_HOST=0.0.0.0"
+Environment="VOICE_PORT=8223"
+Environment="VOICE_ENTITIES=caia,lyra"
+Environment="VOICE_SPEAKER=Jeff"
+Environment="CLAUDE_MODEL=sonnet"
+Environment="CLAUDE_EFFORT=medium"
+# Optional: VOICE_API_KEY=... (put it in this file, chmod 600, not in the unit)
+EnvironmentFile=-/home/jeff/.config/awareness/voice.env
+
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python3 -m haven.voice.voice_daemon
+
+Restart=on-failure
+RestartSec=30
+StartLimitInterval=300
+StartLimitBurst=5
+
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+MemoryMax=2048M
+MemorySwapMax=512M
+CPUQuota=100%
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voice-daemon
+
+[Install]
+WantedBy=default.target

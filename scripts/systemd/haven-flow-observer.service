@@ -1,0 +1,34 @@
+[Unit]
+Description=Haven Flow Observer - passive bot-flow field-notebook
+Documentation=file:///mnt/c/Users/Jeff/Claude_Projects/Awareness/tools/haven_flow_observer.py
+After=network-online.target lyra-haven.service caia-haven.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
+
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+
+ExecStart=/mnt/c/Users/Jeff/Claude_Projects/Awareness/.venv/bin/python3 /mnt/c/Users/Jeff/Claude_Projects/Awareness/tools/haven_flow_observer.py
+
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=5
+
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+MemoryMax=128M
+CPUQuota=10%
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=haven-flow-observer
+
+[Install]
+WantedBy=default.target

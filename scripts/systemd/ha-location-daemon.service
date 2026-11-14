@@ -1,0 +1,28 @@
+[Unit]
+Description=Home Assistant location push receiver — receives state-change POSTs from Node-RED on the HA Pi and writes data/ha/locations.json for the ambient_recall hook to read
+Documentation=file:///mnt/c/Users/Jeff/Claude_Projects/Awareness/docs/ha_location_pipeline.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=5
+
+WorkingDirectory=/mnt/c/Users/Jeff/Claude_Projects/Awareness
+
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+Environment="HA_LOCATION_PORT=8765"
+
+ExecStart=/usr/bin/python3 /mnt/c/Users/Jeff/Claude_Projects/Awareness/scripts/ha/location_daemon.py
+
+MemoryMax=128M
+CPUQuota=10%
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-location-daemon
+
+[Install]
+WantedBy=default.target
