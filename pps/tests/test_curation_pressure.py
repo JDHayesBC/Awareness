@@ -1,9 +1,13 @@
 """Curation pressure counts only curatable work and doesn't let one term mask the other (#345, #336)."""
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
-from layers.custom_graph import CustomGraphLayer
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from layers.custom_graph import CustomGraphLayer  # noqa: E402
 
 
 class _Rec:
