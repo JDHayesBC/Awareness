@@ -324,8 +324,18 @@ def _append_result(p: Paths, obj: dict) -> None:
 def client(entity: str, verb: str, args: list[str], timeout: float = 30.0) -> int:
     p = Paths(entity)
     if not _serve_alive(p):
-        sys.exit(f"sl_bus: no serve running for {entity}. Start it with:\n"
-                 f"    ENTITY_NAME={entity} python3 {Path(__file__).name} serve &")
+        # Wording matters here: on 2026-11-11 "no serve running" was read as
+        # "a daemon the avatar needs is down" and nearly got this bench set to
+        # autostart, which would have left the brain deaf (serve takes the
+        # notify subscription for as long as it runs).
+        sys.exit(f"sl_bus: no hand-driving session open for {entity}.\n"
+                 f"This is normal, not a fault: the bus is a debugging bench you\n"
+                 f"open on purpose. The avatar's own brain (the {entity}-sl\n"
+                 f"service) does not use it and is unaffected.\n"
+                 f"To drive by hand, open a session, and stop it when done,\n"
+                 f"because the brain is deaf while it runs:\n"
+                 f"    ENTITY_NAME={entity} python3 {Path(__file__).name} serve &\n"
+                 f"    ENTITY_NAME={entity} python3 {Path(__file__).name} stop")
 
     cmd_id = f"{int(time.time()*1000)}-{os.getpid()}"
     # Note where result.jsonl ends BEFORE we enqueue, so we only read new lines.

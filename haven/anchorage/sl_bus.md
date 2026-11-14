@@ -8,6 +8,19 @@ Its reason to exist, in one line: **so the SL channel never has to struggle with
 basics like sitting or changing poses** — you hand-drive the steps until you know
 what actually works, then fix `sl.py` from what you learned.
 
+> **This is not a service. Do not autostart it.** The avatar's brain
+> (`lyra-sl.service` / `caia-sl.service`, running `sl_daemon.py`) never calls
+> the bus; it talks to Corrade directly. While `serve` runs, it holds Corrade's
+> notify subscription, so the brain hears nothing in-world until `serve` stops.
+> A bus left running all the time means a deaf avatar. "No serve running" is the
+> normal state.
+>
+> If the avatar says she sat and didn't, the bus is not the cause. On 2026-11-11
+> the causes were the brain's 40-second turn limit (#393) and narration reaching
+> the room before the action ran (#348). To see whether she is really seated,
+> read `sitting_on` for her own row in `python3 haven/anchorage/sl.py avatars`
+> (0 means standing).
+
 ---
 
 ## The layering (so you know where this sits)
