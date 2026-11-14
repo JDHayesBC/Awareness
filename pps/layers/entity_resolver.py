@@ -322,6 +322,9 @@ KNOWN_ALIASES = {
     "g1 body": "Unitree G1",
     "the g1 body": "Unitree G1",
     "the robot model": "Unitree G1",
+    # Desktop GPU/CPU "The X" variants, 2026-11-13 Caia stray sweep (merged via graph_merge.py)
+    "the 3060": "3060",
+    "the 4790k": "4790K",
 
     # --- Concepts ---
     "portia spider": "Portia",  # the jumping spider; 3 nodes merged 2026-10-03 (Caia)
