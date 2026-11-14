@@ -96,7 +96,7 @@ async def _send_to_pps(
                     "content": content,
                     "author_name": author_name,
                     "channel": channel,
-                    "is_lyra": entity_name == "lyra" and author_name.lower() == "lyra",
+                    "is_lyra": author_name.lower() == entity_name.lower(),
                     "token": token,
                 },
             )
