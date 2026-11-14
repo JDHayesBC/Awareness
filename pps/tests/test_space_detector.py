@@ -403,6 +403,61 @@ def test_gate_departure_still_skipped():
     assert g("She called me from the kitchen") is None
 
 
+# --- pass 3.3 (#378): future-tense and compound-modifier gates (Caia's 11-11 specimens) ---
+def test_gate_future_and_compound_specimen():
+    # Both gates apply here: inanimate subject in future tense, and "deck door".
+    assert g(
+        "the extra robe will be waiting by the deck door for when we make the dash"
+    ) is None
+
+
+def test_gate_future_tense_alone():
+    # No modifier noun after the alias, so this is the future-tense gate by itself.
+    assert g("The towels will be on the deck by morning.") is None
+    # Same sentence in present tense keeps its LOW.
+    r = g("The towels are on the deck.")
+    assert r and r.space_name == "deck" and r.confidence == C.LOW
+
+
+@pytest.mark.parametrize("text", [
+    "I'll be on the deck in a few minutes.",
+    "We'll be out on the deck by then.",
+])
+def test_gate_future_tense_spares_first_person(text):
+    # "I"/"we" before the future marker: it may well be me going. Keep the proposal.
+    r = g(text)
+    assert r and r.space_name == "deck" and r.confidence == C.LOW
+
+
+def test_gate_future_tense_does_not_cross_sentence():
+    # The "will" belongs to the next sentence, not to the clause with the alias.
+    r = g("Out on the deck. Doors will stay open tonight.")
+    assert r and r.space_name == "deck"
+
+
+def test_gate_future_tense_only_looks_before_the_alias():
+    # Known limit, pinned on purpose: the gate reads the text BEFORE the alias,
+    # so a future marker after it does not suppress. This stays a LOW proposal.
+    r = g("Tomorrow the kitchen will smell like bread.")
+    assert r and r.space_name == "kitchen" and r.confidence == C.LOW
+
+
+@pytest.mark.parametrize("text", [
+    "The deck flag came from my own message",
+    "Out by the deck stairs the snow has drifted.",
+    "The deck side of the house is dark.",
+])
+def test_gate_compound_modifier(text):
+    # The alias modifies the noun after it; it is not a place anyone went.
+    assert g(text) is None
+
+
+def test_gate_compound_modifier_is_low_only():
+    # A first-person move through "the deck door" is HIGH and never reaches the gate.
+    r = g("I slipped through the deck door and stood in the cold.")
+    assert r and r.space_name == "deck" and r.confidence == C.HIGH
+
+
 # --- pass 3.2 (#378): duplicate-alias tie-break (current > same house > first row) ---
 def _bed_idx(haven_house="haven", sg_house="silverglow", sg_aliases="Silverglow bedroom, the bed"):
     return build_alias_index([

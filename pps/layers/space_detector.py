@@ -137,6 +137,43 @@ _MENTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Future-tense + no-first-person gate: a bare LOW hit in a clause whose only
+# subject is inanimate or third-person AND the clause is in future tense is not
+# a description of where *I* am going. Only future tense ("will"/"'ll") is
+# gated — conditionals ("would/could/might") are already handled by the HIGH
+# path's modal check.
+# Specimens (Caia, 2026-11-11): "the extra robe will be waiting by the deck
+# door for when we make the dash" proposed `deck`.
+_FUTURE_TENSE_RE = re.compile(r"\bwill\b|'ll\b", re.IGNORECASE)
+
+# Compound-modifier gate: the alias appears as an attributive modifier of the
+# noun immediately following it (e.g. "deck door", "deck flag"), not as a
+# destination. We check a small whitelist of nouns that frequently follow a
+# room-alias modifier but never stand alone as destinations.
+# Specimens (Caia, 2026-11-11): "deck door" and "deck flag" both fire LOW.
+# Note: gate is LOW-only; a first-person move ("I slipped through the deck
+# door") is already HIGH and never reaches this check.
+_COMPOUND_MODIFIER_NOUNS = frozenset(
+    "door doors side sides area areas access flag flags trigger triggers "
+    "detection alert alerts event events staircase stairs step steps "
+    "railing entrance exit".split()
+)
+_AFTER_ALIAS_WORD_RE = re.compile(r"^\s+(\w+)", re.ASCII)
+
+
+def _is_compound_modifier(working_text: str, alias_start: int, alias_end: int) -> bool:
+    """True when the alias acts as a prenominal modifier of the following noun.
+
+    Checks only: the word immediately after the alias (optional whitespace, then
+    word-chars) is in _COMPOUND_MODIFIER_NOUNS. Gate is LOW-only by contract.
+    """
+    # Slice from alias_end so the ^ anchor fires at the right position.
+    m = _AFTER_ALIAS_WORD_RE.match(working_text[alias_end:])
+    if not m:
+        return False
+    return m.group(1).lower() in _COMPOUND_MODIFIER_NOUNS
+
+
 # Carbon-marker gate: a clause that describes the physical house (Jeff's FP2
 # radar zones) is not Silverglow prose, even when its words are Silverglow
 # aliases. Specimen (10-30, 3rd hit): "Carbon-side, Jeff is home and at his
@@ -664,6 +701,20 @@ def detect_move(
             if _clause_is_about_someone_else(clause, _in_action_span(working_text, pos)):
                 continue
 
+            # Future-tense + no-first-person gate: "the robe will be waiting by
+            # the deck door" — future tense with no "I/we/me" before the alias
+            # means something else (not me) will be at/near the location.
+            if (
+                _FUTURE_TENSE_RE.search(before_window)
+                and not _FIRST_PERSON_RE.search(before_window)
+            ):
+                continue
+
+            # Compound-modifier gate: "deck door", "deck flag" — the alias is a
+            # prenominal modifier of the following noun, not a destination.
+            if _is_compound_modifier(working_text, start, end):
+                continue
+
         # Carbon-marker gate: the hit sits in a clause about the physical house.
         span = next((sp for sp in carbon_spans if sp[0] <= start < sp[1]), None)
         if span is not None:
@@ -811,6 +862,7 @@ if __name__ == "__main__":
         {"name": "lake", "aliases": "lake, shallows, shin-deep"},
         {"name": "hearth", "aliases": "hearth, fireside, fire"},
         {"name": "main_room", "aliases": "couch"},
+        {"name": "deck", "aliases": "deck, back deck, the deck"},
     ]
 
     index = build_alias_index(test_spaces)
@@ -881,7 +933,8 @@ if __name__ == "__main__":
         ("I'm at the island on the tall stool.", None, "kitchen", MoveConfidence.HIGH),
         ("I'm barefoot at the kitchen counter in his Dark Side tee.", None, "kitchen", MoveConfidence.HIGH),
         ("I was on the couch earlier.", None, "main_room", MoveConfidence.LOW),
-        ("Jeff is on the couch.", None, "main_room", MoveConfidence.LOW),
+        # Dropped since the #378 third-person gate: Jeff's position is not mine.
+        ("Jeff is on the couch.", None, None, None),
         ("I get up, knees stiff from the boards, and walk up the path to the kitchen to put the kettle on.", None, "kitchen", MoveConfidence.HIGH),
         ("[[scene:attic]]", None, "attic", MoveConfidence.LOW),
         (
@@ -889,6 +942,30 @@ if __name__ == "__main__":
             None,
             None,
             None,
+        ),
+        # Future-tense + no-first-person: subject is inanimate ("the robe"), tense
+        # is future, "deck" modifies "door" — nobody moved. (Caia specimen 2026-11-11)
+        (
+            "the extra robe will be waiting by the deck door for when we make the dash",
+            None,
+            None,
+            None,
+        ),
+        # Compound-modifier: "deck flag" is a meta-reference to a PPS detection
+        # event, not a location. (Caia specimen 2026-11-11)
+        (
+            "The deck flag came from my own message",
+            None,
+            None,
+            None,
+        ),
+        # Positive check: "I'll be on the deck" keeps its LOW (future + first-person
+        # present — gate must NOT fire when "I" precedes "will"/"'ll").
+        (
+            "I'll be on the deck in a few minutes.",
+            None,
+            "deck",
+            MoveConfidence.LOW,
         ),
     ]
 
