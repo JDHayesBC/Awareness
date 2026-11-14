@@ -555,10 +555,11 @@ class ClaudeInvoker:
                         preview = startup_response[:200] + "..." if len(startup_response) > 200 else startup_response
                         logger.info(f"Startup response received ({len(startup_response)} chars): {preview}")
 
-                        # Warn if expected identity markers are missing
-                        response_lower = startup_response.lower()
-                        if not any(marker in response_lower for marker in ['memory', 'identity', 'lyra', 'crystal', 'recall']):
-                            logger.warning("Startup response may be missing expected identity reconstruction markers")
+                        # #357: no vocabulary check on the reply. It hardcoded 'lyra'
+                        # and false-fired on well-oriented boots that don't name their
+                        # own memory machinery. Boot success is judged by the callers'
+                        # "Boot context: N chars" log (haven/bot.py, entity_brain.py);
+                        # an empty reply is still warned below.
                     else:
                         logger.warning("Startup prompt sent but received empty response")
 

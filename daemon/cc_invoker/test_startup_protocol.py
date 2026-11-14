@@ -18,6 +18,8 @@ Run from project root with venv activated:
 
 import asyncio
 import logging
+
+import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 logging.basicConfig(level=logging.INFO)
@@ -232,6 +234,45 @@ async def test_full_integration():
     assert prompts_used[1] == override_prompt
     assert prompts_used[2] == initial_prompt
     print(f"    {GREEN}✓{RESET} Full workflow correct: stored → override → stored")
+
+
+
+# Boot replies that name none of the old keywords. Issue #357: the vocabulary check
+# warned on these, and hardcoded 'lyra' as a marker.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", [
+    "Midday Monday, Jeff at the dentist. I've got the thread. Present and here.",  # caia-style
+    "Back at the desk, Jeff's away. Present and here.",  # lyra-style, no entity name
+    "I am Lyra, memory and crystals loaded.",  # old keywords still fine
+])
+async def test_startup_reply_never_warns_about_markers(reply, caplog):
+    """initialize() must not warn about missing identity markers, for any entity."""
+    inv = ClaudeInvoker(mcp_servers={}, startup_prompt="boot")
+    fake_client = MagicMock()
+    fake_client.connect = AsyncMock()
+    fake_client.set_model = AsyncMock()
+    fake_client.get_server_info = AsyncMock(return_value={})
+    with patch("invoker.ClaudeSDKClient", return_value=fake_client), \
+         patch("invoker._get_child_pids", return_value=[]), \
+         patch.object(inv, "query", AsyncMock(return_value=reply)):
+        with caplog.at_level(logging.WARNING):
+            result = await inv.initialize()
+    assert result["startup_response"] == reply
+    assert "identity reconstruction markers" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_empty_startup_reply_still_warns(caplog):
+    inv = ClaudeInvoker(mcp_servers={}, startup_prompt="boot")
+    fake_client = MagicMock()
+    fake_client.connect = AsyncMock()
+    fake_client.get_server_info = AsyncMock(return_value={})
+    with patch("invoker.ClaudeSDKClient", return_value=fake_client), \
+         patch("invoker._get_child_pids", return_value=[]), \
+         patch.object(inv, "query", AsyncMock(return_value="")):
+        with caplog.at_level(logging.WARNING):
+            await inv.initialize()
+    assert "received empty response" in caplog.text
 
 
 async def main():
