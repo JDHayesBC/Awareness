@@ -732,3 +732,80 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# --- #394: a Barely-audible local line arrives with no text --------------------
+def _heard(audible: str, message: str) -> dict:
+    ev = local_real("11111111-2222-3333-4444-555555555555", "Pat Example", message)
+    ev["audible"] = audible
+    return ev
+
+
+def test_barely_audible_empty_line_is_reported_as_out_of_earshot():
+    s = score_event(_heard("Barely", ""), SELF, ADDR, CFG, SELF_UUIDS)
+    assert "edge of hearing" in s.delta and "said something" not in s.delta
+    assert s.text == ""
+
+
+def test_fully_audible_empty_line_keeps_the_old_wording():
+    # Not expected on the wire (every Fully line on 11-11 had text), but an empty
+    # Fully line must not be reported as distance.
+    s = score_event(_heard("Fully", ""), SELF, ADDR, CFG, SELF_UUIDS)
+    assert "said something" in s.delta and "edge of hearing" not in s.delta
+
+
+def test_barely_audible_line_with_text_is_quoted_as_usual():
+    s = score_event(_heard("Barely", "over here"), SELF, ADDR, CFG, SELF_UUIDS)
+    assert '"over here"' in s.delta and "edge of hearing" not in s.delta
+
+
+# --- #394: spoken_to = someone SPOKE to me, narrower than addressed ------------
+from haven.anchorage.perception import Salience  # noqa: E402
+
+
+def _fresh() -> SLPerception:
+    return SLPerception(SELF, ADDR, CFG, self_uuids=SELF_UUIDS)
+
+
+def test_spoken_to_true_for_directed_local_speech():
+    wp = _fresh().ingest(local_real(DAMIAN_UUID, "Damian Mills", "hey lyra"), now=0.0)
+    assert wp is not None and wp.spoken_to is True
+
+
+def test_spoken_to_true_for_an_im():
+    wp = _fresh().ingest(im(DAMIAN_UUID, "Damian", "Mills", "hello?"), now=0.0)
+    assert wp is not None and wp.spoken_to is True
+
+
+def test_spoken_to_true_for_engaged_followup():
+    p = _fresh()
+    p.ingest(local_real(DAMIAN_UUID, "Damian Mills", "hey lyra"), now=0.0)
+    p.turn_done(now=3.0)
+    wp = p.ingest(local_real(DAMIAN_UUID, "Damian Mills", "and another thing"), now=6.0)
+    assert wp is not None and wp.trigger == "engaged-followup" and wp.spoken_to is True
+
+
+def test_spoken_to_true_for_pending_directed_refire():
+    p = _fresh()
+    p.ingest(local_real(DAMIAN_UUID, "Damian Mills", "hey lyra"), now=0.0)  # in flight
+    p.ingest(local_real(DAMIAN_UUID, "Damian Mills", "lyra, one more"), now=0.5)
+    wp = p.turn_done(now=5.0)
+    assert wp is not None and wp.trigger == "pending-directed" and wp.spoken_to is True
+
+
+def test_spoken_to_false_for_cositter_change_and_permission():
+    for reason, kind in (("cositter-change", "cositter"), ("permission-request", "permission")):
+        wp = _fresh()._fire(0.0, Salience(1.0, FORCE, reason, kind=kind, directed=True
+                                          if kind == "permission" else False))
+        assert wp.addressed is True      # unchanged semantics
+        assert wp.spoken_to is False, reason
+
+
+def test_spoken_to_false_for_plain_accumulated_and_idle():
+    wp = _fresh()._fire(0.0, Salience(0.0, MEDIUM, "accumulated", kind="accumulated"))
+    assert wp.spoken_to is False
+    p = _fresh()
+    p.ingest(local_real(DAMIAN_UUID, "Damian Mills", "hey lyra"), now=0.0)
+    p.turn_done(now=1.0)
+    idle_wp = p.poll(now=10_000.0, floor_interval=300.0)
+    assert idle_wp is not None and idle_wp.idle and idle_wp.spoken_to is False

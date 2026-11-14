@@ -544,6 +544,21 @@ def _is_directed(text: str, address_names: set[str]) -> bool:
     return any(n and n in low for n in address_names)
 
 
+def _local_delta(speaker: str, text: str, audible: str) -> str:
+    """The line the brain reads for one local-chat event.
+
+    Corrade marks each local line ``audible``: Fully or Barely. A Barely line
+    arrives with an EMPTY message (all 52 on 2026-11-11 did; all 419 Fully lines
+    had text), so the honest report is that someone is talking out of earshot,
+    not that they "said something" she could answer."""
+    if text:
+        return f'{speaker}: "{text}"'
+    if audible.strip().lower() == "barely":
+        return (f"{speaker} is speaking at the edge of hearing, "
+                f"too far to make out the words")
+    return f"{speaker} said something"
+
+
 def score_event(
     event: dict,
     self_names: set[str],
@@ -580,7 +595,7 @@ def score_event(
             "directed-speech" if directed else "local-speech",
             kind=kind, speaker=speaker, speaker_uuid=speaker_uuid(event),
             text=text, directed=directed,
-            delta=f'{speaker}: "{text}"' if text else f"{speaker} said something",
+            delta=_local_delta(speaker, text, _get(event, "audible")),
         )
 
     if kind == "message":  # IM straight to me — always directed
@@ -793,6 +808,12 @@ class WakePayload:
     # accumulated re-fires all stay "local"; only a direct IM trigger routes "im".
     reply_via: str = "local"
     reply_to_uuid: Optional[str] = None
+    # Someone actually SPOKE to me (a directed local/IM line, incl. the
+    # pending-directed re-fire and engaged-followup). Narrower than ``addressed``,
+    # which is also True for FORCE-tier non-speech (a co-sitter leaving, a
+    # permission request). The output-boundary gate (#394) lets only spoken-to
+    # turns split a long reply; default False so an old payload fails closed.
+    spoken_to: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -1097,4 +1118,9 @@ class SLPerception:
             music_line=self.surface.music_line(),
             reply_via=reply_via,
             reply_to_uuid=reply_to_uuid,
+            spoken_to=(
+                reply_via == "im"
+                or (trigger.directed
+                    and trigger.kind in ("local", "message", "accumulated"))
+            ),
         )
