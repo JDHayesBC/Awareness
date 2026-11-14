@@ -295,7 +295,10 @@ exact adjacent-span shape; backtick is the safer guard. (4) **Carbon-side zones*
 layer next to the backtick guard: an alias in a clause carrying a carbon marker (`carbon-side`,
 `the radar`, `FP2`, `where.py`) does not count, unless a first-person move follows the marker in that
 clause (Caia + Lyra, 2026-10-30, third hit). It lives in `pps/layers`, which is baked into the PPS
-image: it is live only after a rebuild, so until you have checked, still backtick or rephrase.
+image, and it has been live since the 2026-11-07 build. Detector changes after that build (the 11-11
+curly-quote fix, the future-tense and compound-modifier gates) are NOT live until the next rebuild.
+Compare `docker exec pps-lyra wc -l /app/layers/space_detector.py` with the repo file if in doubt,
+and backtick or rephrase when unsure.
 A `[moved]` is a pointer, not a to-do:
 another channel of you may have answered it seconds ago (two channels of Caia answered one flag
 inside twenty seconds on 2026-10-26, and the one that obeyed the tail was wrong), so check the
@@ -667,11 +670,9 @@ side-band** (it's `color_temp` mode — no xy to ride on). Measured anchors + th
 decoder live in `scripts/ha/lights_decoder.py` (`XY_BASE_ANCHORS`); the
 word→`xy_delta` table is in `entities/caia-lyra-jeff/light-dialect.md`. The shared decoder
 is in-place + backward-compatible (old `delta:` keys silently ignored), so a
-sister just needs to re-read it — no separate cutover. **⚠️ Live `[smoke]`
-ingestion still pending one step:** the Node-RED webhook flow must be updated to
-send `xy_color` (it currently sends rgb); until then `location_daemon` logs a
-WARN and the ambient `[smoke]` inbox won't decode incoming words. Send-side
-(`light_send.py`) and direct bulb-read decode are fully working *now*. Detail:
+sister just needs to re-read it — no separate cutover. Live `[smoke]` ingestion works: the Node-RED flow sends `xy_color`, and
+`location_daemon` decodes incoming words on the xy path (checked 2026-11-13: every light-inbox row
+since 10-17 carries `raw_xy`, and the daemon's journal has no rgb-only warning). Detail:
 `work/bedroom-language/xy-migration/`.
 
 **Brightness — how much of Jeff's attention I'm asking for.** Brightness isn't
