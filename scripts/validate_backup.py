@@ -247,6 +247,43 @@ def sqlite_integrity_check(db_path: Path) -> tuple[bool, str, str]:
         con.close()
 
 
+def fts5_integrity_check(db_path: Path) -> tuple[str, str]:
+    """Strict FTS5 check (#390) against an extracted (never live) copy.
+
+    The plain PRAGMA integrity_check passes on an external-content FTS5 index
+    that disagrees with its content table; the 'integrity-check' command with
+    rank=1 compares the two and raises when they differ. Returns
+    (status, detail) where status is "ok", "skip" (no messages_fts table, or
+    this SQLite lacks FTS5) or "fail".
+
+    The command is an INSERT, so SQLite refuses it on a mode=ro connection
+    ("attempt to write a readonly database", verified even on a healthy
+    index). We therefore open the SCRATCH copy read-write for this step only.
+    The command only reads the content table and compares; it writes nothing.
+    """
+    con = sqlite3.connect(str(db_path))
+    try:
+        has_fts = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='messages_fts'"
+        ).fetchone()
+        if not has_fts:
+            return "skip", "no messages_fts table"
+        try:
+            con.execute(
+                "INSERT INTO messages_fts(messages_fts, rank) "
+                "VALUES('integrity-check', 1)"
+            )
+        except sqlite3.OperationalError as e:
+            if "fts5" in str(e).lower() and "no such module" in str(e).lower():
+                return "skip", f"SQLite built without FTS5 ({e})"
+            return "fail", str(e)
+        except sqlite3.DatabaseError as e:  # corrupt/inconsistent index
+            return "fail", str(e)
+        return "ok", "ok"
+    finally:
+        con.close()
+
+
 def table_row_count(db_path: Path, table: str) -> int | None:
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
@@ -302,6 +339,23 @@ def check_sqlite_sources(scratch_dir: Path, sources: dict[str, list[str]]) -> tu
                 continue
 
             checks.append(f"{source_name}/{rel}: integrity_check=ok, quick_check=ok")
+
+            # 1b. Strict FTS5 check (#390): same failure path as above.
+            try:
+                fts_status, fts_detail = fts5_integrity_check(extracted)
+            except Exception as e:
+                fts_status, fts_detail = "fail", f"could not run ({e})"
+            if fts_status == "fail":
+                errors.append(
+                    f"{source_name}/{rel}: FTS5 INTEGRITY FAILURE "
+                    f"(messages_fts integrity-check rank=1: {fts_detail})"
+                )
+                ok = False
+                continue
+            if fts_status == "skip":
+                log(f"  {source_name}/{rel}: FTS5 check skipped ({fts_detail})")
+            else:
+                checks.append(f"{source_name}/{rel}: messages_fts strict integrity-check=ok")
 
             # 2. Row-count sanity vs live db (best-effort — skip if no live db)
             live_path = live_db_path_for(source_name, rel)

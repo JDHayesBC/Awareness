@@ -246,3 +246,75 @@ def test_write_verdict_falls_back_on_permission_error(vb, tmp_path, monkeypatch)
 
     assert fallback.exists()
     assert '"ok": true' in fallback.read_text()
+
+
+# --- Strict FTS5 integrity-check (#390) -------------------------------------
+
+def _make_fts_db(path: Path) -> Path:
+    con = sqlite3.connect(path)
+    con.executescript(
+        "CREATE TABLE messages (id INTEGER PRIMARY KEY, body TEXT);"
+        "CREATE VIRTUAL TABLE messages_fts USING fts5("
+        "body, content='messages', content_rowid='id');"
+        "INSERT INTO messages(body) VALUES ('alpha'), ('beta'), ('gamma');"
+        "INSERT INTO messages_fts(messages_fts) VALUES ('rebuild');"
+    )
+    con.commit()
+    con.close()
+    return path
+
+
+def test_fts5_healthy_passes(vb, tmp_path):
+    db = _make_fts_db(tmp_path / "ok.db")
+    assert vb.fts5_integrity_check(db)[0] == "ok"
+
+
+@pytest.mark.parametrize("breakage", [
+    "DELETE FROM messages WHERE id = 1",
+    "INSERT INTO messages(body) VALUES ('delta')",
+])
+def test_fts5_stale_index_fails_where_plain_check_passes(vb, tmp_path, breakage):
+    db = _make_fts_db(tmp_path / "stale.db")
+    con = sqlite3.connect(db)
+    con.execute(breakage)  # content table changed, no matching FTS update
+    con.commit()
+    con.close()
+    # The old check is blind to this...
+    assert vb.sqlite_integrity_check(db)[0] is True
+    # ...the strict one is not.
+    status, detail = vb.fts5_integrity_check(db)
+    assert status == "fail", detail
+
+
+def test_fts5_absent_table_is_skipped(vb, tmp_path):
+    db = tmp_path / "plain.db"
+    _make_sqlite_db(db, message_rows=2)
+    assert vb.fts5_integrity_check(db)[0] == "skip"
+
+
+def test_fts5_check_leaves_content_rows_unchanged(vb, tmp_path):
+    db = _make_fts_db(tmp_path / "rows.db")
+    def rows():
+        con = sqlite3.connect(db)
+        try:
+            return con.execute("SELECT id, body FROM messages ORDER BY id").fetchall()
+        finally:
+            con.close()
+    before = rows()
+    vb.fts5_integrity_check(db)
+    assert rows() == before
+
+
+def test_check_sqlite_sources_reports_fts_failure(vb, tmp_path):
+    (tmp_path / "x_sqlite").mkdir()
+    db = _make_fts_db(tmp_path / "x_sqlite" / "conversations.db")
+    con = sqlite3.connect(db)
+    con.execute("DELETE FROM messages WHERE id = 2")
+    con.commit()
+    con.close()
+    ok, checks, errors = vb.check_sqlite_sources(
+        tmp_path, {"x_sqlite": ["conversations.db"]}
+    )
+    assert not ok
+    assert any("FTS5 INTEGRITY FAILURE" in e and "x_sqlite/conversations.db" in e
+               for e in errors)
