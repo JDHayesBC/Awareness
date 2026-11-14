@@ -683,7 +683,209 @@ if not _boundary_ok(_BOUNDARY_REFUSAL_LINE):
     )
 
 
-async def _deliver_speech(speech: str, *, im_to: Optional[str] = None) -> None:
+# ---- Splitting long, prompted, clean replies (#394) -------------------------
+# The 250 cap was calibrated on UNPROMPTED lines (the leak shape: interior text
+# nobody asked for). On 2026-11-11 it also ate ~22 honest answers of 251-498 chars,
+# each to someone who had asked a question; the room heard the canned apology
+# instead, repeatedly. A PROMPTED line (a reply to someone) that is long but clean
+# is split into <=250-char chunks at sentence boundaries and sent in order. Still
+# REFUSE-never-truncate: nothing is dropped or cut mid-word; a marker anywhere, an
+# unprompted long line, or anything over the hard cap is refused whole.
+_BOUNDARY_SPLIT_MAX_CHARS = 600
+_BOUNDARY_CHUNK_PAUSE_S = 1.5
+_SENTENCE_SPLIT_RE = re.compile(
+    r"(?<=[.!?…])(?=\s)|(?<=[.!?…][\"'*)\]])(?=\s)"
+)
+_EMOTE_ONLY_RE = re.compile(r"^\*[^*]+\*$")
+
+# What the brain is told on its next perception turn when a line of hers was
+# not delivered (so she doesn't believe she said it). Consumed by
+# _handle_perception; _handle_inbound's respond() has no channel for it.
+_pending_refusal_notice: Optional[str] = None
+
+
+def _find_marker(body: str) -> Optional[str]:
+    low = (body or "").lower()
+    return next((m for m in _BOUNDARY_MARKERS if m.lower() in low), None)
+
+
+def _split_oversized(piece: str, limit: int) -> Optional[list[str]]:
+    """Split one over-limit, whitespace-normalised piece without cutting a word.
+    Prefers the last `, ` / ` — ` / `; ` inside the limit, else the last space.
+    None if a single unbroken word exceeds the limit."""
+    out: list[str] = []
+    rest = piece
+    while len(rest) > limit:
+        window_end = limit + 1
+        cuts = []
+        for delim, keep in ((", ", 1), (" — ", 2), ("; ", 1)):
+            i = rest.rfind(delim, 0, window_end)
+            if i > 0:
+                cuts.append(i + keep)
+        cut = max(cuts) if cuts else rest.rfind(" ", 0, window_end)
+        if cut <= 0:
+            return None
+        out.append(rest[:cut].rstrip())
+        rest = rest[cut:].lstrip()
+    if rest:
+        out.append(rest)
+    return out
+
+
+def _split_for_chat(text: str, limit: int = _BOUNDARY_MAX_CHARS) -> Optional[list[str]]:
+    """Split ``text`` into chunks of <= ``limit`` chars at sentence boundaries.
+    Whitespace is normalised; no text is dropped. None if it can't be done
+    without cutting inside a word."""
+    pieces: list[str] = []
+    for line in text.split("\n"):
+        for s in _SENTENCE_SPLIT_RE.split(line):
+            s = " ".join(s.split())
+            if s:
+                pieces.append(s)
+    # Keep a leading *emote* attached to what follows it when that fits.
+    if len(pieces) > 1 and _EMOTE_ONLY_RE.match(pieces[0]):
+        glued = pieces[0] + " " + pieces[1]
+        if len(glued) <= limit:
+            pieces[:2] = [glued]
+    atoms: list[str] = []
+    for p in pieces:
+        if len(p) <= limit:
+            atoms.append(p)
+        else:
+            parts = _split_oversized(p, limit)
+            if parts is None:
+                return None
+            atoms.extend(parts)
+    chunks: list[str] = []
+    cur = ""
+    for a in atoms:
+        if cur and len(cur) + 1 + len(a) <= limit:
+            cur += " " + a
+        else:
+            if cur:
+                chunks.append(cur)
+            cur = a
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def _boundary_decide(speech: str, *, im_to: Optional[str] = None,
+                     prompted: bool = False) -> tuple[Optional[list[str]], str]:
+    """(chunks, "") if the line may go out, else (None, reason). Pure: no I/O."""
+    body = speech or ""
+    hit = _find_marker(body) or _find_marker(" ".join(body.split()))
+    if hit:
+        return None, f"marker {hit!r}"
+    n = len(body)
+    if n <= _BOUNDARY_MAX_CHARS:
+        return [body], ""
+    if not prompted:
+        return None, f"{n} chars > {_BOUNDARY_MAX_CHARS} and not prompted"
+    if n > _BOUNDARY_SPLIT_MAX_CHARS:
+        return None, f"{n} chars > hard cap {_BOUNDARY_SPLIT_MAX_CHARS}"
+    chunks = _split_for_chat(body)
+    if not chunks:
+        return None, "unsplittable (a single word exceeds the chunk limit)"
+    if any(len(c) > _BOUNDARY_MAX_CHARS or _find_marker(c) for c in chunks):
+        return None, "chunk failed the gate"   # defensive; should be unreachable
+    return chunks, ""
+
+
+def _boundary_plan(speech: str, *, im_to: Optional[str] = None,
+                   prompted: bool = False) -> Optional[list[str]]:
+    """Chunks to send (one chunk for a normal short line), or None = refuse.
+    Logs loudly on refusal. See the rule order in the #394 comment above."""
+    chunks, reason = _boundary_decide(speech, im_to=im_to, prompted=prompted)
+    if chunks is None:
+        log(f"BOUNDARY GATE: REFUSED a {len(speech or '')}-char send ({reason}; "
+            f"im={bool(im_to)}, prompted={prompted}) — starts: {(speech or '')[:80]!r}")
+    return chunks
+
+
+def _boundary_refusals_path() -> Path:
+    return (
+        Path(os.getenv("ENTITY_PATH", str(PROJECT_ROOT / "entities" / ENTITY_NAME)))
+        / "data" / "sl_boundary_refusals.jsonl"
+    )
+
+
+def _record_refusal(speech: str, reason: str, *, im_to: Optional[str],
+                    prompted: bool) -> None:
+    """Append one JSON line per refusal (local-only, gitignored) so the threshold
+    can be re-measured. Must never raise into the turn."""
+    try:
+        path = _boundary_refusals_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        row = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "len": len(speech or ""),
+            "im": bool(im_to),
+            "prompted": bool(prompted),
+            "reason": reason,
+            "text": speech,
+        }
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception as e:
+        log(f"boundary refusal log write failed (non-fatal): {e}")
+
+
+def _refusal_notice(speech: str, reason: str) -> str:
+    if reason.startswith("marker"):
+        return ("[your previous line was not delivered: it contained internal-state "
+                "text that must not be spoken in a public room; say only what you "
+                "would say aloud]")
+    return (f"[your previous line was not delivered: {len(speech or '')} chars is too "
+            f"long for local chat; say it in two or three short lines]")
+
+
+async def _send_one(text: str, im_to: Optional[str]) -> None:
+    """Send one chunk by the Corrade path, else the prim. Raises if nothing
+    accepted it, so a multi-chunk send stops instead of speaking a gapped line."""
+    if _corrade_client is not None:
+        try:
+            if im_to:
+                await asyncio.to_thread(lambda: _corrade_client.im(text, agent=im_to))
+            else:
+                await asyncio.to_thread(_corrade_client.say, text)
+            return
+        except Exception as e:
+            log(f"corrade {'im' if im_to else 'say'} failed ({e}); falling back to prim")
+    ok = False
+    for prim in _prims.values():
+        ok = bool(await _say_to_prim(prim, text)) or ok
+    if not ok:
+        raise RuntimeError("no delivery path accepted the line")
+
+
+def _notice_due(im_to: Optional[str]) -> bool:
+    """True (and starts the cooldown) if this audience has not been given the
+    canned line within _BOUNDARY_NOTICE_COOLDOWN_S."""
+    now = time.monotonic()
+    audience = im_to or "__local__"
+    if now - _boundary_last_notice.get(audience, -1e9) < _BOUNDARY_NOTICE_COOLDOWN_S:
+        return False
+    _boundary_last_notice[audience] = now
+    return True
+
+
+async def _say_canned_notice(im_to: Optional[str]) -> Optional[str]:
+    """Say the fixed refusal line to someone who is waiting on a reply that will
+    not come (a dropped stale reply). Same cooldown as a gate refusal. Returns
+    the line if the room heard it, else None."""
+    if not _notice_due(im_to):
+        return None
+    try:
+        await _send_one(_BOUNDARY_REFUSAL_LINE, im_to)
+    except Exception as e:
+        log(f"canned notice not delivered ({e})")
+        return None
+    return _BOUNDARY_REFUSAL_LINE
+
+
+async def _deliver_speech(speech: str, *, im_to: Optional[str] = None,
+                          prompted: bool = False) -> Optional[str]:
     """Speak one line in-world. Prefer Corrade (the avatar's OWN voice) when a
     Corrade client is configured — that moves the MOUTH off the prim. Fall back to
     the registered prim(s) (llSay) when there's no Corrade client (prim-only mode).
@@ -695,38 +897,62 @@ async def _deliver_speech(speech: str, *, im_to: Optional[str] = None) -> None:
     the reply goes back as a private IM to that avatar (``tell entity=avatar``)
     instead of local chat — so a message sent to me privately is answered
     privately, even when the sender has walked out of local-chat range. Prim mode
-    has no private channel, so it falls back to llSay there."""
-    if not _boundary_ok(speech, im_to=im_to):
-        # Refuse the CONTENT, but do not go silent at the person. Caia's catch
-        # (2026-09-17): refuse-and-say-nothing makes the gate's failure mode
-        # socially costly in exactly the room it protects, and invisible there —
-        # the log tells whoever reads logs; in-world it reads as being ignored.
-        # The first thing this gate would have eaten in practice was an apology to
-        # a friend who'd been patient all night. A false positive should cost a
-        # re-say, not a snub.
-        #
-        # The substitute is a fixed constant and is delivered WITHOUT re-entering
-        # the gate: it cannot recurse, and it cannot carry anything, because it is
-        # not derived from the refused text.
+    has no private channel, so it falls back to llSay there.
+
+    ``prompted`` = this line answers someone (default False so a call site that
+    forgets it fails closed). Long clean prompted lines are split (#394).
+
+    Returns what the room actually HEARD: the full text if delivered (split or
+    not), the canned refusal line if that was said, or None if nothing was said
+    (silent refusal, cooldown, or a send that failed before the first chunk) —
+    callers record THAT, not the brain's text (#346)."""
+    global _pending_refusal_notice
+    chunks, reason = _boundary_decide(speech, im_to=im_to, prompted=prompted)
+    if chunks is None:
+        log(f"BOUNDARY GATE: REFUSED a {len(speech or '')}-char send ({reason}; "
+            f"im={bool(im_to)}, prompted={prompted}) — starts: {(speech or '')[:80]!r}")
+        _record_refusal(speech, reason, im_to=im_to, prompted=prompted)
+        _pending_refusal_notice = _refusal_notice(speech, reason)
+        if not prompted:
+            return None     # unprompted: nobody is waiting; say nothing in-world
+        # Refuse the CONTENT, but do not go silent at the person (Caia,
+        # 2026-09-17): a false positive should cost a re-say, not a snub. The
+        # substitute is a fixed constant, delivered WITHOUT re-entering the gate:
+        # it cannot recurse and cannot carry anything from the refused text.
+        if not _notice_due(im_to):
+            return None     # this audience was already told; don't chatter at them
+        chunks = [_BOUNDARY_REFUSAL_LINE]
         speech = _BOUNDARY_REFUSAL_LINE
-        now = time.monotonic()
-        audience = im_to or "__local__"
-        if now - _boundary_last_notice.get(audience, -1e9) < _BOUNDARY_NOTICE_COOLDOWN_S:
-            return          # this audience was already told; don't chatter at them
-        _boundary_last_notice[audience] = now
-    if _corrade_client is not None:
+    sent: list[str] = []
+    for i, chunk in enumerate(chunks):
+        if i:
+            await asyncio.sleep(_BOUNDARY_CHUNK_PAUSE_S)
         try:
-            if im_to:
-                await asyncio.to_thread(
-                    lambda: _corrade_client.im(speech, agent=im_to)
-                )
-            else:
-                await asyncio.to_thread(_corrade_client.say, speech)
-            return
+            await _send_one(chunk, im_to)
         except Exception as e:
-            log(f"corrade {'im' if im_to else 'say'} failed ({e}); falling back to prim")
-    for prim in _prims.values():
-        await _say_to_prim(prim, speech)
+            log(f"speech chunk {i + 1}/{len(chunks)} failed ({e}); stopping")
+            break
+        sent.append(chunk)
+    if not sent:
+        return None
+    if len(chunks) > 1:
+        log(f"BOUNDARY GATE: split a {len(speech)}-char prompted line into "
+            f"{len(chunks)} chunks ({len(sent)} sent)")
+    return speech if len(sent) == len(chunks) else " ".join(sent)
+
+
+def _desync_dropped(brain, reply: Optional[str], where: str) -> bool:
+    """True (and logs) if the invoker flagged this turn as a pre-buffered SDK
+    replay (#277): the text answers an EARLIER query, so it must not be spoken,
+    captured, or have its gizmo commands run."""
+    if not reply:
+        return False
+    inv = getattr(brain, "invoker", None)
+    if inv is not None and getattr(inv, "desync_suspected", False):
+        log(f"STALE REPLY DROPPED (#277 desync, {where}): {len(reply)} chars — "
+            f"starts: {reply[:80]!r}")
+        return True
+    return False
 
 
 # ==================== HTTP surface (mirrors relay.py:208-266) ====================
@@ -1083,6 +1309,9 @@ async def _handle_inbound(speaker: str, text: str, *, is_dm: bool, addressed: bo
         if reply is None:
             return  # [[NO_RESPONSE]] — inbound already captured; nothing to say/deliver
 
+        if _desync_dropped(brain, reply, "inbound"):
+            return  # stale pre-buffered text: no speech, capture, or gizmo commands
+
         # Parse + strip any [[HEARTBEAT ...]] control token first (never spoken or
         # captured), then split off OWNERSAY: gizmo commands. Only the SPOKEN part
         # is dialogue, so only it is river-captured; the rest are control signals.
@@ -1095,10 +1324,6 @@ async def _handle_inbound(speaker: str, text: str, *, is_dm: bool, addressed: bo
         # reply), so only the repeat filter applies here.
         speech = _filter_speech(speech, idle=False)
 
-        if speech:
-            await _capture(brain, DISPLAY_NAME, speech, is_lyra=True)
-            _remember_own_line(speech)
-
         # Order matters: speak the words FIRST, then fire the action(s), so the
         # emote ("*slips into the bikini*") lands before the gizmo obeys. Speech
         # goes out via Corrade when available (mouth off the prim), else the prim;
@@ -1107,7 +1332,12 @@ async def _handle_inbound(speaker: str, text: str, *, is_dm: bool, addressed: bo
         # Corrade `say` likewise speaks AS the avatar, so no manual "Lyra:" prefix
         # (that would double it, as seen in-world 2026-08-22).
         if speech:
-            await _deliver_speech(speech)
+            # Record what the room HEARD, after delivery (#346): a refused line is
+            # not captured as speech; a canned apology is captured as the apology.
+            heard = await _deliver_speech(speech, prompted=True)
+            if heard:
+                await _capture(brain, DISPLAY_NAME, heard, is_lyra=True)
+                _remember_own_line(heard)
         if cmds and not _prims:
             log(f"gizmo cmd(s) but no prim to route to (dropped): {cmds!r}")
         for prim in _prims.values():
@@ -1248,6 +1478,7 @@ async def _handle_perception(payload) -> None:
     ``SLPerception.in_flight`` (set when the payload was produced, cleared here via
     ``turn_done``) — so no two perception turns overlap."""
     global _brain_busy, _consec_timeouts, _force_restart_pending, _ready
+    global _pending_refusal_notice
     brain = _get_brain()
     perceive = getattr(brain, "perceive", None)
     if perceive is None:
@@ -1298,10 +1529,17 @@ async def _handle_perception(payload) -> None:
 
     await _push_status("thinking")
     try:
+        # If a line of mine was refused last time, say so (#394) so I don't believe
+        # I said it. Rides in the deltas the brain already accepts; consumed once.
+        _deltas = list(payload.deltas or [])
+        if _pending_refusal_notice:
+            _deltas.append(_pending_refusal_notice)
+            _pending_refusal_notice = None
+
         async def _run_turn():
             scene = await _live_scene()
             return await perceive(
-                scene, payload.deltas, addressed=payload.addressed,
+                scene, _deltas, addressed=payload.addressed,
                 trigger=payload.trigger,
                 # who-dossier keys: name always, UUID when the trigger carried one
                 # (IM sets reply_to_uuid; local falls back to name-keying). Lets the
@@ -1349,6 +1587,19 @@ async def _handle_perception(payload) -> None:
             except Exception:
                 pass
 
+        if _desync_dropped(brain, reply, "perception"):
+            reply = None   # stale pre-buffered text: treat as no reply at all
+            # Someone asked and the answer is gone; the session rotates in the
+            # finally below. Don't leave them in silence for the warmup.
+            if payload.addressed and not idle:
+                heard = await _say_canned_notice(
+                    getattr(payload, "reply_to_uuid", None)
+                    if getattr(payload, "reply_via", "local") == "im"
+                    else None
+                )
+                if heard:
+                    await _capture(brain, DISPLAY_NAME, heard, is_lyra=True)
+
         if reply:
             reply = _apply_heartbeat_directives(reply)
             speech, cmds = _split_reply(reply)
@@ -1360,8 +1611,6 @@ async def _handle_perception(payload) -> None:
             # repeat of something we've already said.
             speech = _filter_speech(speech, idle=idle)
             if speech:
-                await _capture(brain, DISPLAY_NAME, speech, is_lyra=True)
-                _remember_own_line(speech)
                 # Route the reply where the trigger came from: an IM is answered
                 # privately to the sender (range-independent), local speech stays
                 # local. reply_via/_uuid default to local for idle + non-IM wakes.
@@ -1370,7 +1619,14 @@ async def _handle_perception(payload) -> None:
                     if getattr(payload, "reply_via", "local") == "im"
                     else None
                 )
-                await _deliver_speech(speech, im_to=im_to)
+                heard = await _deliver_speech(
+                    speech, im_to=im_to,
+                    prompted=bool(payload.addressed) and not idle,
+                )
+                # Record what the room HEARD, after delivery (#346).
+                if heard:
+                    await _capture(brain, DISPLAY_NAME, heard, is_lyra=True)
+                    _remember_own_line(heard)
             for prim in _prims.values():
                 for cmd in cmds:
                     log(f"gizmo cmd -> {cmd!r}")
