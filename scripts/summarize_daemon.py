@@ -230,10 +230,18 @@ async def process_entity(entity: dict) -> None:
                         client, pps_url, token, name, per_call_target
                     )
                 except httpx.HTTPStatusError as e:
+                    # The server puts the reason in the response body. Log it: a bare
+                    # status code left two failed runs on 2026-11-17 with no cause on record.
+                    try:
+                        detail = " ".join((e.response.text or "").split())[:400]
+                    except Exception:
+                        detail = ""
                     if e.response.status_code == 503:
                         log(f"[{name}] NUC LLM unavailable (503) — stopping (committed {total_summaries} summaries so far)")
                     else:
                         log(f"[{name}] ERROR: HTTP {e.response.status_code} from PPS — stopping (committed {total_summaries} summaries so far)")
+                    if detail:
+                        log(f"[{name}] server said: {detail}")
                     break
                 except (httpx.ReadTimeout, httpx.ConnectTimeout):
                     # A chunk should fit under HTTP_TIMEOUT; if it times out the
