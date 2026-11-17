@@ -49,7 +49,7 @@ class StubBrain:
         self.perceive_deltas.append(list(deltas))
         return None   # silence; nothing to deliver
 
-    async def rotate_if_approaching(self, threshold=None, on_warmup=None):
+    async def rotate_if_approaching(self, threshold=None, on_warmup=None, room_context=None):
         self.rotate_calls += 1
         if self.rotate_calls == 1:        # only the first rotation is slow
             self.log.append("rotate-start")

@@ -362,6 +362,151 @@ def _load_own_lines_from_db() -> None:
         log(f"self-repeat: db seed failed (non-fatal): {e}")
 
 
+# ==================== Rotation seed: recent room conversation (#404) ====================
+# A rotated/restarted brain session gets the identity warmup but, on its own, none of
+# the conversation that was happening (2026-11-16: asked "Who is she?" about someone
+# discussed for the previous five minutes). The per-turn prompt only carries lines
+# since the last fire. So the daemon keeps a ring of recent local-chat lines HEARD and
+# lines SPOKEN (each with speaker, text, wall time) and hands a rendered seed to the
+# brain, which folds it into the SAME warmup prompt as identity (one step, no window
+# with identity-but-no-room or room-but-no-identity). The ring is recorded at the
+# ingest seam (_on_corrade_event, before salience scoring, so quiet lines count) and
+# at _capture(is_lyra=True) (own speech), NOT at river capture: the river write is
+# best-effort and a #277 desync drops whole turns. conversations.db is read only as a
+# backfill when the ring is empty (fresh process), and labelled possibly incomplete.
+# The seed is prompt INPUT only: nothing in it is spoken, so the boundary gate is
+# unaffected; only a COUNT is ever logged (it contains other people's chat).
+SL_SEED_WINDOW_S = float(os.getenv("SL_SEED_WINDOW_S", "600"))         # 10 min
+SL_SEED_MAX_LINES = int(os.getenv("SL_SEED_MAX_LINES", "40"))
+SL_SEED_EXCHANGE_LINES = int(os.getenv("SL_SEED_EXCHANGE_LINES", "6"))  # kept even if outside the window
+# ...but only while that exchange is still recent. Without this bound a quiet ring (or a
+# river backfill at process start) would hand a new session yesterday's last lines under
+# a header that says "immediately before this session".
+SL_SEED_EXCHANGE_MAX_AGE_S = float(os.getenv("SL_SEED_EXCHANGE_MAX_AGE_S", "3600"))  # 1 h
+_SEED_RING_MAX = 200
+# (wall-clock ts, speaker, text, is_own)
+_room_ring: "deque[tuple[float, str, str, bool]]" = deque(maxlen=_SEED_RING_MAX)
+
+
+def _note_room_line(speaker: str, text: str, *, own: bool, ts: Optional[float] = None) -> None:
+    """Record one line of room conversation (heard or own) for the rotation seed."""
+    text = (text or "").strip()
+    if not text:
+        return
+    _room_ring.append((time.time() if ts is None else ts, speaker or "someone", text, own))
+
+
+def _select_seed_lines(
+    lines: "list[tuple[float, str, str, bool]]", now: float
+) -> "list[tuple[float, str, str, bool]]":
+    """Pick the seed lines (chronological) from ``lines`` (oldest first).
+
+    Window: lines within SL_SEED_WINDOW_S of ``now``, newest SL_SEED_MAX_LINES kept
+    (oldest dropped first). Latest exchange: the most recent non-own speaker, plus
+    the last SL_SEED_EXCHANGE_LINES lines that are theirs or my own, are ALWAYS
+    kept even when outside the window, and are never the ones dropped by the cap
+    (so a conversation that went quiet 20 minutes ago still survives a rotation),
+    as long as they are newer than SL_SEED_EXCHANGE_MAX_AGE_S.
+    """
+    if not lines or SL_SEED_MAX_LINES <= 0:
+        return []
+    keep: set[int] = set()
+    cutoff = now - SL_SEED_WINDOW_S
+    keep.update(i for i, ln in enumerate(lines) if ln[0] >= cutoff)
+    exchange: set[int] = set()
+    last_speaker = next((ln[1] for ln in reversed(lines) if not ln[3]), None)
+    ex_cutoff = now - SL_SEED_EXCHANGE_MAX_AGE_S
+    if last_speaker is not None:
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i][0] < ex_cutoff:
+                break                       # too old to call "the conversation we were in"
+            if lines[i][3] or lines[i][1] == last_speaker:
+                exchange.add(i)
+                if len(exchange) >= SL_SEED_EXCHANGE_LINES:
+                    break
+    keep |= exchange
+    ordered = sorted(keep)
+    over = len(ordered) - SL_SEED_MAX_LINES
+    if over > 0:
+        droppable = [i for i in ordered if i not in exchange]   # oldest first
+        drop = set(droppable[:over])
+        ordered = [i for i in ordered if i not in drop]
+        if len(ordered) > SL_SEED_MAX_LINES:        # exchange alone exceeds cap
+            ordered = ordered[-SL_SEED_MAX_LINES:]
+    return [lines[i] for i in ordered]
+
+
+def _load_room_lines_from_db() -> "list[tuple[float, str, str, bool]]":
+    """River backfill (read-only): recent lines of this entity's SL channel from
+    conversations.db, oldest first. Best-effort; any failure returns []. created_at
+    is stored UTC. Used ONLY when the ring buffer is empty."""
+    db_path = (
+        Path(os.getenv("ENTITY_PATH", str(PROJECT_ROOT / "entities" / ENTITY_NAME)))
+        / "data" / "conversations.db"
+    )
+    if not db_path.exists():
+        return []
+    try:
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            rows = con.execute(
+                "SELECT created_at, author_name, content, is_lyra FROM messages "
+                "WHERE channel = ? ORDER BY id DESC LIMIT ?",
+                (SL_CHANNEL, max(SL_SEED_MAX_LINES * 2, SL_SEED_EXCHANGE_LINES * 4)),
+            ).fetchall()
+        finally:
+            con.close()
+    except Exception as e:
+        log(f"rotation seed: river backfill failed (non-fatal): {e}")
+        return []
+    import datetime as _dt
+    out: "list[tuple[float, str, str, bool]]" = []
+    for created_at, author, content, is_lyra in reversed(rows):
+        if not content or not content.strip():
+            continue
+        try:
+            ts = _dt.datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=_dt.timezone.utc).timestamp()
+        except Exception:
+            continue
+        out.append((ts, author or "someone", content.strip(), bool(is_lyra)))
+    return out
+
+
+def _build_room_seed() -> Optional[str]:
+    """Render the rotation seed block, or None when there is nothing to seed.
+    Evaluated at warmup time (zero-arg callable handed to the brain)."""
+    now = time.time()
+    from_ring = bool(_room_ring)
+    source = list(_room_ring) if from_ring else _load_room_lines_from_db()
+    picked = _select_seed_lines(source, now)
+    if not picked:
+        return None
+    log(f"rotation seed: {len(picked)} line(s) from {'ring buffer' if from_ring else 'river backfill'}")
+    header = [
+        "[ROOM CONVERSATION BEFORE THIS SESSION]",
+        "This is the recent conversation in the room immediately before this session "
+        f"started. You, {DISPLAY_NAME}, were part of it; lines marked (you) are yours. "
+        "Continue it naturally. Do not greet people again or re-introduce yourself.",
+    ]
+    age_min = int(max(0.0, now - picked[-1][0]) // 60)
+    header.append(
+        "The most recent line below was "
+        + ("less than a minute ago." if age_min < 1 else f"about {age_min} minute(s) ago.")
+    )
+    if not from_ring:
+        header.append(
+            "Note: this was read back from the saved record, which is best-effort, "
+            "so it may be missing some lines."
+        )
+    body = []
+    for ts, speaker, text, own in picked:
+        hhmm = time.strftime("%H:%M", time.localtime(ts))
+        who = f"{DISPLAY_NAME} (you)" if own else speaker
+        body.append(f"[{hhmm}] {who}: {' '.join(text.split())}")
+    return "\n".join(header + [""] + body + ["[END ROOM CONVERSATION]"])
+
+
 def _filter_speech(speech: str, *, idle: bool) -> str:
     """Apply the idle-quiet speech gate (idle turns only) then self-repeat
     suppression to a candidate spoken line. Returns ``speech`` unchanged, or
@@ -1126,6 +1271,15 @@ def _on_corrade_event(data: dict) -> None:
                 _idle_backoff.note_other_speech(now)
         except Exception:
             pass
+    # Rotation seed (#404): record every heard local-chat line (not mine), BEFORE
+    # scoring, so quiet lines the salience layer drops still count as conversation.
+    try:
+        if perception.event_kind(data) == "local" and not perception._is_self(
+            data, _perception.self_names, _perception.self_uuids
+        ):
+            _note_room_line(perception.speaker_of(data), perception._get(data, "message"), own=False)
+    except Exception:
+        pass
     try:
         payload = _perception.ingest(data, now)
     except Exception as e:  # a perception bug must never break the ack
@@ -1315,7 +1469,12 @@ async def sl_inbound(body: InboundBody):
 
 async def _capture(brain, author_name: str, content: str, *, is_lyra: bool) -> None:
     """Best-effort river write-back, guarded by the SL_CAPTURE off-switch and
-    tolerant of brains (test stubs) that don't implement capture_to_river."""
+    tolerant of brains (test stubs) that don't implement capture_to_river.
+
+    Also the single place my own spoken lines enter the rotation-seed ring (#404):
+    recorded BEFORE the SL_CAPTURE gate and independent of river success."""
+    if is_lyra and content:
+        _note_room_line(DISPLAY_NAME, content, own=True)
     if not SL_CAPTURE or not content:
         return
     fn = getattr(brain, "capture_to_river", None)
@@ -1375,7 +1534,9 @@ async def _handle_inbound(speaker: str, text: str, *, is_dm: bool, addressed: bo
             if rotate is not None:
                 try:
                     async with _get_rotation_lock():
-                        rotated = await rotate(on_warmup=_warmup_halo)
+                        rotated = await rotate(
+                            on_warmup=_warmup_halo, room_context=_build_room_seed
+                        )
                     if rotated:
                         log("brain session rotated after inbound desync drop")
                 except Exception as e:
@@ -1579,7 +1740,8 @@ async def _handle_perception(payload) -> None:
                 # status below reads "listening" again.
                 async with _get_rotation_lock():
                     await restart_session(
-                        reason="repeated-timeout recovery", on_warmup=_warmup_halo
+                        reason="repeated-timeout recovery", on_warmup=_warmup_halo,
+                        room_context=_build_room_seed,
                     )
             except Exception as e:
                 log(f"forced session rotation failed (non-fatal): {e}")
@@ -1745,7 +1907,9 @@ async def _handle_perception(payload) -> None:
                         # but ONLY when a rotation actually happens (approaching-limit),
                         # since the hook is threaded through and fires past that gate.
                         async with _get_rotation_lock():
-                            _rotated = await rotate(on_warmup=_warmup_halo)
+                            _rotated = await rotate(
+                                on_warmup=_warmup_halo, room_context=_build_room_seed
+                            )
                         if _rotated:
                             log("brain session rotated proactively (quiet moment, off hot path)")
                     except Exception as e:
@@ -1766,7 +1930,9 @@ async def _handle_perception(payload) -> None:
                 # turn. Rotates before the queued `again` re-fires, so that turn runs fresh.
                 try:
                     async with _get_rotation_lock():
-                        _rotated = await rotate(threshold=0.95, on_warmup=_warmup_halo)
+                        _rotated = await rotate(
+                            threshold=0.95, on_warmup=_warmup_halo, room_context=_build_room_seed
+                        )
                     if _rotated:
                         log("brain session rotated on hot path (room saturated, no idle beat)")
                 except Exception as e:
@@ -2021,7 +2187,7 @@ async def _brain_warmup_task() -> None:
     # (within the ~60 s re-register window) see it via sl_register's status push.
     await _push_status("warming up")
     try:
-        await brain.warmup()
+        await brain.warmup(room_context=_build_room_seed)
         _ready = True
         log("brain warmed up")
     except Exception as e:

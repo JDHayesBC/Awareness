@@ -278,7 +278,7 @@ class FakeBrain:
             raise RuntimeError("perceive blew up")
         return self.reply
 
-    async def rotate_if_approaching(self, threshold=0.8, *, on_warmup=None):
+    async def rotate_if_approaching(self, threshold=0.8, *, on_warmup=None, room_context=None):
         self.rotations += 1
         was = self.invoker.desync_suspected
         self.invoker.desync_suspected = False

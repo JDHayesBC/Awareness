@@ -314,7 +314,7 @@ class EntityBrain:
             logger.warning(f"[{self.entity_name}] Boot context fetch failed (non-fatal): {e}")
             return ""
 
-    def _build_warmup_prompt(self, boot_context: str = "") -> str:
+    def _build_warmup_prompt(self, boot_context: str = "", room_context: str | None = None) -> str:
         """Heavy identity-reconstruction prompt (bot.py:202-225, channel/consumer_key
         parameterized instead of hardcoded 'haven').
 
@@ -324,6 +324,11 @@ class EntityBrain:
         baseline, causing per-turn latency creep vs Caia whose file is much smaller.
         The field laws are already in identity.md (step 1) and the SL-specific
         constraints are covered by the CRITICAL note in step 6.
+
+        ``room_context`` (optional, #404): a pre-rendered block of the conversation
+        happening in the room right before this session started. Delivered inside
+        this SAME prompt so identity and room arrive in one step. ``None``/empty
+        leaves the prompt byte-identical to what it always was (Haven bots).
         """
         token_path = self.entity_path / ".entity_token"
         project_root = self.entity_path.parent.parent
@@ -391,6 +396,7 @@ class EntityBrain:
             f"the message you want others to read, or the exact token [[NO_RESPONSE]] to stay "
             f"silent — never your reasoning, never a self-scan.\n"
             + self._profile_extras()
+            + (f"\n{room_context.rstrip()}\n\n" if room_context else "")
             + "After completing these, say 'warmed up'."
         )
 
@@ -418,8 +424,13 @@ class EntityBrain:
 
     # ==================== Warmup (bot.py:228-292) ====================
 
-    async def _warm_identity(self) -> None:
-        """Run the heavy identity-reconstruction prompt (bot.py:228-248, warm_identity)."""
+    async def _warm_identity(self, room_context=None) -> None:
+        """Run the heavy identity-reconstruction prompt (bot.py:228-248, warm_identity).
+
+        ``room_context`` (#404, optional): a str, or a zero-arg callable returning
+        ``str | None`` evaluated HERE, at warmup time (lines keep arriving during
+        the slow rotation). Folded into the same warmup prompt. A provider that
+        raises is logged and treated as no context, never aborts the warmup."""
         if self.invoker is None:
             raise RuntimeError("EntityBrain: invoker not constructed yet")
         logger.info(f"[{self.entity_name}] Warming up identity (channel={self.channel})...")
@@ -431,7 +442,16 @@ class EntityBrain:
                 logger.info(
                     f"[{self.entity_name}] Boot context empty - falling back to model-side tool calls"
                 )
-            resp = await self.invoker.query(self._build_warmup_prompt(boot_context))
+            room_text = None
+            if room_context is not None:
+                try:
+                    room_text = room_context() if callable(room_context) else room_context
+                except Exception as e:
+                    logger.warning(f"[{self.entity_name}] room_context provider failed: {e}")
+            resp = await self.invoker.query(
+                self._build_warmup_prompt(boot_context, room_text) if room_text
+                else self._build_warmup_prompt(boot_context)
+            )
             logger.info(
                 f"[{self.entity_name}] Identity warmed up — response: "
                 f"{resp[:100] if resp else '(empty)'}"
@@ -439,8 +459,10 @@ class EntityBrain:
         except Exception as e:
             logger.warning(f"[{self.entity_name}] Warmup failed (non-fatal): {e}")
 
-    async def warmup(self) -> None:
+    async def warmup(self, *, room_context=None) -> None:
         """Construct the ClaudeInvoker and run identity warmup (bot.py:251-292, init_invoker).
+
+        ``room_context`` (optional, #404): see :meth:`_warm_identity`.
 
         Idempotent-ish: safe to call once at surface-adapter startup. After
         this returns, `respond()` can be called.
@@ -474,7 +496,7 @@ class EntityBrain:
 
         await asyncio.sleep(5)
 
-        await self._warm_identity()
+        await self._warm_identity(room_context=room_context)
         logger.info(
             f"[{self.entity_name}] Invoker ready — context: {self.invoker.context_size} "
             f"tokens, {self.invoker.turn_count} turns"
@@ -482,7 +504,9 @@ class EntityBrain:
 
     # ==================== Session rotation (surface-adapter controllable) ============
 
-    async def restart_session(self, reason: str = "forced", *, on_warmup=None) -> bool:
+    async def restart_session(
+        self, reason: str = "forced", *, on_warmup=None, room_context=None
+    ) -> bool:
         """Force a full session restart + identity re-warm.
 
         For a surface adapter's watchdog: repeated-timeout recovery (a wedged /
@@ -499,6 +523,10 @@ class EntityBrain:
         WHOLE duration of the rotation, and only when a rotation truly happens. It
         is best-effort: a failure in the callback is logged but never aborts the
         restart.
+
+        ``room_context`` (keyword-only, optional, #404): str or zero-arg callable,
+        passed to ``_warm_identity`` so the room conversation rides in the same
+        warmup prompt. Default None = unchanged behaviour.
         """
         if self.invoker is None:
             return False
@@ -509,7 +537,7 @@ class EntityBrain:
                 logger.error(f"[{self.entity_name}] on_warmup hook failed ({reason}): {e}")
         try:
             await self.invoker.restart(reason=reason)
-            await self._warm_identity()
+            await self._warm_identity(room_context=room_context)
             logger.info(
                 f"[{self.entity_name}] Session rotated ({reason}) — fresh context: "
                 f"{self.invoker.context_size} tokens, {self.invoker.turn_count} turns"
@@ -519,7 +547,9 @@ class EntityBrain:
             logger.error(f"[{self.entity_name}] restart_session failed ({reason}): {e}")
             return False
 
-    async def rotate_if_approaching(self, threshold: float = 0.8, *, on_warmup=None) -> bool:
+    async def rotate_if_approaching(
+        self, threshold: float = 0.8, *, on_warmup=None, room_context=None
+    ) -> bool:
         """Proactively rotate the session BETWEEN turns if it's approaching its
         limits, so the heavy identity warmup is paid off the hot path (while no one
         is waiting on a reply) rather than landing inside a user-facing turn where it
@@ -536,7 +566,10 @@ class EntityBrain:
         approaching, reason = self.invoker.approaching_restart(threshold)
         if not approaching:
             return False
-        return await self.restart_session(reason=f"proactive: {reason}", on_warmup=on_warmup)
+        return await self.restart_session(
+            reason=f"proactive: {reason}", on_warmup=on_warmup,
+            room_context=room_context,
+        )
 
     # ==================== Ambient context (bot.py:329-359) ====================
 
