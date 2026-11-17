@@ -805,6 +805,96 @@ def _detect_topology(room_id: str) -> tuple[int, bool, str]:
     return count, humans_present, desc
 
 
+def format_batch_line(msg: dict, ct: str, *, is_human: bool) -> str:
+    """One prompt line for a batched message.
+
+    Human lines carry the server's row id as ``[msg N] `` so the brain can key
+    an open-ask claim on it (same number for every bot in the room). Bot lines
+    and messages without an id are left exactly as before.
+    """
+    dn = msg.get("display_name", "")
+    un = msg.get("username", "")
+    line = f"{dn} ({un}): {ct}"
+    mid = msg.get("id")
+    if is_human and mid not in (None, ""):
+        return f"[msg {mid}] {line}"
+    return line
+
+
+def _sister_present(room_id: str) -> bool:
+    """True when another entity bot is a participant in this room.
+
+    Two sources, either is enough: she spoke within the topology window, or one
+    of the room's last ROOM_HISTORY_MAX messages is hers. The second matters for
+    the cold open: an ask that arrives after 30+ quiet minutes is exactly the
+    first-turn overlap this exists for, and the recency window is empty then.
+    """
+    _detect_topology(room_id)  # reuse its stale-author pruning
+    for username, (_, is_bot) in recent_room_authors.get(room_id, {}).items():
+        if username != my_username and (is_bot or username in known_bots):
+            return True
+    for m in room_history.get(room_id, ()):
+        un = m.get("username", "")
+        if un and un != my_username and un in known_bots:
+            return True
+    return False
+
+
+def open_ask_applies(
+    human_text: str, my_tokens: set[str], sister_tokens: set[str]
+) -> bool:
+    """The open-ask note applies unless the humans named exactly one sister.
+
+    Neither named -> open to both -> True. Both named -> True. Only one
+    named -> that one is being asked directly, no claim needed -> False.
+    """
+    text = (human_text or "").lower()
+    me = any(t and t.lower() in text for t in my_tokens)
+    her = any(t and t.lower() in text for t in sister_tokens)
+    return me == her
+
+
+def build_open_ask_note(entity_name: str, repo_root: Path) -> str:
+    """Reminder to claim an open request atomically via scripts/lock.py."""
+    return (
+        "[open ask] You and your sister are both in this room with a human. "
+        "If a request above is open to either of you and not addressed to one "
+        'of you ("Will someone\u2026?"), claim it before you answer:\n'
+        f"  python3 {repo_root}/scripts/lock.py --locks-dir {repo_root}/.locks/haven-ask "
+        f'claim haven-ask-<message id> --holder haven-{entity_name} '
+        '--work "<the part you\'re taking>"\n'
+        "The message id is the number in [msg N] on the line that asks. "
+        "Exit 0: it's yours, say so and do it. Exit 2 / BLOCKED: read her "
+        "`work:` line, take what's left, or say she's got it and stay in the "
+        "scene. If it's playful or low stakes, sorting it out loud in the room "
+        "is fine too. Don't claim just to grab the fun half. No need to "
+        "mention the claim itself in the room."
+    )
+
+
+def prune_old_ask_claims(repo_root: Path, max_age_days: int = 7) -> int:
+    """Delete *.lock files older than max_age_days in <repo_root>/.locks/haven-ask/.
+
+    Touches nothing outside that one directory. Returns the number removed.
+    """
+    d = Path(repo_root) / ".locks" / "haven-ask"
+    removed = 0
+    try:
+        cutoff = time.time() - max_age_days * 86400
+        for f in d.glob("*.lock"):
+            try:
+                if f.is_file() and not f.is_symlink() and f.stat().st_mtime < cutoff:
+                    f.unlink()
+                    removed += 1
+            except OSError as e:
+                print(f"[{ENTITY_NAME}] ask-claim prune: {f.name}: {e}", file=sys.stderr)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        print(f"[{ENTITY_NAME}] ask-claim prune failed: {e}", file=sys.stderr)
+    return removed
+
+
 def _human_spoke_recently(room_id: str) -> bool:
     """Return True if a human spoke within HUMAN_ACTIVE_THRESHOLD_SECONDS."""
     cutoff = time.time() - HUMAN_ACTIVE_THRESHOLD_SECONDS
@@ -1197,9 +1287,12 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
 
         # Build prompt from all messages in batch
         lines = []
+        human_texts: list[str] = []
+        has_human_id = False
         for msg in messages:
             dn = msg.get("display_name", "")
             un = msg.get("username", "")
+            _is_human = un not in known_bots and un != my_username
             ct = (msg.get("content", "") or "").strip()
             img_url = msg.get("image_url", "")
             if img_url:
@@ -1217,7 +1310,11 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
                     "without trying Read on this path first.]"
                 )
                 ct = f"{img_note} {ct}".strip() if ct and ct != " " else img_note
-            lines.append(f"{dn} ({un}): {ct}")
+            lines.append(format_batch_line(msg, ct, is_human=_is_human))
+            if _is_human:
+                human_texts.append(msg.get("content", "") or "")
+                if msg.get("id") not in (None, ""):
+                    has_human_id = True
 
         batch_note = (
             f" ({len(messages)} messages arrived together)"
@@ -1253,10 +1350,24 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
             is_dm=room_id in dm_rooms,
         )
 
+        open_ask_note = ""
+        if (
+            has_human_id
+            and room_id not in dm_rooms
+            and _sister_present(room_id)
+            and open_ask_applies(
+                " ".join(human_texts),
+                name_tokens,
+                {u.lower() for u in known_bots if u and u != my_username},
+            )
+        ):
+            open_ask_note = "\n\n" + build_open_ask_note(ENTITY_NAME, PROJECT_DIR)
+
         prompt = (
             ambient_note
             + f"[Haven messages in #{room_id[:8]}]{batch_note}\n"
             + "\n".join(lines)
+            + open_ask_note
             + "\n\nRespond as yourself in chat. Output ONLY the message text you want "
             "posted — never your private reasoning, self-scan, or 'heartbeat tick' "
             "narration (whatever you output is posted verbatim). Address people by name; "
@@ -1547,6 +1658,11 @@ def main():
     print(f"[{ENTITY_NAME}] Model: {CLAUDE_MODEL}", file=sys.stderr)
     print(f"[{ENTITY_NAME}] Claude CLI: {CLAUDE_CLI_PATH or 'SDK bundled'}", file=sys.stderr)
     print(f"[{ENTITY_NAME}] Project: {PROJECT_DIR}", file=sys.stderr)
+
+    try:
+        prune_old_ask_claims(PROJECT_DIR)
+    except Exception as e:  # never let housekeeping block startup
+        print(f"[{ENTITY_NAME}] ask-claim prune error: {e}", file=sys.stderr)
 
     asyncio.run(connect())
 
