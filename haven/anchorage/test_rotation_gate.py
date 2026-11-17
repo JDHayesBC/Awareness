@@ -43,11 +43,29 @@ class StubBrain:
         self.rotate_raises = rotate_raises
         self.perceive_deltas: list[list[str]] = []
         self.invoker = None
+        # abandon-rotation (#277) knobs
+        self.hang_first_perceive = False
+        self.restart_calls = 0
+        self.restart_fail_first = False
+        self.restart_release = asyncio.Event()
+        self.restart_gated = False
 
     async def perceive(self, scene, deltas, **kw):
         self.log.append("perceive")
         self.perceive_deltas.append(list(deltas))
+        if self.hang_first_perceive and len(self.perceive_deltas) == 1:
+            await asyncio.sleep(3600)   # abandoned by wait_for
         return None   # silence; nothing to deliver
+
+    async def restart_session(self, reason=None, on_warmup=None, room_context=None):
+        self.restart_calls += 1
+        n = self.restart_calls
+        self.log.append("restart-start")
+        if self.restart_gated:
+            await self.restart_release.wait()
+        self.log.append("restart-end")
+        if self.restart_fail_first and n == 1:
+            raise RuntimeError("restart blew up")
 
     async def rotate_if_approaching(self, threshold=None, on_warmup=None, room_context=None):
         self.rotate_calls += 1
@@ -72,6 +90,7 @@ def env(monkeypatch):
     monkeypatch.setattr(d, "_consec_timeouts", 0)
     monkeypatch.setattr(d, "_force_restart_pending", False)
     monkeypatch.setattr(d, "_bg_tasks", set())
+    monkeypatch.setattr(d, "_abandon_rotation_task", None, raising=False)
 
     async def _noop(*a, **k):
         return None
@@ -193,3 +212,92 @@ def test_no_rotation_means_no_change(env):
     asyncio.run(go())
     assert log == ["perceive"]
     assert perc.in_flight is False
+
+
+# --- abandon-rotation (#277): one timed-out turn poisons the session ----------
+
+async def _timeout_turn(perc, brain, log, monkeypatch):
+    monkeypatch.setattr(d, "SL_TURN_TIMEOUT", 0.05)
+    brain.rotate_calls = 1   # finally-block rotate_if_approaching: fast no-op
+    brain.hang_first_perceive = True
+    brain.restart_gated = True
+    p1 = perc.ingest(_line("Lyra, hello there"), now=1000.0)
+    t1 = asyncio.create_task(d._handle_perception(p1))
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if "restart-start" in log:
+            break
+    return t1
+
+
+def test_single_timeout_starts_rotation_immediately(env, monkeypatch):
+    perc, brain, log = env
+    assert d.SL_TIMEOUT_RECOVER_AFTER == 2   # old code needed a 2nd timeout
+
+    async def go():
+        t1 = await _timeout_turn(perc, brain, log, monkeypatch)
+        assert "restart-start" in log, f"no rotation after ONE timeout: {log}"
+        assert d._consec_timeouts == 1
+        assert d._get_rotation_lock().locked()
+        brain.restart_release.set()
+        await _drain(t1)
+        await d._abandon_rotation_task
+
+    asyncio.run(go())
+    assert d._force_restart_pending is False
+
+
+def test_turn_during_abandon_rotation_waits_for_it(env, monkeypatch):
+    perc, brain, log = env
+
+    async def go():
+        t1 = await _timeout_turn(perc, brain, log, monkeypatch)
+        p2 = perception.WakePayload(trigger="idle", addressed=False, deltas=["x"])
+        t2 = asyncio.create_task(d._handle_perception(p2))
+        await asyncio.sleep(0.2)
+        assert log.count("perceive") == 1, f"turn ran on poisoned session: {log}"
+        brain.restart_release.set()
+        await _drain(t1, t2)
+
+    asyncio.run(go())
+    assert log.index("restart-end") < [i for i, e in enumerate(log) if e == "perceive"][1]
+
+
+def test_one_abandon_means_one_rotation(env, monkeypatch):
+    perc, brain, log = env
+
+    async def go():
+        t1 = await _timeout_turn(perc, brain, log, monkeypatch)
+        p2 = perception.WakePayload(trigger="idle", addressed=False, deltas=["x"])
+        t2 = asyncio.create_task(d._handle_perception(p2))
+        await asyncio.sleep(0.1)
+        brain.restart_release.set()
+        await _drain(t1, t2)
+
+    asyncio.run(go())
+    assert brain.restart_calls == 1
+    assert d._force_restart_pending is False
+
+
+def test_failed_abandon_rotation_is_logged_and_next_turn_retries(env, monkeypatch):
+    perc, brain, log = env
+    brain.restart_fail_first = True
+    brain.rotate_calls = 1
+    msgs: list[str] = []
+    monkeypatch.setattr(d, "log", lambda m: msgs.append(str(m)))
+
+    async def go():
+        t1 = await _timeout_turn(perc, brain, log, monkeypatch)
+        brain.restart_release.set()
+        await _drain(t1)
+        await d._abandon_rotation_task          # must not raise
+        assert d._force_restart_pending is True  # left set for the retry
+        assert not d._get_rotation_lock().locked()
+        p2 = perception.WakePayload(trigger="idle", addressed=False, deltas=["x"])
+        await d._handle_perception(p2)
+
+    asyncio.run(go())
+    assert any("abandon-rotation: failed" in m for m in msgs)
+    assert brain.restart_calls == 2
+    assert d._force_restart_pending is False
+    assert log.count("perceive") == 2

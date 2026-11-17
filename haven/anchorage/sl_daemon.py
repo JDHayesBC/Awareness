@@ -162,7 +162,7 @@ SL_TURN_TIMEOUT = float(os.getenv("SL_TURN_TIMEOUT", "40"))
 # with a tool call or two; 90s let a *degrading* brain session (context creeping
 # up turn-over-turn) limp for a minute and a half per fire before giving up — the
 # "escalating timing then total silence" Jeff saw. 40s catches degradation ~2x
-# sooner and pairs with the repeated-timeout recovery below. Session ROTATION
+# sooner and pairs with the abandon-rotation below. Session ROTATION
 # (the heavy identity warmup) is deliberately kept OFF this hot path (proactive
 # rotate_if_approaching at a quiet moment), so a normal turn never legitimately
 # needs the old 90s headroom.
@@ -181,9 +181,12 @@ SL_TURN_TIMEOUT = float(os.getenv("SL_TURN_TIMEOUT", "40"))
 # session bounded. Tune down again if per-turn latency creeps back up on a busy sim.
 SL_BRAIN_MAX_TURNS = int(os.getenv("SL_BRAIN_MAX_TURNS", "40"))
 SL_BRAIN_MAX_CONTEXT = int(os.getenv("SL_BRAIN_MAX_CONTEXT", "100000"))  # backstop
-# Repeated-timeout recovery: if this many perceive turns time out back-to-back,
-# force a full session rotation (fresh subprocess + re-warm) before the next fire —
-# turns "silent forever" into "silent one turn, then recovered".
+# Abandon-rotation (#277): an abandoned (timed-out) turn leaves the Claude CLI
+# subprocess still generating; its late reply sits in the SDK stream buffer and the
+# NEXT query on that session reads it back as its own answer. So ONE timeout poisons
+# the session, and it is rotated immediately, in the background (see
+# _start_abandon_rotation). SL_TIMEOUT_RECOVER_AFTER is kept as an env var for
+# compatibility only; it no longer gates rotation (it used to wait for N in a row).
 SL_TIMEOUT_RECOVER_AFTER = int(os.getenv("SL_TIMEOUT_RECOVER_AFTER", "2"))
 
 # Heartbeat-as-event (opt-in): a periodic self-authored "heartbeat" event fed into
@@ -1164,13 +1167,15 @@ _idle_backoff: Optional[heartbeat.IdleBackoff] = None
 # cleared in its finally.
 _brain_busy: bool = False
 
-# Repeated-timeout recovery state (see SL_TIMEOUT_RECOVER_AFTER). Consecutive
-# perception-turn timeouts are counted; once the count reaches the threshold a full
-# session rotation is forced at the TOP of the next turn (off the abandoned turn's
-# stack, under the _brain_busy guard). Any turn that completes without timing out
-# resets the counter.
+# Abandon-rotation state (#277). A timed-out perceive turn leaves a stale reply in
+# the session's stream buffer, so every timeout sets _force_restart_pending and
+# starts a background rotation (_abandon_rotation_task). The flag is cleared only
+# when a rotation actually completes; the next turn's start-of-turn check rotates
+# itself if the background task failed or has not run. _consec_timeouts is now just
+# a counter for the log lines; any turn that completes resets it.
 _consec_timeouts: int = 0
 _force_restart_pending: bool = False
+_abandon_rotation_task: Optional[asyncio.Task] = None
 
 # Rotation gate (#404). A brain-session rotation/restart takes ~100s (identity
 # warmup). While it runs, NO turn may send a query to the brain: the session has
@@ -1198,6 +1203,62 @@ async def _wait_rotation_done() -> None:
         log("turn waiting for in-progress brain rotation to finish")
         async with lock:
             pass
+
+
+async def _start_abandon_rotation(brain, *, timeout_s: float) -> None:
+    """Response to an abandoned turn (#277): mark the session poisoned and start
+    rotating it in the background right now.
+
+    The rotation lock is taken HERE when it is free (acquire() on a free lock
+    returns without suspending), so there is no window between "turn abandoned" and
+    "lock held" in which another turn could start on the poisoned session. The
+    background task inherits that hold and releases it when the rotation ends. Only
+    one abandon-rotation runs at a time; a timeout while one is running leaves the
+    flag set and the running task covers it.
+    """
+    global _force_restart_pending, _abandon_rotation_task
+    _force_restart_pending = True
+    if _abandon_rotation_task is not None and not _abandon_rotation_task.done():
+        return
+    lock = _get_rotation_lock()
+    pre_held = False
+    if not lock.locked():
+        await lock.acquire()      # does not yield on a free lock
+        pre_held = True
+    log(f"abandon-rotation: started (turn exceeded {timeout_s:.0f}s)")
+    _abandon_rotation_task = asyncio.create_task(_abandon_rotation(brain, pre_held))
+
+
+async def _abandon_rotation(brain, pre_held: bool) -> None:
+    """Background body of the abandon-rotation. Never raises: a failure is logged
+    and ``_force_restart_pending`` stays set so the next turn's start-of-turn path
+    retries once (no retry loop here)."""
+    global _force_restart_pending, _ready
+    lock = _get_rotation_lock()
+    if not pre_held:
+        await lock.acquire()
+    t0 = time.monotonic()
+    try:
+        if not _force_restart_pending:
+            return   # something else already rotated; nothing left to do
+        restart_session = getattr(brain, "restart_session", None)
+        if restart_session is None:
+            return
+        await _halo_debug("abandon-rotation: rotating after abandoned turn")
+        await restart_session(
+            reason="abandoned-turn recovery", on_warmup=_warmup_halo,
+            room_context=_build_room_seed,
+        )
+        _force_restart_pending = False
+        log(f"abandon-rotation: done in {time.monotonic() - t0:.1f}s")
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        log(f"abandon-rotation: failed after {time.monotonic() - t0:.1f}s "
+            f"(non-fatal; next turn will retry): {e}")
+    finally:
+        _ready = True
+        lock.release()
 
 
 _HEARTBEAT_RE = re.compile(r"\[\[\s*HEARTBEAT\s+([^\]]+?)\s*\]\]", re.IGNORECASE)
@@ -1743,16 +1804,17 @@ async def _handle_perception(payload) -> None:
 
     _brain_busy = True
 
-    # Repeated-timeout recovery: if prior turns timed out back-to-back, rotate the
-    # session (fresh subprocess + re-warm) NOW — off the abandoned turn's stack,
-    # under the _brain_busy guard, before we try to think again. This is the safety
-    # net that turns "silent forever" (every turn exceeding SL_TURN_TIMEOUT on a
-    # degraded/wedged session) into "silent one turn, then recovered".
+    # Abandon-rotation safety net (#277): a prior turn timed out, so the session
+    # holds a stale reply. The background task normally has it rotating already;
+    # wait for it (lock), and only if the flag is STILL set (the task failed, or
+    # never ran) rotate here, off the abandoned turn's stack, under _brain_busy.
     if _force_restart_pending:
-        _force_restart_pending = False
+        await _wait_rotation_done()
+    if _force_restart_pending:
         restart_session = getattr(brain, "restart_session", None)
         if restart_session is not None:
-            log(f"forcing brain session rotation after {_consec_timeouts} consecutive timeout(s)")
+            log(f"forcing brain session rotation after {_consec_timeouts} timeout(s) "
+                f"(abandon-rotation did not complete)")
             await _halo_debug(f"timeout-recovery: rotating after {_consec_timeouts} timeout(s)")
             try:
                 # on_warmup fires the "warming up" halo (and clears _ready) at the
@@ -1763,11 +1825,15 @@ async def _handle_perception(payload) -> None:
                         reason="repeated-timeout recovery", on_warmup=_warmup_halo,
                         room_context=_build_room_seed,
                     )
+                _force_restart_pending = False
+                _consec_timeouts = 0
             except Exception as e:
+                # Flag stays set: the next turn tries again. No retry loop here.
                 log(f"forced session rotation failed (non-fatal): {e}")
             finally:
                 _ready = True
-        _consec_timeouts = 0
+        else:
+            _force_restart_pending = False
 
     idle = getattr(payload, "idle", False)
     # A real (event-driven) wake feeds the tempo EMA + resets recency; an idle
@@ -1827,14 +1893,10 @@ async def _handle_perception(payload) -> None:
         except asyncio.TimeoutError:
             _consec_timeouts += 1
             reply = None
-            if _consec_timeouts >= SL_TIMEOUT_RECOVER_AFTER:
-                _force_restart_pending = True
-                log(f"perception turn exceeded {SL_TURN_TIMEOUT:.0f}s "
-                    f"(#{_consec_timeouts} in a row) — abandoning; will force session "
-                    f"rotation before next turn")
-            else:
-                log(f"perception turn exceeded {SL_TURN_TIMEOUT:.0f}s "
-                    f"(#{_consec_timeouts}) — abandoning so halo/lock reset")
+            log(f"perception turn exceeded {SL_TURN_TIMEOUT:.0f}s "
+                f"(#{_consec_timeouts} in a row) — abandoning; session holds a stale "
+                f"reply, rotating it now (#277)")
+            await _start_abandon_rotation(brain, timeout_s=SL_TURN_TIMEOUT)
         except Exception as e:
             _consec_timeouts = 0
             log(f"brain.perceive failed: {e}")
