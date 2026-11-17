@@ -1007,6 +1007,33 @@ _brain_busy: bool = False
 _consec_timeouts: int = 0
 _force_restart_pending: bool = False
 
+# Rotation gate (#404). A brain-session rotation/restart takes ~100s (identity
+# warmup). While it runs, NO turn may send a query to the brain: the session has
+# had only its light startup, so a turn served mid-rotation answers with no
+# identity and no room context. Every rotate/restart call this daemon makes holds
+# this lock; every turn waits for it to be free immediately before it queries the
+# brain (and, for perception, BEFORE the SL_TURN_TIMEOUT clock starts, so the wait
+# never counts as a timeout). Perception additionally holds ``in_flight`` through
+# its own rotation so lines ingested meanwhile accumulate in the delta buffer
+# instead of firing a second turn. Created lazily: it binds to the running loop.
+_rotation_lock: Optional[asyncio.Lock] = None
+
+
+def _get_rotation_lock() -> asyncio.Lock:
+    global _rotation_lock
+    if _rotation_lock is None:
+        _rotation_lock = asyncio.Lock()
+    return _rotation_lock
+
+
+async def _wait_rotation_done() -> None:
+    """Block until no rotation/restart is in progress. No-op (no yield) when idle."""
+    lock = _rotation_lock
+    if lock is not None and lock.locked():
+        log("turn waiting for in-progress brain rotation to finish")
+        async with lock:
+            pass
+
 
 _HEARTBEAT_RE = re.compile(r"\[\[\s*HEARTBEAT\s+([^\]]+?)\s*\]\]", re.IGNORECASE)
 
@@ -1324,6 +1351,7 @@ async def _handle_inbound(speaker: str, text: str, *, is_dm: bool, addressed: bo
     await _push_status("thinking")
     try:
         try:
+            await _wait_rotation_done()   # #404: never query a mid-rotation session
             reply = await brain.respond(speaker, text, is_dm=is_dm, addressed=addressed)
         except Exception as e:
             log(f"brain.respond failed: {e}")
@@ -1346,7 +1374,9 @@ async def _handle_inbound(speaker: str, text: str, *, is_dm: bool, addressed: bo
             rotate = getattr(brain, "rotate_if_approaching", None)
             if rotate is not None:
                 try:
-                    if await rotate(on_warmup=_warmup_halo):
+                    async with _get_rotation_lock():
+                        rotated = await rotate(on_warmup=_warmup_halo)
+                    if rotated:
                         log("brain session rotated after inbound desync drop")
                 except Exception as e:
                     log(f"post-desync rotation failed (non-fatal): {e}")
@@ -1547,9 +1577,10 @@ async def _handle_perception(payload) -> None:
                 # on_warmup fires the "warming up" halo (and clears _ready) at the
                 # start of the actual teardown; restore _ready after so the resting
                 # status below reads "listening" again.
-                await restart_session(
-                    reason="repeated-timeout recovery", on_warmup=_warmup_halo
-                )
+                async with _get_rotation_lock():
+                    await restart_session(
+                        reason="repeated-timeout recovery", on_warmup=_warmup_halo
+                    )
             except Exception as e:
                 log(f"forced session rotation failed (non-fatal): {e}")
             finally:
@@ -1593,6 +1624,9 @@ async def _handle_perception(payload) -> None:
                 speaker_uuid=payload.reply_to_uuid or "",
                 idle=idle, idle_prompt=getattr(payload, "idle_prompt", None),
             )
+        # #404: wait out any rotation BEFORE the timeout clock starts, so the wait
+        # neither trips SL_TURN_TIMEOUT nor feeds the consecutive-timeout counter.
+        await _wait_rotation_done()
         _turn_t0 = time.monotonic()
         try:
             # Bounded so a stalled model/scene fetch can't wedge the turn (and with
@@ -1692,40 +1726,58 @@ async def _handle_perception(payload) -> None:
         # per-turn latency climbs until turns exceed SL_TURN_TIMEOUT (silence). Two
         # triggers, preferring the free one.
         rotate = getattr(brain, "rotate_if_approaching", None)
-        if idle and again is None:
-            # PREFERRED — off the hot path: rotate on a genuine IDLE BEAT (endogenous
-            # heartbeat after a 120s+ lull) with nothing queued, at the standard 0.8
-            # threshold — pays the ~minutes identity warmup when no one is waiting.
-            if rotate is not None:
+        # #404: hold single-flight through any rotation. turn_done() just cleared
+        # in_flight; without this, the next inbound line makes ingest() return a
+        # payload and a second turn runs against the half-warmed session. While held,
+        # ingest() only accumulates deltas; the recheck below fires the first turn
+        # of the new session as soon as the rotation returns.
+        _hold = _perception is not None and again is None and rotate is not None
+        if _hold:
+            _perception.in_flight = True
+        try:
+            if idle and again is None:
+                # PREFERRED — off the hot path: rotate on a genuine IDLE BEAT (endogenous
+                # heartbeat after a 120s+ lull) with nothing queued, at the standard 0.8
+                # threshold — pays the ~minutes identity warmup when no one is waiting.
+                if rotate is not None:
+                    try:
+                        # on_warmup shows the "warming up" halo for the whole rotation —
+                        # but ONLY when a rotation actually happens (approaching-limit),
+                        # since the hook is threaded through and fires past that gate.
+                        async with _get_rotation_lock():
+                            _rotated = await rotate(on_warmup=_warmup_halo)
+                        if _rotated:
+                            log("brain session rotated proactively (quiet moment, off hot path)")
+                    except Exception as e:
+                        log(f"proactive rotation failed (non-fatal): {e}")
+                    finally:
+                        _ready = True
+            elif rotate is not None:
+                # HOT-PATH CEILING GUARD (#20, 2026-08-30): a relentlessly-active room
+                # never yields an idle beat — `again` stays non-None through a burst (the
+                # self-re-fire below), so the idle path above is unreachable EXACTLY when
+                # turns pile up fastest. The repeated-timeout backstop does NOT cover this:
+                # bloat produces sporadic single timeouts (each returning turn resets the
+                # consec counter at ~L1029), never the back-to-back streak it needs. So
+                # fire the SAME approaching-check at a TIGHTER 0.95 threshold, regardless
+                # of idle/again. It self-gates (a no-op until ~95% of the turn/token cap),
+                # then eats ONE honest "warming up" stall — legible via halo-v2, and BELOW
+                # the ~44-turn degradation zone we observed, so we never serve a bloated
+                # turn. Rotates before the queued `again` re-fires, so that turn runs fresh.
                 try:
-                    # on_warmup shows the "warming up" halo for the whole rotation —
-                    # but ONLY when a rotation actually happens (approaching-limit),
-                    # since the hook is threaded through and fires past that gate.
-                    if await rotate(on_warmup=_warmup_halo):
-                        log("brain session rotated proactively (quiet moment, off hot path)")
+                    async with _get_rotation_lock():
+                        _rotated = await rotate(threshold=0.95, on_warmup=_warmup_halo)
+                    if _rotated:
+                        log("brain session rotated on hot path (room saturated, no idle beat)")
                 except Exception as e:
-                    log(f"proactive rotation failed (non-fatal): {e}")
+                    log(f"hot-path rotation failed (non-fatal): {e}")
                 finally:
                     _ready = True
-        elif rotate is not None:
-            # HOT-PATH CEILING GUARD (#20, 2026-08-30): a relentlessly-active room
-            # never yields an idle beat — `again` stays non-None through a burst (the
-            # self-re-fire below), so the idle path above is unreachable EXACTLY when
-            # turns pile up fastest. The repeated-timeout backstop does NOT cover this:
-            # bloat produces sporadic single timeouts (each returning turn resets the
-            # consec counter at ~L1029), never the back-to-back streak it needs. So
-            # fire the SAME approaching-check at a TIGHTER 0.95 threshold, regardless
-            # of idle/again. It self-gates (a no-op until ~95% of the turn/token cap),
-            # then eats ONE honest "warming up" stall — legible via halo-v2, and BELOW
-            # the ~44-turn degradation zone we observed, so we never serve a bloated
-            # turn. Rotates before the queued `again` re-fires, so that turn runs fresh.
-            try:
-                if await rotate(threshold=0.95, on_warmup=_warmup_halo):
-                    log("brain session rotated on hot path (room saturated, no idle beat)")
-            except Exception as e:
-                log(f"hot-path rotation failed (non-fatal): {e}")
-            finally:
-                _ready = True
+        finally:
+            if _hold:
+                # Rotation done (or failed): release single-flight and recheck so
+                # lines that arrived meanwhile get a turn now, not at the next line.
+                again = _perception.turn_done(time.time())
 
         _brain_busy = False
         await _push_status(_resting_status())
