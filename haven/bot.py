@@ -506,7 +506,55 @@ async def send_typing_indicator(room_id: str) -> None:
         pass  # Best effort — don't let typing indicator failures block responses
 
 
-async def fetch_ambient_context(speakers: list[str] | None = None) -> str:
+AMBIENT_QUERY_MAX_CHARS = 800
+
+# Leading bracket tags that are not the person's words: a message id, a
+# channel marker such as "[from terminal-caia]", or an attached-image note.
+_QUERY_PREFIX_RE = re.compile(
+    r"^\s*(?:\[(?:msg \d+|from [^\]\n]*|ATTACHED IMAGE[^\]\n]*)\]\s*)+",
+    re.IGNORECASE,
+)
+
+
+def _clean_query_text(text: str) -> str:
+    """Drop leading formatting tags and collapse all whitespace to single spaces."""
+    text = _QUERY_PREFIX_RE.sub("", text or "")
+    return " ".join(text.split())
+
+
+def build_ambient_query(
+    messages: list[dict],
+    known_bot_names: set[str] | frozenset[str] = frozenset(),
+    my_name: str | None = None,
+    max_chars: int = AMBIENT_QUERY_MAX_CHARS,
+) -> str:
+    """Query text for ambient_recall: what the person actually said this turn.
+
+    Human-authored messages, oldest first, one per line. If the batch has no
+    human message (a sister-only batch), the latest message with any text.
+    Capped at ``max_chars``, keeping the most recent end. Pure: no I/O.
+    Returns "" only when the batch has no text at all.
+    """
+    def _is_human(m: dict) -> bool:
+        un = m.get("username", "")
+        return un not in known_bot_names and un != my_name
+
+    cleaned = [(m, _clean_query_text(m.get("content", "") or "")) for m in messages]
+    cleaned = [(m, t) for m, t in cleaned if t]
+    human = [t for m, t in cleaned if _is_human(m)]
+    if human:
+        text = "\n".join(human)
+    elif cleaned:
+        text = cleaned[-1][1]
+    else:
+        return ""
+    return text[-max_chars:] if len(text) > max_chars else text
+
+
+async def fetch_ambient_context(
+    speakers: list[str] | None = None,
+    query: str | None = None,
+) -> str:
     """Fetch ambient context from PPS HTTP server.
 
     Calls the Docker PPS server directly (not via MCP) to get the same
@@ -528,7 +576,9 @@ async def fetch_ambient_context(speakers: list[str] | None = None) -> str:
             resp = await client.post(
                 f"{PPS_HTTP_URL}/tools/ambient_recall",
                 json={
-                    "context": "haven bot turn",
+                    # The turn's own words are the semantic query (#409). The
+                    # constant is only the fallback when no query was passed.
+                    "context": (query or "").strip() or "haven bot turn",
                     "token": ENTITY_TOKEN,
                     "channel": "haven",
                     "consumer_key": f"haven-{ENTITY_NAME}",
@@ -1295,7 +1345,8 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
             (m.get("display_name") or m.get("username") or "").strip() for m in messages
         ]
         ambient = await fetch_ambient_context(
-            speakers=[n for n in dict.fromkeys(batch_speakers) if n]
+            speakers=[n for n in dict.fromkeys(batch_speakers) if n],
+            query=build_ambient_query(messages, known_bots, my_username),
         )
         ambient_elapsed = time.time() - ambient_start
         if ambient:

@@ -1141,7 +1141,16 @@ def main():
         store_user_prompt(prompt, session_id)
 
     # Query PPS for ambient recall context
-    context = query_pps_ambient_recall(prompt, session_id)
+    # In brain sessions the prompt is a constructed turn; query with just the
+    # spoken text (#409). Any failure falls back to the whole prompt, as before.
+    try:
+        from turn_query import extract_turn_query
+        query = extract_turn_query(prompt, invoker_channel)
+        if not isinstance(query, str) or not query.strip():
+            query = prompt
+    except Exception:
+        query = prompt
+    context = query_pps_ambient_recall(query, session_id)
 
     # Always inject at minimum a clock line — even if ambient_recall fails.
     # This prevents time drift during heartbeat ticks when PPS is unreachable.

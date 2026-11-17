@@ -107,7 +107,7 @@ def test_process_batch_does_not_post_auth_error(monkeypatch, notify_calls):
         sent.append(content)
         return True
 
-    async def fake_ambient(speakers=None):
+    async def fake_ambient(speakers=None, query=None):
         return ""
 
     monkeypatch.setattr(bot, "invoker", Inv())
@@ -142,7 +142,7 @@ def _run_batch(monkeypatch, reply):
     async def noop(*a, **k):
         return None
 
-    async def amb(speakers=None):
+    async def amb(speakers=None, query=None):
         return ""
 
     sent = []
