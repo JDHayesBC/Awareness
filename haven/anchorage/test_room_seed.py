@@ -75,6 +75,8 @@ def ring(monkeypatch):
     from collections import deque
     r = deque(maxlen=200)
     monkeypatch.setattr(d, "_room_ring", r)
+    # an old process by default: the ring has had time to cover the whole window
+    monkeypatch.setattr(d, "_room_ring_started_at", time.time() - 10_000)
     return r
 
 
@@ -224,3 +226,25 @@ def test_exchange_inside_age_limit_but_outside_window_is_kept(monkeypatch):
     monkeypatch.setattr(d, "SL_SEED_EXCHANGE_MAX_AGE_S", 3600.0)
     lines = [L(1300, "Ann", "twenty minutes ago"), L(1250, "me", "reply", own=True)]
     assert [ln[2] for ln in d._select_seed_lines(lines, NOW)] == ["twenty minutes ago", "reply"]
+
+
+def test_young_process_prepends_river_lines_older_than_the_ring(ring, monkeypatch):
+    """First live restart, 2026-11-16: one line heard during warmup made the ring
+    non-empty, the backfill was skipped, and the session was seeded with one line."""
+    now = time.time()
+    monkeypatch.setattr(d, "_room_ring_started_at", now - 60)       # 1 min old
+    ring.append((now - 20.4, "Ann", "heard after restart", False))
+    river = [
+        (now - 300, "Ann", "before restart one", False),
+        (now - 280, d.DISPLAY_NAME, "before restart reply", True),
+        (now - 21.0, "Ann", "heard after restart", False),          # river copy of the ring line
+    ]
+    monkeypatch.setattr(d, "_load_room_lines_from_db", lambda: list(river))
+    logs = []
+    monkeypatch.setattr(d, "log", lambda m: logs.append(m))
+    seed = d._build_room_seed()
+    assert seed.index("before restart one") < seed.index("before restart reply") < seed.index("heard after restart")
+    assert seed.count("heard after restart") == 1
+    assert "may be missing some lines" in seed
+    assert any("3 line(s), 2 of them from river backfill" in m for m in logs)
+    assert not any("before restart" in m for m in logs)

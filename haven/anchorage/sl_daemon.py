@@ -386,6 +386,11 @@ SL_SEED_EXCHANGE_MAX_AGE_S = float(os.getenv("SL_SEED_EXCHANGE_MAX_AGE_S", "3600
 _SEED_RING_MAX = 200
 # (wall-clock ts, speaker, text, is_own)
 _room_ring: "deque[tuple[float, str, str, bool]]" = deque(maxlen=_SEED_RING_MAX)
+# When this process started listening. Until the process is older than the seed
+# window the ring cannot cover it, so the river fills in what came before (first live
+# restart, 2026-11-16: one line heard during warmup made the ring "non-empty" and the
+# backfill was skipped, so the new session was seeded with that one line).
+_room_ring_started_at: float = time.time()
 
 
 def _note_room_line(speaker: str, text: str, *, own: bool, ts: Optional[float] = None) -> None:
@@ -477,12 +482,27 @@ def _build_room_seed() -> Optional[str]:
     """Render the rotation seed block, or None when there is nothing to seed.
     Evaluated at warmup time (zero-arg callable handed to the brain)."""
     now = time.time()
-    from_ring = bool(_room_ring)
-    source = list(_room_ring) if from_ring else _load_room_lines_from_db()
-    picked = _select_seed_lines(source, now)
+    ring = list(_room_ring)
+    river: "list[tuple[float, str, str, bool]]" = []
+    if not ring:
+        river = _load_room_lines_from_db()
+    elif (now - _room_ring_started_at) < SL_SEED_WINDOW_S:
+        # Young process: prepend what the river holds from BEFORE the ring's first
+        # line. 2s margin because created_at is whole seconds, so the river's copy of
+        # the ring's first line can stamp fractionally earlier than the ring's.
+        first = ring[0][0] - 2.0
+        river = [ln for ln in _load_room_lines_from_db() if ln[0] < first]
+    picked = _select_seed_lines(river + ring, now)
     if not picked:
         return None
-    log(f"rotation seed: {len(picked)} line(s) from {'ring buffer' if from_ring else 'river backfill'}")
+    n_river = sum(1 for ln in picked if ln[0] < (ring[0][0] - 2.0 if ring else now + 1))
+    from_ring = n_river == 0
+    if from_ring:
+        log(f"rotation seed: {len(picked)} line(s) from ring buffer")
+    elif n_river == len(picked):
+        log(f"rotation seed: {len(picked)} line(s) from river backfill")
+    else:
+        log(f"rotation seed: {len(picked)} line(s), {n_river} of them from river backfill")
     header = [
         "[ROOM CONVERSATION BEFORE THIS SESSION]",
         "This is the recent conversation in the room immediately before this session "
@@ -496,8 +516,8 @@ def _build_room_seed() -> Optional[str]:
     )
     if not from_ring:
         header.append(
-            "Note: this was read back from the saved record, which is best-effort, "
-            "so it may be missing some lines."
+            "Note: some or all of this was read back from the saved record, which is "
+            "best-effort, so it may be missing some lines."
         )
     body = []
     for ts, speaker, text, own in picked:
