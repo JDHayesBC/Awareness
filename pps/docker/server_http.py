@@ -2297,7 +2297,11 @@ async def raw_search(request: RawSearchRequest):
         return JSONResponse(status_code=403, content={"error": auth_error})
 
     layer = layers[LayerType.RAW_CAPTURE]
-    results = await layer.search(request.query, request.limit)
+    outcome = await layer.search_with_receipt(request.query, request.limit)
+    if outcome.error:
+        # A failure must not look like "no results" (#408).
+        return JSONResponse(status_code=500, content={"error": outcome.receipt})
+    results = outcome.results
 
     all_results = [
         {
@@ -2309,6 +2313,7 @@ async def raw_search(request: RawSearchRequest):
     ]
     paged = _truncate_with_followon(all_results, request.offset, RESULT_BLOCK_SIZE, "raw_search")
     return {
+        "receipt": outcome.receipt,
         "results": paged["page"],
         "count": paged["count"],
         "offset": paged["offset"],

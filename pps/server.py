@@ -155,7 +155,12 @@ def _forward(tool_name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if isinstance(data, str):
         text = data
     elif isinstance(data, dict):
-        text = json.dumps(data, indent=2)
+        if tool_name == "raw_search" and isinstance(data.get("receipt"), str):
+            # The receipt (what was searched, how many matched) leads the output.
+            rest = {k: v for k, v in data.items() if k != "receipt"}
+            text = data["receipt"] + "\n" + json.dumps(rest, indent=2)
+        else:
+            text = json.dumps(data, indent=2)
     else:
         text = str(data)
 
