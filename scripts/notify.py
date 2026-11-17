@@ -74,6 +74,20 @@ def _header_safe(value: str) -> str:
 def send(message: str, title: str = None, priority: str = "default",
          entity: str = "lyra", tags: str = None) -> bool:
     """Send a notification. Returns True on success."""
+    # Never page a real phone from a test run. pytest sets PYTEST_CURRENT_TEST
+    # for the duration of each test and child processes inherit it, so this
+    # covers code under test that shells out to this script as well as direct
+    # imports. (2026-11-17: a Haven test exercised the "login expired" alert
+    # path unmocked, and every run of the suite sent Jeff a false re-auth
+    # alert.) Set NOTIFY_ALLOW_UNDER_PYTEST=1 for a deliberate live send.
+    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("NOTIFY_ALLOW_UNDER_PYTEST"):
+        print(
+            "notify.py: NOT SENT, running under pytest "
+            f"({os.environ['PYTEST_CURRENT_TEST']})",
+            file=sys.stderr,
+        )
+        return False
+
     load_env_token()
 
     topic = ENTITY_TOPICS.get(entity, f"{entity}-notify")

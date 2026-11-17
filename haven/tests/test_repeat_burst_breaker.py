@@ -87,8 +87,13 @@ def test_window_expiry(monkeypatch):
     assert ROOM not in bot.burst_tripped_rooms
 
 
-def test_process_batch_does_not_post_auth_error(monkeypatch):
-    """Path 1 (bot.py): a flagged response never reaches send_message."""
+def test_process_batch_does_not_post_auth_error(monkeypatch, notify_calls):
+    """Path 1 (bot.py): a flagged response never reaches send_message.
+
+    Takes ``notify_calls`` so the phone alert this path triggers goes to the
+    fake. Without it this test ran the real notify.py and paged Jeff with a
+    false "login expired" alert on every run of the suite (found 2026-11-17).
+    """
     sent = []
 
     class Inv:
@@ -121,6 +126,7 @@ def test_process_batch_does_not_post_auth_error(monkeypatch):
     }
     asyncio.run(bot._process_batch(ROOM, batch))
     assert sent == []
+    assert len(notify_calls) == 1  # the alert was attempted, through the fake
 
 
 # ---- auth-failure phone alert (#388 follow-up) ----
