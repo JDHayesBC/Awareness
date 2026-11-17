@@ -23,6 +23,7 @@ import subprocess
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import time
@@ -821,6 +822,26 @@ def format_batch_line(msg: dict, ct: str, *, is_human: bool) -> str:
     return line
 
 
+def _open_ask_peers() -> set[str]:
+    """Lowercased usernames of the entities that share the open-ask claim with me.
+
+    HAVEN_OPEN_ASK_PEERS (comma-separated) if set, else the one sister this bot
+    is already configured with (HAVEN_JEV_OTHER_ENTITY). Empty means the feature
+    is off. Deliberately NOT known_bots: that set holds every bot in Haven.
+    """
+    raw = os.getenv("HAVEN_OPEN_ASK_PEERS", "") or JEV_OTHER_ENTITY
+    me = {t.lower() for t in (my_username, ENTITY_NAME) if t}
+    return {t.strip().lower() for t in raw.split(",") if t.strip()} - me
+
+
+def _names_any(text: str, tokens: set[str]) -> bool:
+    """Whole-word, case-insensitive: "Lyra's" names lyra; "dashboard" names no one."""
+    return any(
+        t and re.search(rf"(?<!\w){re.escape(t.lower())}(?!\w)", text)
+        for t in tokens
+    )
+
+
 def _sister_present(room_id: str) -> bool:
     """True when another entity bot is a participant in this room.
 
@@ -828,14 +849,21 @@ def _sister_present(room_id: str) -> bool:
     of the room's last ROOM_HISTORY_MAX messages is hers. The second matters for
     the cold open: an ask that arrives after 30+ quiet minutes is exactly the
     first-turn overlap this exists for, and the recency window is empty then.
+
+    "Sister" means a configured open-ask peer (see _open_ask_peers), not any
+    bot: other bots in Haven (Dash) don't run this claim, so their presence
+    must not produce a note that says "you and your sister".
     """
+    peers = _open_ask_peers()
+    if not peers:
+        return False
     _detect_topology(room_id)  # reuse its stale-author pruning
-    for username, (_, is_bot) in recent_room_authors.get(room_id, {}).items():
-        if username != my_username and (is_bot or username in known_bots):
+    for username in recent_room_authors.get(room_id, {}):
+        if username != my_username and username.lower() in peers:
             return True
     for m in room_history.get(room_id, ()):
-        un = m.get("username", "")
-        if un and un != my_username and un in known_bots:
+        un = m.get("username", "") or ""
+        if un != my_username and un.lower() in peers:
             return True
     return False
 
@@ -849,9 +877,7 @@ def open_ask_applies(
     named -> that one is being asked directly, no claim needed -> False.
     """
     text = (human_text or "").lower()
-    me = any(t and t.lower() in text for t in my_tokens)
-    her = any(t and t.lower() in text for t in sister_tokens)
-    return me == her
+    return _names_any(text, my_tokens) == _names_any(text, sister_tokens)
 
 
 def build_open_ask_note(entity_name: str, repo_root: Path) -> str:
@@ -1358,7 +1384,7 @@ async def _process_batch(room_id: str, batch_state: dict) -> None:
             and open_ask_applies(
                 " ".join(human_texts),
                 name_tokens,
-                {u.lower() for u in known_bots if u and u != my_username},
+                _open_ask_peers(),
             )
         ):
             open_ask_note = "\n\n" + build_open_ask_note(ENTITY_NAME, PROJECT_DIR)

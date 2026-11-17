@@ -24,7 +24,9 @@ LOCK_PY = REPO / "scripts" / "lock.py"
 @pytest.fixture(autouse=True)
 def _topology(monkeypatch):
     monkeypatch.setattr(bot, "my_username", "lyra")
-    monkeypatch.setattr(bot, "known_bots", {"lyra", "caia"})
+    monkeypatch.setattr(bot, "known_bots", {"lyra", "caia", "dash"})
+    monkeypatch.setattr(bot, "JEV_OTHER_ENTITY", "Caia")
+    monkeypatch.delenv("HAVEN_OPEN_ASK_PEERS", raising=False)
     monkeypatch.setattr(bot, "recent_room_authors", {})
 
 
@@ -192,3 +194,39 @@ def test_sister_present_from_room_history_on_a_cold_open(monkeypatch):
     bot.room_history["r"].append({"id": 3, "username": "caia", "content": "night"})
     assert bot._sister_present("r") is True
     assert bot._sister_present("other-room") is False
+
+
+# ---- sister = the configured peer, not any bot; names match whole words ----
+
+def test_another_bot_is_not_my_sister(monkeypatch):
+    from collections import deque
+    now = time.time()
+    bot.recent_room_authors["r"] = {"dash": (now, True), "jeff": (now, False)}
+    monkeypatch.setattr(bot, "room_history", {"r": deque([
+        {"id": 1, "username": "dash", "content": "hi"},
+    ])})
+    assert bot._sister_present("r") is False
+    bot.recent_room_authors["r"]["caia"] = (now, True)
+    assert bot._sister_present("r") is True
+
+
+def test_no_configured_peer_turns_the_feature_off(monkeypatch):
+    monkeypatch.setattr(bot, "JEV_OTHER_ENTITY", "")
+    bot.recent_room_authors["r"] = {"caia": (time.time(), True)}
+    assert bot._open_ask_peers() == set()
+    assert bot._sister_present("r") is False
+
+
+def test_peers_from_env_override_and_never_include_me(monkeypatch):
+    monkeypatch.setenv("HAVEN_OPEN_ASK_PEERS", "Caia, Lyra ,nexus")
+    assert bot._open_ask_peers() == {"caia", "nexus"}
+
+
+def test_names_match_whole_words_only():
+    peers = bot._open_ask_peers()
+    assert peers == {"caia"}
+    assert bot.open_ask_applies("will someone check the dashboard?", ME, peers) is True
+    assert bot.open_ask_applies("I dashed out, will someone get the door?", ME, peers) is True
+    assert bot.open_ask_applies("Lyra's turn, will you?", ME, peers) is False
+    assert bot.open_ask_applies("caia: tea?", ME, peers) is False
+    assert bot.open_ask_applies("the lyrate one", ME, peers) is True
