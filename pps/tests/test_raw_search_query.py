@@ -316,3 +316,211 @@ def test_any_count_matches_join_version(layer):
                 ["content : (" + " OR ".join(any_terms) + ")"] + ids,
             ).fetchone()[0]
         assert out.any_total == joined, q
+
+
+# ---- what a hit looks like to the caller ----------------------------------
+# Measured 2026-11-18: hits came back with no author and no date, and seats
+# credited real lines to the wrong speaker. Whole messages reached 337,000
+# characters in one result. These tests pin the shape that fixes both.
+
+from datetime import datetime, timezone  # noqa: E402
+
+from layers import LayerType, SearchResult  # noqa: E402
+from layers.raw_capture import (  # noqa: E402
+    FULL_PAGE_CHARS,
+    SNIPPET_CHARS,
+    best_window,
+    full_page_size,
+    query_words,
+    result_row,
+)
+
+NOW = datetime(2026, 3, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _hit(content, stamp="2026-03-10 11:48:00", author="Alex", channel="haven:den"):
+    return SearchResult(
+        content=content, source=f"{channel}:7", layer=LayerType.RAW_CAPTURE, relevance_score=0.5,
+        metadata={"id": 7, "author": author, "channel": channel, "timestamp": stamp},
+    )
+
+
+def test_row_leads_with_author_and_time(layer):
+    hit = run(layer.search("coffee", 5))[0]
+    row = result_row(hit, now=NOW)
+    assert list(row)[:2] == ["author", "when"]
+    assert row["author"] == "Alex"
+    assert row["when"].endswith(" UTC")
+    assert row["channel"] == "terminal"
+    assert list(row) == ["author", "when", "age", "channel", "content", "source", "relevance_score"]
+    assert row["content"] == hit.content
+    assert "cut" not in row
+
+
+@pytest.mark.parametrize("stamp, age", [
+    ("2026-03-10 11:48:00", "12 min ago"),
+    ("2026-03-10 07:00:00", "5 h ago"),
+    ("2026-03-08 13:00:00", "47 h ago"),
+    ("2026-03-07 12:00:00", "3 days ago"),
+    ("2026-03-10T11:00:00.250000", "1 h ago"),
+])
+def test_row_age(stamp, age):
+    row = result_row(_hit("short", stamp), now=NOW)
+    assert row["age"] == age
+    assert row["when"] == stamp[:16].replace("T", " ") + " UTC"
+
+
+def test_row_without_metadata_says_unknown():
+    bare = SearchResult(content="x", source="s", layer=LayerType.RAW_CAPTURE, relevance_score=0.1)
+    row = result_row(bare, now=NOW)
+    assert row["author"] == "unknown" and row["when"] == "unknown" and row["channel"] == "unknown"
+    assert "age" not in row
+
+
+def test_row_with_unparsed_time_keeps_it():
+    row = result_row(_hit("x", "last Tuesday"), now=NOW)
+    assert row["when"] == "last Tuesday" and "age" not in row
+
+
+def test_long_message_is_cut_around_the_match():
+    text = ("filler word " * 400) + "Sam takes his coffee black with one sugar. " + ("more filler " * 400)
+    row = result_row(_hit(text), now=NOW, words=query_words("Sam coffee"))
+    assert "Sam takes his coffee black" in row["content"]
+    assert len(row["content"]) <= SNIPPET_CHARS + 8
+    assert row["content"].startswith("... ") and row["content"].endswith(" ...")
+    assert row["cut"].endswith(f"of {len(text)} characters shown")
+
+
+def test_window_prefers_the_stretch_with_most_query_words():
+    text = "coffee " + ("pad " * 300) + "Sam likes tea. " + ("pad " * 300) + "Sam drinks coffee at dawn." + (" pad" * 300)
+    start, end = best_window(text, ["sam", "coffee"], 200)
+    assert "Sam drinks coffee at dawn" in text[start:end]
+
+
+def test_window_with_no_word_found_is_the_start():
+    text = "abc " * 500
+    assert best_window(text, ["zebra"], 100)[0] == 0
+
+
+def test_short_message_is_not_cut():
+    text = "Sam takes his coffee black.\n\nWith one sugar."
+    row = result_row(_hit(text), now=NOW, words=["sam"])
+    assert row["content"] == text and "cut" not in row
+
+
+def test_full_returns_the_whole_message():
+    text = "word " * 2000
+    row = result_row(_hit(text), now=NOW, words=["word"], snippet_chars=0)
+    assert row["content"] == text and "cut" not in row
+
+
+def test_query_words_split_phrases_and_drop_single_letters():
+    assert query_words('"hot tub" cover') == ["hot", "tub", "cover"]
+    assert query_words("U.S.S. Enterprise") == ["enterprise"]
+
+
+def test_full_page_stops_at_the_ceiling():
+    rows = [{"content": "x" * 25_000} for _ in range(10)]
+    assert full_page_size(rows, 0, 50) == 2            # 25k + 25k fits, the third would pass 60k
+    assert full_page_size(rows, 8, 50) == 2
+    assert full_page_size([{"content": "x" * (FULL_PAGE_CHARS * 3)}], 0, 50) == 1   # one row always goes
+    assert full_page_size([{"content": "short"}] * 80, 0, 50) == 50
+
+
+def test_channel_drops_session_ids_only():
+    from layers.raw_capture import short_channel
+    assert short_channel("terminal:a4c333f3-6a56-48ae-bcb1-236cf044d04e") == "terminal"
+    assert short_channel("discord:1234567890123") == "discord"
+    assert short_channel("terminal:9b9ab200") == "terminal"
+    assert short_channel("haven:deadbeef") == "haven:deadbeef"
+    assert short_channel("haven:cafe") == "haven:cafe"
+    assert short_channel("haven:den") == "haven:den"
+    assert short_channel("haven:dm-sam-alex") == "haven:dm-sam-alex"
+    assert short_channel(None) == "unknown"
+
+
+def test_graph_fact_carries_its_time():
+    from layers.custom_graph import edge_metadata
+    meta = edge_metadata("AGREED_WITH", "2026-03-10T07:00:00.000000000+00:00", 3, now=NOW)
+    assert meta == {"type": "edge", "edge_type": "AGREED_WITH", "when": "2026-03-10 07:00 UTC", "age": "5 h ago", "mentions": 3}
+    assert edge_metadata("X", None) == {"type": "edge", "edge_type": "X"}
+    assert "mentions" not in edge_metadata("X", "2026-03-10 07:00:00", 1, now=NOW)
+
+
+@pytest.mark.parametrize("stamp,want", [
+    ("2026-03-10 07:00:00", "2026-03-10 07:00 UTC"),
+    ("2026-03-10T07:00:00.000000000+00:00", "2026-03-10 07:00 UTC"),
+    ("2026-03-10T07:00:00Z", "2026-03-10 07:00 UTC"),
+    ("2026-03-10T09:30:00+02:30", "2026-03-10 07:00 UTC"),
+    ("2026-03-10T00:00:00-0700", "2026-03-10 07:00 UTC"),
+])
+def test_stored_times_read_as_utc(stamp, want):
+    from layers.timefmt import parse_utc, when_text
+    assert when_text(parse_utc(stamp)) == want
+
+
+def test_stored_time_from_datetime_objects():
+    from datetime import datetime, timedelta, timezone
+    from layers.timefmt import parse_utc, when_text
+    naive = datetime(2026, 3, 10, 7, 0, 0)
+    assert when_text(parse_utc(naive)) == "2026-03-10 07:00 UTC"
+    offset = datetime(2026, 3, 10, 0, 0, 0, tzinfo=timezone(timedelta(hours=-7)))
+    assert when_text(parse_utc(offset)) == "2026-03-10 07:00 UTC"
+
+
+@pytest.mark.parametrize("stamp", [None, "", "yesterday", "2026-03-10", "2026-13-45 07:00:00", 12345])
+def test_unreadable_time_is_none_not_a_guess(stamp):
+    from layers.timefmt import parse_utc
+    assert parse_utc(stamp) is None
+
+
+# --- the hits as text ------------------------------------------------------
+
+def _row(**kw):
+    base = {"author": "Alex", "when": "2026-03-10 07:00 UTC", "age": "5 h ago", "channel": "terminal",
+            "content": "I take it black.", "source": "terminal:abc:41", "relevance_score": 0.5}
+    base.update(kw)
+    return base
+
+
+def test_rendered_hit_puts_speaker_and_time_against_the_words():
+    from layers.raw_capture import render_rows
+    text = render_rows("Searched for all of [black]: 1 message.", [_row()])
+    assert text.splitlines() == [
+        "Searched for all of [black]: 1 message.",
+        "1. [2026-03-10 07:00 UTC, 5 h ago] Alex (terminal, #41): I take it black.",
+    ]
+
+
+def test_rendered_cut_says_how_long_the_whole_message_is():
+    from layers.raw_capture import render_rows
+    text = render_rows("", [_row(content="... black, no sugar ...", cut="500 of 12345 characters shown")])
+    assert text.endswith("... black, no sugar ... [500 of 12345 characters shown]")
+
+
+def test_rendered_multiline_message_is_fenced():
+    from layers.raw_capture import render_rows
+    text = render_rows("", [_row(content="line one\n2. [fake] Robin (x): not a hit"), _row(author="Sam")])
+    lines = text.splitlines()
+    assert lines[1] == "<<<" and lines[4] == ">>>"
+    assert lines[5].startswith("2. [2026-03-10 07:00 UTC, 5 h ago] Sam (")
+
+
+def test_rendered_unknown_speaker_is_said_plainly():
+    from layers.raw_capture import render_rows
+    text = render_rows("", [_row(author="unknown", when="unknown", age=None, source="x")])
+    assert text == "1. [unknown] speaker unknown (terminal): I take it black."
+
+
+def test_rendered_numbering_continues_and_notes_follow():
+    from layers.raw_capture import render_rows
+    text = render_rows("r", [_row()], start=51, notes=[None, "\n** NOTE: 3 more results available."])
+    assert text.splitlines()[1].startswith("51. ")
+    assert text.splitlines()[-1] == "** NOTE: 3 more results available."
+
+
+def test_rendered_text_survives_a_lone_surrogate():
+    from layers.raw_capture import render_rows
+    text = render_rows("", [_row(content="café \ud83d broken")])
+    text.encode("utf-8")
+    assert "café" in text

@@ -9,12 +9,14 @@ import logging
 import os
 import re
 import sqlite3
+from datetime import datetime
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Generator
 
 from . import PatternLayer, LayerType, SearchResult, LayerHealth
+from .timefmt import age_text, parse_utc, when_text
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +97,158 @@ def build_fts_terms(query: str) -> tuple[list[str], list[str], list[str]]:
         t for t, d in items[len(phrases):] if d in content_set
     ]
     return [t for t, _ in items], any_terms, [d for _, d in items]
+
+
+# A long message is shown as a stretch this wide around the matched words.
+# Whole messages reached 337,000 characters in one result before this existed.
+SNIPPET_CHARS = 500
+# Ceiling on one page of whole messages (full=true).
+FULL_PAGE_CHARS = 60_000
+
+
+def query_words(query: str) -> list[str]:
+    """The plain words a query is searched as, used to find the match inside a long message."""
+    words: list[str] = []
+    for label in build_fts_terms(query)[2]:
+        for w in _RUN_RE.findall(label.lower()):
+            if len(w) > 1 and w not in words:
+                words.append(w)
+    return words
+
+
+def best_window(text: str, words: list[str], width: int = SNIPPET_CHARS) -> tuple[int, int]:
+    """(start, end) of the stretch of `text`, `width` characters long, holding the most distinct `words`.
+
+    Ties go to the earliest stretch. With no word found, the start of the text.
+    """
+    if len(text) <= width:
+        return 0, len(text)
+    low = text.lower()
+    hits: list[tuple[int, int]] = []
+    for k, w in enumerate(words):
+        for n, m in enumerate(re.finditer(r"(?<![^\W_])" + re.escape(w), low)):
+            if n >= 200:
+                break
+            hits.append((m.start(), k))
+    if not hits:
+        return 0, width
+    hits.sort()
+    lead = width // 4
+    best_start, best_count = max(0, hits[0][0] - lead), 0
+    for i, (pos, _) in enumerate(hits):
+        start = max(0, pos - lead)
+        seen = set()
+        for p, k in hits[i:]:
+            if p >= start + width:
+                break
+            seen.add(k)
+        if len(seen) > best_count:
+            best_start, best_count = start, len(seen)
+    end = min(len(text), best_start + width)
+    start = max(0, end - width)
+    # Do not start or stop in the middle of a word when a space is close by.
+    if start > 0:
+        gap = text.find(" ", start, start + 30)
+        if gap != -1:
+            start = gap + 1
+    if end < len(text):
+        gap = text.rfind(" ", end - 30, end)
+        if gap != -1 and gap > start:
+            end = gap
+    return start, end
+
+
+# A session or snowflake id: all digits, or 8+ hex characters and dashes with a digit among them.
+_ID_TAIL_RE = re.compile(r"^\d+$|^(?=[0-9a-fA-F-]*\d)[0-9a-fA-F-]{8,}$")
+
+
+def short_channel(channel) -> str:
+    """"terminal:<session id>" -> "terminal"; "haven:den" stays. The full value is in "source"."""
+    text = str(channel or "").strip()
+    if not text:
+        return "unknown"
+    family, _, rest = text.partition(":")
+    return family if rest and _ID_TAIL_RE.match(rest) else text
+
+
+def result_row(
+    result: SearchResult,
+    now: Optional[datetime] = None,
+    words: Optional[list[str]] = None,
+    snippet_chars: int = SNIPPET_CHARS,
+) -> dict:
+    """One raw_search hit as the caller sees it: who said it and when, then the text.
+
+    A line with no speaker and no date gets credited to whoever seems likely, so
+    author and time come first and are never dropped. Times are UTC. A message
+    longer than `snippet_chars` is cut to the stretch around the matched words and
+    says so in "cut"; snippet_chars=0 returns the whole message.
+    """
+    meta = result.metadata or {}
+    stamp = meta.get("timestamp")
+    then = parse_utc(stamp)
+    row = {
+        "author": meta.get("author") or "unknown",
+        "when": when_text(then) if then else (str(stamp) if stamp else "unknown"),
+    }
+    if then:
+        row["age"] = age_text(then, now)
+    row["channel"] = short_channel(meta.get("channel"))
+    text = result.content or ""
+    if snippet_chars and len(text) > snippet_chars:
+        start, end = best_window(text, words or [], snippet_chars)
+        piece = re.sub(r"\s+", " ", text[start:end]).strip()
+        row["content"] = ("... " if start else "") + piece + (" ..." if end < len(text) else "")
+        row["cut"] = f"{end - start} of {len(text)} characters shown"
+    else:
+        row["content"] = text
+    row["source"] = result.source
+    row["relevance_score"] = result.relevance_score
+    return row
+
+
+def render_rows(receipt: str, rows: list[dict], start: int = 1, notes=()) -> str:
+    """The hits as text for a reader: one entry each, the speaker and the time right
+    against the words.
+
+    A JSON dump puts the speaker on a different line from what was said and escapes
+    every newline, quote and non-ASCII character in the message. This is the shape
+    the lacuna trials were run on: "[when, age] Who (channel, #id): text".
+    """
+    out = [receipt] if receipt else []
+    for n, row in enumerate(rows, start):
+        when = row.get("when") or "time unknown"
+        if row.get("age"):
+            when += f", {row['age']}"
+        where = row.get("channel") or "unknown"
+        ident = str(row.get("source") or "").rsplit(":", 1)[-1]
+        if ident.isdigit():
+            where += f", #{ident}"
+        author = row.get("author") or "unknown"
+        head = f"{n}. [{when}] {'speaker unknown' if author == 'unknown' else author} ({where})"
+        text = (row.get("content") or "").strip()
+        if row.get("cut"):
+            out.append(f"{head}: {text} [{row['cut']}]")
+        elif "\n" in text:
+            # A whole multi-line message is fenced so it cannot run into the next hit.
+            out.append(f"{head}:\n<<<\n{text}\n>>>")
+        else:
+            out.append(f"{head}: {text}")
+    out.extend(note.strip() for note in notes if note and note.strip())
+    # A lone surrogate in a stored message must not break the transport.
+    return "\n".join(out).encode("utf-8", "replace").decode("utf-8")
+
+
+def full_page_size(rows: list[dict], offset: int, most: int, budget: int = FULL_PAGE_CHARS) -> int:
+    """How many whole-message rows from `offset` fit in `budget` characters (at least one)."""
+    used = 0
+    count = 0
+    for row in rows[offset: offset + most]:
+        used += len(row.get("content") or "")
+        if count and used > budget:
+            break
+        count += 1
+    return max(1, count)
 
 
 @dataclass

@@ -58,6 +58,7 @@ class RawSearchRequest(BaseModel):
     query: str
     limit: int = 20
     offset: int = 0
+    full: bool = False   # whole messages instead of the stretch around the match
     token: str = ""
 
 
@@ -391,7 +392,9 @@ class HavenSendRequest(BaseModel):
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from layers import LayerType
-from layers.raw_capture import RawCaptureLayer
+from layers.raw_capture import (
+    RawCaptureLayer, SNIPPET_CHARS, full_page_size, query_words, render_rows, result_row,
+)
 from layers.core_anchors import CoreAnchorsLayer
 from layers.crystallization import CrystallizationLayer
 from layers.message_summaries import MessageSummariesLayer
@@ -2303,16 +2306,19 @@ async def raw_search(request: RawSearchRequest):
         return JSONResponse(status_code=500, content={"error": outcome.receipt})
     results = outcome.results
 
+    # Each hit says who said it and when (UTC) before the text. A line with no
+    # speaker gets credited to whoever seems likely; that was measured, not guessed.
+    # Long messages are cut to the stretch around the matched words unless full=true.
+    words = query_words(request.query)
     all_results = [
-        {
-            "content": r.content,
-            "source": r.source,
-            "relevance_score": r.relevance_score
-        }
+        result_row(r, words=words, snippet_chars=0 if request.full else SNIPPET_CHARS)
         for r in results
     ]
-    paged = _truncate_with_followon(all_results, request.offset, RESULT_BLOCK_SIZE, "raw_search")
-    return {
+    block = RESULT_BLOCK_SIZE
+    if request.full:
+        block = full_page_size(all_results, request.offset, RESULT_BLOCK_SIZE)
+    paged = _truncate_with_followon(all_results, request.offset, block, "raw_search")
+    response = {
         "receipt": outcome.receipt,
         "results": paged["page"],
         "count": paged["count"],
@@ -2321,6 +2327,18 @@ async def raw_search(request: RawSearchRequest):
         "has_more": paged["has_more"],
         "followon_note": paged["followon_note"],
     }
+    if any("cut" in row for row in paged["page"]):
+        response["note"] = (
+            "Long messages are cut to the stretch around the matched words. "
+            "Search again with full=true to get whole messages."
+        )
+    # What a reading client should show: the same hits as text, speaker and time
+    # against the words. "results" stays for callers that want the fields.
+    response["rendered"] = render_rows(
+        outcome.receipt, paged["page"], start=request.offset + 1,
+        notes=[response.get("note"), paged["followon_note"]],
+    )
+    return response
 
 
 async def _do_add_triplet(request: AddTripletRequest):
@@ -2463,17 +2481,30 @@ async def texture_search(request: TextureSearchRequest):
     layer = layers[LayerType.RICH_TEXTURE]
     results = await layer.search(request.query, request.limit)
 
-    all_results = [
-        {
-            "content": r.content,
-            "source": r.source,  # UUID for texture_delete
-            "relevance_score": r.relevance_score,
-            "metadata": r.metadata
-        }
-        for r in results
-    ]
+    all_results = []
+    for r in results:
+        meta = dict(r.metadata or {})
+        row = {}
+        # A fact says when its source message was said (UTC) before it says what.
+        when, age = meta.pop("when", None), meta.pop("age", None)
+        if when:
+            row["when"] = when
+            if age:
+                row["age"] = age
+        row["content"] = r.content
+        row["source"] = r.source  # UUID for texture_delete
+        row["relevance_score"] = r.relevance_score
+        row["metadata"] = meta
+        all_results.append(row)
     paged = _truncate_with_followon(all_results, request.offset, RESULT_BLOCK_SIZE, "texture_search")
-    return {
+    note = None
+    if any((row["metadata"] or {}).get("type") == "edge" for row in paged["page"]):
+        # Said at the point of use: graph facts were measured producing "X agreed" lines no message holds.
+        note = (
+            "Facts here are a model's summaries, not quotes. To say who said or agreed to what, "
+            "find the message with raw_search."
+        )
+    response = {
         "results": paged["page"],
         "count": paged["count"],
         "offset": paged["offset"],
@@ -2481,6 +2512,9 @@ async def texture_search(request: TextureSearchRequest):
         "has_more": paged["has_more"],
         "followon_note": paged["followon_note"],
     }
+    if note:
+        response["note"] = note
+    return response
 
 
 @app.delete("/tools/texture_delete/{uuid}")

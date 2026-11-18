@@ -40,6 +40,7 @@ from . import LayerHealth, LayerType, PatternLayer, SearchResult
 from .entity_extractor import EntityExtractor, ExtractionResult
 from .entity_resolver import EntityResolver, KNOWN_ALIASES
 from .graph_embedder import GraphEmbedder
+from .timefmt import age_text, parse_utc, when_text
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +131,8 @@ CALL db.index.fulltext.queryRelationships('edge_fact_ft', $query)
 YIELD relationship, score
 WHERE relationship.group_id = $gid
 RETURN relationship.uuid AS uuid, relationship.fact AS fact,
-       relationship.name AS edge_type, score AS ft_score
+       relationship.name AS edge_type, relationship.created_at AS created_at,
+       relationship.mention_count AS mention_count, score AS ft_score
 LIMIT $k
 """
 
@@ -139,7 +141,8 @@ CALL db.index.vector.queryRelationships('edge_embedding', $k, $embedding)
 YIELD relationship, score
 WHERE relationship.group_id = $gid
 RETURN relationship.uuid AS uuid, relationship.fact AS fact,
-       relationship.name AS edge_type, score AS vec_score
+       relationship.name AS edge_type, relationship.created_at AS created_at,
+       relationship.mention_count AS mention_count, score AS vec_score
 LIMIT $k
 """
 
@@ -375,6 +378,23 @@ def _build_recall_query(
 # ─────────────────────────────────────────────
 # Main class
 # ─────────────────────────────────────────────
+
+
+def edge_metadata(edge_type, created_at, mention_count=None, now=None) -> dict:
+    """Metadata for one fact in a search result: its type, and when the message it came from was said.
+
+    A fact is a summary a model wrote from a conversation. Without a date a reader
+    takes it as current, so the time (UTC) and age travel with it.
+    """
+    meta = {"type": "edge", "edge_type": edge_type}
+    then = parse_utc(created_at)
+    if then:
+        meta["when"] = when_text(then)
+        meta["age"] = age_text(then, now)
+    if isinstance(mention_count, int) and mention_count > 1:
+        meta["mentions"] = mention_count
+    return meta
+
 
 class CustomGraphLayer(PatternLayer):
     """
@@ -690,7 +710,7 @@ class CustomGraphLayer(PatternLayer):
                 source=f"neo4j:edge:{row.get('uuid', '')}",
                 layer=LayerType.RICH_TEXTURE,
                 relevance_score=score,
-                metadata={"type": "edge", "edge_type": edge_type},
+                metadata=edge_metadata(edge_type, row.get("created_at"), row.get("mention_count")),
             ))
 
         # Sort all results together by relevance and trim to requested limit

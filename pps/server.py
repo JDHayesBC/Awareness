@@ -155,7 +155,11 @@ def _forward(tool_name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if isinstance(data, str):
         text = data
     elif isinstance(data, dict):
-        if tool_name == "raw_search" and isinstance(data.get("receipt"), str):
+        if isinstance(data.get("rendered"), str):
+            # The server already laid the result out for a reader (who, when: text).
+            # Show that instead of the JSON, which escapes the message text.
+            text = data["rendered"]
+        elif tool_name == "raw_search" and isinstance(data.get("receipt"), str):
             # The receipt (what was searched, how many matched) leads the output.
             rest = {k: v for k, v in data.items() if k != "receipt"}
             text = data["receipt"] + "\n" + json.dumps(rest, indent=2)
@@ -289,7 +293,11 @@ async def list_tools() -> list[Tool]:
             name="raw_search",
             description=(
                 "Search raw captured content (Layer 1: Raw Capture). "
-                "Use for finding specific past conversations or events."
+                "Use for finding specific past conversations or events. "
+                "Each result should name its author, the time (UTC) and how long ago, then the text. "
+                "Never credit a line to a speaker the result does not name. "
+                "A long message may be cut to the stretch around the matched words, and then says so; "
+                "search again with full=true to read whole messages."
             ),
             inputSchema={
                 "type": "object",
@@ -303,6 +311,11 @@ async def list_tools() -> list[Tool]:
                         "description": "Maximum results (default: 20)",
                         "default": 20
                     },
+                    "full": {
+                        "type": "boolean",
+                        "description": "Return whole messages instead of the stretch around the match (default: false)",
+                        "default": False
+                    },
                     "token": TOKEN_PARAM_SCHEMA
                 },
                 "required": ["query"]
@@ -314,6 +327,9 @@ async def list_tools() -> list[Tool]:
                 "Search the knowledge graph (Layer 3: Rich Texture) for entities and facts. "
                 "Use for semantic search over extracted knowledge - people, places, concepts, relationships. "
                 "Returns entities and facts ranked by relevance. "
+                "Facts are summaries a model wrote from conversations, not quotes; each should carry the "
+                "time (UTC) of the message it came from. Before you say that someone said or agreed to "
+                "something, find the message itself with raw_search. "
                 "The 'source' field in results contains the UUID needed for texture_delete."
             ),
             inputSchema={
