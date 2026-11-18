@@ -1489,6 +1489,34 @@ def main():
         else:
             context = f"**{wake_line}**\n" + context
 
+    # Optional closing reminder (#407). Ships OFF (closing_line.MODE). Must never
+    # stop the context from being printed; hook output is cut off above 10,000 chars.
+    try:
+        import closing_line as _cl
+        _is_harness = is_non_jeff_prompt(prompt)
+        _cl_line, _cl_kind = _cl.closing_line(prompt, invoker_channel, is_harness=_is_harness)
+        _cl_appended = False
+        if _cl_line:
+            if len(context) + len(_cl_line) + 2 <= 9900:
+                context = context.rstrip("\n") + "\n\n" + _cl_line
+                _cl_appended = True
+            debug(f"closing line: kind={_cl_kind} {'appended' if _cl_appended else 'skipped (size)'}")
+        if _cl._resolve_mode(None) != "off" and not _is_harness:
+            try:
+                with open(DEBUG_LOG.parent / "closing_line_log.jsonl", "a", encoding="utf-8") as _f:
+                    _f.write(json.dumps({
+                        "ts": datetime.now().isoformat(timespec="seconds"),
+                        "entity": _detected_entity,
+                        "channel": invoker_channel or "terminal",
+                        "kind": _cl_kind,
+                        "appended": _cl_appended,
+                        "context_chars": len(context),
+                    }) + "\n")
+            except Exception as e:
+                debug(f"closing line log failed: {e!r}")
+    except Exception as e:
+        debug(f"closing line skipped: {e!r}")
+
     debug(f"Injecting context: {len(context)} chars")
 
     output = {
