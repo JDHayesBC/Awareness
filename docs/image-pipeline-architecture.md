@@ -25,7 +25,8 @@ IMAGE_GEN_USE_REFERENCES=0 \
 - **`--renderer openai`** (or `IMAGE_GEN_RENDERER=openai`). The default is `stub`, which writes a placeholder, not a real image.
 - **`IMAGE_GEN_USE_REFERENCES=0` for abstract / non-portrait images.** With references ON (the default), the pipeline attaches the entity's portrait + room photos and routes through OpenAI's `/edits` endpoint — perfect for "Caia in the kitchen," wrong for an abstract cover or concept art. Turn refs OFF when you don't want a likeness.
 - **`--entity <name>` does double duty:** it sets the output folder (`entities/<name>/media/generated/`) AND injects a trailing `Subject: <name>.` line into the composed prompt. For abstract images, neutralize it in your prompt ("no people, no human figures, no characters") so the subject-line can't sneak a figure in.
-- **Sizes (gpt-image-1):** `1024x1024`, `1536x1024` (landscape), `1024x1536` (portrait). Substack covers → `1536x1024`. Render time ≈ 25–30s.
+- **Model:** the default is `gpt-image-2` (set in `image_gen/config.py`). `gpt-image-1` was retired from the API; on 2026-11-22 a render failed with `400: The model 'gpt-image-1' does not exist`. Override per run with `IMAGE_GEN_OPENAI_MODEL=<id>`. If the default is ever retired again, list the account's image models (`GET /v1/models`, ids containing "image") and update the default.
+- **Sizes:** `1024x1024`, `1536x1024` (landscape), `1024x1536` (portrait). Substack covers → `1536x1024`. Render time ≈ 25–30s.
 - **Output:** `entities/<entity>/media/generated/<UTC-timestamp>_<slug>.png`, plus a `.json` sidecar with the composed prompt + full metadata (replayable/auditable).
 
 For "an entity in a room, with people" (the references-ON path), drop `IMAGE_GEN_USE_REFERENCES=0` and add `--house caia --room <room> --people jeff,carol`; the manifest at `image_gen/references/manifest.json` maps logical names to photo paths.

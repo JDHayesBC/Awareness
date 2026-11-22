@@ -157,7 +157,7 @@ Without explicit scale guidance, renderers default to human-like proportions —
 
 5. **API key is auto-loaded but must exist.** If `OPENAI_API_KEY` isn't in the env and `pps/docker/.env` doesn't have it or doesn't exist, the OpenAI renderer will raise `RuntimeError("OpenAIRenderer requires OPENAI_API_KEY")`. The auto-load is a convenience, not magic.
 
-6. **Size mismatch uses model defaults.** `gpt-image-1` supports `1024x1024`, `1536x1024` (landscape), `1024x1536` (portrait). Pass other sizes and the renderer snaps to the nearest supported (or raises if none is close). Render time is roughly proportional to pixel count: ~25–30s for most sizes.
+6. **Size mismatch uses model defaults.** The gpt-image models support `1024x1024`, `1536x1024` (landscape), `1024x1536` (portrait). Pass other sizes and the renderer snaps to the nearest supported (or raises if none is close). Render time is roughly proportional to pixel count: ~25–30s for most sizes.
 
 7. **Fallback is optional.** If the primary renderer fails and no fallback is configured, the pipeline raises. Per design, automatic silent substitution (e.g., OpenAI fallback when local stack is down) isn't a default — the entity chooses it explicitly via `IMAGE_GEN_RENDERER_FALLBACK`.
 

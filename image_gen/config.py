@@ -70,7 +70,10 @@ RENDERER_FALLBACK = os.getenv("IMAGE_GEN_RENDERER_FALLBACK", "").lower()
 
 # OpenAI image generation
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_IMAGE_MODEL = os.getenv("IMAGE_GEN_OPENAI_MODEL", "gpt-image-1")
+# gpt-image-1 was retired from the API (2026-11-22: 400 "The model 'gpt-image-1' does not exist").
+# If this default is retired too, list the account's image models (GET /v1/models, ids containing
+# "image") and set IMAGE_GEN_OPENAI_MODEL, then update this default.
+OPENAI_IMAGE_MODEL = os.getenv("IMAGE_GEN_OPENAI_MODEL", "gpt-image-2")
 OPENAI_IMAGE_SIZE = os.getenv("IMAGE_GEN_OPENAI_SIZE", "1024x1024")
 OPENAI_IMAGE_QUALITY = os.getenv("IMAGE_GEN_OPENAI_QUALITY", "auto")
 

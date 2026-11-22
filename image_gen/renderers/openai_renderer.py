@@ -3,8 +3,8 @@
 Calls the OpenAI Images API. Two paths:
 
 - No reference photos -> /v1/images/generations (JSON, prompt-only).
-- One or more reference photos -> /v1/images/edits (multipart). gpt-image-1
-  accepts multiple image[] inputs and uses them as visual conditioning, so a
+- One or more reference photos -> /v1/images/edits (multipart). The gpt-image
+  family accepts multiple image[] inputs and uses them as visual conditioning, so a
   request with the entity's portrait + a room photo will produce a render
   that looks like *that entity* in *that room*.
 
@@ -31,7 +31,7 @@ class OpenAIRenderer:
         self,
         *,
         api_key: str | None = None,
-        model: str = "gpt-image-1",
+        model: str = "gpt-image-2",
         size: str = "1024x1024",
         quality: str = "auto",
     ) -> None:
@@ -103,7 +103,7 @@ class OpenAIRenderer:
             return resp.json()
 
     async def _render_edits(self, request: RenderRequest, size: str) -> dict:
-        # gpt-image-1 /edits accepts multiple inputs as `image[]`. We send each
+        # The gpt-image family's /edits accepts multiple inputs as `image[]`. We send each
         # reference path as a separate file in the multipart body. Quality and
         # size still apply.
         files: list[tuple[str, tuple[str, bytes, str]]] = []
