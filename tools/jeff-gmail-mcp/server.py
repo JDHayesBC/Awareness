@@ -622,6 +622,11 @@ async def _bulk_trash(service, args: dict):
     return [TextContent(type="text", text=text)]
 
 
+BATCH_SIZE = 20
+BATCH_PAUSE_SECONDS = 0.3
+BATCH_ATTEMPTS = 4
+
+
 async def _sender_counts(service, args: dict):
     """Top senders for a query, from metadata only (never fetches bodies)."""
     query = args.get("query", "")
@@ -647,29 +652,46 @@ async def _sender_counts(service, args: dict):
         return [TextContent(type="text", text=f"No messages match query '{query}'")]
 
     rows: list[dict[str, str]] = []
-    errors: list[str] = []
-
-    def on_message(request_id, response, exception):
-        if exception is not None:
-            errors.append(str(exception))
-            return
-        rows.append(normalize_headers(response.get('payload', {}).get('headers', [])))
+    last_error = ""
 
     # Gmail allows 100 calls per batch, but its per-user concurrency limit (429)
-    # rejects most of a batch that size; small batches with a pause stay under it.
-    import time
-    for start in range(0, len(ids), 20):
-        if start:
-            time.sleep(0.3)
-        batch = service.new_batch_http_request(callback=on_message)
-        for mid in ids[start:start + 20]:
-            batch.add(service.users().messages().get(
-                userId='me',
-                id=mid,
-                format='metadata',
-                metadataHeaders=['From', 'List-Unsubscribe']
-            ))
-        batch.execute()
+    # rejects most of a batch that size. Small batches with a pause stay under it,
+    # and whatever still fails is retried with a longer pause.
+    pending = ids
+    for attempt in range(BATCH_ATTEMPTS):
+        failed: list[str] = []
+
+        def on_message(request_id, response, exception):
+            nonlocal last_error
+            if exception is not None:
+                failed.append(request_id)
+                last_error = " ".join(str(exception).split())[:200]
+                return
+            rows.append(normalize_headers(response.get('payload', {}).get('headers', [])))
+
+        pause = BATCH_PAUSE_SECONDS * (2 ** attempt)
+        if attempt:
+            await asyncio.sleep(pause * 4)
+        for start in range(0, len(pending), BATCH_SIZE):
+            if start:
+                await asyncio.sleep(pause)
+            chunk = pending[start:start + BATCH_SIZE]
+            batch = service.new_batch_http_request(callback=on_message)
+            for mid in chunk:
+                batch.add(service.users().messages().get(
+                    userId='me',
+                    id=mid,
+                    format='metadata',
+                    metadataHeaders=['From', 'List-Unsubscribe']
+                ), request_id=mid)
+            try:
+                batch.execute()
+            except Exception as e:  # the whole batch was refused: retry all of it
+                failed.extend(m for m in chunk if m not in failed)
+                last_error = " ".join(str(e).split())[:200]
+        pending = failed
+        if not pending:
+            break
 
     addresses: Counter = Counter()
     domains: Counter = Counter()
@@ -683,8 +705,9 @@ async def _sender_counts(service, args: dict):
 
     text = f"Scanned {len(rows)} of ~{max(estimate, len(ids))} estimated matches for '{query}'\n"
     text += f"With List-Unsubscribe header: {unsub}\n"
-    if errors:
-        text += f"Fetch errors: {len(errors)} (first: {errors[0]})\n"
+    if pending:
+        text += (f"Fetch errors: {len(pending)} still failed after {BATCH_ATTEMPTS} attempts "
+                 f"(last: {last_error})\n")
     text += "\nTop sender addresses:\n"
     text += "\n".join(f"  {n:5d}  {a}" for a, n in addresses.most_common(25))
     text += "\n\nTop sender domains:\n"

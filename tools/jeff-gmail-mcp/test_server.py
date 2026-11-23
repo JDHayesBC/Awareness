@@ -26,12 +26,18 @@ class _Batch:
         self._callback = callback
         self._items: list[tuple[str, dict]] = []
 
-    def add(self, call):
-        self._items.append(call)
+    def add(self, call, request_id=None):
+        self._items.append((request_id, call))
 
     def execute(self):
-        for i, call in enumerate(self._items):
-            self._callback(str(i), call.execute(), None)
+        for i, (rid, call) in enumerate(self._items):
+            rid = rid if rid is not None else str(i)
+            try:
+                response = call.execute()
+            except Exception as e:  # a real batch hands per-request failures to the callback
+                self._callback(rid, None, e)
+            else:
+                self._callback(rid, response, None)
 
 
 class FakeService:
@@ -286,3 +292,37 @@ def test_one_line_flattens_caps_and_neutralises_sender_text():
     assert "\n" not in out
     assert "END UNTRUSTED" not in out
     assert len(out) <= 63
+
+
+def _flaky(svc, always=(), once=()):
+    """Make metadata fetches fail for some ids: always, or only the first time."""
+    seen: set[str] = set()
+    real_get = svc.get
+
+    def get(userId, id, format, metadataHeaders=None):
+        if id in always or (id in once and id not in seen):
+            seen.add(id)
+
+            def boom():
+                raise RuntimeError("Too many concurrent requests for user")
+            return _Call(boom)
+        return real_get(userId, id, format, metadataHeaders)
+    svc.get = get
+
+
+def test_sender_counts_retries_failed_fetches(monkeypatch):
+    monkeypatch.setattr(server, "BATCH_PAUSE_SECONDS", 0)
+    svc = FakeService({str(i): [{'name': 'From', 'value': f'a{i}@x.com'}] for i in range(5)})
+    _flaky(svc, once=("1", "3"))
+    text = _run(server._sender_counts(svc, {"max_scan": 5}))
+    assert "Scanned 5 of" in text
+    assert "Fetch errors" not in text
+
+
+def test_sender_counts_reports_what_still_failed(monkeypatch):
+    monkeypatch.setattr(server, "BATCH_PAUSE_SECONDS", 0)
+    svc = FakeService({str(i): [{'name': 'From', 'value': f'a{i}@x.com'}] for i in range(5)})
+    _flaky(svc, always=("2",))
+    text = _run(server._sender_counts(svc, {"max_scan": 5}))
+    assert "Scanned 4 of" in text
+    assert "Fetch errors: 1 still failed" in text
