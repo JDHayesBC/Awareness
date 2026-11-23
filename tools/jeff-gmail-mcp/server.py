@@ -655,10 +655,14 @@ async def _sender_counts(service, args: dict):
             return
         rows.append(normalize_headers(response.get('payload', {}).get('headers', [])))
 
-    # Gmail allows up to 100 calls per batch request
-    for start in range(0, len(ids), 100):
+    # Gmail allows 100 calls per batch, but its per-user concurrency limit (429)
+    # rejects most of a batch that size; small batches with a pause stay under it.
+    import time
+    for start in range(0, len(ids), 20):
+        if start:
+            time.sleep(0.3)
         batch = service.new_batch_http_request(callback=on_message)
-        for mid in ids[start:start + 100]:
+        for mid in ids[start:start + 20]:
             batch.add(service.users().messages().get(
                 userId='me',
                 id=mid,
