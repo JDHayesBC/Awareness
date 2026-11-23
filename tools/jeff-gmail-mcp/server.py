@@ -250,6 +250,25 @@ async def list_tools():
             }
         ),
         Tool(
+            name="gmail_bulk_archive",
+            description="Remove messages matching a query from the inbox (takes off the INBOX label). Deletes nothing: archived mail stays in All Mail, is still found by search, and can be put back by adding the INBOX label. Only inbox mail is ever touched. Returns a receipt: query, matched count, archived count, failed count. Use gmail_count_messages first!",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Gmail search query for inbox messages to archive (searched as in:inbox (<query>))"
+                    },
+                    "max_messages": {
+                        "type": "integer",
+                        "description": "Maximum messages to archive in one call (default: 100, max: 500)",
+                        "default": 100
+                    }
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
             name="gmail_sender_counts",
             description=(
                 "Scan up to max_scan messages matching a query (metadata only, never bodies) and "
@@ -295,6 +314,8 @@ async def call_tool(name: str, arguments: dict):
             return await _count_messages(service, arguments)
         elif name == "gmail_bulk_trash":
             return await _bulk_trash(service, arguments)
+        elif name == "gmail_bulk_archive":
+            return await _bulk_archive(service, arguments)
         elif name == "gmail_sender_counts":
             return await _sender_counts(service, arguments)
         else:
@@ -619,6 +640,54 @@ async def _bulk_trash(service, args: dict):
     )
     if failures:
         text += "\nFirst failures:\n" + "\n".join(f"  {f}" for f in failures[:5])
+    return [TextContent(type="text", text=text)]
+
+
+async def _bulk_archive(service, args: dict):
+    """Take inbox messages matching a query out of the inbox. Deletes nothing."""
+    query = args.get("query", "")
+    max_messages = min(args.get("max_messages", 100), 500)
+
+    if not query:
+        return [TextContent(type="text", text="Error: query required")]
+
+    # Wrapped so this tool can only ever act on inbox mail
+    results = service.users().messages().list(
+        userId='me',
+        q=f"in:inbox ({query})",
+        maxResults=max_messages
+    ).execute()
+
+    messages = results.get('messages', [])
+    if not messages:
+        return [TextContent(type="text", text=f"No inbox messages match query '{query}'")]
+
+    # One call; the API returns an empty body on success and fails as a whole
+    ids = [m['id'] for m in messages]
+    archived = 0
+    error_text = ""
+    try:
+        service.users().messages().batchModify(
+            userId='me',
+            body={'ids': ids, 'removeLabelIds': ['INBOX']}
+        ).execute()
+        archived = len(ids)
+    except Exception as e:
+        error_text = " ".join(str(e).split())[:200]
+
+    failed = len(ids) - archived
+    remaining = "more remain" if results.get('nextPageToken') else "no more"
+    text = (
+        f"Bulk archive receipt\n"
+        f"Query: {query}\n"
+        f"Matched: {len(ids)}\n"
+        f"Archived: {archived}\n"
+        f"Failed: {failed}\n"
+        f"({remaining} matching; archived mail stays in All Mail, is still found by search, "
+        f"and can be put back by adding the INBOX label)"
+    )
+    if error_text:
+        text += f"\nError: {error_text}"
     return [TextContent(type="text", text=text)]
 
 

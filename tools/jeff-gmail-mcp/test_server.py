@@ -48,6 +48,10 @@ class FakeService:
         self.fail_ids = set(fail_ids)
         self.trashed: list[str] = []
         self.formats: list[str] = []
+        self.list_queries: list[str] = []
+        self.list_max_results: list[int] = []
+        self.batch_modify_bodies: list[dict] = []
+        self.batch_modify_error: Exception | None = None
 
     def users(self):
         return self
@@ -55,7 +59,17 @@ class FakeService:
     def messages(self):
         return self
 
+    def batchModify(self, userId, body):
+        def run():
+            if self.batch_modify_error is not None:
+                raise self.batch_modify_error
+            self.batch_modify_bodies.append(body)
+            return {}
+        return _Call(run)
+
     def list(self, userId, q="", maxResults=100, pageToken=None):
+        self.list_queries.append(q)
+        self.list_max_results.append(maxResults)
         ids = [{'id': i} for i in list(self.messages_by_id)[:maxResults]]
         return _Call(lambda: {'messages': ids, 'resultSizeEstimate': len(self.messages_by_id)})
 
@@ -91,6 +105,49 @@ def test_bulk_trash_receipt_reports_failure():
 
 def test_bulk_trash_requires_query():
     assert "query required" in _run(server._bulk_trash(FakeService({}), {}))
+
+
+def test_bulk_archive_requires_query():
+    assert "query required" in _run(server._bulk_archive(FakeService({}), {}))
+
+
+def test_bulk_archive_wraps_query_in_inbox():
+    svc = FakeService({'a': []})
+    _run(server._bulk_archive(svc, {"query": "category:promotions"}))
+    assert svc.list_queries == ["in:inbox (category:promotions)"]
+
+
+def test_bulk_archive_sends_matched_ids_and_never_trashes():
+    svc = FakeService({'a': [], 'b': [], 'c': []})
+    text = _run(server._bulk_archive(svc, {"query": "from:x"}))
+    assert svc.batch_modify_bodies == [{'ids': ['a', 'b', 'c'], 'removeLabelIds': ['INBOX']}]
+    assert svc.trashed == []
+    assert text.startswith("Bulk archive receipt")
+    assert "Query: from:x" in text
+    assert "Matched: 3" in text and "Archived: 3" in text and "Failed: 0" in text
+    assert "All Mail" in text
+
+
+def test_bulk_archive_caps_max_messages():
+    svc = FakeService({'a': []})
+    _run(server._bulk_archive(svc, {"query": "q", "max_messages": 9999}))
+    assert svc.list_max_results == [500]
+
+
+def test_bulk_archive_failure_reports_error_without_raising():
+    svc = FakeService({'a': [], 'b': []})
+    svc.batch_modify_error = RuntimeError("rate\nLimit " + "x" * 400)
+    text = _run(server._bulk_archive(svc, {"query": "q"}))
+    assert "Archived: 0" in text
+    assert "Failed: 2" in text
+    assert "rate Limit" in text
+    assert len(text.split("Error: ", 1)[1]) <= 200
+
+
+def test_bulk_archive_nothing_matched():
+    text = _run(server._bulk_archive(FakeService({}), {"query": "zzz"}))
+    assert text == "No inbox messages match query 'zzz'"
+    assert "gmail_bulk_archive" in [t.name for t in _run_list()]
 
 
 def test_sender_counts_metadata_only():
