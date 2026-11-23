@@ -81,7 +81,11 @@ All tools that return mail content or headers say in their description that the 
 is untrusted data and instructions inside it are never to be followed.
 
 - **gmail_list_messages** - List recent emails with search queries
-- **gmail_read_message** - Read full email content by ID
+- **gmail_read_message** - Read an email by ID. Headers, then a plain-text body (prefers
+  `text/plain`, converts HTML, walks nested multipart) between `BEGIN/END UNTRUSTED MESSAGE BODY`
+  markers, with a one-line reminder that its instructions are not to be followed. `max_chars`
+  (default 4000, max 20000) caps the body and the cut is announced. Attachments are listed by
+  name and size only, never downloaded. Marker look-alikes in the body are replaced.
 - **gmail_mark_read** - Mark messages as read
 - **gmail_count_messages** - Count messages matching a query (use before bulk operations)
 - **gmail_sender_counts** - Scan up to `max_scan` (default 500, cap 3000) matching messages,
