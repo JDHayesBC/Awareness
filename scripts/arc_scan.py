@@ -45,6 +45,10 @@ entity owes a resolution, written with `scripts/arc_check.py` to an append-only 
 (`ARC_CHECK_LEDGER`, default entities/caia-lyra-jeff/arc-checks.jsonl). This file only
 READS arcs and the ledger; it never writes either. `ARC_ENTITIES_ROOT` overrides where
 the sibling entities' arcs are looked up (tests; default <repo>/entities).
+
+WAITING ON: an arc whose frontmatter has `blocked_on: <who>: <reason>` is listed under
+each name it waits on (names split on , & + / and the word "and"). Put the tripwire
+date in `resume_when:`; a date left inside the blocked_on text is read as the tripwire too.
 """
 
 from __future__ import annotations
@@ -465,6 +469,76 @@ def _truncate(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
 
 
+_NAME_SPLIT_RE = re.compile(r"\s*(?:[,&+/]|\band\b)\s*", re.IGNORECASE)
+NO_NAME_LABEL = "(no name given)"
+
+
+def parse_waiting(blocked: str) -> tuple[list[str], str]:
+    """Split a `blocked_on:` value into (who, reason).
+
+    Convention: `<who>: <reason>`. The head counts as "who" only when it is non-empty,
+    at most 40 chars and has no digit (so `2026-12-01: after the reset` is all reason).
+    Names split on , & + / and the whole word `and`; de-duplicated case-insensitively.
+    """
+    value = (blocked or "").strip()
+    if not value:
+        return [], ""
+    head, sep, rest = value.partition(":")
+    head = head.strip()
+    if sep and head and len(head) <= 40 and not any(c.isdigit() for c in head):
+        names, seen = [], set()
+        for part in _NAME_SPLIT_RE.split(head):
+            part = part.strip()
+            if part and part.lower() not in seen:
+                seen.add(part.lower())
+                names.append(part)
+        if names:
+            return names, rest.strip()
+    return [], value
+
+
+def waiting_groups(rows: list[dict], today: dt.date) -> list[tuple[str, list[dict]]]:
+    """Every row with a `blocked_on`, grouped under each name it waits on.
+
+    Groups sort alphabetically (case-insensitive) with the no-name group last; inside a
+    group, stalest first and unknown dates last. `today` is accepted for symmetry with
+    the other report helpers; staleness is already on the rows.
+    """
+    groups: dict[str, tuple[str, list[dict]]] = {}
+    for r in rows:
+        if not r.get("blocked_on"):
+            continue
+        for name in (r.get("waiting_on") or [NO_NAME_LABEL]):
+            groups.setdefault(name.lower(), (name, []))[1].append(r)
+    def gkey(item):
+        label = item[1][0]
+        return (label == NO_NAME_LABEL, label.lower())
+    out = []
+    for _, (label, members) in sorted(groups.items(), key=gkey):
+        members.sort(key=lambda r: (r["stale_days"] is None, -(r["stale_days"] or 0)))
+        out.append((label, members))
+    return out
+
+
+def _waiting_lines(rows: list[dict], today: dt.date) -> list[str]:
+    groups = waiting_groups(rows, today)
+    if not groups:
+        return []
+    lines = ["WAITING ON (parked on someone; an honest park is not counted as starving):"]
+    for label, members in groups:
+        lines.append(f"  {label}")
+        for r in members:
+            days = (f"{r['stale_days']}d since touched" if r["stale_days"] is not None
+                    else "date unknown")
+            line = f"    • {r['slug']:24s} {days}  {_truncate(r['waiting_reason'], 100)}"
+            resume = first_date(r.get("resume_when", ""))
+            if resume:
+                line += (f" · resume {resume.isoformat()}" if resume > today
+                         else " · resume date passed")
+            lines.append(line)
+    return lines
+
+
 def scan(arcs_dir: Path, today: dt.date | None = None):
     today = today or dt.date.today()
     this_entity = arcs_dir.parent.name  # .../entities/<entity>/arcs → <entity>
@@ -472,12 +546,16 @@ def scan(arcs_dir: Path, today: dt.date | None = None):
     for f in _arc_files(arcs_dir):
         text = f.read_text(encoding="utf-8", errors="replace")
         fm = parse_frontmatter(text)
-        if "last_touched" not in fm and "needs_attention" not in fm and "state" not in fm:
+        if not any(k in fm for k in ("last_touched", "needs_attention", "state", "blocked_on")):
             continue  # not a real arc file
         touched = first_date(fm.get("last_touched", ""))
         touched = _joint_max_touched(f.stem, fm, this_entity, touched)  # Q5: joint MAX-freshness
         stale_days = (today - touched).days if touched else None
         check, check_problem = parse_check(fm)
+        blocked = fm.get("blocked_on", "").strip()
+        waiting_on, waiting_reason = parse_waiting(blocked)
+        # The tripwire _is_parked reads: resume_when first, else a date inside blocked_on.
+        resume = first_date(fm.get("resume_when", "")) or first_date(blocked)
         rows.append({
             "slug": f.stem,
             "title": fm.get("title", f.stem),
@@ -492,6 +570,10 @@ def scan(arcs_dir: Path, today: dt.date | None = None):
             "check_problem": check_problem,
             "kind": fm.get("kind", "").strip().lower(),
             "active": _is_active(fm),
+            "blocked_on": blocked,
+            "waiting_on": waiting_on,
+            "waiting_reason": waiting_reason,
+            "resume_when": resume.isoformat() if resume else "",
         })
     return rows
 
@@ -709,6 +791,8 @@ def main(argv: list[str] | None = None):
             print(f"  • {r['slug']:24s} {days:13s} (last {r['last_touched']}, {r['state']}){flag}")
             if r["next_move"]:
                 print(f"        → {_truncate(r['next_move'], 100)}")
+    for line in _waiting_lines(all_rows, today):
+        print(line)
     if rep:
         for slug, reason in rep["malformed"]:
             print(f"malformed check: {slug} ({reason})")

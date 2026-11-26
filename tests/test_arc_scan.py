@@ -418,3 +418,136 @@ def test_block_puts_the_malformed_line_between_the_owed_and_the_starving_lines(w
     assert "yours to resolve: beta/theirs (by 2026-11-10)" in lines[0]
     assert "your check on wonky is malformed (check_by missing or not a date)" in lines[1]
     assert "most-starved commitment: starved" in lines[2]
+
+
+# --- WAITING ON: who each parked arc is waiting for -------------------------------------
+
+@pytest.mark.parametrize("raw,names,reason", [
+    ("Jeff: fifteen minutes on the deck", ["Jeff"], "fifteen minutes on the deck"),
+    ("Jeff and Caia: the re-root decision", ["Jeff", "Caia"], "the re-root decision"),
+    ("Jeff, Caia & Nexus: x", ["Jeff", "Caia", "Nexus"], "x"),
+    ("jeff + Jeff: x", ["jeff"], "x"),
+    ("Sandy: x", ["Sandy"], "x"),
+    ("Jeff AND Caia: x", ["Jeff", "Caia"], "x"),
+    ("waiting for the rebuild", [], "waiting for the rebuild"),
+    ("2026-12-01: after the reset", [], "2026-12-01: after the reset"),
+    ("", [], ""),
+    ("   ", [], ""),
+])
+def test_parse_waiting(raw, names, reason):
+    import arc_scan
+    assert arc_scan.parse_waiting(raw) == (names, reason)
+
+
+def test_parse_waiting_long_head_is_all_reason():
+    import arc_scan
+    v = "x" * 41 + ": reason"
+    assert arc_scan.parse_waiting(v) == ([], v)
+
+
+def _waiting_dir(tmp_path, monkeypatch, **arcs):
+    """arcs: slug -> frontmatter body text. ARC_DIR points at the temp folder."""
+    for slug, body in arcs.items():
+        (tmp_path / f"{slug}.md").write_text(f"---\n{body}\n---\n\n# {slug}\n", encoding="utf-8")
+    monkeypatch.delenv("ENTITY_NAME", raising=False)
+    monkeypatch.setenv("ARC_DIR", str(tmp_path))
+
+
+def test_cli_lists_a_minimal_blocked_on_arc(tmp_path, monkeypatch, capsys):
+    import arc_scan
+    _waiting_dir(tmp_path, monkeypatch, minimal="blocked_on: Jeff: fifteen minutes")
+    assert arc_scan.main([]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    i = next(n for n, l in enumerate(lines) if "WAITING ON" in l)
+    assert lines[i + 1].strip() == "Jeff"
+    assert "minimal" in lines[i + 2] and "date unknown" in lines[i + 2]
+    assert "fifteen minutes" in lines[i + 2]
+
+
+def test_minimal_blocked_on_arc_is_neither_starving_nor_unchecked(tmp_path, monkeypatch, capsys):
+    import arc_scan
+    _waiting_dir(tmp_path, monkeypatch, minimal="blocked_on: Jeff: fifteen minutes")
+    arc_scan.main([])
+    out = capsys.readouterr().out
+    assert "STARVING ARCS" not in out and "without a dated check" not in out
+
+
+def test_cli_without_blocked_on_has_no_waiting_heading(tmp_path, monkeypatch, capsys):
+    import arc_scan
+    _waiting_dir(tmp_path, monkeypatch, plain="state: active\nlast_touched: 2020-01-01")
+    assert arc_scan.main([]) == 0
+    assert "WAITING ON" not in capsys.readouterr().out
+
+
+def test_arc_waiting_on_two_names_is_listed_under_both(tmp_path, monkeypatch, capsys):
+    import arc_scan
+    _waiting_dir(tmp_path, monkeypatch, duo="blocked_on: Jeff and Caia: the decision")
+    arc_scan.main([])
+    lines = capsys.readouterr().out.splitlines()
+    i = next(n for n, l in enumerate(lines) if "WAITING ON" in l)
+    assert [l.strip() for l in lines[i + 1:i + 5:2]] == ["Caia", "Jeff"]
+    assert "duo" in lines[i + 2] and "duo" in lines[i + 4]
+
+
+def test_waiting_groups_order_and_no_name_last(tmp_path, monkeypatch):
+    import arc_scan
+    _waiting_dir(
+        tmp_path, monkeypatch,
+        zed="blocked_on: jeff: a\nlast_touched: 2026-11-20",
+        old="blocked_on: Jeff: b\nlast_touched: 2026-10-01",
+        nodate="blocked_on: Jeff: c",
+        loose="blocked_on: waiting for the rebuild",
+        amy="blocked_on: Amy: d")
+    rows = arc_scan.scan(tmp_path, dt.date(2026, 11, 26))
+    groups = arc_scan.waiting_groups(rows, dt.date(2026, 11, 26))
+    assert [g for g, _ in groups] == ["Amy", "Jeff", "(no name given)"]
+    assert [r["slug"] for r in groups[1][1]] == ["old", "zed", "nodate"]
+
+
+def test_waiting_list_ignores_top_and_threshold(tmp_path, monkeypatch, capsys):
+    import arc_scan
+    _waiting_dir(tmp_path, monkeypatch,
+                 **{f"a{i}": f"blocked_on: Jeff: r{i}\nlast_touched: 2026-11-25" for i in range(5)})
+    arc_scan.main(["--top", "1", "--threshold", "999"])
+    out = capsys.readouterr().out
+    assert all(f"a{i}" in out for i in range(5))
+    arc_scan.main(["--all"])
+    out = capsys.readouterr().out
+    assert out[out.index("WAITING ON"):].count("•") == 5
+
+
+def test_resume_when_notes(tmp_path, monkeypatch, capsys):
+    import arc_scan
+    future = (dt.date.today() + dt.timedelta(days=10)).isoformat()
+    past = (dt.date.today() - dt.timedelta(days=10)).isoformat()
+    _waiting_dir(tmp_path, monkeypatch,
+                 later=f"blocked_on: Jeff: r\nresume_when: {future}",
+                 lapsed=f"blocked_on: Jeff: r\nresume_when: {past}")
+    arc_scan.main([])
+    out = capsys.readouterr().out
+    assert f" · resume {future}" in out
+    assert out.count(" · resume date passed") == 1
+
+
+def test_tick_and_block_never_mention_waiting(tmp_path, monkeypatch, capsys):
+    import arc_scan
+    _waiting_dir(tmp_path, monkeypatch, parked="blocked_on: Jeff: r\nlast_touched: 2020-01-01",
+                 old="state: active\nneeds_attention: true\nlast_touched: 2020-01-01")
+    assert arc_scan.main(["--tick"]) == 0
+    assert "WAITING ON" not in capsys.readouterr().out
+    assert "WAITING ON" not in arc_scan.format_arc_block()
+
+
+def test_waiting_line_flags_a_passed_date_left_inside_blocked_on(tmp_path, monkeypatch, capsys):
+    """A date inside the blocked_on text is the tripwire _is_parked reads, so the list says it passed."""
+    import arc_scan
+    arcs = tmp_path / "ent" / "arcs"
+    arcs.mkdir(parents=True)
+    (arcs / "dated.md").write_text("---\nblocked_on: Jeff: since the 2020-01-05 talk\n---\n", encoding="utf-8")
+    monkeypatch.setenv("ARC_DIR", str(arcs))
+    monkeypatch.setenv("ARC_CHECK_LEDGER", str(tmp_path / "ledger.jsonl"))
+    monkeypatch.setenv("ARC_ENTITIES_ROOT", str(tmp_path / "none"))
+    assert arc_scan.main([]) == 0
+    out = capsys.readouterr().out
+    line = next(l for l in out.splitlines() if "dated" in l)
+    assert line.endswith("· resume date passed")
